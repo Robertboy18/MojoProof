@@ -1,0 +1,62 @@
+# The checks of CONTRIBUTING.md ("Building and checking"), the roadmap check and the site's
+# build and check, on every pull request and every push to main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prebuilt Mathlib files
+        run: lake exe cache get
+
+      - name: Build the library and the kernels
+        run: lake build
+
+      - name: Build the test modules
+        run: lake build MojoProofTest
+
+      - name: Run the tests
+        run: lake test
+
+      - name: Audit
+        run: lake env lean --run scripts/Audit.lean
+
+      - name: Names cited in docstrings
+        run: python3 scripts/cited.py
+
+      - name: Corpus manifest
+        run: python3 scripts/corpus.py check
+
+      - name: Roadmap status is current
+        run: python3 scripts/roadmap_status.py --check
+
+      - name: Build and check the site
+        run: |
+          python3 -m pip install -r scripts/site-requirements.txt
+          python3 scripts/site.py --out _site
+          python3 scripts/site.py --check _site

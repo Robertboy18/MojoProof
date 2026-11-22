@@ -2,3 +2,5 @@
 build/
 *.olean
 tmp/
+_site/
+__pycache__/

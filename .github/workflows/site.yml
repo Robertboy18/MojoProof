@@ -1,0 +1,69 @@
+# Builds the website from main and publishes it on GitHub Pages
+# (https://robertboy18.github.io/MojoProof/). The repository's Pages source must be "GitHub Actions".
+name: Site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # roadmap_status.py reads FloatLib's and TorchLean's sources under .lake/packages.
+      # Any lake command clones the packages at the revisions lake-manifest.json pins; nothing is built.
+      - name: Fetch the pinned packages
+        run: lake env true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install graphviz and the site's Python packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+          python3 -m pip install -r scripts/site-requirements.txt
+
+      - name: Roadmap status
+        run: python3 scripts/roadmap_status.py
+
+      - name: Build the site
+        run: python3 scripts/site.py --out _site
+
+      - name: Check the site
+        run: python3 scripts/site.py --check _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

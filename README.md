@@ -2,6 +2,8 @@
 
 Machine-checked proofs for compiled Mojo, in Lean.
 
+Website, with the roadmap and the guide: <https://robertboy18.github.io/MojoProof/>
+
 ## Why Mojo
 
 I really like Mojo, for two reasons.
@@ -267,6 +269,10 @@ Contributions are welcome. Start with [roadmap/STATUS.md](roadmap/STATUS.md): pi
 level can be raised. [docs/new-kernel.md](docs/new-kernel.md) takes one kernel from its Mojo source
 to its kernel theorem, [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and check a
 change, and [AGENTS.md](AGENTS.md) gives the same rules to coding agents.
+
+**Website.** The [website](https://robertboy18.github.io/MojoProof/) is built from the repository by
+`scripts/site.py` and rebuilt from main every time a pull request is merged, so the roadmap
+and the docs on it are always those of main.
 
 ## License
 

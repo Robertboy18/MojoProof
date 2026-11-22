@@ -140,6 +140,22 @@ python3 scripts/deps.py check /tmp/facts.json
   reproducer under `tests/upstream/`.
 - Commit messages describe the change in plain words.
 
+## The website
+
+The website, <https://robertboy18.github.io/MojoProof/>, is built from the repository's own files
+by `scripts/site.py`: the README, the roadmap with every card, this guide and every document of
+`docs/`. To build it and check it locally:
+
+```
+pip install -r scripts/site-requirements.txt   # markdown and pygments
+python3 scripts/roadmap_status.py              # if a card or a declaration it names changed
+python3 scripts/site.py --out _site
+python3 scripts/site.py --check _site          # every link, anchor and image resolves
+```
+
+Then open `_site/index.html` in a browser, as a file. CI builds and checks the site on every pull
+request, and rebuilds and publishes it from main when the pull request is merged.
+
 ## Where things live
 
 - `MojoProof/LLVM/`: the LLVM IR AST, lexer, parser, printer, intrinsic table, the importer's checks,
