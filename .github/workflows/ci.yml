@@ -1,11 +1,10 @@
 # The checks of CONTRIBUTING.md ("Building and checking"), the roadmap check and the site's
-# build and check, on every pull request and every push to main.
+# build and check, on pull requests (and by hand from the Actions tab). Pushes to main only rebuild the site.
 name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
