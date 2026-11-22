@@ -1,0 +1,49 @@
+MojoProof test corpus: notice for the files in tests/corpus/
+
+The files named *.nvptx.ll here are LLVM IR that the Mojo compiler wrote for the GPU kernels of
+the Mojo sources listed below (`mojo build --emit llvm --target-accelerator <arch>`). Each file's
+row in MANIFEST.tsv records its Mojo version, its flags, its source and the source's sha256. The
+IR is compiled from those sources and from the library code they import.
+
+The sources come from the Modular repository, https://github.com/modular/modular, at commit
+bbc13a719b6c139ede763f1434a4342ebfd843ac (bbc13a71). Their headers read:
+
+    Copyright (c) 2026, Modular Inc. All rights reserved.
+
+    Licensed under the Apache License v2.0 with LLVM Exceptions:
+    https://llvm.org/LICENSE.txt
+
+The license text is in LICENSE-APACHE-LLVM, next to this file.
+
+Sources at bbc13a71. Each one's header says "Licensed under the Apache License v2.0 with LLVM
+Exceptions":
+
+    max/examples/gpu-functions/vector_addition.mojo               vadd/
+    max/examples/gpu-functions/reduction.mojo                     reduction/
+    max/examples/gpu-block-and-warp/tiled_matmul.mojo             tiled_matmul/
+    max/kernels/test/gpu/nn/test_layer_norm.mojo                  layernorm/
+    max/kernels/test/gpu/layout/test_layout_mma.mojo              mma/
+    max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo  mgemm/, mgemm_nocontract/
+
+The library code that these kernels import comes from the same commit: the Mojo standard library
+(Mojo/stdlib/std) and the MAX kernel library (max/kernels/src, max/mojo/max). Every .mojo file
+under Mojo/stdlib/std and max/kernels/src carries the same header. So does every .mojo file under
+max/mojo/max, except those in the host driver directory max/mojo/max/_driver/max_license/.
+
+Modified copies kept in this repository. Each one keeps Modular's header and says in a comment
+what was changed:
+
+    vmul/vector_multiply.mojo      from max/examples/gpu-functions/vector_addition.mojo at
+                                   bbc13a71: the kernel renamed and its `+` replaced by `*`
+    vsub/vector_subtraction.mojo   from max/examples/gpu-functions/vector_addition.mojo at
+                                   bbc13a71: the kernel renamed and its `+` replaced by `-`
+
+Their IR is in vmul/ and vsub/, under the same license.
+
+LICENSE-APACHE-LLVM is the file Licenses/APACHE_LICENSE of the Modular repository at bbc13a71,
+byte for byte (git blob 62f360af9a9148bfae1d91e0a258dde0283adeb3). The repository's top-level
+LICENSE at that commit points to it: "Mojo and its contributions are licensed under the Apache
+License v2.0 with LLVM Exceptions. See Licenses/APACHE_LICENSE."
+
+MANIFEST.tsv, REFUSALS.tsv and this file belong to MojoProof. They are under the Apache License
+2.0 in the repository's top-level LICENSE.

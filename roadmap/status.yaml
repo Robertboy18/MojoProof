@@ -1,0 +1,1022 @@
+# Written by scripts/roadmap_status.py from the cards and the code. Do not edit.
+areas:
+  - id: floats
+    title: "Floats"
+    readme: roadmap/floats/README.md
+    levels: {L0: 0, L1: 6, L2: 0, L3: 0, L4: 0}
+    cards:
+      - id: binary-op-rounding
+        title: "the rounding of fadd, fsub, fmul and fdiv, to nearest even in the operation's format"
+        kind: construct
+        level: L1
+        evidence_present: [L3]
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 2
+        lean: [MojoProof.Sem.floatBin, MojoProof.Sem.floatBin_ofFloat, MojoProof.Sem.floatOp, MojoProof.Sem.fbin, MojoProof.Sem.fbin_finite, FloatLib.Floats.Formats.BinaryInterchange.Model.add, FloatLib.Floats.Formats.BinaryInterchange.Model.sub, FloatLib.Floats.Formats.BinaryInterchange.Model.mul, FloatLib.Floats.Formats.BinaryInterchange.Model.div, FloatLib.Floats.Formats.BinaryInterchange.Model.roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_add_eq_roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_sub_eq_roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_mul_eq_roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_div_eq_roundAt]
+        depends: [floats/deliver]
+      - id: contract
+        title: "contract, the fast-math flag that lets fmul and fadd fuse into one rounding"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 13
+        lean: [MojoProof.LLVM.FastMath.contract, MojoProof.Sem.contract, MojoProof.Sem.contract_cases, MojoProof.Sem.contract_unfused, MojoProof.Sem.contract_error, MojoProof.Sem.contract_est, MojoProof.Sem.floatBin_contract, MojoProof.Sem.floatBin_contract_est, FloatLib.Floats.Formats.BinaryInterchange.Model.fma]
+        depends: [floats/binary-op-rounding]
+      - id: deliver
+        title: "deliver, the result of a floating-point operation as a word, NaNs from the oracle"
+        kind: construct
+        level: L1
+        evidence_present: [L3]
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.deliver, MojoProof.Sem.deliver_finite, MojoProof.Sem.exists_deliver, MojoProof.Sem.not_finite_deliver, MojoProof.Sem.FinEq, MojoProof.Sem.FinEq.deliver, MojoProof.Sem.Ctx.oracle]
+        depends: []
+      - id: maxnum-minnum
+        title: "llvm.maxnum and llvm.minnum, the floating-point maximum and minimum"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.maxnum, MojoProof.Sem.maxnum_of_not_nan, MojoProof.Sem.maxnum_nanEq, MojoProof.Sem.intrinsic_fminmax, MojoProof.Sem.intrinsic_fminmax_ofFloat, MojoProof.Sem.intrinsic_fminmax_vec, MojoProof.Sem.fminmax_of_not_nan, MojoProof.Sem.fminmax_nanEq, MojoProof.Sem.fminmax_vec_of_not_nan, MojoProof.Sem.fminmax_vec_nanEq, FloatLib.Floats.Formats.BinaryInterchange.Model.maximumNumber, FloatLib.Floats.Formats.BinaryInterchange.Model.minimumNumber]
+        depends: [floats/nan-payloads]
+      - id: nan-payloads
+        title: "NaN payloads, which NaN a floating-point operation may return"
+        kind: construct
+        level: L1
+        evidence_present: [L3]
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.NaNEq, MojoProof.Sem.nanEq_deliver, MojoProof.Sem.isNaN_deliver, MojoProof.Sem.floatOp_isNaN, MojoProof.Sem.floatOp_nanEq, MojoProof.Sem.fbin_isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isSignaling, FloatLib.Floats.Formats.BinaryInterchange.Model.quietNaN]
+        depends: [floats/deliver]
+      - id: rsqrt-approx
+        title: "rsqrt.approx.ftz.f32, the approximate reciprocal square root"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 34
+        lean: [MojoProof.Sem.rsqrt, MojoProof.Sem.rsqrtErr, MojoProof.Sem.rsqrtOk, MojoProof.Sem.rpow_le_rsqrtErr, MojoProof.Sem.rsqrtOk_rSqrt, MojoProof.Sem.rsqrtOk_of_rsqrt, MojoProof.Sem.rsqrt_toNatBits, MojoProof.Sem.intrinsic_rsqrt, MojoProof.Sem.rsqrt_close, FloatLib.Floats.Formats.BinaryInterchange.Model.rSqrt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_rSqrt_eq_roundAt]
+        depends: [floats/deliver]
+  - id: gpu-model
+    title: "The GPU model"
+    readme: roadmap/gpu-model/README.md
+    levels: {L0: 3, L1: 6, L2: 0, L3: 0, L4: 0}
+    cards:
+      - id: address-spaces
+        title: "address spaces, the generic, global, shared and local spaces of a pointer"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.Block.space, MojoProof.LLVM.Global.addrSpace, MojoProof.Sem.Layout.allocaSpace]
+        depends: []
+      - id: atomics
+        title: "atomics, atomicrmw with a commutative operation and an unused result"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.LLVM.RmwOp, MojoProof.LLVM.Stmt.checkAtomic, MojoProof.Sem.rmw, MojoProof.Sem.rmw_comm, MojoProof.Sem.exec_atomic, MojoProof.Sem.step_atomic, MojoProof.Sem.Grid.advance_atomic_comm]
+        depends: [gpu-model/launch]
+      - id: barriers
+        title: "the block barrier, bar.sync over the threads of a block"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.phases, MojoProof.Sem.phases_barrier, MojoProof.LLVM.Intrinsic.barrier_args]
+        depends: [gpu-model/launch]
+      - id: cp-async
+        title: "cp.async, asynchronous copies from global to shared memory and their groups"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [gpu-model/shared-memory]
+      - id: launch
+        title: "threads and the launch, the grid and blocks of threads and their special registers"
+        kind: construct
+        level: L1
+        evidence_present: [L3]
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.Launch, MojoProof.Sem.Launch.Valid, MojoProof.Sem.Launch.env, MojoProof.Sem.Env.sreg, MojoProof.Sem.Env.laneid, MojoProof.LLVM.SReg, MojoProof.LLVM.Intrinsic.sregName, MojoProof.Sem.Grid.start, MojoProof.Sem.Grid.Step, MojoProof.Sem.Grid.Sound, MojoProof.Sem.Kernel.Sound]
+        depends: []
+      - id: ldmatrix
+        title: "ldmatrix, a warp's load of 8x8 matrices from shared memory"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [gpu-model/shared-memory]
+      - id: mma
+        title: "mma, a warp's tensor-core multiply-accumulate"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [gpu-model/launch]
+      - id: shared-memory
+        title: "shared memory, the static and dynamic shared blocks of a block of threads"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.Sem.shared, MojoProof.Sem.shared_blocks, MojoProof.Sem.shared_closed, MojoProof.Sem.Launch.dynShared, MojoProof.Sym.shared_res]
+        depends: [gpu-model/address-spaces, gpu-model/launch]
+      - id: warp-shuffles
+        title: "warp shuffles, shfl.sync of an i32 across the lanes of a warp"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [MojoProof.LLVM.Shfl, MojoProof.LLVM.Intrinsic.shflName, MojoProof.LLVM.Intrinsic.shfl_args, MojoProof.Sem.shflSource, MojoProof.Sem.shfl_erase]
+        depends: [gpu-model/launch]
+  - id: kernels
+    title: "Kernels"
+    readme: roadmap/kernels/README.md
+    levels: {L0: 13, L1: 0, L2: 0, L3: 0, L4: 0}
+    cards:
+      - id: gemv
+        title: "gemv_kernel, a matrix-vector product (TorchLean.Tensor.matVecLoop)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [TorchLean.Tensor.matVecLoop, MojoProof.Sem.matVec_cell_real]
+        depends: [gpu-model/launch, floats/binary-op-rounding]
+      - id: layernorm
+        title: "layer_norm_gpu, the 34 row-wise layer norm specializations (TorchLean.Tensor.layerNorm)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 34
+        lean: [TorchLean.Tensor.layerNorm]
+        depends: [gpu-model/warp-shuffles, gpu-model/shared-memory, gpu-model/barriers, floats/rsqrt-approx, gpu-model/launch]
+      - id: layout-mma
+        title: "the layout tensor-core tests, mma_layout_tc, matmul_naive and c_fragment_kernel (TorchLean.Tensor.matmul)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 13
+        lean: [TorchLean.Tensor.matmul]
+        depends: [gpu-model/mma, gpu-model/launch]
+      - id: multistage-gemm
+        title: "multistage_gemm, the tiled tensor-core GEMM with asynchronous copies (TorchLean.Tensor.matmul)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 24
+        lean: [TorchLean.Tensor.matmul]
+        depends: [gpu-model/mma, gpu-model/ldmatrix, gpu-model/cp-async, gpu-model/shared-memory, gpu-model/barriers, kernels/split-k-reduce]
+      - id: naive-matmul
+        title: "matmul_kernel_naive, one thread per output cell of C = A B (TorchLean.Tensor.matmul)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 23
+        lean: [TorchLean.Tensor.matmul, MojoProof.Sem.matmul_cell_real]
+        depends: [gpu-model/launch, floats/contract, floats/binary-op-rounding]
+      - id: reduction
+        title: "sum_kernel, a block sum in shared memory with one atomic add per block (TorchLean.Tensor.sum)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 1
+        lean: [TorchLean.Tensor.sum]
+        depends: [gpu-model/shared-memory, gpu-model/barriers, gpu-model/atomics, gpu-model/launch]
+      - id: rms-norm
+        title: "rms_norm_gpu, root mean square normalization (TorchLean.Tensor.rmsNorm)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [TorchLean.Tensor.rmsNorm]
+        depends: [gpu-model/warp-shuffles, floats/rsqrt-approx, gpu-model/launch]
+      - id: softmax
+        title: "softmax_kernel, the row-wise softmax (TorchLean.Tensor.softmax)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 0
+        lean: [TorchLean.Tensor.softmax]
+        depends: [gpu-model/warp-shuffles, floats/maxnum-minnum, gpu-model/launch]
+      - id: split-k-reduce
+        title: "matmul split-k reduce, the sum of the partial products of a split GEMM (TorchLean.Tensor.sum)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 12
+        lean: [TorchLean.Tensor.sum]
+        depends: [gpu-model/launch, floats/binary-op-rounding]
+      - id: tiled-matmul
+        title: "tiled_matmul_kernel, a matmul by shared-memory tiles (TorchLean.Tensor.matmul)"
+        kind: kernel
+        level: L0
+        evidence_present: []
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 1
+        lean: [TorchLean.Tensor.matmul]
+        depends: [gpu-model/shared-memory, gpu-model/barriers, gpu-model/launch]
+      - id: vadd
+        title: "vector_addition, the elementwise sum of two float32 vectors (TorchLean.Tensor.add)"
+        kind: kernel
+        level: L0
+        evidence_present: [L2, L3, L4]
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 1
+        lean: [TorchLean.Tensor.add, MojoProof.Kernels.vadd.bytes, MojoProof.Kernels.vadd.correct]
+        depends: [gpu-model/launch, floats/binary-op-rounding, floats/deliver]
+      - id: vmul
+        title: "vector_multiply, the elementwise product of two float32 vectors (TorchLean.Tensor.mul)"
+        kind: kernel
+        level: L0
+        evidence_present: [L2, L3, L4]
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 1
+        lean: [TorchLean.Tensor.mul, MojoProof.Kernels.vmul.bytes, MojoProof.Kernels.vmul.correct]
+        depends: [gpu-model/launch, floats/binary-op-rounding, floats/deliver]
+      - id: vsub
+        title: "vector_subtraction, the tutorial's elementwise difference of two float32 vectors (TorchLean.Tensor.sub)"
+        kind: kernel
+        level: L0
+        evidence_present: [L2, L3, L4]
+        next: "L1 needs a recorded GPU run"
+        corpus_kernels: 1
+        lean: [TorchLean.Tensor.sub, MojoProof.Kernels.vsub.bytes, MojoProof.Kernels.vsub.correct]
+        depends: [kernels/vadd]
+  - id: layout
+    title: "Layout laws"
+    readme: roadmap/layout/README.md
+    levels: {L0: 15, L1: 0, L2: 0, L3: 0, L4: 0}
+    cards:
+      - id: bit-layout
+        title: "A layout whose extents are powers of two is linear over F2"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/swizzle]
+      - id: blocked-product
+        title: "`blocked_product`'s outer stride is documented as the block's cosize times the tiler's stride"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/cosize]
+      - id: coalesce
+        title: "`coalesce` keeps the offsets and merges contiguous modes"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+      - id: composition
+        title: "`composition(a, b)` maps a coordinate through `b`, then `a`"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+      - id: cosize
+        title: "`cosize` is the offset of the last coordinate plus one"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+      - id: crd2idx
+        title: "`crd2idx` is the dot product of a coordinate with the strides"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: idx2crd
+        title: "`idx2crd` inverts `crd2idx` only on layouts where the formula does"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+      - id: index-width
+        title: "With a narrow index type the caller must ensure products and sums fit"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+      - id: is-affine
+        title: "Stepping by a stride is exact only for an affine layout"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+      - id: reverse-transpose
+        title: "`reverse` and `transpose` reverse the shape and the stride"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: row-major-views
+        title: "`TileTensor.as_span`, `reshape` and `coalesce` need row-major contiguous strides"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: swizzle
+        title: "`Swizzle` is `x ^ ((x & mask) >> shift)` and needs `abs(shift) >= bits`"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: two-level-swizzle
+        title: "`two_level_layout_from_swizzle` evaluates to `Swizzle(L(x))`"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/swizzle, layout/is-affine]
+      - id: upcast
+        title: "`upcast` divides strides and shapes by the factor with `shape_div`"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: zipped-divide
+        title: "`zipped_divide` splits a layout into tile and number-of-tiles modes"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: [layout/crd2idx]
+  - id: llvm-ir
+    title: "LLVM IR constructs"
+    readme: roadmap/llvm-ir/README.md
+    levels: {L0: 6, L1: 58, L2: 0, L3: 0, L4: 0}
+    cards:
+      - id: inst-add
+        title: "The `add` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-addrspacecast
+        title: "The `addrspacecast` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-alloca
+        title: "The `alloca` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        depends: []
+      - id: inst-and
+        title: "The `and` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-ashr
+        title: "The `ashr` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-atomicrmw
+        title: "The `atomicrmw` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 1
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.rmw]
+        depends: []
+      - id: inst-bitcast
+        title: "The `bitcast` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.bitcast, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-call
+        title: "The `call` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_sreg, MojoProof.Sym.exec_minmax]
+        depends: []
+      - id: inst-extractelement
+        title: "The `extractelement` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        depends: []
+      - id: inst-extractvalue
+        title: "The `extractvalue` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_extract]
+        depends: []
+      - id: inst-fadd
+        title: "The `fadd` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
+        depends: []
+      - id: inst-fdiv
+        title: "The `fdiv` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
+        depends: []
+      - id: inst-fmul
+        title: "The `fmul` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
+        depends: []
+      - id: inst-fpext
+        title: "The `fpext` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-fptrunc
+        title: "The `fptrunc` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-fsub
+        title: "The `fsub` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
+        depends: []
+      - id: inst-getelementptr
+        title: "The `getelementptr` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_gep]
+        depends: []
+      - id: inst-icmp
+        title: "The `icmp` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.LLVM.ICmp.holds, MojoProof.Sym.exec_icmp]
+        depends: []
+      - id: inst-insertelement
+        title: "The `insertelement` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        depends: []
+      - id: inst-insertvalue
+        title: "The `insertvalue` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        depends: []
+      - id: inst-load
+        title: "The `load` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_load]
+        depends: []
+      - id: inst-lshr
+        title: "The `lshr` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-mul
+        title: "The `mul` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-or
+        title: "The `or` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-phi
+        title: "The `phi` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        depends: []
+      - id: inst-ptrtoint
+        title: "The `ptrtoint` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-sdiv
+        title: "The `sdiv` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-select
+        title: "The `select` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_select]
+        depends: []
+      - id: inst-sext
+        title: "The `sext` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intCast, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-shl
+        title: "The `shl` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-shufflevector
+        title: "The `shufflevector` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        depends: []
+      - id: inst-sitofp
+        title: "The `sitofp` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 3
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intToFloat, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-store
+        title: "The `store` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_store]
+        depends: []
+      - id: inst-sub
+        title: "The `sub` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-trunc
+        title: "The `trunc` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intCast, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: inst-udiv
+        title: "The `udiv` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-urem
+        title: "The `urem` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-xor
+        title: "The `xor` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
+        depends: []
+      - id: inst-zext
+        title: "The `zext` instruction"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intCast, MojoProof.Sym.exec_cast]
+        depends: []
+      - id: intrinsic-barrier
+        title: "The intrinsic family `Intrinsic.barrier`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-cpasynccommit
+        title: "The intrinsic family `Intrinsic.cpAsyncCommit`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-cpasyncwait
+        title: "The intrinsic family `Intrinsic.cpAsyncWait`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-extract
+        title: "The intrinsic family `Intrinsic.extract`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-fminmax
+        title: "The intrinsic family `Intrinsic.fminmax`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-griddeplaunch
+        title: "The intrinsic family `Intrinsic.griddepLaunch`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-griddepwait
+        title: "The intrinsic family `Intrinsic.griddepWait`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-laneid
+        title: "The intrinsic family `Intrinsic.laneid`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-ldmatrix
+        title: "The intrinsic family `Intrinsic.ldmatrix`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-lifetime
+        title: "The intrinsic family `Intrinsic.lifetime`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.lifetimeStarted]
+        depends: []
+      - id: intrinsic-minmax
+        title: "The intrinsic family `Intrinsic.minmax`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.intMinMax, MojoProof.Sym.exec_minmax]
+        depends: []
+      - id: intrinsic-mma
+        title: "The intrinsic family `Intrinsic.mma`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-reduceand
+        title: "The intrinsic family `Intrinsic.reduceAnd`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: intrinsic-rsqrtapprox
+        title: "The intrinsic family `Intrinsic.rsqrtApprox`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.rsqrt, MojoProof.Sem.rsqrtOk]
+        depends: []
+      - id: intrinsic-shfl
+        title: "The intrinsic family `Intrinsic.shfl`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.shflSource]
+        depends: []
+      - id: intrinsic-sreg
+        title: "The intrinsic family `Intrinsic.sreg`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sym.exec_sreg]
+        depends: []
+      - id: intrinsic-stepvector
+        title: "The intrinsic family `Intrinsic.stepvector`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        depends: []
+      - id: refused-asm-cp-async-cg-shared-global-3
+        title: "Refused: inline asm `cp.async.cg.shared.global` with 3 operands"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 2
+        lean: []
+        depends: []
+      - id: refused-asm-cp-async-cg-shared-global-4
+        title: "Refused: inline asm `cp.async.cg.shared.global` with 4 operands"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 5
+        lean: []
+        depends: []
+      - id: refused-asm-cvt-rn-f16x2-e4m3x2-2
+        title: "Refused: inline asm `cvt.rn.f16x2.e4m3x2` with 2 operands"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 4
+        lean: []
+        depends: []
+      - id: refused-asm-cvt-rn-satfinite-e4m3x2-f32-3
+        title: "Refused: inline asm `cvt.rn.satfinite.e4m3x2.f32` with 3 operands"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 1
+        lean: []
+        depends: []
+      - id: refused-load-atomic
+        title: "Refused: `load atomic`"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: refused-store-atomic
+        title: "Refused: `store atomic`"
+        kind: construct
+        level: L0
+        evidence_present: []
+        next: "L1 needs a Lean model"
+        corpus_kernels: 0
+        lean: []
+        depends: []
+      - id: term-br
+        title: "The `br` terminator"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.terminator, MojoProof.LLVM.Term, MojoProof.Sem.step, MojoProof.Sym.SState.exit_sound, MojoProof.Sym.SState.exitAt_sound]
+        depends: []
+      - id: term-ret
+        title: "The `ret` terminator"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 5
+        lean: [MojoProof.LLVM.Parser.terminator, MojoProof.LLVM.Term, MojoProof.Sem.step, MojoProof.Sym.SState.exit_sound]
+        depends: []
+  - id: std-math
+    title: "std.math functions the corpus kernels call"
+    readme: roadmap/std-math/README.md
+    levels: {L0: 0, L1: 3, L2: 0, L3: 0, L4: 0}
+    cards:
+      - id: max
+        title: "`std.math.max` on SIMD values: `llvm.maxnum` on floats, `llvm.smax` on signed integers"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 44
+        lean: [MojoProof.Sem.maxnum, MojoProof.Sem.intMinMax, MojoProof.Sem.maxnum_of_not_nan, MojoProof.Sem.maxnum_nanEq]
+        depends: [llvm-ir/intrinsic-fminmax, llvm-ir/intrinsic-minmax]
+      - id: min
+        title: "`std.math.min` on SIMD values: `llvm.smin` on signed integers"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 37
+        lean: [MojoProof.Sem.intMinMax]
+        depends: [llvm-ir/intrinsic-minmax]
+      - id: rsqrt
+        title: "`std.math.rsqrt` on float32 on the GPU is `llvm.nvvm.rsqrt.approx.ftz.f`"
+        kind: construct
+        level: L1
+        evidence_present: []
+        next: "L2 needs a recorded GPU run"
+        corpus_kernels: 34
+        lean: [MojoProof.Sem.rsqrtOk, MojoProof.Sem.rsqrt, MojoProof.Sem.rsqrtErr, MojoProof.Sem.rpow_le_rsqrtErr, MojoProof.Sem.rsqrtOk_of_rsqrt]
+        depends: [llvm-ir/intrinsic-rsqrtapprox]
