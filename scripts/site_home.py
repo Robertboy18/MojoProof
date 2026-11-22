@@ -256,8 +256,9 @@ need to change, and every theorem says how far it reaches: every program, a fami
 
 <h2 id="what-is-proved">What is proved today</h2>
 <div class="results">{''.join(results)}</div>
-<p class="note">Each result links to its Lean declaration. The full list, with every premise, is in the
-<a href="{site.blob}README.md">README</a> and the <a href="docs/trust.html">trusted base</a>.</p>
+<p class="note">Each result links to its Lean declaration. Every statement, with all its premises, is in
+<a href="docs/proved.html">What is proved</a>, and what the proofs trust is in the
+<a href="docs/trust.html">trusted base</a>.</p>
 
 <h2 id="roadmap">The roadmap</h2>
 <figure class="map">
