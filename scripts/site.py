@@ -465,18 +465,10 @@ class Site:
         self.docs()
 
     def home(self):
-        after = f'''
-<section class="next">
-<h2 id="where-to-go-next">Where to go next</h2>
-<ul>
-<li><a href="roadmap/index.html">Roadmap</a>: every card, its level and what its next level needs.</li>
-<li><a href="guide/index.html">How to contribute</a>: from a card to a merged pull request, in four steps.</li>
-<li><a href="docs/index.html">Docs</a>: the trusted base, the commands and tactics, the proofs written out and the dependency graphs.</li>
-</ul>
-<p>I'd love help! Pick a card on the roadmap, and come say hi on the
-<a href="{FORUM}">Modular forum</a>. Happy to help you get started : )</p>
-</section>'''
-        self.add_md('README.md', 'home', after=after)
+        """The home page: scripts/site_home.py."""
+        import site_home
+        self.root, self.blob, self.tree, self.repo, self.forum = ROOT, BLOB, TREE, REPO, FORUM
+        self.add('index.html', 'MojoProof', 'home', site_home.home_body(self), 'scripts/site_home.py')
 
     def roadmap(self):
         page = 'roadmap/index.html'
@@ -890,7 +882,7 @@ def css() -> str:
     dark = '\n'.join('  ' + ln for ln in dark.split('\n'))
     return ('/* MojoProof site: written by scripts/site.py. Code colours from Pygments. */\n' +
             light + '\n@media (prefers-color-scheme: dark) {\n' + dark + '\n}\n' +
-            STYLE.lstrip('\n'))
+            STYLE.lstrip('\n') + __import__('site_home').CSS.lstrip('\n'))
 
 
 # The check.
