@@ -1,9 +1,18 @@
 # The checks of CONTRIBUTING.md ("Building and checking"), the roadmap check and the site's
-# build and check, on pull requests (and by hand from the Actions tab). Pushes to main only rebuild the site.
+# build and check, on pull requests that change Lean code, the corpus, the scripts or the roadmap (and by hand
+# from the Actions tab). Pushes to main only rebuild the site.
 name: CI
 
 on:
   pull_request:
+    paths:
+      - '**.lean'
+      - 'lakefile.lean'
+      - 'lake-manifest.json'
+      - 'lean-toolchain'
+      - 'tests/**'
+      - 'scripts/**.py'
+      - 'roadmap/**'
   workflow_dispatch:
 
 permissions:
