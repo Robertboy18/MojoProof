@@ -6,7 +6,7 @@ ref: LLVM LangRef 24.0.0git #fptrunc-to-instruction
 quote: "The ‘fptrunc’ instruction truncates value to type ty2."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast
 corpus: tests/corpus/mgemm/g_matmul_kernel_naive_bfloat16_bfloat16_bfloat16_True_16_ba3789d9.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_126ea5ea.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_d7e21bec.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_01cf4f39.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_c8f5de2a.nvptx.ll
-tests: MojoProofTest.Rule, MojoProofTest.Corpus
+tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
 ---
@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-LangRef's section on `fptrunc` (the quote is the first sentence of its overview). The importer reads `fptrunc` as `Inst.cast` with `CastOp.fptrunc` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.floatCast`. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (trunc, zext and sext); refused (the other casts): SState.stmt takes trunc, zext and sext only.
+LangRef's section on `fptrunc` (the quote is the first sentence of its overview). The importer reads `fptrunc` as `Inst.cast` with `CastOp.fptrunc` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.floatCast`. MojoProofTest/Modelled.lean runs a kernel of it (its row `fptrunc`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (trunc, zext and sext); refused (the other casts): SState.stmt takes trunc, zext and sext only.
 
 ## Corpus
 
-6 of the 111 corpus files use it (321 uses); `corpus` lists the first 5 in path order.
+6 of the 114 corpus files use it (321 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

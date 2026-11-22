@@ -1,7 +1,7 @@
 import MojoProofTest.SymRun
 
 /-!
-# `Block.sound_retI` on edges into `phi` blocks: the naive matmul kernel's, and `br i1`'s
+# `Block.sound_retR` on edges into `phi` blocks: the naive matmul kernel's, and `br i1`'s
 
 `naive` is `matmul_kernel_naive_float32_float32_float32_True_16_16826c8c`
 (tests/corpus/mgemm/), imported here only. Its loop header `%46` starts with two `phi`s, the
@@ -21,10 +21,12 @@ checker without `phi`s refuses the edge `%51 → %67`.
   (`%46`'s position 2 with `%47 = 0`, `%48` the binary32 word of 1, the bound `%16 = 0` and `%40`
   pointing at `mem0`'s output block 3): the header's branch goes to `%51` (`0 < 0` fails), and
   the entry valuation of `%67` (`Valuation.into`) has `%68 = %48`, which `enter` sets.
-* `trip0_cell`: `Block.sound_retI` with these: the thread's steps from `frameH 0` run the path
+* `trip0_cell`: `Block.sound_retR` with these: the thread's steps from `frameH 0` run the path
   to its `ret`, the next step returns, and the output's cell 0 holds 1.
-* `trip0_twins`: the summary of `%45`, whose `br` enters `%46` with the float constant `0.0` for
-  `%48`, is refused (`SState.phiConds` takes registers and integer constants only); an edge
+* `pre`, `pre_covers`: the summary of `%45`, whose `br` enters `%46` with the integer constant
+  0 for `%47` and the float constant `0.0` for `%48`: the constant is its node 0
+  (`SNode.flit`), and the path checker with `phi`s accepts `%45 → %46 → %51 → %67 → %69`.
+* `trip0_twins`: `%45`'s certificate without node 0's obligation is refused; an edge
   `%50 → %67` is refused, since `%67`'s `phi` has no operand from `%50`; with the bound
   `%16 = 1` the header goes to `%50` and the premises fail; the path checker without `phi`s
   (`coversPath`) refuses the path.
@@ -33,14 +35,16 @@ A `br i1` into blocks with `phi`s (`edgeF`, a function written here: block 0's `
 `%3` goes to block 1, whose `phi` takes the constant 7 from block 0, or to block 2, whose `phi`
 takes the float constant 1.5):
 
+* `entryB`, `entry_both`: the entry block's summary with both edges' obligations (`summarize`):
+  block 2's constant 1.5 is its node 0, whose obligation holds at `frameE true`.
 * `entryTo`: the entry block's summary for the edge into block 1 (`summarizeWith` with
   `SState.exitTo`), with the obligations of that edge only.
 * `edge_covers`, `edge_walk`, `edge_run`: the path checker with `phi`s accepts the path `0 → 1`
   (the entry block by `coversTo`), its premises hold at `frameE true` (`%3 = 1`), and
-  `Block.sound_retI` runs the thread through the edge to block 1's `ret`.
-* `edge_twins`: `summarize` refuses the entry block (both edges' obligations, block 2's float
-  constant among them); `coversTo` refuses `entryTo` without its first obligation and with none;
-  the path `0 → 2` is refused; with `%3 = 0` the premises of the path `0 → 1` fail.
+  `Block.sound_retR` runs the thread through the edge to block 1's `ret`.
+* `edge_twins`: `coversTo` refuses `entryTo` without its first obligation and with none;
+  the path `0 → 2` with `entryTo` is refused; with `%3 = 0` the premises of the path `0 → 1`
+  fail.
 
 A `ret` to a caller frame: `edge_back` runs the thread `[frameE true, callerE]` through the
 callee's path `0 → 1`, back to the caller `callerE` after its call (position 1 of block 1, with
@@ -106,7 +110,7 @@ theorem trip0_walk :
 
 /-- **The output cell at the return**: the steps from `frameH 0` run `%46 → %51 → %67 → %69` to
 its `ret`, the next step returns (`.done`), and cell 0 of the output holds the accumulator's
-value 1 (`Block.sound_retI` with `trip0_covers` and `trip0_walk`, and the kernel's evaluation
+value 1 (`Block.sound_retR` with `trip0_covers` and `trip0_walk`, and the kernel's evaluation
 of the path's effects). -/
 theorem trip0_cell : ∃ fe me,
     Steps ctxN ⟨[frameH 0], 0⟩ mem0 ⟨[fe], 0 + pathLen hdr trip0⟩ me ∧
@@ -127,7 +131,7 @@ theorem trip0_cell : ∃ fe me,
           | .error _ => false
         | .error _ => false) = true := by
     decide +kernel
-  obtain ⟨fe, me, hS, hm, hst⟩ := Block.sound_retI (c := ctxN) (t := ⟨[frameH 0], 0⟩) (m := mem0)
+  obtain ⟨fe, me, hS, hm, hst⟩ := Block.sound_retR (c := ctxN) (t := ⟨[frameH 0], 0⟩) (m := mem0)
     (f := frameH 0) rfl trip0_covers rfl rfl rfl rfl trip0_walk rfl
   refine ⟨fe, me, hS, hst, ?_⟩
   dsimp only at hm
@@ -137,13 +141,32 @@ theorem trip0_cell : ∃ fe me,
   next v hv => rw [hv, Val.float?_eq_some.1 (of_decide_eq_true hc)]
   next => exact absurd hc (by decide)
 
-/-- **The twins**: the summary of `%45`, whose `br` enters `%46` with the float constant `0.0`
-for `%48`, is refused; `%67`'s `phi` has no operand from `%50`, so an edge `%50 → %67` is
+/-- `%45`, the loop's preheader, from position 0: `br label %46`, whose `phi`s take the
+integer constant 0 for `%47` and the float constant `0.000000e+00` for `%48`. -/
+sym_summary pre := naive.prog naive.fn_0 naive.fn_0.b_2.label 0
+
+/-- **The preheader**: `%45`'s summary has one node, the float constant `0.0` at type `float`
+(`SNode.flit`, from `SState.start`), and the obligations that the edge's operands (the word 0
+for `%47`, node 0 for `%48`) evaluate and that its effects (none) run; the path checker with
+`phi`s accepts `%45 → %46 → %51 → %67 → %69` from position 0. The premises of `%45` and its
+edge hold at every valuation of `naive`'s function (`SymNaive.pre_edge`,
+MojoProofTest/SymNaive.lean). -/
+theorem pre_covers :
+    pre.nodes = [.flit .float (.dec false "0" "000000" 0)] ∧
+    pre.obls = [.ok (.int 64 0), .ok (.node 0), .mem []] ∧
+    coversPathI naive.prog naive.fn_0 0
+      ((naive.fn_0.b_2.label, pre.obls, pre) :: (naive.fn_0.b_3.label, hdr.obls, hdr) :: trip0) =
+      true := by
+  decide +kernel
+
+/-- **The twins**: `%45`'s certificate without the obligation that node 0 (the float constant
+`0.0`) evaluates is refused; `%67`'s `phi` has no operand from `%50`, so an edge `%50 → %67` is
 refused (`SState.phiConds` gives `none`); with the bound `%16 = 1` the header goes to `%50`,
 and the premises of the path through `%51` fail; the path checker without `phi`s refuses the
 path, whose edge `%51 → %67` enters a `phi` block. -/
 theorem trip0_twins :
-    summarize naive.prog naive.fn_0 naive.fn_0.b_2.label 0 = none ∧
+    covers naive.prog naive.fn_0 naive.fn_0.b_2.label 0 (pre.obls.erase (.ok (.node 0))) pre =
+      false ∧
     (SState.init.phiConds naive.fn_0 naive.fn_0.b_4.label naive.fn_0.b_7.label).isNone = true ∧
     ¬ WalkI (Valuation.entry ctxN 0 mem0 (frameH 1))
       ((naive.fn_0.b_3.label, hdr.obls, hdr) :: trip0) ∧
@@ -155,7 +178,8 @@ theorem trip0_twins :
 
 /-- A `br i1` on `%3` from the entry block 0 into two blocks that start with a `phi`: block 1's
 `%4 = phi i64 [7, %0]`, then `%6 = add nsw i64 %4, 1` and `ret void`; block 2's
-`%5 = phi double [1.5, %0]` (a float constant, outside the checker's fragment), then `ret void`. -/
+`%5 = phi double [1.5, %0]` (a float constant, written as the bits of a `double`), then
+`ret void`. -/
 def edgeF : Func :=
   { linkage := [], cconv := none, retAttrs := [], ret := .void, name := "edge", params := [],
     group := none, names := #["entry", "a", "b", "c", "x", "y", "z"],
@@ -163,7 +187,7 @@ def edgeF : Func :=
       ⟨1, #[{ res := some 4, inst := .phi (.int 64) [(.int 7, 0)] },
         { res := some 6, inst := .bin .add { nsw := true } (.int 64) (.loc 4) (.int 1) }],
         .ret none⟩,
-      ⟨2, #[⟨some 5, .phi (.fp .double) [(.float (.hex "0x" 0x3FF8000000000000), 0)], []⟩],
+      ⟨2, #[⟨some 5, .phi (.fp .double) [(.float (.hex "" 0x3FF8000000000000), 0)], []⟩],
         .ret none⟩] }
 
 /-- The program of `edgeF` alone. -/
@@ -176,6 +200,19 @@ def ctxE : Ctx := { ctx0 with prog := edgeP }
 def frameE (b : Bool) : Frame :=
   ⟨edgeF, 0, 0, fun r => if r = 3 then some (.bits 1 (BitVec.ofBool b)) else none,
     fun _ => none, [], none⟩
+
+/-- The entry block's summary with both edges' obligations (`summarize`). -/
+sym_summary entryB := edgeP edgeF 0 0
+
+/-- **Both edges**: the entry block's summary has one node, block 2's `phi` operand 1.5
+(`SNode.flit`), and the obligations that `%3` is a word, that the constant 7 and node 0
+evaluate, and that its effects (none) run; at `frameE true` under `ctxE` on `mem0` they hold
+(node 0's value is `floatLit` of the literal, 1.5 as a `double`). -/
+theorem entry_both :
+    entryB.nodes = [.flit .double (.hex "" 0x3FF8000000000000)] ∧
+    entryB.obls = [.bool (.reg 3), .ok (.int 64 7), .ok (.node 0), .mem []] ∧
+    WalkI (Valuation.entry ctxE 0 mem0 (frameE true)) [(0, entryB.obls, entryB)] := by
+  decide +kernel
 
 /-- The entry block's summary for its edge into block 1 (`summarizeWith` with `SState.exitTo`,
 evaluated): the exit `Exit.phi` on `%3`, with the obligations that `%3` is a word and that block
@@ -202,23 +239,21 @@ theorem edge_walk :
   decide +kernel
 
 /-- **The run through the edge into block 1**: from `frameE true` the thread's steps run
-the entry block and block 1 to its `ret`, and the next step returns (`Block.sound_retI` with
+the entry block and block 1 to its `ret`, and the next step returns (`Block.sound_retR` with
 `edge_covers` and `edge_walk`). For this program, context, memory and frame only. -/
 theorem edge_run : ∃ fe me,
     Steps ctxE ⟨[frameE true], 0⟩ mem0 ⟨[fe], 0 + pathLen entryTo edgeT⟩ me ∧
     step ctxE ⟨[fe], 0 + pathLen entryTo edgeT⟩ me = .ok (.done me) := by
-  obtain ⟨fe, me, hS, -, hst⟩ := Block.sound_retI (c := ctxE) (t := ⟨[frameE true], 0⟩)
+  obtain ⟨fe, me, hS, -, hst⟩ := Block.sound_retR (c := ctxE) (t := ⟨[frameE true], 0⟩)
     (m := mem0) (f := frameE true) rfl edge_covers rfl rfl rfl rfl edge_walk rfl
   exact ⟨fe, me, hS, hst⟩
 
-/-- **The twins**: the block checker with both edges' obligations refuses the entry block
-(block 2's `phi` operand is a float constant); `coversTo` refuses the corrupted certificates
-`entryTo` without its first obligation (that `%3` is a word) and `entryTo` with no obligations;
-the path checker refuses the path `0 → 2`, with block 2's summary from position 1 (`ret void`
-alone, `Kernels.vadd.b3`), since the edge into block 2 has no obligations in the fragment; and
-with `%3 = 0` the branch goes to block 2, so the premises of the path `0 → 1` fail. -/
+/-- **The twins**: `coversTo` refuses the corrupted certificates `entryTo` without its first
+obligation (that `%3` is a word) and `entryTo` with no obligations; the path checker refuses the
+path `0 → 2` with `entryTo`, the certificate of the edge into block 1, and block 2's summary from
+position 1 (`ret void` alone, `Kernels.vadd.b3`); and with `%3 = 0` the branch goes to block 2,
+so the premises of the path `0 → 1` fail. -/
 theorem edge_twins :
-    summarize edgeP edgeF 0 0 = none ∧
     coversTo edgeP edgeF 0 0 1 entryTo.obls.tail entryTo = false ∧
     coversTo edgeP edgeF 0 0 1 [] { entryTo with obls := [] } = false ∧
     coversPathI edgeP edgeF 0

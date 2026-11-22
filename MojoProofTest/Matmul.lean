@@ -25,11 +25,29 @@ and the vector `vB = [1, 1 - 2 ^ -23]`, the first column of `mB`, as TorchLean t
   the `contract` flag over `matVecPairs mA vB 1` is its entry 1 (`matVec_cell_eq`); that word is
   finite, so it is within `dotBound .binary32 2 T` of entry 1 of the real product
   (`matVec_error_inst`, the instance of `matVec_cell_error`).
+
+The thread's loads and accumulator, on the 2 × 3 binary32 matrices `tA = [[1, 2, 3], [4, 5, 6]]`
+and `tB = [[1, 0, -1], [2, 1, 0]]`, whose product `tA tBᵀ` (TorchLean's transpose `tBᵀ`) is
+`[[-2, 4], [-2, 13]]` (`cells`):
+
+* `load_inst`, the instance of `Mem.load_get2`: in the memory `Mem.alloc` makes from `tB`'s bytes
+  under the default layout, the load of a `float` at element `1 * 3 + 0` of the block is
+  `get2 tB 1 0`, which is entry `(0, 1)` of `tBᵀ` (`get2_swap`).
+* `cell_inst`, the instance of `cell_of_floatBin` and `matmul_cell_eq` at every cell: with the
+  flags `contract` and the oracle numbers `(0, 1)`, the words `floatBin` gives for the loop's
+  `fmul`s and `fadd`s over row `i` of `tA` and row `j` of `tB` (`prodW`, `accW`) end in entry
+  `(i, j)` of TorchLean's `Tensor.matmul tA tBᵀ`.
+* `untransposed`, the twin: reading `tB`'s six words untransposed, as the 3 × 2 matrix `tBu`
+  (element `k * 2 + j` at `(k, j)`), the loop over `matmulPairs tA tBu 0 0` gives 2, not entry
+  `(0, 0)` of `tA tBᵀ`, which is -2.
+* `take_inst`, the instance of `matmul_take_eq` and its twin: the loop over the first 2 of the 3
+  pairs of row 0 of `tA` and row 0 of `tB` gives 1, entry `(0, 0)` of the product of the first 2
+  columns of `tA` and the transpose of the first 2 columns of `tB`, and not the full entry -2.
 -/
 
 namespace MojoProofTest.Matmul
 
-open MojoProof.Sem FloatLib.Floats.Formats.BinaryInterchange TorchLean
+open MojoProof.Sem MojoProof.LLVM FloatLib.Floats.Formats.BinaryInterchange TorchLean
 open MojoProofTest.FloatRel (f32)
 
 /-- The binary32 matrix `[[-1, 1 + 2 ^ -23], [1, 2]]` (words `0xbf800000`, `0x3f800001`,
@@ -152,5 +170,178 @@ theorem matVec_error_inst :
           .matVec).getScalar 1| ≤
       dotBound .binary32 2 ((matVecPairs mA vB 1).map fun ab => |ab.1.toReal * ab.2.toReal|).sum :=
   matVec_cell_error rfl false _ mA vB 1 (by rw [matVec_cell_inst, matVec_vals.2]; decide +kernel)
+
+/-! ## The thread's loads and accumulator -/
+
+/-- The binary32 matrix `[[1, 2, 3], [4, 5, 6]]` (words `0x3f800000`, `0x40000000`,
+`0x40400000`, `0x40800000`, `0x40a00000`, `0x40c00000`), as a TorchLean tensor of shape
+`[2, 3]`. -/
+def tA : Tensor (Model .binary32) [2, 3] :=
+  Tensor.Rep.ofFn fun c =>
+    ![![f32 0x3f800000, f32 0x40000000, f32 0x40400000],
+      ![f32 0x40800000, f32 0x40a00000, f32 0x40c00000]] c.1 c.2.1
+
+/-- The six binary32 words `1, 0, -1, 2, 1, 0` (`0x3f800000`, `0`, `0xbf800000`, `0x40000000`,
+`0x3f800000`, `0`): the buffer of `tB`, in memory order. -/
+def wB : List (Model .binary32) :=
+  [f32 0x3f800000, f32 0, f32 0xbf800000, f32 0x40000000, f32 0x3f800000, f32 0]
+
+/-- The buffer `wB` read row-major as a 2 × 3 matrix, element `j * 3 + k` at `(j, k)`:
+`[[1, 0, -1], [2, 1, 0]]`. -/
+def tB : Tensor (Model .binary32) [2, 3] :=
+  Tensor.Rep.ofFn fun c => wB.getD (c.1 * 3 + c.2.1) (f32 0)
+
+/-- The buffer `wB` read untransposed as a 3 × 2 matrix, element `k * 2 + j` at `(k, j)`:
+`[[1, 0], [-1, 2], [1, 0]]`. -/
+def tBu : Tensor (Model .binary32) [3, 2] :=
+  Tensor.Rep.ofFn fun c => wB.getD (c.1 * 2 + c.2.1) (f32 0)
+
+/-- TorchLean's transpose of `tB`, a 3 × 2 matrix. -/
+abbrev tBT : Tensor (Model .binary32) [3, 2] :=
+  Tensor.permute tB (Shape.adjacentSwap [2, 3] 0) [3, 2]
+
+/-- **TorchLean's binary32 product of `tA` and `tBᵀ`**: `Tensor.matmul tA tBᵀ` is
+`[[-2, 4], [-2, 13]]` (words `0xc0000000`, `0x40800000`, `0xc0000000`, `0x41500000`): the
+kernel evaluates `Tensor.matmul tA tBᵀ` at each coordinate (`decide +kernel`). -/
+theorem cells :
+    Tensor.get2 (Tensor.matmul tA tBT) 0 0 = f32 0xc0000000 ∧
+      Tensor.get2 (Tensor.matmul tA tBT) 0 1 = f32 0x40800000 ∧
+      Tensor.get2 (Tensor.matmul tA tBT) 1 0 = f32 0xc0000000 ∧
+      Tensor.get2 (Tensor.matmul tA tBT) 1 1 = f32 0x41500000 := by
+  simp only [tBT, Tensor.get2_eq_apply, tA, tB]
+  decide +kernel
+
+/-- The memory and block number `Mem.alloc` gives under the default layout (a `float` takes 4
+bytes) for `tB`'s 24 bytes (`tensorBytes`, row-major) in the empty memory: block 1, in address
+space 1, live, read-only, owned by all threads, at addresses 16 in its space and in the generic
+space. -/
+def allocB : Mem × Nat :=
+  ({} : Mem).alloc {} 1 (Shape.size [2, 3] * ({} : Layout).size (.fp .float)) 16 true true .all 1 1
+    (tensorBytes {} (.fp .float) (.ofFloat .float) tB)
+
+/-- **The instance of `Mem.load_get2`**: in the memory `allocB` makes, for every thread `w`, the
+load of a `float` under the default layout through the generic space with alignment 4 at element
+`1 * 3 + 0` of block 1 (offset 12, address 28) gives `get2 tB 1 0`, which is entry `(0, 1)` of
+TorchLean's transpose of `tB`; the block holds `tB` by `Mem.holds_alloc`. -/
+theorem load_inst (w : Who) :
+    allocB.1.load {} w 0 (.fp .float)
+        ⟨allocB.2, ((0 + (1 * 3 + 0) * ({} : Layout).size (.fp .float) : Nat) : Int)⟩ (some 4) =
+      .ok (.ofFloat .float (Tensor.get2 tBT 0 1 : Model .binary32)) := by
+  obtain ⟨blk, hb, h⟩ := Mem.holds_alloc (Layout.Codec.float {} .float) tB {} 1 16 true true .all
+    1 1
+  have e : blk = _ := (Option.some.inj hb).symm
+  subst e
+  rw [show Tensor.get2 tBT 0 1 = Tensor.get2 tB 1 0 from get2_swap tB 0 1]
+  exact Mem.load_get2 (w := w) (r := 1) (k := 0) (a := 0) (ad := 28) hb h rfl rfl (by decide)
+    (by decide) rfl
+    (fun q hq => by simp only [Option.mem_def, Option.some.injEq] at hq; subst hq; rfl)
+
+/-- The flags of the naive kernel's `fmul` and `fadd`: `contract` only. -/
+def fmC : FastMath := { contract := true }
+
+/-- The value of a result, `poison` for a fault. -/
+def res : Except Fault Val → Val
+  | .ok v => v
+  | .error _ => .poison
+
+/-- A result that is not a fault is `.ok` of its `res`. -/
+theorem res_eq {x : Except Fault Val} (h : x.isOk = true) : x = .ok (res x) := by
+  cases x
+  · cases h
+  · rfl
+
+/-- The word of the `fmul` of iteration `k < 3` of the loop for cell `(i, j)` under oracle
+sequence `o`: `floatBin`'s product of `get2 tA i k` and `get2 tB j k` with no factors, at
+`(o k).1`; `poison` for `k ≥ 3`. -/
+def prodW (o : Nat → Nat × Nat) (i j : Fin 2) (k : Nat) : Val :=
+  if hk : k < 3 then
+    res (floatBin .float .fmul fmC (.ofFloat .float (Tensor.get2 tA i ⟨k, hk⟩))
+      (.ofFloat .float (Tensor.get2 tB j ⟨k, hk⟩)) none none (o k).1)
+  else .poison
+
+/-- The accumulator of the loop for cell `(i, j)` under oracle sequence `o` after `k`
+iterations: `+0`, then `floatBin`'s sum of the accumulator (no factors) and `prodW o i j k` (the
+factors `(get2 tA i k, get2 tB j k)`, as `exec` records them under `contract`) at `(o k).2`;
+`poison` after 3. -/
+def accW (o : Nat → Nat × Nat) (i j : Fin 2) : Nat → Val
+  | 0 => .ofFloat .float (Model.zero .binary32 false)
+  | k + 1 =>
+    if hk : k < 3 then
+      res (floatBin .float .fadd fmC (accW o i j k) (prodW o i j k) none
+        (some (.ofFloat .float (Tensor.get2 tA i ⟨k, hk⟩),
+          .ofFloat .float (Tensor.get2 tB j ⟨k, hk⟩))) (o k).2)
+    else .poison
+
+/-- **The instance of `cell_of_floatBin` and `matmul_cell_eq`**, at every cell `(i, j)`: with
+the flags `contract` and the oracle numbers `(0, 1)` for every iteration, the accumulator
+`accW` after 3 iterations is the word of entry `(i, j)` of TorchLean's `Tensor.matmul tA tBᵀ`.
+The premises of `cell_of_floatBin` hold because no `floatBin` of the loop faults, by evaluation
+in the kernel. -/
+theorem cell_inst (i j : Fin 2) :
+    accW (fun _ => (0, 1)) i j 3 = .ofFloat .float (Tensor.get2 (Tensor.matmul tA tBT) i j) := by
+  have okM : ∀ i j : Fin 2, ∀ k : Fin 3, (floatBin .float .fmul fmC
+      (.ofFloat .float (Tensor.get2 tA i k)) (.ofFloat .float (Tensor.get2 tB j k)) none none
+      0).isOk = true := by
+    simp only [tA, tB]
+    decide +kernel
+  have okA : ∀ i j : Fin 2, ∀ k : Fin 3, (floatBin .float .fadd fmC (accW (fun _ => (0, 1)) i j k)
+      (prodW (fun _ => (0, 1)) i j k) none (some (.ofFloat .float (Tensor.get2 tA i k),
+        .ofFloat .float (Tensor.get2 tB j k))) 1).isOk = true := by
+    simp only [tA, tB]
+    decide +kernel
+  have hnan : ∀ i j : Fin 2, (Tensor.get2 (Tensor.matmul tA tBT) i j).isNaN = false := by
+    simp only [tBT, Tensor.get2_eq_apply, tA, tB]
+    decide +kernel
+  have h := cell_of_floatBin (t := .float) (fm := fmC) rfl rfl rfl (fun _ => (0, 1)) tA tB i j
+    (accW (fun _ => (0, 1)) i j) (prodW (fun _ => (0, 1)) i j) rfl
+    (fun k hk => by simp only [prodW, hk, ↓reduceDIte]; exact res_eq (okM i j ⟨k, hk⟩))
+    (fun k hk => by simp only [accW, hk, ↓reduceDIte]; exact res_eq (okA i j ⟨k, hk⟩))
+  exact h.trans (congrArg (Val.ofFloat .float)
+    ((matmul_cell_eq true (fun _ => (0, 1)) tA tBT i j (fun _ _ => by simp)).1 (hnan i j)))
+
+/-- **The twin of the transposed read**: reading `tB`'s buffer untransposed, as the 3 × 2 matrix
+`tBu`, the loop over `matmulPairs tA tBu 0 0` from `+0` with the `contract` flag under the oracle
+numbers `(0, 1)` gives 2 (`0x40000000`), by evaluation, and that word is not entry `(0, 0)` of
+`Tensor.matmul tA tBᵀ`, which is -2. -/
+theorem untransposed :
+    dotLoop true (fun _ => (0, 1)) (Model.zero .binary32 false) (matmulPairs tA tBu 0 0) =
+        f32 0x40000000 ∧
+      dotLoop true (fun _ => (0, 1)) (Model.zero .binary32 false) (matmulPairs tA tBu 0 0) ≠
+        Tensor.get2 (Tensor.matmul tA tBT) 0 0 := by
+  have h : dotLoop true (fun _ => (0, 1)) (Model.zero .binary32 false) (matmulPairs tA tBu 0 0) =
+      f32 0x40000000 := by
+    simp only [matmulPairs, Tensor.get2_eq_apply, tA, tBu, Tensor.Rep.get_ofFn]
+    decide +kernel
+  refine ⟨h, ?_⟩
+  rw [h, cells.1]
+  decide +kernel
+
+/-- **The instance of `matmul_take_eq`**, and its twin: the loop without the `contract` flag
+(oracle numbers `(0, 0)`) from `+0` over the first 2 of the 3 pairs of row 0 of `tA` and row 0 of
+`tB`, `(1, 1)` and `(2, 0)`, gives 1 (`0x3f800000`), by evaluation; that word is entry `(0, 0)` of
+TorchLean's product of the first 2 columns of `tA` and the transpose of the first 2 columns of
+`tB` (`matmul_take_eq`, from its NaN half and the word); and it is not entry `(0, 0)` of the full
+product `Tensor.matmul tA tBᵀ`, which is -2. -/
+theorem take_inst :
+    dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false)
+        ((List.ofFn fun k : Fin 3 => (Tensor.get2 tA 0 k, Tensor.get2 tB 0 k)).take 2) =
+        f32 0x3f800000 ∧
+      dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false)
+          ((List.ofFn fun k : Fin 3 => (Tensor.get2 tA 0 k, Tensor.get2 tB 0 k)).take 2) =
+        Tensor.get2 (Tensor.matmul (cols 2 (by decide) tA)
+          (Tensor.permute (cols 2 (by decide) tB) (Shape.adjacentSwap [2, 2] 0) [2, 2])) 0 0 ∧
+      dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false)
+          ((List.ofFn fun k : Fin 3 => (Tensor.get2 tA 0 k, Tensor.get2 tB 0 k)).take 2) ≠
+        Tensor.get2 (Tensor.matmul tA tBT) 0 0 := by
+  have h : dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false)
+      ((List.ofFn fun k : Fin 3 => (Tensor.get2 tA 0 k, Tensor.get2 tB 0 k)).take 2) =
+      f32 0x3f800000 := by
+    simp only [Tensor.get2_eq_apply, tA, tB, Tensor.Rep.get_ofFn]
+    decide +kernel
+  have e := matmul_take_eq false (fun _ => (0, 0)) tA tB (K := 2) (by decide) 0 0
+    (fun _ h => by cases h)
+  refine ⟨h, e.1 (by rw [← e.2, h]; decide +kernel), ?_⟩
+  rw [h, cells.1]
+  decide +kernel
 
 end MojoProofTest.Matmul

@@ -1,0 +1,39 @@
+GPU run record: a conformance test, not a proof.
+
+kernel: tests/corpus/mgemm_sm80/test_multistage_gemm_kernel_matmul_kernel_naive_float32_float32_float32_True_16_343aedc5.nvptx.ll
+kernel sha256: 03f8d1b362e7612b7a2ae6dd359d640e16afa58b508b21a1ac11d17c1e4c6274
+program: tests/gpu/naive/test_multistage_gemm_kernel.mojo
+program sha256: 9e25b5a22bdc613e9a007eb48bc99b7f84bf220818d88552bdc85f73c31dd759
+program origin: modular/modular@bbc13a71:max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo, its imports kept and the rest replaced by a main that launches the library's float32 matmul_kernel_naive (BLOCK_DIM 16, transpose_b) as that file's multistage_gemm_run[M=20, N=50257, K=768] instantiates it
+mojo: Mojo 1.3.0.dev2026112105 (f23ed0af), the newest nightly installed where the run was made
+build: mojo build -o naive tests/gpu/naive/test_multistage_gemm_kernel.mojo
+ir: mojo build --emit llvm --target-accelerator sm_80 of the program, with this Mojo, emits the kernel's IR as the corpus file, byte for byte (the same sha256; the corpus file is that output). The proved program is the import of tests/corpus/mgemm/g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.nvptx.ll (MojoProofTest.SymPhi.naive, sm_90a, Mojo 1.3.0.dev2026111705), of which the corpus file differs in two lines only: line 7, the kernel's name (suffix 343aedc5 for 16826c8c; the suffix follows the Mojo version, not the target: the older Mojo at sm_80 emits 16826c8c, this one at sm_90a 343aedc5), and line 112, attribute group #0 ("target-cpu"="sm_80" "target-features"="+ptx81,+sm_80" "tune-cpu"="sm_80" for sm_90a and +ptx85,+sm_90a). In Lean, MojoProofTest.Gpu.naiveSm80_fn (by rfl): the imported function is naive's but for its name; MojoProofTest.Gpu.naiveSm80_prog (by rfl): the imported program is naive's but for the kernel's name, the file's sha256, the kernel list and attribute group 0
+gpu: NVIDIA A100-SXM4-80GB (compute capability 8.0, sm_80), NVIDIA driver 580.167.08, one GPU selected with CUDA_VISIBLE_DEVICES
+run: naive 20261122 dump.txt
+seed: 20261122
+inputs: for each launch, A of m * 768 words and B of n * 768 words, row-major with row stride 768 (the static K): in each row the first k words are successive outputs of the program's xorshift64* generator (next_word; the state starts at the seed and continues across launches) with exponent 255 changed to 254 (finite), and in the launches 2 21 768, 4 6 33 and 3 17 768 also with the exponent set to 124 plus its low 3 bits (magnitude in [2^-3, 2^5), sums finite); the other words of each row are 0x7FBADBAD. Every input is a finite float32 (32 of the 39872 input words of this run are subnormal, none is zero). C, the output, has m * 50257 words (row stride 50257, the static N), every word 0x7FBADBAD before the launch
+launches: m n k gx gy bx by words, a 2-D launch of gx x gy blocks of bx x by threads on m rows, n columns and inner dimension k, where words = m * 50257 is the length of C. Every launch has threads out of bounds in x and in y (m and n are not multiples of 16, and the grid of 4 6 33 is larger than ceildiv(m, 16) x ceildiv(n, 16)); every grid covers the m x n cells; k is 768 (the static K) in three launches and 0 (no round) in one
+launch: 1 1 1 1 1 16 16 50257
+launch: 3 5 768 1 1 16 16 150771
+launch: 17 19 7 2 2 16 16 854369
+launch: 2 21 768 1 2 16 16 100514
+launch: 5 20 0 1 2 16 16 251285
+launch: 4 6 33 2 2 16 16 201028
+launch: 20 40 2 2 3 16 16 1005140
+launch: 3 17 768 1 2 16 16 150771
+dump: tests/gpu/naive/dump.txt, sha256 4ece48981eb026412cf546665fd805778e95535a24fc8e132b61ef9422ac8a12: the inputs and the whole of C after each launch, on the GPU (a run of k equal words written w*k)
+compare time: 3 min 16 s and 594 MB peak memory for the 8 launches, compiled: the test executable that lake build mojoproof_test builds runs MojoProofTest.Gpu.main on its arguments after gpu (MojoProofTest/Main.lean). lake env lean --run tests/gpu/Compare.lean naive <dump> <launches> runs the same code interpreted: 8.3 s for the launch 1 1 1 alone; the launch 3 5 768 alone was stopped unfinished after 5 min 28 s
+compare: .lake/build/bin/mojoproof_test gpu naive tests/gpu/naive/dump.txt 8
+oracle: every thread of the evaluator ran with the oracle that is always 2: each fadd contract of the loop is the fused multiply-add of the fmul contract product into the sum (Sem.contract), and 2 encodes no NaN, so no result is replaced (Sem.deliver). The proved theorem (MojoProofTest.NaiveKernel.correct) holds for every oracle family, this one among them
+evaluator: program naive: corpus file sha256 03f8d1b362e7612b7a2ae6dd359d640e16afa58b508b21a1ac11d17c1e4c6274
+evaluator: m 1 n 1 k 1 grid 1 1 block 16 16: 50257 words agree
+evaluator: m 3 n 5 k 768 grid 1 1 block 16 16: 150771 words agree
+evaluator: m 17 n 19 k 7 grid 2 2 block 16 16: 854369 words agree
+evaluator: m 2 n 21 k 768 grid 1 2 block 16 16: 100514 words agree
+evaluator: m 5 n 20 k 0 grid 1 2 block 16 16: 251285 words agree
+evaluator: m 4 n 6 k 33 grid 2 2 block 16 16: 201028 words agree
+evaluator: m 20 n 40 k 2 grid 2 3 block 16 16: 1005140 words agree
+evaluator: m 3 n 17 k 768 grid 1 2 block 16 16: 150771 words agree
+evaluator: 8 launches, 0 differ
+result: agree: on every launch, every word of C is the same on the GPU and in the evaluator, bit for bit: the 1356 cells (r, c) with r < m and c < n that the threads in bounds write (476 of them infinite, none NaN, the first cell of the first launch +0 by underflow, every cell of the k = 0 launch +0), and the 2762779 other words, which keep 0x7FBADBAD
+scope: a conformance test, not a proof. One compiled kernel, these 8 launches and these inputs, on one GPU, and one oracle. The evaluator ran the import of the corpus file (MojoProofTest.Gpu.naiveSm80.prog, all buffers in address space 1), not the proved program MojoProofTest.SymPhi.naive.prog: the two differ only as naiveSm80_prog states, and no theorem here says that the evaluator's runs of the two agree. It says nothing about other launches, inputs, oracles, GPUs or Mojo versions.

@@ -5,8 +5,10 @@ kernels, and a clause for each of the kernel's parameters. It checks the kernel'
 and declares theorems about that one kernel. With the `map2` clause, for a binary elementwise kernel
 such as `out[i] = x[i] + y[i]`, the last of them, `n.correct`, says what the kernel computes at
 every valid one-dimensional launch (grid and block of side 1 in `y` and `z`) and every input that
-meets the precondition. Nothing the command produces is trusted: every theorem it declares is
-checked by Lean's kernel like any other.
+meets the precondition. With the `mat` clause, for a matmul kernel, it declares `n.sound_mat`, the
+kernel theorem at every launch with side 1 in `z`, whose premises are the memory's and the
+threads' runs, which you prove. Nothing the command produces is trusted: every theorem it
+declares is checked by Lean's kernel like any other.
 
 This guide covers what the command needs, its clauses, what it declares, what the theorems say
 and for which kernels, what it refuses and why, and one worked example, `vector_addition`
@@ -38,7 +40,9 @@ definitions and theorems the generated theorems are built from.
   each with one round and one path out into the next (below). With `map2` there are four more
   requirements: the kernel term must elaborate to a constant (a name, or a term such as `(f)`
   that denotes one), the program must have no globals, the kernel must have no loop, and the
-  parameters must have the shape of a binary elementwise kernel (below).
+  parameters must have the shape of a binary elementwise kernel (below). With `mat` the kernel
+  must be a constant of a program without globals, with the parameters of a matmul kernel, and
+  the paths and chains you give must be the kernel's (below); it may have loops.
 
 ## The command and its clauses
 
@@ -69,6 +73,8 @@ that the generated theorems give the block number or the value of that parameter
   bytes thread `k` stores at oracle `ω`, for input tensors `x`, `y` of one length `N` and the
   count `n`; it is `none` for a thread that stores nothing. The specification is written in Lean
   before the command, and it is the claim the command proves.
+- `mat paths chains` (optional, last) declares the kernel a matmul kernel, with its paths and
+  sequences of loops as terms ("The matmul clause `mat`" below).
 
 Each parameter must be named by exactly one clause.
 
@@ -101,7 +107,9 @@ The command runs `tac` on each of four obligations, at every valuation `V` of `p
 The tactic sees one obligation at a time and introduces its own names, so it typically starts
 with `intro V hV` and uses `first` to pick the lemma for each shape. If it leaves any obligation,
 the command fails, names each one it leaves (`n.entry (the path into the loop)`, …) and adds
-nothing. MojoProofTest/KernelCmd.lean's `cnt_open` checks this message.
+nothing. MojoProofTest/KernelCmd.lean's `cnt_open` checks this message. The four terms are
+elaborated in the generated statements; a term that uses field notation on a binder needs the
+binder's type, as in `fun (V : Valuation) i W => inv V.ctx V.mem i W`.
 
 ### Loops in sequence
 
@@ -120,10 +128,85 @@ by its clause's tactic, with two changes: a loop's path in is the previous loop'
 the exit of each loop but the last says that every valuation `W` of `inv V (trips V)` meets the
 next clause's precondition, and that every memory of the next clause's postcondition at `W` is
 one of `post V`. `n.loop` runs `Chain.loop` for each loop in turn, from the first clause's
-precondition to its postcondition, and `n.sound_loop` takes the first clause's precondition and
-postcondition. With one clause, the names, the statements and the messages are as above.
+precondition to its postcondition, and `n.sound_loop` (on `n.args`) takes the first clause's
+precondition and postcondition. With one clause, the names, the statements and the messages are as above.
 MojoProofTest/KernelLoop.lean's `cnt2k` runs two clauses on SymLoop's `cnt2`, and `cnt2_open`
 checks the message for the obligations of the second loop that its tactic leaves.
+
+### Loops with `fmul contract`
+
+```lean
+mojo_kernel n := P fn
+  contract
+  loop h := pre inv trips post by tac
+```
+
+The flag `contract` comes before the loop clauses, if any, and puts `fmul contract` in the block
+checker's fragment: the summaries are `summarizeC`'s, so a `fadd contract` that reads a recorded
+`fmul contract` product fuses with it or not by the thread's oracle. The checks are
+`coversEntryWith true` and `coversChainsWith true`, the obligations are over `EdgeWith true`,
+`Valuation.roundWith true`, `RoundWith true` and `RetWith true` (their names and order are those
+above), `n.loop` is a `RetLsWith true`, `n.sound_of` is `Kernel.sound_of_chainsWith` at `true`
+and `n.sound_loop` is `Kernel.sound_entryWith` at `true`. The per-thread premise of
+`n.sound_loop` also takes an admitted address choice and oracle and gives the thread's oracle
+(`V.ctx.oracle = oracle k`), since a fused operation's rounding depends on it. A loop-free
+kernel takes the flag with no loop clause: `n.sound_of` is then `Kernel.sound_of_chainsWith` at
+`true`, `n.covers` and no sequence of loops (its cover is `rfl`). The flag is not combined with
+`map2` (`contract is not combined with map2`), since `Kernel.sound_map2` has no form with the
+flag. Without the flag, a kernel with `fmul contract` is refused at the block that has it. With
+`mat` the flag is optional ("The matmul clause `mat`" below). MojoProofTest/KernelContract.lean's
+`kfK` is the flag on its one-loop kernel `kf`, on a launch of six threads. Its `pre` (`preF`) is
+the start's facts of some thread with a memory of the invariant `I` (`memF`, the memory after
+that many threads from a memory with the caller's blocks), so every admitted thread's facts give
+it, and `kernelK` is `kfK.sound_loop` with every premise closed. Its twins are the clause without
+the flag, the flag without a loop clause (refused at the loop, which has no clause), and the
+message of a tactic that leaves two obligations; an open-goal test checks `kfK.sound_loop`'s
+per-thread premise. The module's `kgK` is the flag on the loop-free kernel `kg`, with no loop
+clause; its twins are `kg` without the flag and the flag with `map2`.
+
+### The matmul clause `mat`
+
+```lean
+mojo_kernel naive := naive.prog naive.fn_0 reads bA := a1, bB := a2 writes bC := a0
+  scalars m := a3, n := a4, K := a5 contract mat [skipN] [chainN]
+```
+
+`mat paths chains` is for a kernel whose parameters are the output `a0` and the inputs `a1`,
+`a2`, passed `byval` as one struct type of a pointer and a tail with a zero value, then the
+`i32` sizes `m`, `n`, `K` (`a3` to `a5`), with parameter `j` named `%j`: the naive matmul's
+shape. Here `paths : List (List (Nat × List Cond × Summary))` are the kernel's loop-free paths
+from the entry block and `chains : List LoopChain` its sequences of loops, both terms; the
+command checks them with the path checker (`coversEntryWith contract` and
+`coversChainsWith contract`) by evaluation before it adds anything, so a wrong path or chain is
+refused. `contract` is optional and sets the flag of the checks and the runs. `mat` is not
+combined with `map2` or `loop`. The clauses must be `reads` of `a1`, `a2`, `writes` of `a0` and
+`scalars` of `a3`, `a4`, `a5`, and their names are the binder names of the blocks and sizes in
+the theorem, so none may be one of its other binder names (`L`, `t`, `x`, `Hin`, …).
+
+The clause declares three theorems and nothing else: `n.names` (parameter `j` has register name
+`j`, by `decide +kernel`), `n.starts` (the start on `Mat.args z o a b m n K` of
+MojoProof/Sem/Precond.lean succeeds, with `z` the zero tail) and `n.sound_mat`. That is
+`Kernel.sound_mat` (MojoProof/Sym/KernelMat.lean) at `fn`, the paths and the chains, with every
+premise that depends only on the program discharged: the coverage by `decide +kernel`, the
+parameters by `rfl`, the names by `n.names`, the struct's codec by `Layout.Codec.ptrArg`, the
+alignment by `decide`, `withAttrs` of the sizes by `rfl`, the start by `n.starts`. Its premises
+are the launch's (valid, side 1 in `z`), the memory's (fields of `Mat.Pre`, which gives all of
+them; `a ≠ b` and `K`'s bounds are not needed) and two you prove: `Hin`, every thread in bounds
+runs a chain of `chains` to `ret` (`RetLsWith`), and `Hout`, every other thread of the launch
+takes a path of `paths` to `ret` (`RetWith`), each from the facts the start gives the thread,
+to `Elem` after one more thread at the 2-D cells `(row * sC + column) * w`. Its binders have the
+names of the clauses and of `Kernel.sound_mat`'s, so named arguments such as `(t := .fp .float)`,
+`(w := 4)` or `(Hin := …)` work. The conclusion is `Kernel.Sound` on `Mat.args` with `Elem.Out`
+at those cells.
+
+The command does not generate the runs: a matmul thread's run needs a loop invariant over the
+dot product at every launch, which no tactic of the library proves yet.
+MojoProofTest/NaiveSound.lean runs the command on the naive matmul. Its `naive_sound` applies
+`naive.sound_mat` and builds the runs' premises (`NaiveSpec.At`) from the facts; with the runs
+`NaiveIn.runIn` and `NaiveOut.runOut` it is `NaiveKernel.correct`. An open-goal test there shows
+the two premises as `case Hin` and `case Hout`, and five refusals check the messages. An empty
+`paths` or `chains` is refused, since the checker's cover of an empty list is vacuous: with it
+the theorem would cover only launches with no thread out of, or in, bounds.
 
 ## What it declares
 
@@ -143,7 +226,16 @@ checks the message for the obligations of the second loop that its tactic leaves
 | `n.coversChains` | `coversChains P fn n.chains = true`, by `decide +kernel` | `loop` |
 | `n.entry`, `n.init`, `n.step`, `n.exit` | the loop's obligations, by the clause's tactic (with several clauses, `n.entry<h>`, … for each header `h`) | `loop` |
 | `n.loop` | a thread of `pre` runs through the loops to `ret` with a memory of `post` (`RetLs`; the first clause's) | `loop` |
-| `n.sound_loop` | `n.sound_of` with each thread by `n.loop` | `loop` |
+| `n.sound_loop` | the kernel theorem on `n.args` from `Mem.Closed` and an invariant, each thread by `n.loop` from the start's facts (`Kernel.sound_entry`) | `loop`, as `n.args` |
+| `n.names` | parameter `j` of `fn` has register name `j`, by `decide +kernel` | `mat` |
+| `n.starts` | the launch on `Mat.args z o a b m n K` starts | `mat` |
+| `n.sound_mat` | the matmul kernel theorem from the threads' runs `Hin` and `Hout` (`Kernel.sound_mat`) | `mat` |
+
+With `mat`, the command declares only the last three rows (no summary, path, `n.covers` or
+`n.args`).
+
+With the flag `contract`, `n.covers`, `n.coversChains`, the obligations, `n.loop`, `n.sound_of`
+and `n.sound_loop` are the `With true` forms of "Loops with `fmul contract`" above.
 
 With the `loop` clause, `n.paths` holds only the paths that do not enter the loop (often none),
 and `n.sound_of` is `Kernel.sound_of_chains` at `n.covers` and `n.coversChains`.
@@ -191,9 +283,23 @@ Its final grids (the reachable grids in which every thread has returned) agree o
   of every memory of `post V`, the thread runs from `V` through the loop of `n.chains` to `ret`
   with a memory of `Q` (`RetLs`, by `Chain.loop` with `inv V` and `trips V` from the four
   obligations).
-- **`n.sound_loop`** (with `loop`). `n.sound_of`, with the per-thread premise replaced by: the
-  entry valuation of each thread `k`, on every memory of the invariant after `k` threads, meets
-  `pre`, and every memory of `post` there satisfies the invariant after `k + 1` threads.
+- **`n.sound_loop`** (with `loop`, as `n.args`). For every launch, block numbers, scalars,
+  memory `m` closed for `n.args` (`Mem.Closed`) whose pointer bytes are known, admission,
+  observation reading only blocks and predicate `R`, the kernel on `n.args` is sound
+  (`Kernel.Sound`) if some invariant `I`, indexed by the number of threads done, holds of every
+  memory with `m`'s blocks and an empty trace (`I 0`); each thread `k`, from every valuation `V`
+  with the start's facts and a memory of `I k`, meets `pre`, with every memory of `post V` one of
+  `I (k + 1)`; and `I` after all threads holds only of memories whose trace has no data race,
+  keeps the promise of `!invariant.load` and has an observation meeting `R`. The start's facts
+  are the program, the identity `⟨k, k / volume L.block⟩`, the special registers `L.env k`, the
+  function, and the register of each `scalars` and `pointers` parameter holding its argument
+  (`Grid.start_scalar`). A `buffers` parameter (`byval`) gets no register fact: its register
+  points to a copy the start makes. The proof is `Kernel.sound_entry` with the start by
+  `n.starts`, so no evaluation of the start is needed. Without the flag `contract`,
+  `n.sound_loop` is on `Kernel.sound_entry`; with it, on `Kernel.sound_entryWith` at `true`,
+  whose per-thread premise also takes an admitted address choice and oracle and gives
+  `V.ctx.oracle = oracle k` ("Loops with `fmul contract`" above). Neither form uses
+  `Kernel.sound_entryWith`'s fact for the copy (`Grid.start_buffer`).
 - **`n.starts`.** For every launch, block numbers, scalars, memory closed for the arguments,
   address choice and oracle, the start on `n.args` returns a grid (`Sym.Grid.start_ok`). Its one
   premise is `Mem.Closed`.
@@ -239,7 +345,9 @@ The checks of the clauses, the blocks, the paths, the `loop` clause's paths and 
 `map2` prerequisites all come before anything is declared. A command refused by one of them
 therefore declares nothing. When the loop clause's tactic leaves an obligation, the command
 restores the environment it had before its first declaration, so it declares nothing either; an
-`#eval` in MojoProofTest/KernelCmd.lean checks both. Every message starts with `mojo_kernel:`.
+`#eval` in MojoProofTest/KernelCmd.lean checks both. With `mat` the checks come first in the same
+way, and if a generated theorem does not elaborate (`mat: n.sound_mat does not elaborate`) the
+environment is restored. Every message starts with `mojo_kernel:`.
 All but the first name the kernel term `fn`; the clause messages end with it in parentheses,
 which the table leaves out.
 
@@ -261,12 +369,22 @@ which the table leaves out.
 | `the path checker does not accept the paths of the loop at … (coversChains)` | `n.coversChains` would not hold (`the loops at …` with several clauses) |
 | `the loop clause's tactic does not close n.entry (…), … for the loop at …; the command adds nothing` | the tactic leaves the obligations named |
 | `the loop clauses' tactics do not close n.entry<h> (…), …; the command adds nothing` | with several clauses: the tactics leave the obligations named |
+| `contract is not combined with map2 (fn)` | `Kernel.sound_map2` has no form with the flag |
 | `map2 needs a kernel without a loop (fn)` | `Kernel.sound_map2` is about kernels whose threads run one path |
 | `map2 needs the kernel as a constant; … does not elaborate to one` | `n.correct` names the kernel by its constant |
 | `map2 needs a program without globals; P has [@g] (fn)` | the command proves the start (`n.starts`) only for programs without globals |
 | `map2 needs reads a0, a1, writes a2, scalars a3, an i32 (fn)` | `Kernel.sound_map2` is for kernels whose parameters are two inputs, an output and an `i32` count, in that order |
 | `map2 needs a0, a1 and a2 byval of one type (fn)`, `map2 needs a0, a1 and a2 byval (fn)` | the three buffers must be passed `byval` with one struct type |
 | `map2 needs a struct of a pointer and a tail (fn)`, `map2: the struct's tail has no zero value (fn)` | `n.args` passes each buffer as a pointer followed by the zero value of the remaining fields |
+| `mat is not combined with map2 or loop (fn)` | `n.sound_mat` takes the paths and chains as given, and states no elementwise specification |
+| `mat needs the kernel as a constant; …`, `mat needs a program without globals; P has [@g] (fn)` | as for `map2`: the theorem names the kernel by its constant, and `n.starts` is proved only for programs without globals |
+| `mat needs a kernel of six parameters, three byval structs then three i32s; fn has k` | `Kernel.sound_mat` is for kernels of that shape |
+| `mat needs reads a1, a2, writes a0 and scalars a3, a4, a5 (fn)`, `mat needs a3, a4 and a5 of type i32 (fn)` | the output first, then the inputs and the `i32` sizes `m`, `n`, `K`, the order of `Mat.args` |
+| `mat needs a0, a1 and a2 byval of one type (fn)`, `mat needs a0, a1 and a2 byval (fn)`, `mat needs a struct of a pointer and a tail (fn)`, `mat: the struct's tail has no zero value (fn)` | `Mat.args` passes each buffer as a pointer followed by the zero value of the remaining fields, and the codec is `Layout.Codec.ptrArg`'s |
+| `mat needs parameter j named %j, for each j (fn)` | `Kernel.sound_mat` takes the registers `%0` to `%5` by number (`n.names`) |
+| `mat: the clause name x is a binder name of n.sound_mat (fn)`, `mat: two clauses have one name (fn)` | the clause names are binder names of `n.sound_mat`, beside its own |
+| `mat needs a path; with no paths the theorem covers only launches with no thread out of bounds (fn)`, `mat needs a chain; with no chains … no thread in bounds (fn)` | the checker's cover of an empty list is vacuous, so the theorem's `Hout` (or `Hin`) would hold only when no thread is out of (or in) bounds |
+| `mat: the path checker does not accept the paths (coversEntryWith c, fn)`, `… the chains (coversChainsWith c, fn)` | the given paths or chains are not the kernel's at the flag `c` |
 
 Two errors come from proofs, not checks. A scalar whose attributes do not accept its value by
 evaluation is an error at `n.starts`. If `mojo_ret` does not prove a thread's path, for instance
@@ -400,9 +518,9 @@ context, bound and block; the trip count is `nOf V`; `cntPost V` says cell `j` h
 definitions recorded for it, which `sym_summary` does not do), the blocks' summaries are SymLoop's
 `cntE`, `cntH`, `cntB` and the library's `Kernels.vadd.b3`, so the test adds no second definition
 of one value. The command declares the empty `cntk.paths`, `cntk.chains` (equal to SymLoop's
-`cntL.chain`, `cntk_chains`), the obligations, `cntk.loop`, `cntk.sound_of`, `cntk.sound_loop`,
-and, since `cnt` is a constant and `cntP` has no globals, `cntk.args`, `cntk.starts` and
-`cntk.sound`. `cntk_three` applies `cntk.loop` at
+`cntL.chain`, `cntk_chains`), the obligations, `cntk.loop`, `cntk.sound_of`, and, since `cnt` is
+a constant and `cntP` has no globals, `cntk.args` (no arguments), `cntk.starts`, `cntk.sound` and
+`cntk.sound_loop`. `cntk_three` applies `cntk.loop` at
 SymLoop's `start 3`.
 
 `cnt` has no parameters, so the frame a launch's start gives a thread has no `%n` and no `%p`, and
@@ -425,9 +543,12 @@ with `cnt`'s blocks and every context whose program has `cntP`'s layout. The inv
 puts the stores of the rounds so far on the trace, and the postcondition `postB` gives the end's
 trace, which the end's check of data races needs. Since `cntK` is a constant and `cntKP` has no
 globals, the command declares `loopK.args n p = [.bits 64 n, .ptr ⟨p, 0⟩]`, `loopK.starts` and
-`loopK.sound`; its summaries, paths and chains are `cntk`'s. `kernelK` is `loopK.sound_loop` on
-`Launch.one` with `loopK.args 3 outC.2` and the memory `outC`, at `ch₀` and `ω₀`, with the
-thread's precondition evaluated at the start.
+`loopK.sound` and `loopK.sound_loop`, whose per-thread premise has the registers `%n` and `%p`
+holding the arguments; its summaries, paths and chains are `cntk`'s. `kernelK` is
+`loopK.sound_loop` on `Launch.one` with `loopK.args 3 outC.2` and the memory `outC` (closed for
+them, `outC_closed`), at `ch₀` and `ω₀`: the thread's precondition comes from those registers and
+`outC`'s block, with nothing of the start evaluated. An `example` with `#guard_msgs` checks the
+per-thread goal `loopK.sound_loop` leaves.
 
 MojoProofTest/KernelCmd.lean tests the command:
 - `vadd_paths_cmd` checks that the generated paths are the ones written by hand in
@@ -541,7 +662,7 @@ choice and oracle, under the premises given.
   a memory of `Q`. `Runs.of_ret`: take a one-frame thread with no `alloca` blocks at the first
   block of a path that the path checker with `phi`s accepts (`coversPathI`). If the path is a
   `Ret` from the thread's entry valuation, the thread runs to its end leaving a memory of `Q`
-  (`Block.sound_retI`). `Walk.walkI`: premises without `phi`s (`Walk`) are premises with `phi`s,
+  (`Block.sound_retR`). `Walk.walkI`: premises without `phi`s (`Walk`) are premises with `phi`s,
   with the same last block. So `Ret.of_walk`, and `mojo_obl`'s `Walk` goals, give a `Ret`
   (`Elem.ret`, MojoProof/Sym/Ops.lean, is `Ret.of_walk` with the effects as steps of `Elem`).
 - **The start's threads.** `Grid.start_thread`: every thread `Grid.start` makes has one frame of
@@ -549,7 +670,9 @@ choice and oracle, under the premises given.
 - **Covered paths.** `coversEntry P fn paths`: every path starts at `fn`'s first block and is
   accepted by the path checker with `phi`s (`coversPathI`) from instruction 0. A path may
   therefore cross a join whose block starts with `phi`s. This is a closed Boolean that
-  `decide +kernel` evaluates on a concrete program.
+  `decide +kernel` evaluates on a concrete program. `coversEntryWith contract` is the same with
+  the path checker with `fmul contract` when `contract` (`coversPathWith`); at `false` it is
+  `coversEntry`.
 - **`Kernel.sound_of_paths`.** `Kernel.Sound` from:
   - `coversEntry`;
   - the caller's pointer bytes;
@@ -568,6 +691,24 @@ choice and oracle, under the premises given.
   `Ret.out`). Its premises are `Kernel.check` (every thread's picked path is accepted) and the
   last memory's trace and observation. The kernel evaluates these on a concrete launch, memory,
   choice and oracle.
+- **`Kernel.sound_entry`.** `Kernel.sound_of_chains` with the start's facts derived: the invariant
+  `I 0` holds of every memory with the caller's blocks and an empty trace, and each thread's
+  premise is stated on every valuation `V` whose context has the program, the identity
+  `⟨k, k / volume L.block⟩` and the special registers `L.env k`, whose function is the kernel,
+  whose register of each parameter that is not `byval` and is named by no earlier parameter holds
+  the argument as `withAttrs` gives it on every memory, and whose memory is one of `I k`
+  (`Grid.start_thread`, `Grid.start_ctx`, `Grid.start_scalar`, `Grid.start_blocks`,
+  `Grid.start_trace`). `mojo_kernel`'s `n.sound_loop` is it on `n.args`.
+- **The `contract` forms.** `Kernel.sound_of_chainsWith`, `Kernel.sound_entryWith` and
+  `Kernel.sound_cellsWith` are `Kernel.sound_of_chains`, `Kernel.sound_entry` and
+  `Kernel.sound_cells` for every flag `contract`: `coversEntryWith contract` and
+  `coversChainsWith contract` for the checks, and `RetWith contract` and `RetLsWith contract` for
+  each thread's run, so the blocks may have `fmul contract` and `fadd contract`
+  (`Runs.of_retWith`, `Runs.of_chainsWith`, MojoProof/Sym/Loop.lean). The three without the flag
+  are their `false` cases (`Chain.with_iff`). `Kernel.sound_entryWith` also indexes the
+  invariant by the start's memory and gives each named `byval(t)` parameter's register a pointer
+  to a block of the start's memory, owned by the thread, from which `t` loads as the argument
+  (`Grid.start_buffer`), and the valuation's oracle.
 - **The elementwise invariant.** `Elem m₀ out w cell bs k m`: block `out` is `m₀`'s with the
   bytes of the first `k` threads put at their cells, other blocks are unchanged, and every access
   is owned.
@@ -584,32 +725,72 @@ choice and oracle, under the premises given.
     `out` is one of every memory of `Elem` from the start's memory.
   - `Mem.Buffer.of_block`, `Mem.Fits.of_block` and `Mem.Holds.of_block`: each reads only its
     block.
-- **`Kernel.sound_elem`.** The kernel theorem of an elementwise kernel at every address choice
+  - `Elem.Only out S m`: every access to block `out` on `m`'s trace is by a thread of `S`.
+    `Elem.Only.log` and `Elem.Only.apply`: an access, and a block's effect, of a thread of `S`
+    keep it. `Elem.safe_on`: with `Elem.Only` and the cells of the threads of `S` `Apart` (on the
+    subtype of `S`; the others' cells may overlap them), the trace has no data race and keeps the
+    promise of `!invariant.load`.
+- **`Kernel.sound_cells`.** The kernel theorem of an elementwise kernel with loops: as
+  `Kernel.sound_elem`, at every admission, with each thread either taking a path of `paths` that
+  is a `Ret` or running a sequence of loops of `chains` to `ret` (`RetLs`), from every memory of
+  `Elem` and `Elem.Only` after `k` threads to one after `k + 1`, and with the cells apart only on
+  a set `S` of threads (the ones that access `out`). `Kernel.sound_of_chains` with the invariant
+  `Elem` and `Elem.Only`. MojoProofTest/KernelCells.lean's `kernelC` is an instance on a launch of
+  six threads where a thread that skips the store shares a cell with one that stores.
+  `Kernel.sound_cellsWith` is its `contract` form; MojoProofTest/KernelContract.lean's `kernelF`
+  is an instance at `contract = true` (through `Kernel.sound_mapNWith`), a loop with
+  `fmul contract` and `fadd contract` on a launch of six threads, and its twin shows that the
+  same proof at `false` fails.
+- **`Kernel.sound_elem`.** `Kernel.sound_cells` with no loops, `S` all threads and one oracle.
+  The kernel theorem of an elementwise kernel at every address choice
   and one oracle `ω`, for the observation of the blocks and `Elem.Out`. `Elem.Out` says block
   `out`, if the caller's memory has it, is the caller's with every thread's bytes put at its cell,
   and every other block of the caller's memory is unchanged. Its premises are the start on every
   choice, `Apart` cells, and each thread's `Ret` from every memory of `Elem k` to `Elem (k + 1)`
-  (`Kernel.sound_of_paths` with the invariant `Elem`). `apart_mul`: cells `w i` are `w` apart
-  (`apart_stride`), the `Apart` premise for cells of one stride.
-- **`Kernel.sound_mapN`.** `Kernel.sound_elem` for the family of kernels whose parameters are
-  `ps ++ [pc]`, the one at each position `j` named `%j`. Every one of `ps` is `byval` of one
-  struct type `T` with a codec for `.agg [.ptr p, z]`, and `pc` is a count of any type and width,
-  passed by value. It is stated on the arguments `bl.map (fun a => .agg [.ptr ⟨a, 0⟩, z]) ++ [v]`
-  for block numbers `bl` (one for each of `ps`) and a caller's memory whose output block `o` is
-  owned by all threads, with the start facts derived. Its per-thread premise is a `Ret` from every
-  frame of `fn` whose `%i`, for each position `i` of `bl`, points to a block other than `o`
-  holding the struct of `bl[i]`, and whose `%n` (`n` the length of `bl`) holds the count. The
-  `Ret` is required on every memory of `Elem k` on which the caller's blocks other than `o` are
+  (`Kernel.sound_of_paths` with the invariant `Elem`). `apart_mul` (MojoProof/Sem/Buffer.lean):
+  cells `w i` are `w` apart (`apart_stride`), the `Apart` premise for cells of one stride.
+  `Launch.apart_xy` (MojoProof/Sem/Index.lean): at every valid launch with side 1 in `z`, the 2-D
+  cells `(row * s + col) * w` of the threads whose row (`Launch.index` in `x`) is below `m` and
+  column (in `y`) below `n ≤ s` are `w` apart, the `Apart` premise on that set of threads
+  (`Launch.cell_apart`).
+- **`Kernel.sound_mapNWith`.** `Kernel.sound_cellsWith` for the family of kernels whose
+  parameters are `ps ++` the parameters of a list `sc` of scalars, the one at each position `j`
+  named `%j`. Every one of `ps` is `byval` of one struct type `T` with a codec for
+  `.agg [.ptr p, z]`, and none of `sc`'s is `byval`; each scalar is a parameter, its argument and
+  the value its attributes make of it on every memory (`withAttrs`). It is stated on the
+  arguments `bl.map (fun a => .agg [.ptr ⟨a, 0⟩, z]) ++ sc.map (·.2.1)` for block numbers `bl`
+  (one for each of `ps`) and a caller's memory whose output block `o` is owned by all threads, at
+  every admission, with the cells apart on a set `S` of threads and the start facts derived. Its
+  per-thread premise is a `RetWith contract` or a `RetLsWith contract` from every frame of `fn`
+  whose `%i`, for each position `i` of `bl`, points to a block other than `o` holding the struct
+  of `bl[i]`, and whose `%(n + j)` (`n` the length of `bl`) holds `sc[j]`'s value. It is required
+  on every memory of `Elem k` and `Elem.Only` on which the caller's blocks other than `o` are
   unchanged (`Grid.start_buffer`, `Grid.start_scalar`, `take_names`, `Elem.start_block`,
   `Elem.load`). `take_names`: parameters named by their positions name no register twice.
+  MojoProofTest/KernelContract.lean's `kernelF` is an instance with no struct and two scalars.
+- **`Kernel.sound_mapN`.** `Kernel.sound_mapNWith` without `contract`, with no loops, one count
+  `pc` of any type and width (`sc = [(pc, v, u)]`), `S` all threads and one oracle: the
+  parameters are `ps ++ [pc]`, the arguments `bl.map (fun a => .agg [.ptr ⟨a, 0⟩, z]) ++ [v]`,
+  and the per-thread premise a `Ret` to `Elem k + 1` from every frame whose `%n` holds `u`.
 - **`Kernel.sound_map2`.** `Kernel.sound_mapN` for binary elementwise kernels: three structs
   (`bl = [a, b, o]`) and the `i32` count, on the arguments `Map2.args z a b o n` and a caller's
   memory of `Map2.Pre`. Its per-thread premise is a `Ret` from every frame of `fn` whose `%0` to
   `%2` point to blocks other than `o` holding the structs of `a`, `b`, `o` and whose `%3` is `n`.
   The `Ret` is required on every memory of `Elem k` with the buffers, tensors and `Mem.Fits` of
   `Map2.Pre` (the `of_block` lemmas, `Elem.buffer`, `Elem.fits`). `mojo_kernel`'s `map2` clause
-  discharges these premises for one named kernel; no clause generates the per-thread `Ret` for
-  another shape of `Kernel.sound_mapN`.
+  discharges these premises for one named kernel; no clause generates the per-thread premise
+  for another shape of `Kernel.sound_mapNWith`.
+- **`Kernel.sound_mat`** (MojoProof/Sym/KernelMat.lean). `Kernel.sound_mapNWith` for matmul
+  kernels, with or without `contract`: three structs (`bl = [o, a, b]`, the output first) and the
+  `i32` words of `m`, `n` and `K`, on the arguments `Mat.args z o a b m n K`, at every launch
+  valid with side 1 in `z`, with the 2-D cells `(row * sC + col) * w` apart on the threads in the
+  window and the matrix (`Launch.apart_xy`) and every admission. Its memory premises are the
+  fields of `Mat.Pre` but for `a ≠ b` and `K`'s bounds. Its two per-thread premises take the
+  frame's registers `%0` to `%5`, the struct loads and the buffers of `Mat.Pre` on the thread's
+  memory: a thread in bounds runs some sequence of loops to `ret` (`RetLsWith`), a thread out of
+  bounds takes some path (`RetWith`). `mojo_kernel`'s `mat` clause generates its call for one
+  named kernel, with the two per-thread premises left open; MojoProofTest/NaiveSound.lean's
+  `naive_sound` is its instance for the naive matmul kernel, through that call.
 - **Buffers that fit.** `Mem.Fits l m c size` (MojoProof/Sem/Precond.lean): block `c`'s generic
   addresses up to `size` stay below `2 ^ w`. Each byte of a buffer that fits has an address with
   no wrap (`addr_buffer`, MojoProof/Sym/OblLemmas.lean). A `getelementptr inbounds` past the wrap is
@@ -644,8 +825,16 @@ choice and oracle, under the premises given.
   - With `FinEq.eq_of_isFinite`: a finite float there is the same in every observation.
 - **Evaluation and canaries.** `Elem.outBelow` is `Elem.Out` as a closed Boolean on the blocks
   below `nb` and the offsets below `K`, which the kernel evaluates on a concrete final grid.
-  `Elem.Out.outBelow`: `Elem.Out` passes it. `Elem.canaries` are the canaries (probes of the
-  observation): five wrong outputs made from the right bytes by the probes of
+  `Elem.Out.outBelow`: `Elem.Out` passes it. `Elem.Out.of_outBelow` is the converse, for every
+  memory and blocks. It holds when the memory has no block from `nb` on, every thread's bytes end
+  by offset `K`, and every block of the memory agrees with the final block at its number from
+  `K` on. `out_rev` (MojoProofTest/Kernel.lean) is an instance with every premise closed, and
+  `out_rev_twin` shows that the last premise is needed. `Elem.Out.of_run`: on the blocks at the
+  end of a run from the start, that last premise holds when every block of the caller's memory
+  is owned by no thread and has at most `K` bytes (`Grid.start_reach_above`,
+  MojoProof/Sem/Writes.lean); `out_run` (MojoProofTest/KernelXY.lean) is an instance on a run of
+  `vector_addition`. `Elem.canaries` are the canaries
+  (probes of the observation): five wrong outputs made from the right bytes by the probes of
   MojoProof/Sem/Replay.lean, one definition for every kernel. They are: cell 0 omitted, stale
   output, cells 0 and 1 swapped, zero output, and the first input copied.
   `Kernel.replay_canaries`: if the trace-replay checker reports each canary's violation on one
@@ -689,8 +878,10 @@ Tests in MojoProofTest/Kernel.lean. Each covers the launch and memory it names.
   - (c) `twin_tid`: `fnTid` (statement 14 of the entry block adds 0 for `ctaid.x * ntid.x`,
     built from `Kernels.vadd.fn_0`'s AST). The run ends done with a race and its two accesses
     (`run_tid`).
-  - (d) `twin_2d`: a block of 3 by 2 threads (`L32`), valid with a one-dimensional grid but
-    refused by `vadd.correct`'s hypothesis `block y = 1`. The run races.
+  - (d) `twin_2d`: the four launches of `rows2`, valid, each with two rows in one of the grid's
+    and the block's `y` and `z` (the block of 3 by 2 threads `L32` is one) and so refused by one
+    of `vadd.correct`'s hypotheses on the launch. The run races on each, so each hypothesis is
+    needed.
 - **The canaries `canaries_vadd`, `canaries_vmul` and `canaries_vsub`.** `Elem.canaries` of
   `correct23`'s, `correctV23`'s and `correctS23`'s bytes, each refuted
   (`Kernel.replay_canaries`, by the kernel).
@@ -699,3 +890,21 @@ Tests in MojoProofTest/Kernel.lean. Each covers the launch and memory it names.
   TorchLean's `x + y` and the rounded real sum), `vadd_finEq`, `vadd_stable`, and the four
   `vmul_*` and the four `vsub_*`. `vmul_real` is about each cell: the product of the inputs'
   cells; `vsub_real` their difference.
+
+Tests in MojoProofTest/KernelContract.lean and MojoProofTest/KernelXY.lean. Each covers the
+launch, memory, address choice and oracle it names.
+
+- **`kernelF`.** `Kernel.sound_mapNWith` at `contract = true` with every premise closed: `kf`,
+  whose threads run three rounds of `%a = fadd contract (fmul contract %a, 2.0), 1.0` and store
+  7.0 to their cells, on `L23` with `outF`, `ch₀` and the oracle `ω₁` (every `fadd contract`
+  fuses). Its twin: the same proof at `contract = false` fails (`chainF_refused`: the checker
+  without `fmul contract` refuses the loop).
+- **`kernelK`.** `kfK.sound_loop` (`mojo_kernel` with the flag `contract`, so
+  `Kernel.sound_entryWith` at `true`) with every premise closed: `kf` on `L23` with
+  `kfK.args 3 outF.2`, `outF`, every address choice and the oracle `ω₁`, with the same
+  postcondition (`Elem.Out` of 7.0 in each thread's cell). The clause's `pre` holds of every
+  valuation with the start's facts of a thread and a memory of `memF` for that thread, so each
+  admitted thread meets it; `kfK_retLs` is `kfK.loop` at thread 0.
+- **`apart2x3`.** `Launch.apart_xy` on one block of 2 × 3 threads. Its twin `apart2x3_twin`: at a
+  row stride below the column bound, two threads share a cell.
+- **`out_run`.** `Elem.Out.of_run` on one run of `vector_addition` (`mem5`, `ch₀`, `ω₀`).

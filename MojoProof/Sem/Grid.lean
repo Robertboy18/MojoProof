@@ -47,13 +47,14 @@ by 32 (indices in x, y, z order, x fastest). A thread's special registers come f
 `Grid.run` is the evaluator: phases in which every thread runs until it waits or returns, then
 every collective call that can complete does; no progress is a deadlock (undefined behavior).
 
-Proved here: `Mem.compact` is the identity (`Mem.compact_eq`); a closed memory passes the start's
+Proved here: `Mem.compact` is the identity (`Mem.compact_eq`) and compiles to `Mem.tabulate`,
+the same memory tabulated (`Mem.compact_csimp`); a closed memory passes the start's
 check (`Mem.checkClosed_of_closed`), for every memory and argument values; a start that
 succeeds keeps every block of the caller's memory unchanged (`Grid.start_blocks`, through
 `Mem.allocNext_blocks`, `shared_blocks`, `launchArgs_blocks` and the fold invariants
-`foldlM_mem_inv`, `foldlM_inv`), and its contexts give thread `n` the program and the number
-`n` (`Grid.start_ctx`), for every program, kernel, launch, memory and choices; every state
-`Grid.run` reaches is reachable by `Grid.Step` (`Grid.run_reach`), for every program.
+`foldlM_mem_inv`, `foldlM_inv`), and its contexts give thread `n` the program, the number
+`n`, the launch's special registers and the oracle's row `n` (`Grid.start_ctx`), for every
+program, kernel, launch, memory and choices; every state `Grid.run` reaches is reachable by `Grid.Step` (`Grid.run_reach`), for every program.
 -/
 
 namespace MojoProof.Sem
@@ -114,12 +115,41 @@ def shared (l : Layout) (gs : List Global) (dyn c : Nat) (ch : Nat → Nat) (m :
     | some _ => throw (.unsupported "initialized global")
 
 /-- `m` with its blocks, and their bytes below their sizes, tabulated: the same memory
-(`Mem.compact_eq`), whose lookups do not go through the history of stores. -/
-def Mem.compact (m : Mem) : Mem :=
+(`Mem.compact_csimp`), whose lookups do not go through the history of stores. Compiled code runs
+it for `Mem.compact`; it is private, as only `Mem.compact_csimp` names it. -/
+private def Mem.tabulate (m : Mem) : Mem :=
   let tab := Array.ofFn (n := m.next) fun c => (m.blocks c).map fun b =>
     let bs := Array.ofFn (n := b.size) fun i => b.bytes i
     { b with bytes := fun i => if h : i < bs.size then bs[i] else b.bytes i }
   { m with blocks := fun c => if h : c < tab.size then tab[c] else m.blocks c }
+
+/-- `m` itself. The start and the evaluator (`Grid.run`) apply it to the memory they hand on, and
+compiled code runs `Mem.tabulate` for it, the same memory (`Mem.compact_csimp`), so that evaluated
+lookups do not go through the history of stores. The kernel unfolds it in one step at every block
+size; it does not reduce `Mem.tabulate` at a block of 16,384 bytes (`Array.ofFn` is a chain of
+pushes). -/
+def Mem.compact (m : Mem) : Mem := m
+
+/-- **Compiled code may run `Mem.tabulate` for `Mem.compact`**: tabulating a memory gives the same
+memory, for every memory. -/
+@[csimp] theorem Mem.compact_csimp : @Mem.compact = @Mem.tabulate := by
+  funext m
+  show m = m.tabulate
+  symm
+  rcases m with ⟨blocks, next, trace⟩
+  simp only [tabulate, Mem.mk.injEq, and_true]
+  funext c
+  split
+  · simp only [Array.getElem_ofFn]
+    cases blocks c with
+    | none => rfl
+    | some b =>
+      simp only [Option.map_some, Option.some.injEq]
+      rcases b with ⟨_, _, _, _, _, bytes, _, _⟩
+      simp only [Block.mk.injEq, and_true, true_and]
+      funext i
+      split <;> simp
+  · rfl
 
 mutual
   /-- One more than the largest block number a pointer in the value names; 0 if it names none. -/
@@ -185,22 +215,8 @@ def Mem.checkClosed (m : Mem) (vs : List Val) : Except Fault Unit :=
   else if m.namesBelow vs then .ok ()
   else .error (.unsupported "caller memory naming a block from next on")
 
-/-- Tabulating a memory gives the same memory, for every memory. -/
-theorem Mem.compact_eq (m : Mem) : m.compact = m := by
-  rcases m with ⟨blocks, next, trace⟩
-  simp only [compact, Mem.mk.injEq, and_true]
-  funext c
-  split
-  · simp only [Array.getElem_ofFn]
-    cases blocks c with
-    | none => rfl
-    | some b =>
-      simp only [Option.map_some, Option.some.injEq]
-      rcases b with ⟨_, _, _, _, _, bytes, _, _⟩
-      simp only [Block.mk.injEq, and_true, true_and]
-      funext i
-      split <;> simp
-  · rfl
+/-- `Mem.compact` is the identity, for every memory (by its definition). -/
+theorem Mem.compact_eq (m : Mem) : m.compact = m := rfl
 
 /-- The start's check passes on every memory that is closed for the argument values. -/
 theorem Mem.checkClosed_of_closed {m : Mem} {vs : List Val} (h : m.Closed vs) :
@@ -400,13 +416,15 @@ theorem Grid.start_blocks {prog : Program} {fn : Func} {L : Launch} {args : List
   cases h
   simpa [Mem.compact_eq] using hm2
 
-/-- **The start's contexts give thread `n` the program and the number `n`**, in block of threads
-`n / volume L.block`, for every program, kernel, launch, argument values, memory, address choice
-and oracle. -/
+/-- **The start's contexts give thread `n` the program, the number `n`** (in block of threads
+`n / volume L.block`), **the launch's special registers for thread `n` (`L.env n`) and the
+oracle's row `oracle n`**, for every program, kernel, launch, argument values, memory, address
+choice and oracle. -/
 theorem Grid.start_ctx {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
     {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) (n : Nat) :
-    (c n).prog = prog ∧ (c n).who = ⟨n, n / volume L.block⟩ := by
+    (c n).prog = prog ∧ (c n).who = ⟨n, n / volume L.block⟩ ∧ (c n).env = L.env n ∧
+      (c n).oracle = oracle n := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
   split at h
@@ -418,7 +436,7 @@ theorem Grid.start_ctx {prog : Program} {fn : Func} {L : Launch} {args : List Va
   split at h
   · cases h
   cases h
-  exact ⟨rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 /-- Thread `n` takes one step; `none` if it is not running. -/
 def Grid.advance (c : Nat → Ctx) (g : Grid) (n : Nat) : Except Fault (Option Grid) :=

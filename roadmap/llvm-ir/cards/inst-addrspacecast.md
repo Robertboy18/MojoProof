@@ -6,7 +6,7 @@ ref: LLVM LangRef 24.0.0git #addrspacecast-to-instruction
 quote: "The ‘addrspacecast’ instruction converts ptrval from pty in address space n to type pty2 in address space m."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_cast
 corpus: tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_126ea5ea.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_d7e21bec.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_01cf4f39.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_c8f5de2a.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_compute_fn_float32_float32_float32_True_1_b8699ce6f48a0bbb.nvptx.ll
-tests: MojoProofTest.Rule, MojoProofTest.Corpus
+tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
 ---
@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-LangRef's section on `addrspacecast` (the quote is the first sentence of its overview). The importer reads `addrspacecast` as `Inst.cast` with `CastOp.addrspacecast` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (trunc, zext and sext); refused (the other casts): SState.stmt takes trunc, zext and sext only.
+LangRef's section on `addrspacecast` (the quote is the first sentence of its overview). The importer reads `addrspacecast` as `Inst.cast` with `CastOp.addrspacecast` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`. MojoProofTest/Modelled.lean runs a kernel of it (its row `addrspacecast`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (trunc, zext and sext); refused (the other casts): SState.stmt takes trunc, zext and sext only.
 
 ## Corpus
 
-32 of the 111 corpus files use it (282 uses); `corpus` lists the first 5 in path order.
+32 of the 114 corpus files use it (282 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

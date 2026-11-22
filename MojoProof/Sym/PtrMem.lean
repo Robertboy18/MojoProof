@@ -40,13 +40,15 @@ namespace MojoProof.Sym
 
 open MojoProof.LLVM MojoProof.Sem
 
-/-- A stored operand `w` that the payload term `x` describes with register entries `regs`
-(`StoreVal`) mentions a payload register, when every entry of `regs` to a payload term is of a
-payload register. -/
-theorem StoreVal.mentions {lab : Labels} {fn : Func} {ps : List Bool}
-    {regs : List (Nat × SVal)} {x : SVal} {w : Value} (h : StoreVal regs x w)
-    (hx : x.pay lab fn ps = true)
-    (ha : ∀ r y, (r, y) ∈ regs → y.pay lab fn ps = true → lab.reg fn.name r = true) :
+/-- A stored operand `w` that the term `x`, payload at the roles of table `ns`, describes with
+table `ns` and register entries `regs` (`StoreVal`) mentions a payload register, when every
+entry of `regs` to a payload term is of a payload register: a float constant's node is never
+payload. -/
+theorem StoreVal.mentions {lab : Labels} {fn : Func} {ns : List SNode}
+    {regs : List (Nat × SVal)} {x : SVal} {w : Value} (h : StoreVal ns regs x w)
+    (hx : x.pay lab fn (roles lab fn ns) = true)
+    (ha : ∀ r y, (r, y) ∈ regs → y.pay lab fn (roles lab fn ns) = true →
+      lab.reg fn.name r = true) :
     w.mentions (lab.reg fn.name) = true := by
   unfold StoreVal at h
   split at h
@@ -55,6 +57,9 @@ theorem StoreVal.mentions {lab : Labels} {fn : Func} {ps : List Bool}
     rcases h with rfl | hr
     · exact hx
     · exact ha r x hr hx
+  · obtain ⟨j, ft, rfl, hj⟩ := h
+    have hr : (roles lab fn ns)[j]? = some false := by rw [roles_getElem?, hj]; rfl
+    simp [SVal.pay, List.getD_eq_getElem?_getD, hr] at hx
   · obtain ⟨n, i, rfl⟩ := h
     simp [SVal.pay] at hx
 

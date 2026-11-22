@@ -14,7 +14,8 @@ import MojoProof.Sem.SkelStep
   (`memAtB_sound`, `memNextB_sound`, `memAllB_sound`); with `ScheduleOwned.every`, a grid all of
   whose reachable grids within `f` steps pass `memAllB`, none with a step after `f`, meets
   `Labels.MemOk` (`memOk_of_every`). `every` explores every interleaving of the threads' steps, so
-  it is a decision procedure only for a launch of few threads.
+  by evaluation it closes a launch of one thread only: at two threads of `vector_addition` it
+  would check 3.0e16 grids (docs/proofs/skel-kernel.md, last section).
 * `atStart`, `memCheck`, `runCheck`: checks of the start of `vector_addition` on one thread
   (`Launch.one`) with buffers at blocks 1, 2, 3 and count 5
   (`Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)`) on the canaries' memory `mem5`
@@ -36,6 +37,12 @@ import MojoProof.Sem.SkelStep
   `vaddOk`.
 * `out_vadd`, the instance of `Kernel.Sound.of_blocks`: at `mem5`, `ch₀` and `ω₀`, the kernel on
   one thread is sound for the blocks and `outV`, from the run's final grid.
+* `elem_vadd`, the instance of `Kernel.Sound.of_blocks` for `Elem.Out` at one thread: at `mem5`,
+  `ch₀` and `ω₀`, from the same run. Every grid reachable from the start keeps `mem5`'s blocks
+  with their owners and sizes and their bytes from their sizes on (`above_vadd`, by
+  `Grid.start_reach_above`); every block of `mem5` is below 4, of every thread and of at most 20
+  bytes (`mem5_blocks`); so blocks that pass `outV` and keep `mem5`'s bytes beyond the sizes are
+  `Elem.Out`'s (`out_of_outV`, by `Sym.Elem.Out.of_outBelow` at 4 blocks and offset 24).
 * `correct_one`, for comparison: `Kernels.vadd.correct` at the same launch and memory, for every
   address choice and oracle, with `Elem.Out` at one thread.
 * Twins of `memCheck`: with block 3 not payload, the store of the payload `%28` to block 3 fails
@@ -49,7 +56,7 @@ One kernel, launch, start memory up to its payload bytes, and address choice; ev
 namespace MojoProofTest.SkelVadd
 
 open MojoProof MojoProof.Sem MojoProof.LLVM Relation
-open MojoProofTest.Kernel (ch₀ ω₀ mem5 pre5 x5 y5 sums5)
+open MojoProofTest.Kernel (ch₀ ω₀ mem5 pre5 x5 y5 sums5 mem5_none bytes5_end)
 open MojoProofTest.Labels (vaddLab vadd_ok)
 open MojoProofTest.ScheduleOwned (every every_sound)
 
@@ -268,6 +275,76 @@ theorem out_vadd : Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 .one
   rw [hs] at e
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj e)
   exact ⟨z, hr, hd, _, rfl, ho⟩
+
+/-! ## `Elem.Out` from the run -/
+
+/-- Every block of `mem5` is at a number below 4, of every thread (`.all`), and of at most 20
+bytes: below 4 by kernel evaluation; from 4 on `mem5` has no block (`mem5_none`). -/
+theorem mem5_blocks {b : Nat} {x : Sem.Block} (h : mem5.blocks b = some x) :
+    b < 4 ∧ x.owner = .all ∧ x.size ≤ 20 := by
+  by_cases hb : b < 4
+  · have hc : (List.range 4).all (fun b => (mem5.blocks b).all fun x =>
+        x.owner == .all && decide (x.size ≤ 20)) = true := by decide +kernel
+    have hx := List.all_eq_true.1 hc b (List.mem_range.2 hb)
+    simp only [h, Option.all_some, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at hx
+    exact ⟨hb, hx⟩
+  · rw [mem5_none b (by omega)] at h
+    cases h
+
+/-- **`Grid.start_reach_above` on `vector_addition`**: on one thread on `mem5` at address choice
+`ch₀` and oracle `ω₀`, in every grid `z` reachable from the start's grid, every block `x` of
+`mem5` is a block at its number with the owner and size of `x` and, at every offset of at least
+`x.size`, the byte of `x` (`Grid.start_blocks`; the blocks of `mem5` are of every thread,
+`mem5_blocks`). -/
+theorem above_vadd {g z : Grid} {c : Nat → Ctx}
+    (hs : Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 .one
+      (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 ch₀ ω₀ = .ok (g, c))
+    (hr : ReflTransGen (Grid.Step .one c) g z) {b : Nat} {x : Sem.Block}
+    (hx : mem5.blocks b = some x) :
+    ∃ x', z.mem.blocks b = some x' ∧ x'.owner = x.owner ∧ x'.size = x.size ∧
+      ∀ i, x.size ≤ i → x'.bytes i = x.bytes i :=
+  Grid.start_reach_above hs hr (Grid.start_blocks hs hx) fun _ h => by
+    rw [(mem5_blocks hx).2.1] at h
+    cases h
+
+/-- **`Elem.Out` from `outV` and the bytes beyond the sizes**: blocks `B` that pass `outV` (the
+blocks below 4 at the offsets below 24, `Elem.outBelow`) and have every block `x` of `mem5` at
+its number with, at every offset of at least `x.size`, the byte of `x`, are those of
+`Elem.Out mem5 3 (4 ·) (Kernels.vadd.bytes ω₀ x5 y5 5) 1`: block 3 is `mem5`'s with thread 0's
+4 bytes put at offset 0, every other block of `mem5` is unchanged. By `Sym.Elem.Out.of_outBelow` at
+4 blocks and offset 24: `mem5` has no block from 4 on (`mem5_none`), thread 0's bytes end by
+offset 24 (`bytes5_end`), and every block of `mem5` has at most 20 bytes (`mem5_blocks`). -/
+theorem out_of_outV {B : Nat → Option Sem.Block} (ho : outV B = true)
+    (ha : ∀ b x, mem5.blocks b = some x →
+      ∃ x', B b = some x' ∧ ∀ i, x.size ≤ i → x'.bytes i = x.bytes i) :
+    Sym.Elem.Out mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω₀ x5 y5 5) 1 B := by
+  simp only [outV, Bool.and_eq_true] at ho
+  refine Sym.Elem.Out.of_outBelow ho.1 mem5_none (fun i hi => bytes5_end i (by omega))
+    fun b x y hx hy i hi => ?_
+  obtain ⟨x', hx', hby⟩ := ha b x hx
+  rw [hx', Option.some.injEq] at hy
+  subst hy
+  exact hby i (by have := (mem5_blocks hx).2.2; omega)
+
+/-- **`Kernel.Sound.of_blocks` to `Elem.Out` on `vector_addition`**: on one thread on `mem5`, at
+address choice `ch₀` and oracle `ω₀`, the kernel is sound for the blocks and
+`Elem.Out mem5 3 (4 ·) (Kernels.vadd.bytes ω₀ x5 y5 5) 1`, from `skel_vadd` and the final grid of
+`vaddOk`'s run, whose blocks pass `outV` and keep `mem5`'s bytes beyond the sizes (`above_vadd`,
+`out_of_outV`). `correct_one` gives the same at every address choice and oracle, from the kernel
+theorem; this one is from one run. -/
+theorem elem_vadd : Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 .one
+      (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 (fun ch o => ch = ch₀ ∧ o = ω₀)
+      (fun m => some m.blocks)
+      (Sym.Elem.Out mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω₀ x5 y5 5) 1) := by
+  refine Kernel.Sound.of_blocks
+    (fun ch o ha => skel_vadd (Mem.SkelEq.refl _ mem5) ch o ha.1) (fun _ _ h => congrArg some h) ?_
+  rintro _ _ g c ⟨rfl, rfl⟩ e
+  obtain ⟨g', c', z, hs, -, hr, hd, -, ho⟩ := vaddOk
+  rw [hs] at e
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj e)
+  refine ⟨z, hr, hd, _, rfl, out_of_outV ho fun b x hx => ?_⟩
+  obtain ⟨x', hx', -, -, hby⟩ := above_vadd hs hr hx
+  exact ⟨x', hx', hby⟩
 
 /-- **The kernel theorem at the same launch, for comparison**: `Kernels.vadd.correct` on one
 thread (`Launch.valid_one`) and `mem5` (`pre5`), for every oracle `ω`: the kernel is sound at every

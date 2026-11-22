@@ -17,8 +17,8 @@ I really like Mojo, for two reasons.
 ## Why verification
 
 GPU kernels are easy to get quietly wrong, and testing can't cover them. A kernel that passes on the sizes you tried can
-still read out of bounds, race, or give a different answer at another size or under another thread schedule. A proof
-covers every input, every launch size and every schedule at once. MojoProof proves things about the code the Mojo
+still read out of bounds, race, or give a different answer at another size or under another thread schedule. A proof can
+cover every input, every launch size and every schedule at once. MojoProof proves things about the code the Mojo
 compiler actually emits, so the guarantee is about what runs, not about a hand-written model of it.
 
 ## What is proved today
@@ -42,7 +42,7 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   result, for every observation that reads only the memory's blocks (`Grid.start_sound`).
 - **The block checker is sound**, every program: a block, a path of blocks or a path to `ret` that
   the symbolic checker accepts runs as its summary says whenever the path's conditions hold at its
-  entry (`Block.sound`, `Block.sound_pathI`, `Block.sound_retI`). Its fragment includes integer
+  entry (`Block.sound`, `Block.sound_pathI`, `Block.sound_retR`). Its fragment includes integer
   `select` and the `llvm.smax`, `smin`, `umax` and `umin` intrinsics; a block with `fmul contract`
   (whose products a later `fadd contract` may fuse) is checked with the products it records
   (`Block.soundC`, and along a path `Block.sound_pathC`).
@@ -62,11 +62,13 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   trip count whose rounds meet their conditions (`Block.sound_loop`), and a thread runs through a
   sequence of loops, nested ones included, to its end (`Runs.of_chain`). This is only partly
   automated: the invariant and the trip count are the user's, and the rounds' conditions are
-  closed by `decide +kernel` at a concrete launch. The one kernel theorem through a loop is for a
-  test program, the counting loop "for i in [0, n): p[i] = i" run by one thread with `n = 3`, at
-  one memory, address choice and NaN choice (`MojoProofTest.KernelLoop.kernelK`, from what
-  `mojo_kernel loopK` generates); for two such loops in sequence the command gives the thread's
-  run (`MojoProofTest.KernelLoop.cnt2k_retLs`).
+  closed by `decide +kernel` at a concrete launch. The kernel theorems through a loop are for test
+  programs, each at one memory, address choice and NaN choice: the counting loop "for i in [0, n):
+  p[i] = i" run by one thread with `n = 3` (`MojoProofTest.KernelLoop.kernelK`, the generated
+  `loopK.sound_loop` with no evaluation of the start), and six threads in two blocks that each run
+  a counted loop and then store one cell, apart only on the storing threads
+  (`MojoProofTest.KernelCells.kernelC`, through `Kernel.sound_cells`); for two such loops in
+  sequence the command gives the thread's run (`MojoProofTest.KernelLoop.cnt2k_retLs`).
 - **Binary elementwise kernels**, a family: every kernel whose parameters are three `byval` structs
   that each hold a buffer pointer (two inputs and an output, as Mojo passes tensors) and an `i32`
   count, at one NaN choice and every address choice, meets the kernel theorem for memories and
@@ -96,6 +98,19 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   (`MojoProof.Kernels.vmul.correct`). Where an output float is finite it is TorchLean's `x * y`
   at that cell, and its real value is the real product rounded to binary32
   (`MojoProofTest.Kernel.vmul_real`, in the tests).
+- **Modular's naive matrix product** (`matmul_kernel_naive`), one float32 specialization of the
+  multistage GEMM test, in the tests: compiled with `fmul contract`, for every oracle family,
+  every valid launch whose side in `z` is 1, all sizes, blocks and tensors and every memory that
+  meets the matmul precondition `Mat.Pre`, the kernel theorem holds: no run faults or races,
+  every run terminates, and each cell `(r, c)` with `r < m`, `c < n` inside the launch's window
+  holds the contracted dot loop of row `r` of `A` and row `c` of `B`, every other byte the
+  caller's (`MojoProofTest.NaiveKernel.correct`, from the library's `Kernel.sound_mat` through
+  `mojo_kernel`'s `mat` clause; the threads' runs are proved by hand). For every `K ≤ 768`, a
+  finite cell is within `dotBound` of the real product at every oracle
+  (`MojoProofTest.NaiveKernel.matmul_error`), and at a thread whose oracle fuses no round the
+  cell is TorchLean's `Tensor.matmul`, the same word or both NaNs
+  (`MojoProofTest.NaiveKernel.matmul_nanEq`). For the same kernel compiled with contraction off,
+  the cell is `Tensor.matmul`'s up to NaNs at every oracle (`MojoProofTest.NaiveOff.matmul_nanEq`).
 - **Refutations**, every program: a violation the trace-replay checker reports disproves the kernel
   theorem at that input (`Kernel.replay_sound`). For every program, five wrong elementwise outputs
   (a cell left out, the output left unchanged, two cells swapped, zeros, a copy of an input) are
@@ -135,14 +150,16 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   product (`matmul_cell_real`), and with contraction on a finite result is within `dotBound` of it
   (`matmul_cell_error`). The same four hold for a matrix times a vector (`matVec_cell_nanEq`,
   `matVec_cell_eq`, `matVec_cell_real`, `matVec_cell_error`). These are about the loop's floats;
-  no kernel theorem uses them yet.
+  the naive matrix product's kernel theorems below use their forms on the first `K` columns
+  (`matmul_take_nanEq`, `matmul_take_error`).
 
 Not proved yet:
 
-- kernel theorems for corpus kernels with loops, shared memory or barriers: the importer accepts
-  `tiled_matmul` and most other corpus files, but only the two elementwise kernels above have a
-  kernel theorem; the naive matrix product's blocks are checked one by one, and its loop is not
-  connected to the dot-product theorems above;
+- kernel theorems for corpus kernels with shared memory or barriers, and for the other 12
+  specializations of the naive matrix product: the importer accepts `tiled_matmul` and most other
+  corpus files, but only the elementwise kernels above, the tutorial's `vector_subtraction` and
+  one naive matrix product have a kernel theorem, and that product's threads' runs are proved by
+  hand in the tests, not generated by `mojo_kernel`;
 - launches other than one-dimensional ones for the kernels above, and real MAX kernels (layer norm,
   softmax, GEMM) against the PyTorch-level operations they implement;
 - anything after the LLVM IR: LLVM's optimizer, the NVPTX backend, `ptxas`, the driver and the GPU;
@@ -229,6 +246,10 @@ the guide for coding agents working in the repository.
   kernels.
 - `tests/corpus/`: the compiled kernels, with `MANIFEST.tsv` (digests and provenance) and the
   files the importer refuses, with their reasons (`REFUSALS.tsv`).
+- `tests/gpu/`: records of GPU runs of `vector_addition`, the vector multiply and
+  `vector_subtraction` (the driver, the dump of inputs and outputs, and `record.txt`), and
+  `Compare.lean`, which runs the grid evaluator on a dump's inputs and compares its output buffer
+  with the GPU's. They are conformance tests of those launches and inputs, not proofs.
 - `docs/`: the trusted base, guides to the commands and tactics, and informal proofs.
 - `roadmap/`: one card per kernel, GPU-model construct, float operation, LLVM construct, layout law
   and `std.math` function, each with its source line, its Lean names and its level;

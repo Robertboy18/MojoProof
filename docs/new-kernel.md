@@ -8,7 +8,7 @@ tests in `MojoProofTest/Kernel.lean`. The commands below were run on that exampl
 output is shown where it matters, except as follows. In steps 2 and 3 the `mkdir`, `cp` and `cd`
 lines were not run. The compile ran the same `mojo build` command through the repository's Mojo
 wrapper, in a scratch directory, and `corpus.py add` read the IR from that directory, not from
-`../build-vsub` (docs/BUGS.md, B578).
+`../build-vsub`.
 
 ## What is automatic today, and what is not
 
@@ -20,11 +20,25 @@ wrapper, in a scratch directory, and `corpus.py add` read the IR from that direc
   your specification: no proof lines. The theorem covers every valid launch whose grid and block
   have side 1 in `y` and `z`, every caller's memory of the precondition `Map2.Pre` (distinct,
   large enough buffers; inputs holding the tensors), every address choice and every oracle.
-- **In the library, not generated: `Kernel.sound_mapN`.** The kernel theorem for kernels whose
-  parameters are any number of `byval` buffer structs of one type followed by one count of any
-  integer type and width, at every launch. You supply its per-thread premise, a `Ret` for each
-  thread's path. No clause of `mojo_kernel` generates it for any shape other than `map2`'s, and
-  the tactic `mojo_ret`, which proves `map2`'s, handles only parameters `%0` to `%3`.
+- **In the library, not generated: `Kernel.sound_mapNWith`.** The kernel theorem for kernels
+  whose parameters are any number of `byval` buffer structs of one type followed by any number
+  of scalars, at every launch, with or without `fmul contract` and loops, with the cells apart
+  only on the threads that store (for 2-D cells `(row * s + col) * w`, `Launch.apart_xy` gives
+  that premise) and at every admitted oracle. You supply its per-thread premise, a `Ret` for each
+  thread's path or a run through its loops (`RetLsWith`). `Kernel.sound_mapN` is its case with
+  one count, no loops and no `contract`; `Kernel.sound_mat` its case for a matmul kernel (the
+  output and two input structs, then the `i32` sizes `m`, `n`, `K`, with 2-D cells), whose two
+  per-thread premises are the runs of the threads in and out of bounds. No clause of
+  `mojo_kernel` generates the per-thread premise for any shape other than `map2`'s, and the
+  tactic `mojo_ret`, which proves `map2`'s, handles only parameters `%0` to `%3`, paths without
+  loops and launches with side 1 in `y` and `z`.
+- **Matmul kernels: `mat`, with the threads' runs yours.** For a kernel of `Kernel.sound_mat`'s
+  shape, `mojo_kernel` with the clause `mat paths chains` (the kernel's loop-free paths and its
+  sequences of loops, which it checks by evaluation) generates the call of `Kernel.sound_mat`:
+  the start, the register names, the codec, the attributes and the coverage are proved by the
+  command, and the theorem `n.sound_mat` is left with the memory premises (`Mat.Pre` gives them)
+  and the two runs `Hin` and `Hout` as premises, which you prove. See docs/kernel.md, "The
+  matmul clause `mat`".
 - **Loops: a clause with your invariant, for loops in sequence.** The `loop` clause takes, per
   loop, the header's block number, a precondition, an invariant, a trip count, a postcondition
   and a tactic (default `decide +kernel`, which closes few obligations). The kernel must have one
@@ -103,13 +117,16 @@ comes from (`repo:<path>` for a source kept in this repository, or its path in t
 `add` copies each file to `tests/corpus/<family>/` and writes its row of
 `tests/corpus/MANIFEST.tsv`: its sha256, line count, kernel, arch, PTX version, Mojo version,
 flags and source. Leave out `--mojo` when you compiled with the version `corpus.py` records.
-`check` printed `corpus: 111 files, 0 problems`.
+When the kernel is defined in a library file that the source imports, name that file with
+`--lib <path>`; the vsub source defines its kernel, so its row's `lib` is `-`. `add` refuses a
+source whose header lacks the Apache-LLVM license line.
+`check` printed `corpus: 114 files, 0 problems`.
 
 The repository already has this row, and `add` refuses a file already in the manifest: for your
 own kernel, use your own family name.
 
 A new row changes the corpus's counts, which a test checks: in `MojoProofTest/Corpus.lean`, the
-expected message of `#mojo_corpus` (`mojo_corpus: 111 rows, 82 imported, ...` after this
+expected message of `#mojo_corpus` (`mojo_corpus: 114 rows, 85 imported, ...` after this
 example) must count your row, or step 8's build fails there with "Docstring on `#guard_msgs`
 does not match".
 
@@ -249,7 +266,7 @@ edges needs the `loop` clause; a refused block needs a change to the kernel or t
 The command's messages say which check failed (docs/kernel.md, "What it refuses, and why"). An
 error at `n.ret` means `mojo_ret` could not prove a thread's path, most often because `bytes` is
 not what the kernel stores. For the goals you prove yourself (a loop clause's obligations, the
-per-thread premise of `Kernel.sound_mapN`), the tactics are, with details in docs/tactics.md:
+per-thread premise of `Kernel.sound_mapNWith`), the tactics are, with details in docs/tactics.md:
 
 - `mojo_obl`: a path's obligations and exits, including a loop's entry edge and round
   ([docs/tactics.md](tactics.md#mojo_obl-mojoproofsymobllean)).

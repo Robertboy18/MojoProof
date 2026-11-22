@@ -10,7 +10,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: [L3]
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 2
         lean: [MojoProof.Sem.floatBin, MojoProof.Sem.floatBin_ofFloat, MojoProof.Sem.floatOp, MojoProof.Sem.fbin, MojoProof.Sem.fbin_finite, FloatLib.Floats.Formats.BinaryInterchange.Model.add, FloatLib.Floats.Formats.BinaryInterchange.Model.sub, FloatLib.Floats.Formats.BinaryInterchange.Model.mul, FloatLib.Floats.Formats.BinaryInterchange.Model.div, FloatLib.Floats.Formats.BinaryInterchange.Model.roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_add_eq_roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_sub_eq_roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_mul_eq_roundAt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_div_eq_roundAt]
         depends: [floats/deliver]
@@ -19,7 +20,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 13
         lean: [MojoProof.LLVM.FastMath.contract, MojoProof.Sem.contract, MojoProof.Sem.contract_cases, MojoProof.Sem.contract_unfused, MojoProof.Sem.contract_error, MojoProof.Sem.contract_est, MojoProof.Sem.floatBin_contract, MojoProof.Sem.floatBin_contract_est, FloatLib.Floats.Formats.BinaryInterchange.Model.fma]
         depends: [floats/binary-op-rounding]
@@ -28,7 +30,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: [L3]
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.deliver, MojoProof.Sem.deliver_finite, MojoProof.Sem.exists_deliver, MojoProof.Sem.not_finite_deliver, MojoProof.Sem.FinEq, MojoProof.Sem.FinEq.deliver, MojoProof.Sem.Ctx.oracle]
         depends: []
@@ -37,7 +40,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.maxnum, MojoProof.Sem.maxnum_of_not_nan, MojoProof.Sem.maxnum_nanEq, MojoProof.Sem.intrinsic_fminmax, MojoProof.Sem.intrinsic_fminmax_ofFloat, MojoProof.Sem.intrinsic_fminmax_vec, MojoProof.Sem.fminmax_of_not_nan, MojoProof.Sem.fminmax_nanEq, MojoProof.Sem.fminmax_vec_of_not_nan, MojoProof.Sem.fminmax_vec_nanEq, FloatLib.Floats.Formats.BinaryInterchange.Model.maximumNumber, FloatLib.Floats.Formats.BinaryInterchange.Model.minimumNumber]
         depends: [floats/nan-payloads]
@@ -46,7 +50,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: [L3]
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.NaNEq, MojoProof.Sem.nanEq_deliver, MojoProof.Sem.isNaN_deliver, MojoProof.Sem.floatOp_isNaN, MojoProof.Sem.floatOp_nanEq, MojoProof.Sem.fbin_isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isSignaling, FloatLib.Floats.Formats.BinaryInterchange.Model.quietNaN]
         depends: [floats/deliver]
@@ -55,7 +60,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 34
         lean: [MojoProof.Sem.rsqrt, MojoProof.Sem.rsqrtErr, MojoProof.Sem.rsqrtOk, MojoProof.Sem.rpow_le_rsqrtErr, MojoProof.Sem.rsqrtOk_rSqrt, MojoProof.Sem.rsqrtOk_of_rsqrt, MojoProof.Sem.rsqrt_toNatBits, MojoProof.Sem.intrinsic_rsqrt, MojoProof.Sem.rsqrt_close, FloatLib.Floats.Formats.BinaryInterchange.Model.rSqrt, FloatLib.Floats.Formats.BinaryInterchange.Model.toReal_rSqrt_eq_roundAt]
         depends: [floats/deliver]
@@ -69,7 +75,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.Block.space, MojoProof.LLVM.Global.addrSpace, MojoProof.Sem.Layout.allocaSpace]
         depends: []
@@ -78,7 +85,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.LLVM.RmwOp, MojoProof.LLVM.Stmt.checkAtomic, MojoProof.Sem.rmw, MojoProof.Sem.rmw_comm, MojoProof.Sem.exec_atomic, MojoProof.Sem.step_atomic, MojoProof.Sem.Grid.advance_atomic_comm]
         depends: [gpu-model/launch]
@@ -87,7 +95,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.phases, MojoProof.Sem.phases_barrier, MojoProof.LLVM.Intrinsic.barrier_args]
         depends: [gpu-model/launch]
@@ -96,6 +105,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -105,7 +115,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: [L3]
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.Launch, MojoProof.Sem.Launch.Valid, MojoProof.Sem.Launch.env, MojoProof.Sem.Env.sreg, MojoProof.Sem.Env.laneid, MojoProof.LLVM.SReg, MojoProof.LLVM.Intrinsic.sregName, MojoProof.Sem.Grid.start, MojoProof.Sem.Grid.Step, MojoProof.Sem.Grid.Sound, MojoProof.Sem.Kernel.Sound]
         depends: []
@@ -114,6 +125,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -123,6 +135,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -132,7 +145,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.Sem.shared, MojoProof.Sem.shared_blocks, MojoProof.Sem.shared_closed, MojoProof.Sem.Launch.dynShared, MojoProof.Sym.shared_res]
         depends: [gpu-model/address-spaces, gpu-model/launch]
@@ -141,22 +155,24 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [MojoProof.LLVM.Shfl, MojoProof.LLVM.Intrinsic.shflName, MojoProof.LLVM.Intrinsic.shfl_args, MojoProof.Sem.shflSource, MojoProof.Sem.shfl_erase]
         depends: [gpu-model/launch]
   - id: kernels
     title: "Kernels"
     readme: roadmap/kernels/README.md
-    levels: {L0: 13, L1: 0, L2: 0, L3: 0, L4: 0}
+    levels: {L0: 9, L1: 0, L2: 0, L3: 0, L4: 4}
     cards:
       - id: gemv
         title: "gemv_kernel, a matrix-vector product (TorchLean.Tensor.matVecLoop)"
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
-        corpus_kernels: 0
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
+        corpus_kernels: 2
         lean: [TorchLean.Tensor.matVecLoop, MojoProof.Sem.matVec_cell_real]
         depends: [gpu-model/launch, floats/binary-op-rounding]
       - id: layernorm
@@ -164,7 +180,8 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 34
         lean: [TorchLean.Tensor.layerNorm]
         depends: [gpu-model/warp-shuffles, gpu-model/shared-memory, gpu-model/barriers, floats/rsqrt-approx, gpu-model/launch]
@@ -173,7 +190,8 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 13
         lean: [TorchLean.Tensor.matmul]
         depends: [gpu-model/mma, gpu-model/launch]
@@ -182,17 +200,19 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 24
         lean: [TorchLean.Tensor.matmul]
         depends: [gpu-model/mma, gpu-model/ldmatrix, gpu-model/cp-async, gpu-model/shared-memory, gpu-model/barriers, kernels/split-k-reduce]
       - id: naive-matmul
         title: "matmul_kernel_naive, one thread per output cell of C = A B (TorchLean.Tensor.matmul)"
         kind: kernel
-        level: L0
+        level: L4
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
-        corpus_kernels: 23
+        evidence_scope: {L2: "valid launches with block and grid of side 1 in z", L3: "valid launches with block and grid of side 1 in z", L4: "valid launches with block and grid of side 1 in z, where the output is finite"}
+        next: "top level"
+        corpus_kernels: 24
         lean: [TorchLean.Tensor.matmul, MojoProof.Sem.matmul_cell_real]
         depends: [gpu-model/launch, floats/contract, floats/binary-op-rounding]
       - id: reduction
@@ -200,7 +220,8 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 1
         lean: [TorchLean.Tensor.sum]
         depends: [gpu-model/shared-memory, gpu-model/barriers, gpu-model/atomics, gpu-model/launch]
@@ -209,7 +230,8 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [TorchLean.Tensor.rmsNorm]
         depends: [gpu-model/warp-shuffles, floats/rsqrt-approx, gpu-model/launch]
@@ -218,7 +240,8 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
         lean: [TorchLean.Tensor.softmax]
         depends: [gpu-model/warp-shuffles, floats/maxnum-minnum, gpu-model/launch]
@@ -227,7 +250,8 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 12
         lean: [TorchLean.Tensor.sum]
         depends: [gpu-model/launch, floats/binary-op-rounding]
@@ -236,34 +260,38 @@ areas:
         kind: kernel
         level: L0
         evidence_present: []
-        next: "L1 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 1
         lean: [TorchLean.Tensor.matmul]
         depends: [gpu-model/shared-memory, gpu-model/barriers, gpu-model/launch]
       - id: vadd
         title: "vector_addition, the elementwise sum of two float32 vectors (TorchLean.Tensor.add)"
         kind: kernel
-        level: L0
-        evidence_present: [L2, L3, L4]
-        next: "L1 needs a recorded GPU run"
+        level: L4
+        evidence_present: []
+        evidence_scope: {L2: "valid one-dimensional launches (block and grid of side 1 in y and z)", L3: "valid one-dimensional launches (block and grid of side 1 in y and z), where the output is finite and is the exact real result rounded to the format", L4: "valid one-dimensional launches (block and grid of side 1 in y and z), where the output is finite and is the exact real result rounded to the format"}
+        next: "top level"
         corpus_kernels: 1
         lean: [TorchLean.Tensor.add, MojoProof.Kernels.vadd.bytes, MojoProof.Kernels.vadd.correct]
         depends: [gpu-model/launch, floats/binary-op-rounding, floats/deliver]
       - id: vmul
         title: "vector_multiply, the elementwise product of two float32 vectors (TorchLean.Tensor.mul)"
         kind: kernel
-        level: L0
-        evidence_present: [L2, L3, L4]
-        next: "L1 needs a recorded GPU run"
+        level: L4
+        evidence_present: []
+        evidence_scope: {L2: "valid one-dimensional launches (block and grid of side 1 in y and z)", L3: "valid one-dimensional launches (block and grid of side 1 in y and z), where the output is finite and is the exact real result rounded to the format", L4: "valid one-dimensional launches (block and grid of side 1 in y and z), where the output is finite and is the exact real result rounded to the format"}
+        next: "top level"
         corpus_kernels: 1
         lean: [TorchLean.Tensor.mul, MojoProof.Kernels.vmul.bytes, MojoProof.Kernels.vmul.correct]
         depends: [gpu-model/launch, floats/binary-op-rounding, floats/deliver]
       - id: vsub
         title: "vector_subtraction, the tutorial's elementwise difference of two float32 vectors (TorchLean.Tensor.sub)"
         kind: kernel
-        level: L0
-        evidence_present: [L2, L3, L4]
-        next: "L1 needs a recorded GPU run"
+        level: L4
+        evidence_present: []
+        evidence_scope: {L2: "valid one-dimensional launches (block and grid of side 1 in y and z)", L3: "valid one-dimensional launches (block and grid of side 1 in y and z), where the output is finite and is the exact real result rounded to the format", L4: "valid one-dimensional launches (block and grid of side 1 in y and z), where the output is finite and is the exact real result rounded to the format"}
+        next: "top level"
         corpus_kernels: 1
         lean: [TorchLean.Tensor.sub, MojoProof.Kernels.vsub.bytes, MojoProof.Kernels.vsub.correct]
         depends: [kernels/vadd]
@@ -277,6 +305,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -286,6 +315,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -295,6 +325,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -304,6 +335,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -313,6 +345,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -322,15 +355,17 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
         depends: []
       - id: idx2crd
-        title: "`idx2crd` inverts `crd2idx` only on layouts where the formula does"
+        title: "`idx2crd` maps an offset back to a coordinate, documented as the inverse of `crd2idx`"
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -340,6 +375,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -349,6 +385,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -358,6 +395,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -367,6 +405,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -376,6 +415,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -385,6 +425,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -394,6 +435,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -403,6 +445,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -410,14 +453,15 @@ areas:
   - id: llvm-ir
     title: "LLVM IR constructs"
     readme: roadmap/llvm-ir/README.md
-    levels: {L0: 6, L1: 58, L2: 0, L3: 0, L4: 0}
+    levels: {L0: 8, L1: 36, L2: 20, L3: 0, L4: 0}
     cards:
       - id: inst-add
         title: "The `add` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -426,7 +470,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_cast]
         depends: []
@@ -435,7 +480,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
         depends: []
@@ -444,7 +490,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -453,7 +500,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -462,7 +510,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 1
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.rmw]
         depends: []
@@ -471,16 +520,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.bitcast, MojoProof.Sym.exec_cast]
         depends: []
       - id: inst-call
         title: "The `call` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_sreg, MojoProof.Sym.exec_minmax]
         depends: []
@@ -489,25 +540,28 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
         depends: []
       - id: inst-extractvalue
         title: "The `extractvalue` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_extract]
         depends: []
       - id: inst-fadd
         title: "The `fadd` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
         depends: []
@@ -516,16 +570,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
         depends: []
       - id: inst-fmul
         title: "The `fmul` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
         depends: []
@@ -534,7 +590,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast]
         depends: []
@@ -543,34 +600,38 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast]
         depends: []
       - id: inst-fsub
         title: "The `fsub` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatBin, MojoProof.Sym.exec_fbin, MojoProof.Sym.exec_fbinC]
         depends: []
       - id: inst-getelementptr
         title: "The `getelementptr` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_gep]
         depends: []
       - id: inst-icmp
         title: "The `icmp` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.LLVM.ICmp.holds, MojoProof.Sym.exec_icmp]
         depends: []
@@ -579,7 +640,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
         depends: []
@@ -588,16 +650,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
         depends: []
       - id: inst-load
         title: "The `load` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_load]
         depends: []
@@ -606,16 +670,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
       - id: inst-mul
         title: "The `mul` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -624,16 +690,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
       - id: inst-phi
         title: "The `phi` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
         depends: []
@@ -642,7 +710,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_cast]
         depends: []
@@ -651,25 +720,28 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
       - id: inst-select
         title: "The `select` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_select]
         depends: []
       - id: inst-sext
         title: "The `sext` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intCast, MojoProof.Sym.exec_cast]
         depends: []
@@ -678,7 +750,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -687,7 +760,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
         depends: []
@@ -696,16 +770,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 3
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intToFloat, MojoProof.Sym.exec_cast]
         depends: []
       - id: inst-store
         title: "The `store` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_store]
         depends: []
@@ -714,16 +790,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
       - id: inst-trunc
         title: "The `trunc` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intCast, MojoProof.Sym.exec_cast]
         depends: []
@@ -732,7 +810,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -741,7 +820,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
@@ -750,16 +830,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin]
         depends: []
       - id: inst-zext
         title: "The `zext` instruction"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intCast, MojoProof.Sym.exec_cast]
         depends: []
@@ -768,7 +850,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -777,7 +860,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -786,7 +870,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -795,7 +880,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -804,7 +890,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -813,7 +900,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -822,7 +910,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -831,52 +920,58 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
       - id: intrinsic-ldmatrix
         title: "The intrinsic family `Intrinsic.ldmatrix`"
         kind: construct
-        level: L1
+        level: L0
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a Lean model"
         corpus_kernels: 5
-        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        lean: []
         depends: []
       - id: intrinsic-lifetime
         title: "The intrinsic family `Intrinsic.lifetime`"
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.lifetimeStarted]
         depends: []
       - id: intrinsic-minmax
         title: "The intrinsic family `Intrinsic.minmax`"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.intMinMax, MojoProof.Sym.exec_minmax]
         depends: []
       - id: intrinsic-mma
         title: "The intrinsic family `Intrinsic.mma`"
         kind: construct
-        level: L1
+        level: L0
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L1 needs a Lean model"
         corpus_kernels: 5
-        lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
+        lean: []
         depends: []
       - id: intrinsic-reduceand
         title: "The intrinsic family `Intrinsic.reduceAnd`"
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -885,7 +980,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.rsqrt, MojoProof.Sem.rsqrtOk]
         depends: []
@@ -894,16 +990,18 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.shflSource]
         depends: []
       - id: intrinsic-sreg
         title: "The intrinsic family `Intrinsic.sreg`"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sym.exec_sreg]
         depends: []
@@ -912,7 +1010,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic]
         depends: []
@@ -921,6 +1020,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 2
         lean: []
@@ -930,6 +1030,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 5
         lean: []
@@ -939,6 +1040,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 4
         lean: []
@@ -948,6 +1050,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 1
         lean: []
@@ -957,6 +1060,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -966,6 +1070,7 @@ areas:
         kind: construct
         level: L0
         evidence_present: []
+        evidence_scope: {}
         next: "L1 needs a Lean model"
         corpus_kernels: 0
         lean: []
@@ -973,18 +1078,20 @@ areas:
       - id: term-br
         title: "The `br` terminator"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.terminator, MojoProof.LLVM.Term, MojoProof.Sem.step, MojoProof.Sym.SState.exit_sound, MojoProof.Sym.SState.exitAt_sound]
         depends: []
       - id: term-ret
         title: "The `ret` terminator"
         kind: construct
-        level: L1
+        level: L2
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L3 needs a proved kernel that uses it"
         corpus_kernels: 5
         lean: [MojoProof.LLVM.Parser.terminator, MojoProof.LLVM.Term, MojoProof.Sem.step, MojoProof.Sym.SState.exit_sound]
         depends: []
@@ -998,7 +1105,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 44
         lean: [MojoProof.Sem.maxnum, MojoProof.Sem.intMinMax, MojoProof.Sem.maxnum_of_not_nan, MojoProof.Sem.maxnum_nanEq]
         depends: [llvm-ir/intrinsic-fminmax, llvm-ir/intrinsic-minmax]
@@ -1007,7 +1115,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 37
         lean: [MojoProof.Sem.intMinMax]
         depends: [llvm-ir/intrinsic-minmax]
@@ -1016,7 +1125,8 @@ areas:
         kind: construct
         level: L1
         evidence_present: []
-        next: "L2 needs a recorded GPU run"
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 34
         lean: [MojoProof.Sem.rsqrtOk, MojoProof.Sem.rsqrt, MojoProof.Sem.rsqrtErr, MojoProof.Sem.rpow_le_rsqrtErr, MojoProof.Sem.rsqrtOk_of_rsqrt]
         depends: [llvm-ir/intrinsic-rsqrtapprox]

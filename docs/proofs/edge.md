@@ -1,6 +1,6 @@
 # One edge of a `br i1` into blocks with `phi`s (`Block.sound_to`)
 
-Lean: `MojoProof/Sym/Checker.lean` (the checker) and `MojoProof/Sym/Block.lean` (the proof).
+Lean: `MojoProof/Sym/Checker.lean` (the checker) and `MojoProof/Sym/Path.lean` (the proof).
 Tests: `MojoProofTest/SymPhi.lean`, the section "A `br i1` into blocks with `phi`s, one edge at a
 time".
 
@@ -12,7 +12,7 @@ block but the last by `covers` or by `coversTo` for the edge into the next block
 
 **Why one edge.** `SState.phiExit` gives `br i1 c, d, e` into blocks with `phi`s the obligations
 of both edges (`SState.phiConds fn lbl d ++ SState.phiConds fn lbl e`). A `phi` operand of the
-untaken edge that is outside the fragment (a float constant) makes `summarize` `none`, and
+untaken edge that is outside the fragment (an `undef`, say) makes `summarize` `none`, and
 one that faults makes the block's premises fail, although the run never reads it.
 
 ## Statement
@@ -32,14 +32,16 @@ checks `covers P fn l p0 ds S || coversTo P fn l p0 l' ds S`.
    `x.dest V vs = some d₀`, then `x.next V vs rest k fe me = .ok r` and the terminator's step is
    `.ok r`.
 2. `Block.sound_with`: `Block.sound` for `coversWith` with any `ex` whose exit, at the block's end,
-   is the terminator's step whenever its obligations hold (premise `hex`). It concludes
-   `Ends ∧ Ptrs` (docs/proofs/ptrs.md).
-3. `Block.sound` is `Block.sound_with` with `SState.exitAt_sound`, through `Block.sound_ptrs`
-   (`Ends ∧ Ptrs`).
-4. `Block.sound_to`: `Block.sound` for `coversTo P fn lbl p0 d₀`, with the extra premise
+   is the terminator's step whenever its obligations hold (premise `hex`), and either value of
+   the flag `contract`. It concludes `EndsWith contract ∧ Ptrs`, which is `Ends ∧ Ptrs` without
+   the flag (docs/proofs/ptrs.md, docs/proofs/contract.md).
+3. `Block.sound` is `Block.sound_with` with `SState.exitAt_sound` (`Block.sound_atWith`), through
+   `Block.sound_ptrs` (`Ends ∧ Ptrs`).
+4. `Block.sound_to`: `Block.sound` for `coversTo P fn lbl p0 d₀` (`Block.sound_toWith` without the
+   flag), with the extra premise
    `S.exit.dest (Valuation.entry c t.k m f) (vals … S.nodes) = some d₀`; it concludes
    `Ends ∧ Ptrs`.
-5. `Block.sound_pathI`, `Block.sound_retI` for the wider `coversPathI`; `Block.sound_pathI` is the
+5. `Block.sound_pathI`, `Block.sound_retR` for the wider `coversPathI`; `Block.sound_pathI` is the
    first half of `Block.sound_pathI_ptrs`.
 
 ## Proof
@@ -67,14 +69,17 @@ checks `covers P fn l p0 ds S || coversTo P fn l p0 l' ds S`.
 MojoProofTest/SymPhi.lean, one program written in the test (`edgeF`, three blocks), one context
 (`ctxE`), memory (`mem0`) and frame (`frameE true`): `entryTo` is the entry block's summary for the
 edge into block 1, `edge_covers` accepts the path `0 → 1` (the entry block by `coversTo`),
-`edge_walk` its premises, and `edge_run` (`Block.sound_retI`) runs the thread to block 1's `ret`.
-Twins (`edge_twins`): `summarize` refuses the entry block (block 2's `phi` takes the float constant
-1.5), `coversTo` refuses the corrupted certificates `entryTo` without its first obligation and
-with no obligations, the path `0 → 2` is refused, and with `%3 = 0` the premises fail.
+`edge_walk` its premises, and `edge_run` (`Block.sound_retR`) runs the thread to block 1's `ret`.
+`entry_both`: `summarize` accepts the entry block with both edges' obligations, block 2's float
+constant 1.5 as its node 0 (`SNode.flit`), whose obligation holds at `frameE true`. Twins
+(`edge_twins`): `coversTo` refuses the corrupted certificates `entryTo` without its first
+obligation and with no obligations, the path `0 → 2` with `entryTo` is refused, and with `%3 = 0`
+the premises fail.
 
 ## Limits
 
 A path fixes the edge, so a `br i1` with both successors reached by different paths of a
-certificate needs one path per edge. `phi` operands are registers and integer constants only.
+certificate needs one path per edge. `phi` operands are registers, integer constants and float
+constants only.
 `Cond` has no implication (no constructor for it): the per-edge obligations
 are the path's choice, not a condition under the branch.

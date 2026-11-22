@@ -1,14 +1,21 @@
 # Phi entry along a path (`Block.sound_pathI`, `Ends.edge`)
 
-Lean: `MojoProof/Sym/Checker.lean` (the checker) and `MojoProof/Sym/Block.lean` (the proof).
+Lean: `MojoProof/Sym/Checker.lean` (the checker) and `MojoProof/Sym/Path.lean` (the proof).
 Tests: `MojoProofTest/SymPhi.lean`.
 
 **Scope.** Every program, function, context, thread and path that the path checker with `phi` edges
 (`coversPathI`) accepts. An edge into a block that starts with `phi`s, from `br` or `br i1`, is the
 exit `Exit.phi c d e` (a `br` is `.phi (.int 1 1) d d`); `SState.exitAt` gives `SState.exit`'s exit
 when it has one, else `SState.phiExit`'s, whose obligations (`SState.phiConds`) say that each `phi`
-of the target has an operand for the edge and that the operand evaluates. Operands are registers and
-integer constants; float constants are refused, since the kernel does not reduce `floatLit`.
+of the target has an operand for the edge and that the operand evaluates. Operands are registers,
+integer constants and float constants. A float constant is a node of the block's table,
+`SNode.flit ft lit`, which `summarizeWith` puts there before the first statement (`SState.start`:
+one node per float constant among the statements' operands and the `phi` operands of the block's
+edges, `litNodes`); its value is the semantics' `floatLit ft lit` (`vals_flit`), so the checker
+does not evaluate the literal, and the obligation that it evaluates is decided on a concrete
+valuation like any other (`floatLit` of a decimal literal reads its digits, 0-9 only, with
+`digits`, which the kernel reduces, so `decide +kernel` decides that obligation: `SymNaive.pre_edge`
+does for `%45`'s `0.0`).
 
 ## Statement
 
@@ -22,8 +29,8 @@ and `fmul contract` operands of the frame `enter` gives from `Valuation.frameAt`
 Conclusion: `Ends c t m f rest ((Valuation.entry c t.k m f).lastI l S ps)`: the thread's steps reach
 the last block's end from its entry valuation (`Valuation.lastI`), with the step count
 `t.k + pathLen S ps` (`Valuation.lastI_k`, which also says that `lastI` keeps the context and the
-function). `Block.sound_retI`: for a one-frame thread whose last block returns, the next step is
-`.done`, on the memory the last block's effects make.
+function). `Block.sound_retR`: for a thread whose last block returns, the next step is the `ret`'s, on the
+memory the last block's effects make: `.done` for a one-frame thread (`rest = []`).
 
 ## Proof
 
@@ -58,7 +65,7 @@ its exit, the induction hypothesis from the new frame (position `S.exit.pc fn l'
 F (frozen forms, `Walk.toI`). Under `Walk`, every exit before the last has `Exit.target = some _`,
 so it is `.br` or `.cond`; there `dest = target`, `into = after` and `Exit.pc = 0`, so `Walk` and
 `coversPath` give `WalkI` and `coversPathI`, and `lastI = last`. `Block.sound_path` and
-`Block.sound_ret` are corollaries of `Block.sound_pathI` and `Block.sound_retI`.
+`Block.sound_ret` are corollaries of `Block.sound_pathI` and `Block.sound_retR`.
 
 ## Dependencies
 
@@ -69,13 +76,16 @@ so it is `.br` or `.cond`; there `dest = target`, `into = after` and `Exit.pc = 
 
 MojoProofTest/SymPhi.lean, on the naive matmul kernel (one program, one path, one context, memory
 and frame): the path `%46 → %51 → %67 → %69` of a thread whose loop runs no trip, whose edge
-`%51 → %67` sets `%68 = %48`; `trip0_cell` reads the stored value 1. Twins: the summary of `%45`
-(a float constant `0.0` for `%48`) is refused, an edge without a `phi` operand is refused, the path
-premises fail with bound 1, and the frozen checker refuses the path. MojoProofTest/SymLoop.lean's
+`%51 → %67` sets `%68 = %48`; `trip0_cell` reads the stored value 1. `pre_covers`: the preheader
+`%45`, whose edge passes the float constant `0.0` to `%48`, has that constant as node 0, and the
+path `%45 → %46 → %51 → %67 → %69` is accepted (its premises are not decided: the literal is
+decimal). Twins: `%45`'s certificate without node 0's obligation is refused, an edge without a
+`phi` operand is refused, the path premises fail with bound 1, and the frozen checker refuses the
+path. MojoProofTest/SymLoop.lean's
 `cnt_covers`'s entry path accepts an integer constant operand.
 
 ## Limits
 
 `covers` requires both edges' obligations of a `br i1` into blocks with `phi`s; `coversTo`
-(edge.md) requires only the taken edge's. Phi operands are registers and integer constants; float
-constants, globals, `undef`, `poison` and constant expressions are refused.
+(edge.md) requires only the taken edge's. Phi operands are registers, integer constants and float
+constants; globals, `undef`, `poison` and constant expressions are refused.

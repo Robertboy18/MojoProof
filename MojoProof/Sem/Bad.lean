@@ -877,7 +877,7 @@ theorem Grid.start_reach_bad {prog : Program} {fn : Func} {L : Launch} {args : L
     (hr : Relation.ReflTransGen (Grid.Step L c) g₀ g) (hs : Grid.Step L c g g') (hb : g.Bad L c) :
     g'.Bad L c :=
   hs.bad (Grid.start_reach_closed h hm hr) (Grid.reach_owns hr (Grid.start_owns h c))
-    (fun n k hnk => by rw [(Grid.start_ctx h n).2, (Grid.start_ctx h k).2]; exact hnk)
+    (fun n k hnk => by rw [(Grid.start_ctx h n).2.1, (Grid.start_ctx h k).2.1]; exact hnk)
     (fun _ _ _ _ hn hf => Grid.start_reach_fired h hr hn hf)
     (fun n p => by rw [(Grid.start_ctx h n).1, (Grid.start_ctx h p).1]) hb
 

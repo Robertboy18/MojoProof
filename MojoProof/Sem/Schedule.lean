@@ -903,8 +903,8 @@ theorem zero_namesIn (h0 : S 0) (l : Layout) : ∀ (t : Ty) {v : Val}, l.zero t 
 /-- A float literal's value contains no pointer, so it satisfies `Val.NamesIn S` for every `S`. -/
 theorem floatLit_namesIn {t : FloatTy} {lit : FloatLit} {v : Val} (h : floatLit t lit = .ok v) :
     v.NamesIn S := by
-  simp only [floatLit, floatLit.exactIn, floatLit.wrong, throw, throwThe, MonadExceptOf.throw,
-    pure, Except.pure] at h
+  simp only [floatLit, floatLit.exactIn, floatLit.near, floatLit.wrong, throw, throwThe,
+    MonadExceptOf.throw, pure, Except.pure] at h
   repeat' split at h
   all_goals cases h
   all_goals trivial

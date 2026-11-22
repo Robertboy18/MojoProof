@@ -15,7 +15,7 @@ level: L0
 
 ## Rule
 
-`composition` (layout.mojo:1641) is documented as CuTe's composition. Its constraint is that both layouts are fully static and `B`'s image lies in `A`'s domain (line 1662). The only checks are the two asserts at lines 1664-1669, and the second is `B.static_cosize <= A.static_product`. The helper `_shape_div` (line 1501) returns 1 when `b` does not divide `a`.
+`composition` (layout.mojo:1641) is documented as CuTe's composition. Its constraint is that both layouts are fully static and `B`'s image lies in `A`'s domain (line 1662).
 
 ## In scope
 
@@ -23,8 +23,8 @@ The divisibility conditions (CuTe's) under which the result equals `a` after `b`
 
 ## Out of scope
 
-Layouts that pass the two asserts but break those conditions. Whether the result can then differ from `a` after `b` is not checked here.
+Layouts that do not meet those conditions.
 
 ## Open
 
-The conditions stated in the docstring or checked, and a Lean statement under them. MojoProof states no layout law yet.
+A Lean statement of the composite under the conditions. MojoProof states no layout law yet.

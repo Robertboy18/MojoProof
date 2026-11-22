@@ -13,9 +13,11 @@ Prints three counts and, with --list, the N largest clusters:
   (UInt8/16/32/64, USize, Float, Mint*, byte/word/half, bare 8/16/32/64);
 - framed twins: a theorem `X` next to a theorem `framedX`;
 - near-duplicate clusters: theorems of 15+ lines sharing at least 70% of their 5-token shingles
-  (MinHash, 12 bands of 4), with the lines beyond one theorem per cluster.
+  (Jaccard similarity of the shingle sets, computed exactly for every pair of such theorems, so no
+  pair is missed), with the lines beyond one theorem per cluster; clusters are the connected
+  components of the pairs at or above the threshold.
 Read-only; the standard library only."""
-import collections, glob, hashlib, os, random, re, sys
+import collections, glob, os, re, sys
 
 START = re.compile(r"^(?:@\[[^\]]*\]\s*)?(?:(?:private|protected|nonrec|noncomputable|partial|unsafe)\s+)*"
                    r"(theorem|lemma|def|abbrev|instance|structure|inductive)\b", re.M)
@@ -61,18 +63,7 @@ def main():
     names = {n.split(".")[-1] for n, *_ in items}
     twins = sorted(n for n in names if "framed" + n[:1].upper() + n[1:] in names)
     big = [(n, p, k, re.findall(r"[A-Za-z_][A-Za-z0-9_.']*|\S", c)) for n, p, k, c in items if k >= 15]
-    random.seed(1)
-    salts = [random.getrandbits(32) for _ in range(48)]
-    shingles, sigs = [], []
-    for _, _, _, toks in big:
-        sh = {" ".join(toks[i:i + 5]) for i in range(max(1, len(toks) - 4))}
-        hs = [int(hashlib.blake2b(s.encode(), digest_size=8).hexdigest(), 16) for s in sh]
-        shingles.append(sh)
-        sigs.append([min(h ^ s for h in hs) for s in salts])
-    buckets = collections.defaultdict(list)
-    for i, sg in enumerate(sigs):
-        for b in range(12):
-            buckets[(b, tuple(sg[b * 4:(b + 1) * 4]))].append(i)
+    shingles = [{" ".join(toks[i:i + 5]) for i in range(max(1, len(toks) - 4))} for *_, toks in big]
     parent = list(range(len(big)))
 
     def find(a):
@@ -80,13 +71,15 @@ def main():
             parent[a] = parent[parent[a]]
             a = parent[a]
         return a
-    for v in buckets.values():
-        if 1 < len(v) < 60:
-            for x in range(len(v)):
-                for y in range(x + 1, len(v)):
-                    a, b = v[x], v[y]
-                    if len(shingles[a] & shingles[b]) / max(1, len(shingles[a] | shingles[b])) >= 0.7:
-                        parent[find(a)] = find(b)
+    for a in range(len(big)):
+        for b in range(a + 1, len(big)):
+            sa, sb = shingles[a], shingles[b]
+            # |A ∩ B| / |A ∪ B| ≥ 0.7 needs min/max ≥ 0.7 first; skip the set operations otherwise.
+            if min(len(sa), len(sb)) < 0.7 * max(len(sa), len(sb)):
+                continue
+            inter = len(sa & sb)
+            if inter >= 0.7 * (len(sa) + len(sb) - inter):
+                parent[find(a)] = find(b)
     cl = collections.defaultdict(list)
     for i in range(len(big)):
         cl[find(i)].append(i)

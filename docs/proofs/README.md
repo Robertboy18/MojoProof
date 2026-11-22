@@ -82,7 +82,11 @@ invariants (W1 to W5); these numbers are the documents' own, not the items of `d
    (`Layout.Codec.ptr`, `Layout.Codec.ptrArg`) and `Mem.Closed.alloc`
    (`MojoProof/Sem/Precond.lean`). On `vector_addition` the precondition gives the start and W1
    (`pre_starts`); instances `byval_codec`, `pre5`, `start5`, twins `alias_twin`, `missing_twin` in
-   `MojoProofTest/Precond.lean`.
+   `MojoProofTest/Precond.lean`. The same for a kernel `C = A Bᵀ` over row-major buffers, for
+   every layout, element codec, sizes, row strides and tensors (`Mat.Pre`, `Mat.args`, `Mat.mem`,
+   `Mat.pre_mem`); instance `preN`, twins `overlap_twin`, `absent_twin`. A store or a logged
+   access at another block keeps `Mem.Buffer`, `Mem.Fits` and `Mem.Holds` (`Mem.Buffer.of_block`
+   and its store forms); instance `store_x`.
 
 ## 4. The symbolic block checker and kernel theorems
 
@@ -91,7 +95,7 @@ The block checker (`MojoProof/Sym/Checker.lean`: `summarize`, `Summary`, `SState
 These documents prove that what it accepts holds of the semantics; the proofs are in
 `MojoProof/Sym/Block.lean` unless another file is named.
 
-10. `phi.md`: `Block.sound_pathI` and `Block.sound_retI`, soundness along a path whose edges may
+10. `phi.md`: `Block.sound_pathI` and `Block.sound_retR`, soundness along a path whose edges may
     enter blocks with `phi`s, for every program, with `Ends.edge`; `Block.sound_path` and
     `Block.sound_ret` are their corollaries (`Walk.toI`) (`MojoProof/Sym/Block.lean`; instance and
     twins `trip0_cell`, `trip0_twins` in `MojoProofTest/SymPhi.lean`, one program).
@@ -101,7 +105,7 @@ These documents prove that what it accepts holds of the semantics; the proofs ar
     and twins `edge_covers`,
     `edge_walk`, `edge_run`, `edge_twins` in `MojoProofTest/SymPhi.lean`, one program).
 12. `back.md`: `Block.sound_retR` and `Block.sound_back`, a `ret void` to a caller frame, for every
-    program, path and caller; `Block.sound_retI` is their corollary (`MojoProof/Sym/Block.lean`;
+    program, path and caller; with one frame it is the `.done` case (`MojoProof/Sym/Block.lean`;
     instance `edge_back` in `MojoProofTest/SymPhi.lean`, one program).
 13. `loop.md`: `Block.sound_loop`, soundness of a loop for every trip count, by induction on it, for
     every program; the trip count is a premise, and nothing is said about termination.
@@ -144,12 +148,19 @@ These documents prove that what it accepts holds of the semantics; the proofs ar
     sequence of loops (`RetLs`) and ends in memories whose trace has no race, keeps
     `!invariant.load` and has an observation that meets `R` (`Kernel.sound_of_chains`, with
     `Kernel.sound_of_paths` its loop-free corollary; instance `kernelK`, the counting loop on one
-    thread at one launch, memory, choice and oracle, in `MojoProofTest/KernelLoop.lean`); and at
+    thread at one launch, memory, choice and oracle, in `MojoProofTest/KernelLoop.lean`, from the
+    generated `loopK.sound_loop` through `Kernel.sound_entry`: the same on the start's facts, each
+    thread's precondition from the registers of its scalar and pointer parameters; and
+    `KernelContract.kernelK`, `kfK.sound_loop` with the flag `contract` closed on six threads);
+    with the cells apart only on a set of threads that are the only ones to access the output block
+    (`Kernel.sound_cells`, statement 11 of kernel.md; instance `kernelC`, six threads that each run
+    a counted loop and then store one cell, in `MojoProofTest/KernelCells.lean`); and at
     one choice and oracle by evaluation (`Kernel.sound_eval`), with `Runs.of_ret`,
     `Grid.start_thread` and the elementwise invariant `Elem` (`MojoProof/Sym/Kernel.lean`; instance
     `kernel22`, `vector_addition` at one launch, memory, choice and oracle; twins `out_twin`,
     `entry_twin`, `elem_twin` in `MojoProofTest/Kernel.lean`). Then the kernel theorem of every
-    elementwise kernel from each thread's `Ret` between memories of `Elem` (`Kernel.sound_elem`); of
+    elementwise kernel from each thread's `Ret` between memories of `Elem` (`Kernel.sound_elem`, the
+    corollary of `Kernel.sound_cells` with every thread storing); of
     every binary elementwise kernel whose parameters `%0` to `%2` are `byval` structs that hold a
     buffer pointer and `%3` an `i32` count, at one oracle and every address choice, with the start
     facts derived from `launchArgs` (`Kernel.sound_map2`, `launchArgs_byval`, `Thread.start_regs`),
@@ -170,7 +181,19 @@ These documents prove that what it accepts holds of the semantics; the proofs ar
     and the number of threads: a finite output float is the operation's result, two runs' floats are
     equal up to `FinEq`, and the threads from `n` on put nothing (`Kernel.map2_real`,
     `Kernel.map2_finEq` with `FinEq.eq_of_isFinite`, `Kernel.map2_min`), with instances `vadd_real`,
-    `vadd_finEq`, `vadd_stable`, `vadd_min` and the `vmul_` ones.
+    `vadd_finEq`, `vadd_stable`, `vadd_min` and the `vmul_` ones. And the naive matmul kernel
+    (`naive`, one float32 specialization compiled with `fmul contract`), at every oracle family,
+    valid launch with side 1 in `z`, sizes, blocks, tensors and caller's memory of `Mat.Pre`
+    (`NaiveKernel.correct`, the instance in `NaiveSound.naive_sound` of the kernel theorem of a
+    matmul kernel from its threads' runs, `Kernel.sound_mat` (statement 13 of kernel.md,
+    MojoProof/Sym/KernelMat.lean: `Kernel.sound_mapNWith` at three structs and three `i32` sizes,
+    with 2-D cells), through `naive.sound_mat`, which the `mat` clause of `mojo_kernel` generates
+    (kernel.md, "The 2-D clause of `mojo_kernel` (`mat`)"), at `contract := true`, with the runs
+    `NaiveIn.runIn` and `NaiveOut.runOut`; instance `sound12`, one block of 2 × 2 threads, two in
+    bounds), with its cells read off against TorchLean's `Tensor.matmul` of the first `K` columns
+    (`naive_read`, `naive_matmul`); for `naive` itself, `read_cover` (every cell when the window
+    covers `m × n`, twin `keep11`), `matmul_nanEq` (with instance `nanEq_zero`) and
+    `matmul_error`.
 17. `obl.md`: `vector_addition` walks the path its index selects, for every valid one-dimensional
     launch, thread, count `n ≤ N` with `n < 2 ^ 31` and memory whose distinct buffers are aligned
     to a multiple of 4 and do not wrap (`vadd_walk_launch` and its open-goal twin
@@ -237,14 +260,16 @@ These documents prove that what it accepts holds of the semantics; the proofs ar
     one final grid per admitted pair (`Kernel.Sound.of_blocks`) (`MojoProof/Sem/SkelStep.lean`;
     instances `kernel_six_inst`, `kernel_sum_inst`, twin `kernel_six_twin` in
     `MojoProofTest/SkelKernel.lean`, one kernel; on `vector_addition` at one thread, with every
-    premise by evaluation, `skel_vadd` and `out_vadd` in `MojoProofTest/SkelVadd.lean`).
+    premise by evaluation, `skel_vadd`, `out_vadd` and `elem_vadd` in
+    `MojoProofTest/SkelVadd.lean`).
     `vadd.correct` does not use them.
 21. `dot.md`: the float arithmetic of the contracted dot-product loop of the naive matmul kernel,
     `dotLoop`, for every list of factor pairs and every oracle sequence: without contraction, or
     with no `fadd` oracle number 2 modulo 3, its word is FloatLib's `Model.dotInOrder` up to NaN
     payloads, for every format (`dotLoop_nanEq`, `dotLoop_eq_dotInOrder`); with contraction and
     every oracle, a finite result is within `dotBound` of the exact sum, for every IEEE format
-    (`dotLoop_error`); and `floatBin`'s `fmul` then `fadd` is one iteration (`floatBin_dotStep`)
+    (`dotLoop_error`); `floatBin`'s `fmul` then `fadd` is one iteration (`floatBin_dotStep`); and
+    the contracted loop at never-fusing numbers is the unfused one (`dotLoop_neverFuse`)
     (`MojoProof/Sem/Dot.lean`; instances and twins in `MojoProofTest/Dot.lean`, on binary32).
     Against TorchLean, for every format and all sizes: over the factor pairs `matmulPairs A B i j`
     of entry `(i, j)`, the loop without contraction is TorchLean's `Tensor.matmul A B` entry up to
@@ -256,15 +281,54 @@ These documents prove that what it accepts holds of the semantics; the proofs ar
     (`MojoProof/Sem/Matmul.lean`; instances and a twin in `MojoProofTest/Matmul.lean`, on a
     binary32 2 x 2 product). That the kernel's loop computes `dotLoop` of its loaded pairs is not
     proved.
+22. `bfly.md`: the warp butterfly of the gemv kernels as a FloatLib reduction tree: for every
+    combining operation, offsets, values and lane, a lane's value after the butterfly rounds is the
+    evaluation of a fixed `ReductionTree` of lane numbers whose depth is the number of rounds
+    (`eval_bflyTree`, `depth_bflyTree`); at the offsets 16, 8, 4, 2, 1 each lane below 32 is a
+    leaf exactly once (`leaves_warp`); so FloatLib's tree bound applies with depth 5, and in
+    binary32 a lane's result with every node's sum finite is within
+    `((1 + 2 ^ -24) ^ 5 - 1) · Σ |v j|` of `Σ v j` (`bfly_warp_error`, `bfly_warp_add`); and the
+    semantics' butterfly shuffle with clamp 31 reads lane `l ^^^ m` (`shflSource_bfly`)
+    (`MojoProof/Sem/Bfly.lean`; instances and a twin in `MojoProofTest/Bfly.lean`). That a grid
+    run of a gemv kernel computes the rounds is not proved.
 
 ## 6. Checking a run
 
-22. `replay.md`: the trace-replay checker `Kernel.replay` and its soundness, for every program: a
+23. `replay.md`: the trace-replay checker `Kernel.replay` and its soundness, for every program: a
     reported violation refutes `Grid.Sound` and `Kernel.Sound` (`Replay.found_bad`,
     `Kernel.replay_sound`, `Kernel.replay_unsafe`, `Kernel.replay_block`), and the fault side of
     `Grid.run_reach` (`Grid.run_ub`) (`MojoProof/Sem/Replay.lean`; instances in
     `MojoProofTest/Replay.lean` on `vector_addition` at one launch: a correct output, wrong outputs
     the checker must refuse, and a short output buffer).
+24. `naive.md`: every in-bounds thread of the naive matmul kernel, for every oracle family, launch,
+    sizes, blocks and tensors, from the entry facts `NaiveSpec.At` and a memory of `Elem`, runs
+    its loop to `ret` and stores the contracted dot loop of its row and column at its cell
+    (`NaiveIn.runIn`, from `NaiveThread.thread_run` with the premises `entry_in`, `head_in`,
+    `round_in`, `exit_in`; `MojoProofTest/NaiveIn.lean`). Its instance at an evaluated start is
+    `NaiveStart.runs12` (one block of 2 × 2 threads, `m = 1`, `n = 2`, every `A`, `B`, `K ≤ 768`
+    and oracle; `MojoProofTest/NaiveStart.lean`).
+
+## 7. Compile flags
+
+25. `contract-off.md`: a program with contraction off runs as the program under a never-fusing
+    oracle. For every program of the fragment `Program.fbinOracle` (no `fpext`, `fptrunc`,
+    `maxnum`, `minnum` or `rsqrt.approx`), kernel of `Func.fbinOracle`, program with its module's
+    `contract` flags removed and its layout and intrinsics, launch, arguments, memory,
+    admissibility, observation and relation: `Kernel.Sound` of the kernel gives `Kernel.Sound` of
+    the kernel with its flags removed, for every oracle family whose rows `neverFuse (ω n)` are
+    admitted (`Kernel.Sound.contractOff`, through the lockstep bisimulation
+    `Grid.lockstep_contractOff` and the start `Grid.start_contractOff`;
+    `MojoProof/Sem/ContractOff.lean`). Corollary for one program: the naive matmul kernel compiled
+    with contraction off (corpus `16826c8c` of mgemm_nocontract, checked by evaluation to be
+    `naive`'s module and kernel with the flags removed), at every oracle family, launch, sizes,
+    tensors and memory of `Mat.Pre`, stores the unfused fold `dotLoop false` at each cell in bounds
+    (`NaiveOff.correct`; twin `bf16_fbinOracle`, a kernel with `fpext`, outside the fragment;
+    `MojoProofTest/NaiveOff.lean`). Every observation of a run of that kernel under an oracle
+    family is one of `naive` under the rows `neverFuse (ω n)` (`NaiveOff.obs_contractOff`), so for
+    every `K ≤ 768` each cell in bounds and in the launch's window is `NaNEq` to TorchLean's
+    `Tensor.matmul` of the first `K` columns, with no premise on the oracle, and within `dotBound`
+    of the real product when finite (`NaiveOff.matmul_nanEq`, `NaiveOff.matmul_error`). The
+    converse is not proved.
 
 ## Not proved
 
@@ -273,6 +337,12 @@ These documents prove that what it accepts holds of the semantics; the proofs ar
 - T3c is proved on terms only; its statement on the grid is not.
 - The load and store premises of T3c on terms are not derived from `Labels.MemOk` and the grid.
 - `Labels.MemOk`, the memory premise of T3b and of `Grid.skel_run` and `Grid.skel_six`, is not
-  derived from the block checker's access terms.
+  derived from the block checker's access terms, and evaluation closes it at one thread only; the
+  thread-modular lemma that would close it at `g2_vadd`'s six threads is `Labels.MemOk.of_threads`
+  (instance `store3_ok`), but its instance at those six threads is not proved; `skel-kernel.md`
+  gives the counts that rule out evaluation.
 - The error relation along terms is not proved; T5's rows are proved one operation at a time.
 - T5's statement for every term, `SVal.eval_respects`, is not stated in Lean.
+- The start of a launch of `At`'s sizes does not evaluate in the kernel with its check of the
+  caller's memory in place (the check reads every byte); `NaiveStart` rewrites the check by
+  `Mem.checkClosed_of_closed`.

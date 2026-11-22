@@ -2,12 +2,12 @@
 
 ## Scope
 
-The laws of the layout library in Modular's kernels (`max/kernels/src/layout/` and `Mojo/stdlib/std/utils/coord.mojo`, at commit bbc13a71): how a coordinate maps to an offset, how layouts divide, multiply, compose, coalesce and swizzle, and which layouts support stepping by a stride. Each card quotes the docstring or code line that states its law and says, from the code, where the law holds and where the code does not check it.
+The laws of the layout library in Modular's kernels (`max/kernels/src/layout/` and `Mojo/stdlib/std/utils/coord.mojo`, at commit bbc13a71): how a coordinate maps to an offset, how layouts divide, multiply, compose, coalesce and swizzle, and which layouts support stepping by a stride. Each card quotes the docstring or code line that states its law and says, from the code, where the law holds and what is out of its scope.
 
 ## Items
 
 - [crd2idx](cards/crd2idx.md): `crd2idx` is the dot product of a coordinate with the strides
-- [idx2crd](cards/idx2crd.md): `idx2crd` inverts `crd2idx` only on layouts where the formula does
+- [idx2crd](cards/idx2crd.md): `idx2crd` maps an offset back to a coordinate, documented as the inverse of `crd2idx`
 - [cosize](cards/cosize.md): `cosize` is the offset of the last coordinate plus one
 - [reverse-transpose](cards/reverse-transpose.md): `reverse` and `transpose` reverse the shape and the stride
 - [zipped-divide](cards/zipped-divide.md): `zipped_divide` splits a layout into tile and number-of-tiles modes
@@ -40,5 +40,5 @@ None. MojoProof states no layout law, so every card is L0. A kernel proof today 
 ## Next steps
 
 - A Lean model of `Layout` over integer tuples with `crd2idx`, then the laws in order of the depends lines: `cosize`, `reverse-transpose`, `coalesce`, `is-affine`, `row-major-views`, then `swizzle` and `bit-layout`.
-- The cards whose code is weaker than the docstring (`idx2crd`, `zipped-divide`, `blocked-product`, `composition`, `swizzle`): a precondition in Lean, and a report upstream once each is confirmed by a run.
+- The cards with a precondition (`idx2crd`, `zipped-divide`, `blocked-product`, `composition`, `swizzle`): the precondition in Lean, and the law under it.
 - `index-width` as a per-kernel obligation where a proved kernel uses a narrow index type.

@@ -97,6 +97,7 @@ def relabelNode (a b : Nat) : SNode → SNode
     .fbinP op fm ft n (relabel a b x) (relabel a b y)
       (px.map fun (u, v) => (relabel a b u, relabel a b v))
       (py.map fun (u, v) => (relabel a b u, relabel a b v))
+  | .flit ft lit => .flit ft lit
 
 /-- The number of local `%n` of `vector_addition`. -/
 def local? (n : String) : Nat :=

@@ -11,7 +11,8 @@ itself is proved sound.
 |---|---|
 | `MojoProof/Sym/Term.lean` | symbolic values: the node table (`SVal`, `SNode`), their values (`vals`), memory effects (`SEff`), obligations (`Cond`) |
 | `MojoProof/Sym/Checker.lean` | the checker: `summarize`, `Summary`, `covers`, `coversTo` |
-| `MojoProof/Sym/Block.lean` | its soundness: `Block.sound`, the pointer facts, paths (`coversPath`, `coversPathI`, `Walk`, `WalkI`), returns |
+| `MojoProof/Sym/Block.lean` | its soundness: `Block.sound`, `Block.soundC`, the pointer facts |
+| `MojoProof/Sym/Path.lean` | along a path: `coversPath`, `coversPathI`, `Walk`, `WalkI`, edges into blocks with `phi`s, returns |
 | `MojoProof/Sym/Loop.lean` | loops: `Block.sound_loop`, invariants, sequences of loops and nested loops |
 | `MojoProof/Sym/PtrMem.lean` | the memory premises of a path from a labelling's memory hypothesis |
 | `MojoProofTest/Sym.lean`, `SymRun.lean`, `SymPhi.lean`, `SymLoop.lean` | tests |
@@ -97,8 +98,14 @@ The fragment the checker accepts:
 - order: `load`, `getelementptr`, `icmp` and special-register calls only before the block's first
   `store`, since their terms read the entry memory, which a store changes;
 - terminators: `br`, `br i1` and `ret void`. On an edge into blocks with `phi`s, each `phi`'s
-  operand for the edge must be a register or an integer constant, and its obligation is that the
-  operand evaluates (`SState.phiConds`).
+  operand for the edge must be a register, an integer constant or a float constant, and its
+  obligation is that the operand evaluates (`SState.phiConds`).
+- float constants, as operands of statements and of the edges' `phi`s: `summarizeWith` starts
+  from a table with one node `SNode.flit ft lit` per float constant (`SState.start`, `litNodes`),
+  whose value is the semantics' `floatLit ft lit` (`vals_flit`); the checker never evaluates a
+  literal. The obligation that such an operand evaluates is decided on a concrete valuation;
+  for a decimal literal `floatLit` reads the digits (0-9 only) with `digits`, which the kernel
+  reduces, so `decide +kernel` decides it.
 
 Everything else makes `summarize` give `none`, so `covers` is `false`:
 
@@ -106,7 +113,7 @@ Everything else makes `summarize` give `none`, so `covers` is `false`:
 - `select` of floats, pointers or vectors, float casts and compares, atomics, `alloca`;
 - aggregates other than `extractvalue`, and vectors as `getelementptr` indices;
 - `phi`s inside the range (a block with `phi`s is summarized from the position after them);
-- float constants (the kernel does not reduce `floatLit`), and `ret` of a value.
+- `ret` of a value.
 
 `coversTo P fn lbl p0 d₀` is `covers` with only the obligations of the edge into block `d₀`, for
 a `br i1` into blocks with `phi`s. An operand of the untaken edge that is outside the fragment or
@@ -161,7 +168,8 @@ the fragment keeps it, `SState.run_sound` extends that to the statement list, an
 reach the statement of each `load` node and each `store` effect, and there the statement's
 pointer operand, evaluated in the thread's scope, is the summary term's pointer value
 (`docs/proofs/ptrs.md`). `Block.sound_with` is `Block.sound` for any exit function whose exit is
-the terminator's step when its obligations hold. `Block.sound_to` is `Block.sound` for
+the terminator's step when its obligations hold, and for either value of the flag `contract`
+(concluding `EndsWith contract`, which is `Ends` without it). `Block.sound_to` is `Block.sound` for
 `coversTo`, when the exit goes to `d₀`.
 
 `coversC` is `covers` with `fmul contract` in the fragment: a float operator's node records the
@@ -170,8 +178,9 @@ the terminator's step when its obligations hold. `Block.sound_to` is `Block.soun
 (`regProdIn`: for a register the block sets, the values of its node's operand terms).
 `Ends.edgeC` is `Ends.edge` from `EndsC`, entering the next block at `Valuation.intoC`
 (`Valuation.into` with the table's products). `Block.sound_pathC` takes a path that `coversPathI`
-accepts, then one block that `coversC` accepts. The path checker's inner blocks and the loop
-theorems are still stated with `covers` and `Ends` (`docs/proofs/contract.md`).
+accepts, then one block that `coversC` accepts. The path and loop checkers take the same flag
+(`coversPathWith`, `WalkWith`, `RoundWith`, `ChainWith`, `coversChainsWith`), and the path and
+loop theorems are proved once for both values (`docs/proofs/contract.md`).
 
 ### Along a path
 
@@ -184,8 +193,8 @@ theorems are still stated with `covers` and `Ends` (`docs/proofs/contract.md`).
 - `Block.sound_retR`: for a last block that ends in `ret void`, under any list of caller frames,
   the thread's steps reach the `ret` on the memory the last block's effects make. The next step
   is `.done` without a caller, else a return to the caller at the position after its call; the
-  frame's `alloca` blocks are dead either way. `Block.sound_retI` and `Block.sound_ret` are its
-  one-frame corollaries.
+  frame's `alloca` blocks are dead either way. With one frame (`rest = []`) it is the `.done`
+  case, and `Block.sound_ret` is its one-frame corollary for `coversPath` and `Walk`.
 - `Block.sound_back`: with a caller frame `g`, if `covers` accepts `g`'s block from `g.pc + 1` and
   its conditions hold after the return, the caller's block ends (`Ends`) too
   (`docs/proofs/back.md`).
@@ -216,7 +225,9 @@ A loop is a path `(h, ds, S) :: B` from its header `h`, entered at position `p` 
 header's valuation after one round. `Round` is the decidable premise of one round: the loop path's
 `WalkI`, and its last exit goes to `h` at position `p`. The theorems (`MojoProof/Sym/Loop.lean`)
 are proved once, for every program, function, path, list of loops, nesting, trip count and
-invariant.
+invariant, and for blocks with and without `fmul contract`: each takes a flag `contract`, and
+with `contract = true` reads `coversPathWith true`, `RoundWith true`, `Valuation.roundWith true`
+and `ChainWith true` for the names below (`docs/proofs/contract.md`).
 
 - `Block.sound_loop`: if `Round` holds at the `i`-th round's valuation for every `i < n`, the
   thread's steps reach `h`'s position `p` again, with the `n`-th round's valuation.
@@ -252,16 +263,23 @@ What is not automated:
   per thread, a loop-free path (`Ret`) or a sequence of loops (`RetLs`), and `mojo_kernel` builds
   it for loops in sequence from one `loop` clause per loop (its precondition, invariant, trip
   count and postcondition, all the user's; `docs/kernel.md`). It refuses a nested loop and a loop
-  without a clause, naming the header. The one kernel theorem through a loop is for the counting
-  loop on one thread at one launch (`kernelK`, MojoProofTest/KernelLoop.lean); no kernel of the
-  library is proved that way.
+  without a clause, naming the header. The kernel theorems through a loop are for test programs
+  at one launch: the counting loop on one thread (`kernelK`, MojoProofTest/KernelLoop.lean, the
+  generated `loopK.sound_loop` with no evaluation of the start) and six threads in two blocks that
+  each run a counted loop and then store one cell, apart only on the storing threads (`kernelC`,
+  MojoProofTest/KernelCells.lean, through `Kernel.sound_cells`); no kernel of the library is
+  proved that way.
 - Loops outside the fragment. The naive matmul kernel's latch `%52` is refused at the
   `fmul contract` (statement 12) whose product the `fadd contract` at statement 13 reads
   (`naive_latch_refusal`); its integer `select` (statement 2) is in the fragment. `coversC`
-  accepts the latch as one block (`latch_covers`, MojoProofTest/SymContract.lean), but the loop
-  theorems do not take `coversC`. Of the kernel's nine blocks, `covers` accepts all but the latch
-  and the preheader `%45`, whose `br` passes the float constant `0.0` to the `phi` `%48`
-  (`naive_refusals`, MojoProofTest/SymNaive.lean); `coversC` accepts all but `%45`.
+  accepts the latch as one block (`latch_covers`, MojoProofTest/SymContract.lean), and the path
+  and loop theorems take it with the flag `contract` (the With forms; the loop `%46 → %50 → %52`
+  is covered and runs two rounds at one thread, `naiveL_covers` and `loop_two`,
+  MojoProofTest/SymNaive.lean), but the kernel theorems do not take the flag yet. Of the
+  kernel's nine blocks, `covers` accepts all but the latch
+  (`naive_refusals`, MojoProofTest/SymNaive.lean; the preheader `%45`'s float constant `0.0` for
+  the `phi` `%48` is its node 0, `pre_covers`, MojoProofTest/SymPhi.lean); `coversC` accepts all
+  nine.
 
 ## Running the checker on a new kernel
 
@@ -300,7 +318,7 @@ What is not automated:
    `decide +kernel` proves it (`vadd21_hds`, `MojoProofTest/SymRun.lean`). For every thread it
    needs a symbolic proof.
 5. For a path, list its entries, check them with `coversPathI` by `decide +kernel`, and apply
-   `Block.sound_pathI` or `Block.sound_retI` with `WalkI` (`vadd_paths` and `vadd_ret` in
+   `Block.sound_pathI` or `Block.sound_retR` with `WalkI` (`vadd_paths` and `vadd_ret` in
    `MojoProofTest/Sym.lean`).
 6. For a loop-free kernel, `mojo_kernel` summarizes every block, enumerates and checks the paths
    from the entry, and adds `Kernel.sound_of_paths` at them with the premises that remain. With

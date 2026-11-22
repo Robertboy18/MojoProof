@@ -16,6 +16,20 @@ has `tid` (0, 1), so its `ctaid.x * ntid.x + tid.x` is 0, not 2, and is that of 
 (`twin22`): `Launch.index_oneDim` needs its premise on the block, and on this launch the index is
 not injective on thread numbers, though `Launch.index_inj` still gives equal `ctaid.x` and
 `tid.x`.
+
+On 2-D launches, one launch each: grid and block (2, 2, 1) (`L2222`, valid, 16 threads). Its
+cells `row * 4 + col` are 0 to 15, each once, and every column is below 4 (`cells2222`, by
+evaluation); the 4-byte cells `(row * 4 + col) * 4` of distinct threads are 4 bytes apart
+(`apart2222`, `Launch.cell_apart`), and equal row and column words are one thread (`inj2222`,
+`Launch.xy_inj`). The twins: on grid (1, 1, 1) and block (1, 1, 2) (`L112`, valid), threads 0 and
+1 have row 0 and column 0 (`twin112`), so `Launch.xy_inj` needs side 1 in `z`; on `L2222` with
+stride 1, threads 1 (row 1, column 0) and 2 (row 0, column 1) have cell 1 (`twin_stride`), so
+`Launch.cell_inj` needs the columns below the stride.
+
+Every cell is some thread's, on `L2222`: each `(r, c)` with `r, c < 4` is the row and column of a
+thread below 16 (`onto2222`, `Launch.cell_onto`); cell `(3, 2)` is thread 13's (`cell32`, by
+evaluation). The twin: no thread has row 4 or column 4 (`twin_onto`, `Launch.index_lt_mul`), so
+`Launch.cell_onto` needs its bounds.
 -/
 
 namespace MojoProofTest.Index
@@ -113,5 +127,84 @@ theorem twin22 : L22.Valid ∧ volume L22.grid * volume L22.block = 4 ∧
   ⟨⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
     fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩,
     rfl, rfl, rfl, rfl, by decide +kernel⟩
+
+/-- The launch of grid (2, 2, 1) and block (2, 2, 1): 16 threads, rows and columns 0 to 3. -/
+def L2222 : Launch := ⟨fun | .z => 1 | _ => 2, fun | .z => 1 | _ => 2, 0⟩
+
+/-- `L2222` is valid. -/
+theorem valid2222 : L2222.Valid where
+  grid_pos d := by cases d <;> decide
+  grid_le d := by cases d <;> decide
+  block_pos d := by cases d <;> decide
+  block_le d := by cases d <;> decide
+  threads := by decide
+
+/-- On `L2222`, by evaluation: the launch has 16 threads, their cells `row * 4 + col`
+(`Launch.index` in `x`, then in `y`) are 0 to 15, each once, in the order listed, and every
+column is below 4. -/
+theorem cells2222 : volume L2222.grid * volume L2222.block = 16 ∧
+    (List.range 16).map (fun n => L2222.index n .x * 4 + L2222.index n .y) =
+      [0, 4, 1, 5, 8, 12, 9, 13, 2, 6, 3, 7, 10, 14, 11, 15] ∧
+    ((List.range 16).map fun n => L2222.index n .x * 4 + L2222.index n .y).Nodup ∧
+    ∀ n < 16, L2222.index n .y < 4 := by
+  decide +kernel
+
+/-- The byte offset `(row * 4 + col) * 4` of thread `n`'s 4-byte cell on `L2222`, from offset 0. -/
+def cell2222 (n : Nat) : Nat := (L2222.index n .x * 4 + L2222.index n .y) * 4
+
+/-- The instance of `Launch.cell_apart` (stride 4, base 0, width 4, the threads below 16): on
+`L2222` the cells `cell2222` of distinct threads are 4 bytes apart. -/
+theorem apart2222 : ∀ n n', n ≠ n' → n < 16 → n' < 16 →
+    cell2222 n + 4 ≤ cell2222 n' ∨ cell2222 n' + 4 ≤ cell2222 n := fun n n' hne h1 h2 => by
+  have := Launch.cell_apart valid2222 ⟨rfl, rfl⟩ (s := 4) (p := (· < 16))
+    (fun n hn => ⟨by simpa [volume, L2222] using hn, cells2222.2.2.2 n hn⟩) 0 4 n n' hne h1 h2
+  simpa only [cell2222, Nat.zero_add] using this
+
+/-- The instance of `Launch.xy_inj`: on `L2222`, threads below 16 with equal i64 words of the row
+and of the column (`Launch.index` in `x` and in `y`) are one thread. -/
+theorem inj2222 {n n' : Nat} (hn : n < 16) (hn' : n' < 16)
+    (hx : BitVec.ofNat 64 (L2222.index n .x) = BitVec.ofNat 64 (L2222.index n' .x))
+    (hy : BitVec.ofNat 64 (L2222.index n .y) = BitVec.ofNat 64 (L2222.index n' .y)) : n = n' :=
+  Launch.xy_inj valid2222 ⟨rfl, rfl⟩ (by simpa [volume, L2222] using hn)
+    (by simpa [volume, L2222] using hn') hx hy
+
+/-- The launch of grid (1, 1, 1) and block (1, 1, 2). -/
+def L112 : Launch := ⟨fun _ => 1, fun | .z => 2 | _ => 1, 0⟩
+
+/-- **The twin of the `z` premise**: `L112` is valid and has 2 threads, and threads 0 and 1 both
+have row 0 and column 0 (`Launch.index` in `x` and `y`) but `z` indices 0 and 1, so equal row
+and column words do not give one thread without side 1 in `z` (`Launch.xy_inj`'s premise). -/
+theorem twin112 : L112.Valid ∧ volume L112.grid * volume L112.block = 2 ∧
+    L112.index 0 .x = 0 ∧ L112.index 1 .x = 0 ∧ L112.index 0 .y = 0 ∧ L112.index 1 .y = 0 ∧
+    L112.index 0 .z = 0 ∧ L112.index 1 .z = 1 :=
+  ⟨⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
+    fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩,
+    by decide +kernel⟩
+
+/-- **The twin of `col < s`**: on `L2222` with stride 1, thread 1 (row 1, column 0) and thread 2
+(row 0, column 1) have one cell, `row * 1 + col = 1`, so `Launch.cell_inj` needs the columns
+below the stride. -/
+theorem twin_stride : L2222.index 1 .x = 1 ∧ L2222.index 1 .y = 0 ∧ L2222.index 2 .x = 0 ∧
+    L2222.index 2 .y = 1 ∧
+    L2222.index 1 .x * 1 + L2222.index 1 .y = L2222.index 2 .x * 1 + L2222.index 2 .y := by
+  decide +kernel
+
+
+/-- **The instance of `Launch.cell_onto`**: on `L2222`, every cell `(r, c)` with `r < 4` and
+`c < 4` is the row and column of some thread below 16. -/
+theorem onto2222 {r c : Nat} (hr : r < 4) (hc : c < 4) :
+    ∃ n < 16, L2222.index n .x = r ∧ L2222.index n .y = c :=
+  Launch.cell_onto valid2222 hr hc
+
+/-- On `L2222`, cell `(3, 2)` is thread 13's (`3 · 4 + 1`: block 3, at block point `(1, 1, 0)`,
+and thread 1 of it, at thread point `(1, 0, 0)`, the thread `Launch.index_onto`'s proof builds),
+by `decide`. -/
+theorem cell32 : L2222.index 13 .x = 3 ∧ L2222.index 13 .y = 2 := by decide
+
+/-- **The twin of the bounds of `Launch.cell_onto`**: no thread of `L2222`, below 16 or not, has
+row 4 or column 4 (`Launch.index_lt_mul`: rows and columns are below `2 · 2`). -/
+theorem twin_onto (n : Nat) : L2222.index n .x ≠ 4 ∧ L2222.index n .y ≠ 4 :=
+  ⟨Nat.ne_of_lt (Launch.index_lt_mul (valid2222.grid_pos .x) (valid2222.block_pos .x) n),
+    Nat.ne_of_lt (Launch.index_lt_mul (valid2222.grid_pos .y) (valid2222.block_pos .y) n)⟩
 
 end MojoProofTest.Index

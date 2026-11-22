@@ -1,4 +1,5 @@
 import MojoProof.Sem.Spec
+import MojoProof.Sem.Buffer
 
 /-!
 # The global thread index
@@ -26,8 +27,34 @@ has the informal argument. Proved here:
 - `Launch.index_inj`, for every valid launch, two thread numbers and a dimension: equal i64 words
   of the index give equal `ctaid` and equal `tid` in that dimension (as `tid d < ntid d`).
 
-The instance (grid (2, 1, 1), block (4, 1, 1)) and the twin (a 2-D block, on which the index is
-not the thread number and not injective) are in MojoProofTest/Index.lean.
+On 2-D launches, with `Launch.index L n d` for `ctaid d * ntid d + tid d` of thread `n` (row
+`Launch.index L n .x`, column `Launch.index L n .y`):
+
+- `coord_linear`, `coord_inj`, for every box: a number below the box's volume is its coordinates'
+  linear combination, so it is determined by its three coordinates; `coord_onto`: every point of
+  the box is the coordinates of its linear combination, which is below the volume.
+- `Launch.env_inj`, for every launch: a thread below the thread count is determined by its six
+  special registers (`ctaid` and `tid` in `x`, `y`, `z`).
+- `Launch.thread_inj`, for every valid launch: threads below the thread count with equal i64 index
+  words in all three dimensions are one thread; `Launch.xy_inj`, for every valid launch whose grid
+  and block have side 1 in `z`: equal words in `x` and `y` suffice.
+- `Launch.cell_inj`, `Launch.cell_apart`, for every such launch and every stride `s`: on threads
+  below the thread count with column below `s`, `row * s + col` is injective, and for every base
+  `b`, cell width `w` and predicate `p` selecting such threads, the cells
+  `b + (row * s + col) * w` of distinct selected threads are `w` bytes apart;
+  `Launch.apart_xy`, its form on the threads with row below `m` and column below `n ≤ s`
+  (`Apart` on that subtype, the cell premise of `Kernel.sound_cellsWith`,
+  MojoProof/Sym/Kernel.lean).
+- `Launch.index_onto`, for every launch: every point `r` with `r d < L.grid d * L.block d` in each
+  dimension is `Launch.index` of some thread below the thread count; `Launch.cell_onto`, for every
+  valid launch: every cell `(r, c)` with `r < L.grid x * L.block x` and
+  `c < L.grid y * L.block y` is the row and column of some thread below the thread count (no
+  premise on `z`). `Launch.index_lt_mul`, for every launch with positive sides in `d`: every
+  thread's index in `d` is below `L.grid d * L.block d`, so these bounds are sharp.
+
+The instances (grid (2, 1, 1), block (4, 1, 1); grid and block (2, 2, 1)) and the twins (a 2-D
+block, on which the index is not the thread number and not injective; a block of side 2 in `z`;
+columns not below the stride; a row at the bound) are in MojoProofTest/Index.lean.
 -/
 
 namespace MojoProof.Sem
@@ -208,6 +235,193 @@ theorem Launch.index_inj {L : Launch} (h : L.Valid) {n n' : Nat} (d : Dim)
     exact this
   refine ⟨hc, ?_⟩
   rw [hc, Nat.mul_comm] at e
+  omega
+
+/-- The global index of thread `n` of launch `L` in dimension `d`, `ctaid d * ntid d + tid d`:
+the number whose i64 word the IR computes (`Launch.index_ops`). Unfolds by `rfl`. -/
+def Launch.index (L : Launch) (n : Nat) (d : Dim) : Nat :=
+  (L.env n).sreg .ctaid d * (L.env n).sreg .ntid d + (L.env n).sreg .tid d
+
+/-- **A number is its coordinates' linear combination.** For every box `d` and `a < volume d`:
+`a = coord x + d x * (coord y + d y * coord z)` (x fastest). -/
+theorem coord_linear {d : Dim → Nat} {a : Nat} (h : a < volume d) :
+    coord d a .x + d .x * (coord d a .y + d .y * coord d a .z) = a := by
+  simp only [coord, volume] at h ⊢
+  have hp : 0 < d .x * d .y := Nat.pos_of_ne_zero fun h0 => by simp [h0] at h
+  rw [Nat.mod_eq_of_lt ((Nat.div_lt_iff_lt_mul hp).2 (by rw [Nat.mul_comm (d .z)]; exact h)),
+    ← Nat.div_div_eq_div_mul, Nat.mod_add_div, Nat.mod_add_div]
+
+/-- For every box `d`, two numbers below `volume d` with the same coordinates in `x`, `y` and `z`
+are equal (`coord_linear`). -/
+theorem coord_inj {d : Dim → Nat} {a b : Nat} (ha : a < volume d) (hb : b < volume d)
+    (h : ∀ k, coord d a k = coord d b k) : a = b := by
+  rw [← coord_linear ha, ← coord_linear hb, h .x, h .y, h .z]
+
+/-- **Every point of a box is a number's coordinates** (the converse of `coord_linear`). For every
+box `d` and point `p` with `p k < d k` in each dimension: `p x + d x * (p y + d y * p z)` is below
+`volume d` and has coordinates `p`. -/
+theorem coord_onto {d p : Dim → Nat} (hp : ∀ k, p k < d k) :
+    p .x + d .x * (p .y + d .y * p .z) < volume d ∧
+      ∀ k, coord d (p .x + d .x * (p .y + d .y * p .z)) k = p k := by
+  have hx : 0 < d .x := Nat.lt_of_le_of_lt (Nat.zero_le _) (hp .x)
+  have hy : 0 < d .y := Nat.lt_of_le_of_lt (Nat.zero_le _) (hp .y)
+  have e1 : d .y * p .z + d .y ≤ d .y * d .z := by
+    simpa only [Nat.mul_succ] using Nat.mul_le_mul_left (d .y) (hp .z)
+  have e2 : d .x * (p .y + d .y * p .z) + d .x ≤ d .x * (d .y * d .z) := by
+    simpa only [Nat.mul_add, Nat.mul_one] using
+      Nat.mul_le_mul_left (d .x) (show p .y + d .y * p .z + 1 ≤ d .y * d .z by have := hp .y; omega)
+  have q : (p .x + d .x * (p .y + d .y * p .z)) / d .x = p .y + d .y * p .z := by
+    rw [Nat.add_mul_div_left _ _ hx, Nat.div_eq_of_lt (hp .x), Nat.zero_add]
+  refine ⟨?_, fun k => ?_⟩
+  · simp only [volume, Nat.mul_assoc]
+    have := hp .x
+    omega
+  · cases k with
+    | x => simp only [coord]; rw [Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt (hp .x)]
+    | y => simp only [coord]; rw [q, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt (hp .y)]
+    | z =>
+      simp only [coord]
+      rw [← Nat.div_div_eq_div_mul, q, Nat.add_mul_div_left _ _ hy, Nat.div_eq_of_lt (hp .y),
+        Nat.zero_add, Nat.mod_eq_of_lt (hp .z)]
+
+/-- **A thread is its six special registers.** For every launch and thread numbers `n`, `n'`
+below the thread count `volume L.grid * volume L.block`: if the two threads have the same `ctaid`
+and the same `tid` in every dimension, they are one thread. -/
+theorem Launch.env_inj {L : Launch} {n n' : Nat} (hn : n < volume L.grid * volume L.block)
+    (hn' : n' < volume L.grid * volume L.block)
+    (hc : ∀ d, (L.env n).sreg .ctaid d = (L.env n').sreg .ctaid d)
+    (ht : ∀ d, (L.env n).sreg .tid d = (L.env n').sreg .tid d) : n = n' := by
+  have hB : 0 < volume L.block := Nat.pos_of_ne_zero fun h0 => by simp [h0] at hn
+  have q : n / volume L.block = n' / volume L.block :=
+    coord_inj ((Nat.div_lt_iff_lt_mul hB).2 hn) ((Nat.div_lt_iff_lt_mul hB).2 hn') hc
+  have r : n % volume L.block = n' % volume L.block :=
+    coord_inj (Nat.mod_lt n hB) (Nat.mod_lt n' hB) ht
+  rw [← Nat.div_add_mod n (volume L.block), q, r, Nat.div_add_mod]
+
+/-- **Equal index words in every dimension are one thread.** For every valid launch and thread
+numbers `n`, `n'` below the thread count: if the i64 words of `Launch.index` of the two threads
+are equal in `x`, `y` and `z`, they are one thread (`Launch.index_inj` in each dimension, then
+`Launch.env_inj`). -/
+theorem Launch.thread_inj {L : Launch} (h : L.Valid) {n n' : Nat}
+    (hn : n < volume L.grid * volume L.block) (hn' : n' < volume L.grid * volume L.block)
+    (he : ∀ d, BitVec.ofNat 64 (L.index n d) = BitVec.ofNat 64 (L.index n' d)) : n = n' :=
+  Launch.env_inj hn hn' (fun d => (Launch.index_inj h d (he d)).1)
+    fun d => (Launch.index_inj h d (he d)).2
+
+/-- **On a launch of side 1 in `z`, the row and the column are the thread.** For every valid
+launch whose grid and block have side 1 in `z`, and thread numbers `n`, `n'` below the thread
+count: if the i64 words of `Launch.index` in `x` (the row) and in `y` (the column) of the two
+threads are equal, they are one thread (`Launch.thread_inj`; in `z` every index is 0). -/
+theorem Launch.xy_inj {L : Launch} (h : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1)
+    {n n' : Nat} (hn : n < volume L.grid * volume L.block)
+    (hn' : n' < volume L.grid * volume L.block)
+    (hx : BitVec.ofNat 64 (L.index n .x) = BitVec.ofNat 64 (L.index n' .x))
+    (hy : BitVec.ofNat 64 (L.index n .y) = BitVec.ofNat 64 (L.index n' .y)) : n = n' := by
+  have z : ∀ m, L.index m .z = 0 := fun m => by
+    simp [Launch.index, Launch.env, coord, hz.1, hz.2, Nat.mod_one]
+  exact Launch.thread_inj h hn hn' fun | .x => hx | .y => hy | .z => by simp only [z]
+
+/-- **Distinct threads have distinct cells.** For every valid launch whose grid and block have
+side 1 in `z`, every stride `s`, and thread numbers `n`, `n'` below the thread count whose columns
+(`Launch.index` in `y`) are below `s`: if `row * s + col` (`Launch.index` in `x`, then in `y`) is
+the same for the two threads, they are one thread. -/
+theorem Launch.cell_inj {L : Launch} (h : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1)
+    {s n n' : Nat} (hn : n < volume L.grid * volume L.block)
+    (hn' : n' < volume L.grid * volume L.block) (hs : L.index n .y < s) (hs' : L.index n' .y < s)
+    (he : L.index n .x * s + L.index n .y = L.index n' .x * s + L.index n' .y) : n = n' := by
+  have hr : L.index n .x = L.index n' .x := by
+    by_contra hne
+    rcases Nat.lt_or_gt_of_ne hne with hl | hl
+    · have := stride_lt s hl; omega
+    · have := stride_lt s hl; omega
+  have hc : L.index n .y = L.index n' .y := by rw [hr] at he; omega
+  exact Launch.xy_inj h hz hn hn' (congrArg _ hr) (congrArg _ hc)
+
+/-- **The cells of the threads that write are apart.** For every valid launch whose grid and
+block have side 1 in `z`, every stride `s`, base `b`, cell width `w`, and predicate `p` on thread
+numbers such that `p n` gives `n` below the thread count and a column (`Launch.index` in `y`)
+below `s`: for distinct threads `n`, `n'` with `p n` and `p n'`, the cells
+`b + (row * s + col) * w` of the two threads are `w` bytes apart (`Launch.cell_inj`,
+`apart_stride`). With `w = 4`, the 4-byte cells of a `float` matrix of row stride `s`. -/
+theorem Launch.cell_apart {L : Launch} (h : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1)
+    {s : Nat} {p : Nat → Prop}
+    (hp : ∀ n, p n → n < volume L.grid * volume L.block ∧ L.index n .y < s) (b w : Nat) :
+    ∀ n n', n ≠ n' → p n → p n' →
+      b + (L.index n .x * s + L.index n .y) * w + w ≤
+          b + (L.index n' .x * s + L.index n' .y) * w ∨
+        b + (L.index n' .x * s + L.index n' .y) * w + w ≤
+          b + (L.index n .x * s + L.index n .y) * w :=
+  fun n n' hne h1 h2 => apart_stride b le_rfl _ _ fun e =>
+    hne (Launch.cell_inj h hz (hp n h1).1 (hp n' h2).1 (hp n h1).2 (hp n' h2).2 e)
+
+/-- **The 2-D cells of the threads in a corner of the launch are apart.** For every valid launch
+`L` whose grid and block have side 1 in `z`, row stride `s`, bounds `m` on the row (`Launch.index`
+in `x`) and `n ≤ s` on the column (`Launch.index` in `y`), and cell width `w`: on the threads
+below the thread count whose row is below `m` and column below `n`, the cells
+`(row * s + col) * w` are `w` bytes apart (`Apart` on that subtype, the premise of
+`Kernel.sound_cellsWith`; `Launch.cell_apart`). With `w = 4` and `s` the row length, these are the
+`float` cells of a matrix product's output that the threads inside the matrix store. It covers
+every such launch, stride and bound. -/
+theorem Launch.apart_xy {L : Launch} (h : L.Valid)
+    (hz : L.grid .z = 1 ∧ L.block .z = 1) {s m n : Nat} (hn : n ≤ s) (w : Nat) :
+    Apart (fun i : {k // k < volume L.grid * volume L.block ∧ L.index k .x < m ∧
+      L.index k .y < n} => (L.index i.1 .x * s + L.index i.1 .y) * w) w := by
+  intro i j hij
+  simpa using Launch.cell_apart h hz (s := s)
+    (p := fun k => k < volume L.grid * volume L.block ∧ L.index k .x < m ∧ L.index k .y < n)
+    (fun k hk => ⟨hk.1, by omega⟩) 0 w i.1 j.1 (fun e => hij (Subtype.ext e)) i.2 j.2
+
+/-- **Every index point is some thread's.** For every launch `L` and point `r` with
+`r d < L.grid d * L.block d` in each dimension, some thread `n` below the thread count
+`volume L.grid * volume L.block` has `Launch.index L n d = r d` in every dimension: the thread of
+block point `r d / L.block d` and thread point `r d % L.block d` (`coord_onto`). No validity
+premise: the bounds make every side positive. -/
+theorem Launch.index_onto {L : Launch} {r : Dim → Nat} (hr : ∀ d, r d < L.grid d * L.block d) :
+    ∃ n < volume L.grid * volume L.block, ∀ d, L.index n d = r d := by
+  have hb : ∀ d, 0 < L.block d := fun d =>
+    Nat.pos_of_ne_zero fun h0 => by have := hr d; simp [h0] at this
+  obtain ⟨hB, eB⟩ := coord_onto (d := L.grid) (p := fun d => r d / L.block d)
+    fun d => (Nat.div_lt_iff_lt_mul (hb d)).2 (hr d)
+  obtain ⟨hT, eT⟩ := coord_onto (d := L.block) (p := fun d => r d % L.block d)
+    fun d => Nat.mod_lt _ (hb d)
+  generalize r .x / L.block .x + L.grid .x * (r .y / L.block .y + L.grid .y * (r .z / L.block .z))
+    = B at hB eB
+  generalize r .x % L.block .x + L.block .x * (r .y % L.block .y + L.block .y * (r .z % L.block .z))
+    = T at hT eT
+  have hv : 0 < volume L.block := Nat.lt_of_le_of_lt (Nat.zero_le _) hT
+  refine ⟨volume L.block * B + T, ?_, fun d => ?_⟩
+  · have := Nat.mul_le_mul_left (volume L.block) hB
+    rw [Nat.mul_succ, Nat.mul_comm (volume L.block) (volume L.grid)] at this
+    omega
+  · show coord L.grid ((volume L.block * B + T) / volume L.block) d * L.block d +
+      coord L.block ((volume L.block * B + T) % volume L.block) d = r d
+    rw [Nat.mul_add_div hv, Nat.div_eq_of_lt hT, Nat.add_zero, Nat.mul_add_mod,
+      Nat.mod_eq_of_lt hT, eB, eT]
+    exact Nat.div_add_mod' (r d) (L.block d)
+
+/-- **Every cell of a 2-D launch is some thread's.** For every valid launch, row `r` below
+`L.grid x * L.block x` and column `c` below `L.grid y * L.block y`, some thread `n` below the
+thread count has row `Launch.index L n .x = r` and column `Launch.index L n .y = c`
+(`Launch.index_onto` at `(r, c, 0)`). No premise on `z`; with side 1 in `z` the thread is unique
+(`Launch.xy_inj`). -/
+theorem Launch.cell_onto {L : Launch} (h : L.Valid) {r c : Nat} (hr : r < L.grid .x * L.block .x)
+    (hc : c < L.grid .y * L.block .y) :
+    ∃ n < volume L.grid * volume L.block, L.index n .x = r ∧ L.index n .y = c :=
+  let ⟨n, hn, e⟩ := Launch.index_onto (r := fun | .x => r | .y => c | .z => 0)
+    fun | .x => hr | .y => hc | .z => Nat.mul_pos (h.grid_pos .z) (h.block_pos .z)
+  ⟨n, hn, e .x, e .y⟩
+
+/-- **The index bound is sharp.** For every launch whose grid and block have positive sides in
+`d`, and every thread number `n` (below the thread count or not): `Launch.index L n d` is below
+`L.grid d * L.block d`, as `ctaid d < L.grid d` and `tid d < L.block d` (`coord_lt`). -/
+theorem Launch.index_lt_mul {L : Launch} {d : Dim} (hg : 0 < L.grid d) (hb : 0 < L.block d)
+    (n : Nat) : L.index n d < L.grid d * L.block d := by
+  have c : coord L.grid (n / volume L.block) d < L.grid d := coord_lt _ hg
+  have t : coord L.block (n % volume L.block) d < L.block d := coord_lt _ hb
+  have := Nat.mul_le_mul_right (L.block d) c
+  rw [Nat.succ_mul] at this
+  show coord L.grid (n / volume L.block) d * L.block d + coord L.block (n % volume L.block) d <
+    L.grid d * L.block d
   omega
 
 end MojoProof.Sem

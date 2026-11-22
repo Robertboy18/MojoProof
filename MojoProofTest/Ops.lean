@@ -20,6 +20,11 @@ theorem), each proved by mojo_ret alone:
 The next `example` is the open-goal twin of `vadd_elem0`: with `p1 ≠ out` behind an
 irreducible definition, mojo_ret cannot show the second load's block is not `out` and leaves that
 goal open, as logged; unfolding the definition closes it.
+
+`vadd_only0` and `vadd_only1` are mojo_ret's `Elem.Only` goal (every access to `out` by a thread
+of a set): block `%4`'s loads keep it for every set and thread, and block `%21`'s effects keep it
+for the threads below `n` when the thread is one of them; the last `example` is `vadd_only0`'s
+open-goal twin.
 -/
 
 namespace MojoProofTest.Ops
@@ -90,6 +95,45 @@ example {c : Ctx} {m₀ m me : Mem} {f : Frame} {out p0 p1 p2 k : Nat}
     (h : SEff.run (Valuation.entry c 0 m f) (vals (Valuation.entry c 0 m f) Kernels.vadd.b0.nodes)
       Kernels.vadd.b0.effs = .ok me) :
     Elem m₀ out 4 (fun i => 4 * i) bs k me := by
+  mojo_ret
+  unfold Off at h1
+  exact h1
+
+/-- **Block `%4`'s loads keep `Elem.Only` by mojo_ret**: for every context, memories, frame whose
+registers `%0` to `%2` point to blocks other than `out` and set of threads `S`, whatever the
+context's thread. -/
+theorem vadd_only0 {c : Ctx} {m me : Mem} {f : Frame} {out p0 p1 p2 : Nat} {S : Nat → Prop}
+    (hr0 : f.regs 0 = some (.ptr ⟨p0, 0⟩)) (hr1 : f.regs 1 = some (.ptr ⟨p1, 0⟩))
+    (hr2 : f.regs 2 = some (.ptr ⟨p2, 0⟩)) (hp : p0 ≠ out ∧ p1 ≠ out ∧ p2 ≠ out)
+    (hO : Elem.Only out S m)
+    (h : SEff.run (Valuation.entry c 0 m f) (vals (Valuation.entry c 0 m f) Kernels.vadd.b0.nodes)
+      Kernels.vadd.b0.effs = .ok me) :
+    Elem.Only out S me := by
+  mojo_ret
+
+/-- **Block `%21`'s effects keep `Elem.Only` by mojo_ret**: for every valuation of thread `k < n`,
+output block and memory, the effects of `vadd.b1` (two loads and a store) keep every access to
+`out` by a thread below `n`. -/
+theorem vadd_only1 {V : Valuation} {k n out : Nat} {me : Mem} (hcw : V.ctx.who.thread = k)
+    (hkn : k < n) (hO : Elem.Only out (· < n) V.mem)
+    (h : SEff.run V (vals V Kernels.vadd.b1.nodes) Kernels.vadd.b1.effs = .ok me) :
+    Elem.Only out (· < n) me := by
+  mojo_ret
+
+/--
+info: mojo_ret: open goal
+  ¬p1 = out
+-/
+#guard_msgs (whitespace := lax) in
+/-- **The twin of `vadd_only0`**: with `p1 ≠ out` stated as `Off p1 out`, mojo_ret leaves
+`¬p1 = out` open for the second load; `unfold Off` then closes it. -/
+example {c : Ctx} {m me : Mem} {f : Frame} {out p0 p1 p2 : Nat} {S : Nat → Prop}
+    (hr0 : f.regs 0 = some (.ptr ⟨p0, 0⟩)) (hr1 : f.regs 1 = some (.ptr ⟨p1, 0⟩))
+    (hr2 : f.regs 2 = some (.ptr ⟨p2, 0⟩)) (hp : p0 ≠ out ∧ p2 ≠ out) (h1 : Off p1 out)
+    (hO : Elem.Only out S m)
+    (h : SEff.run (Valuation.entry c 0 m f) (vals (Valuation.entry c 0 m f) Kernels.vadd.b0.nodes)
+      Kernels.vadd.b0.effs = .ok me) :
+    Elem.Only out S me := by
   mojo_ret
   unfold Off at h1
   exact h1

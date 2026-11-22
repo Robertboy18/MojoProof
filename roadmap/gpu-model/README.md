@@ -6,8 +6,8 @@ What the semantics says a GPU does beyond one thread's LLVM IR: the launch and i
 address spaces, shared memory, the barrier, warp shuffles, atomics, and the tensor-core and
 asynchronous-copy operations the corpus's kernels call. Each card names the Lean declarations
 that model the construct (`lean`), or `not stated yet` where the semantics has none. Construct
-cards climb the construct ladder of roadmap/README.md: L1 modelled, L2 tested against a GPU, L3
-used by a proved kernel.
+cards climb the construct ladder of roadmap/README.md: L1 modelled, L2 tested against a GPU (a
+conformance test, not a proof), L3 used by a proved kernel.
 
 Reference: the PTX ISA version 9.5 and LLVM 24.0.0git's LangRef, the versions docs/TRUST.md
 records, and the NVPTX usage guide of the same LLVM version. No copy of them is in the repository, so every quote is empty
@@ -28,6 +28,7 @@ and each card says "quote to be added".
 
 ## Open
 
-No GPU run is recorded, so no construct is past L1. The launch is used by the proved kernels
+A construct passes L1 only with a recorded GPU run of a test of it, a conformance test and not
+a proof; STATUS.md lists the cards that have one. The launch is used by the proved kernels
 (L3 evidence); the barrier, shuffles, shared memory and atomics wait for a proved kernel that
 uses them; `mma`, `ldmatrix` and `cp.async` wait for a model.

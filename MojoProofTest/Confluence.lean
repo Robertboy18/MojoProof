@@ -604,7 +604,7 @@ contexts is reachable from no start, and there the two orders differ. -/
 theorem start_fire_twin {prog : Program} {fn : Func} {args : List Val} {m : Mem}
     {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} :
     Grid.start prog fn (Pending.launch 1) args m ch oracle ≠ .ok (g, ctxOf) :=
-  fun h => absurd (Grid.start_ctx h 1).2 (by decide)
+  fun h => absurd (Grid.start_ctx h 1).2.1 (by decide)
 
 /-! ## Two collective calls (`Grid.fire_fire_comm`, `Grid.start_fire_fire_comm`) -/
 

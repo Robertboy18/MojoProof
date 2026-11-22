@@ -10,12 +10,33 @@ The cards are generated, not written by hand. The inputs are:
 * the block checker's rule table, the `mojo_rule` attributes and `mojo_refuse` commands of
   MojoProof/Sym/Rules.lean;
 * tests/corpus/REFUSALS.tsv, the corpus files the importer refuses and why;
+* the table MojoProofTest/Modelled.lean pins (`#guard_msgs`): for each opcode keyword and intrinsic
+  family, what the grid evaluator does with a small kernel of it (`returns`, or the fault);
 * a token scan of the corpus `.ll` files: the opcode of every instruction line and the callee of
-  every call of an `llvm.` intrinsic.
+  every call of an `llvm.` intrinsic;
+* the records of GPU runs, tests/gpu/<kernel>/record.txt: each names the corpus file of the
+  kernel it ran (its `kernel:` line, with the file's sha256 on its `kernel sha256:` line) and
+  says whether the evaluator agreed with the GPU (its `result:` line).
 
 It writes one card per opcode the corpus uses, one per intrinsic family the corpus calls, and
 one per construct the importer refuses (each distinct reason of REFUSALS.tsv, and each explicit
-refusal of the parser), and the area's README.md. A card's `lean` lists only names that the
+refusal of the parser), and the area's README.md.
+
+An opcode or family card is L1 only if the semantics runs the construct: its row of
+MojoProofTest/Modelled.lean's table says `returns`, that is, the grid evaluator ran a kernel of the
+construct (one block of one thread, a straight-line body) until every thread returned. Any other
+row (the run stops with `unsupported`, or with another fault, or does not start) makes the card
+L0, "parsed, not modelled": its `lean` is `not stated yet` and its body names the importer's
+declarations and the row. The table is computed by the semantics, not written by hand: the
+module's build fails unless the evaluator's output is the pinned table, so the table changes with
+the semantics; a construct with no row is an error here. A `returns` row is a positive witness
+for the form the test kernel runs; an incidental fault of a test kernel can only make a card L0,
+never L1. An L1 card is L2 when a record of a GPU run whose result is agreement ran a corpus
+kernel whose IR uses the construct (the token scan of that kernel's file, not a list): the card's
+`evidence: L2:` lists those records. Such a record is a conformance test, not a proof: the
+evaluator and the GPU gave the same output buffer, bit for bit, on the launches it lists. A record
+whose kernel file's sha256 is not the one it states is an error here. A card's `lean` lists only
+names that the
 declaration index of scripts/cited.py (`scan` over MojoProof/ and MojoProofTest/) contains, so
 each is a declaration on this tree; the constructors (`Inst.bin`, `BinOp.add`), which that index
 does not list, are named in the card's body. A card's quote is the first sentence of the cited
@@ -32,6 +53,7 @@ Usage:
 
 The output is sorted and has no timestamps. Python 3 standard library only.
 """
+import hashlib
 import html
 import pathlib
 import re
@@ -43,9 +65,11 @@ import cited  # noqa: E402  (the declaration index: `scan`)
 
 AREA = ROOT / 'roadmap' / 'llvm-ir'
 CORPUS = ROOT / 'tests' / 'corpus'
+GPU = ROOT / 'tests' / 'gpu'
 LANGREF = 'LLVM LangRef 24.0.0git'
 PTX = 'PTX ISA 9.5'
 SHOWN = 5   # corpus paths listed in a card's front matter
+MODELLED = 'MojoProofTest/Modelled.lean'
 
 # The first sentence of each cited section (LangRef 24.0.0git and PTX ISA 9.5, docs/TRUST.md T7).
 QUOTES = {
@@ -233,6 +257,20 @@ def index() -> set[str]:
         for p in sorted((ROOT / d).rglob('*.lean')):
             decls |= cited.scan(p.read_text())[0]
     return decls
+
+
+def modelled() -> dict[str, str]:
+    """The table MojoProofTest/Modelled.lean pins: construct (an opcode keyword, or
+    `Intrinsic.fam`) to the grid evaluator's outcome (`returns`, or the fault)."""
+    m = re.search(r'/--\ninfo: (.*?)\n-/\n#guard_msgs in\n#eval do\n  for \(k, src\) in cases',
+                  read(MODELLED), re.S)
+    assert m, f'{MODELLED}: no pinned table'
+    out = {}
+    for line in m.group(1).split('\n'):
+        k, outcome = line.split(': ', 1)
+        assert k not in out, k
+        out[k] = outcome
+    return out
 
 
 def def_body(text: str, header: str) -> str:
@@ -428,6 +466,56 @@ def scan_corpus(ops: dict[str, Op], fams: dict[str, re.Pattern]):
     return used
 
 
+def gpu_launches(text: str) -> bool:
+    """Whether the launches of a GPU run record (its text `text`) all agree. A launch line is
+    `launch: n grid block words` (a 1-D launch) or `launch: m n k gx gy bx by words` (a 2-D launch
+    of the naive matmul kernel: sizes `m`, `n`, `k`, the grid's and the block's sides in x and
+    y). Its per-launch `evaluator: n N grid G block B: ...` or `evaluator: m M n N k K grid GX GY
+    block BX BY: ...` lines are as many as its launch lines (at least one), name the same numbers
+    but the words in the same order and each says `W words agree` with W the launch's words; its
+    `evaluator: L launches, 0 differ` line has L the number of launches; and its `compare:`
+    command passes that number as its last argument."""
+    launches = [line.split() for line in re.findall(r'^launch: (\d+(?: \d+)*)$', text, re.M)]
+    head = r'n \d+ grid \d+ block \d+|m \d+ n \d+ k \d+ grid \d+ \d+ block \d+ \d+'
+    evals = [(re.findall(r'\d+', e[1]), e[2])
+             for e in re.finditer(rf'^evaluator: ({head}): (.*)$', text, re.M)]
+    n = len(launches)
+    summary = re.findall(r'^evaluator: (\d+) launches, (\d+) differ$', text, re.M)
+    return (n > 0 and n == len(evals) and summary == [(str(n), '0')] and
+            re.findall(r'^compare: .* (\d+)$', text, re.M) == [str(n)] and
+            all(len(lt) in (4, 8) and lt[:-1] == et[0] and et[1] == f'{lt[-1]} words agree'
+                for lt, et in zip(launches, evals)))
+
+
+def gpu_records() -> dict[str, str]:
+    """The records of GPU runs (tests/gpu/*/record.txt) whose `result:` line starts with `agree`
+    and whose launches all agree (`gpu_launches`): for each, the corpus file of the kernel it ran
+    (its `kernel:` line). The file must exist and have the sha256 of the record's `kernel sha256:`
+    line. A record whose `result:` says `agree` but whose launch, evaluator and compare lines do
+    not is not counted, with a message on stderr. Each counted record, with its first launch's
+    words changed, must be rejected by `gpu_launches`."""
+    out = {}
+    for p in sorted(GPU.glob('*/record.txt')):
+        text = p.read_text()
+        f = dict(re.findall(r'^([a-z][a-z0-9 ]*): (.*)$', text, re.M))
+        rel = str(p.relative_to(ROOT))
+        k = ROOT / f['kernel']
+        assert k.is_file() and f['kernel'].startswith('tests/corpus/'), f'{rel}: no kernel file'
+        sha = hashlib.sha256(k.read_bytes()).hexdigest()
+        assert f['kernel sha256'] == sha, f'{rel}: {f["kernel"]} has sha256 {sha}'
+        if not f['result'].startswith('agree'):
+            continue
+        if gpu_launches(text):
+            out[rel] = f['kernel']
+            bad = re.sub(r'^(launch: (?:\d+ )+)(\d+)$', lambda m: m[1] + str(int(m[2]) + 1),
+                         text, count=1, flags=re.M)
+            assert bad != text and not gpu_launches(bad), f'{rel}: a changed word count is accepted'
+        else:
+            print(f'{rel}: result agree, but its launch, evaluator and compare lines do not '
+                  'agree; not counted', file=sys.stderr)
+    return out
+
+
 def refusals_tsv() -> dict[str, list[str]]:
     """The distinct reasons of REFUSALS.tsv (without the function), with their files."""
     out: dict[str, list[str]] = {}
@@ -462,14 +550,29 @@ def ref_of(anchor: str) -> str:
     return f'{PTX if anchor in PTX_ANCHORS else LANGREF} #{anchor}'
 
 
-def card(cid, title, ref, lean, files, tests, body) -> str:
-    level = 'L1' if lean else 'L0'
+def card(cid, title, ref, lean, files, tests, body, gpu=()) -> str:
+    """A card; L1 when `lean` names declarations, L0 when it is empty (`not stated yet`); L2 when
+    it is L1 and `gpu` lists records of GPU runs (its `evidence: L2:`)."""
+    level = ('L2' if gpu else 'L1') if lean else 'L0'
     head = ['---', f'id: {cid}', f'title: {title}', 'kind: construct', f'ref: {ref}',
             f'quote: {yq(QUOTES[ref.split("#")[1]])}',
             f'lean: {", ".join(lean) if lean else "not stated yet"}',
             f'corpus: {corpus_field(files)}', f'tests: {", ".join(tests) if tests else "none"}',
-            'upstream:', f'level: {level}', '---', '']
+            'upstream:', f'level: {level}'] + ([f'evidence: L2: {", ".join(gpu)}'] if gpu else []) \
+        + ['---', '']
     return '\n'.join(head) + body.rstrip('\n') + '\n'
+
+
+def open_text(run: str, gpu=()) -> str:
+    """A construct card's open work, from its row of the Modelled table and its GPU records."""
+    if run == 'returns' and gpu:
+        return ('L3 needs a kernel card (roadmap/kernels/) with L2 evidence, a proved kernel, whose '
+                'program uses the construct; this script reads no kernel card and writes no L3 '
+                'evidence.\n')
+    if run == 'returns':
+        return 'L2 needs a recorded GPU run of a test of the construct; there is none.\n'
+    return ('L1 needs a semantics of the construct: the run of its test kernel stops with '
+            f'`{run}`. L2 then needs a recorded GPU run of a test of it; there is none.\n')
 
 
 def checker_text(entries: list[str]) -> str:
@@ -484,7 +587,12 @@ def generate() -> dict[str, str]:
     rules = rule_table()
     decls = index()
     kfiles = kernel_files()
+    records = gpu_records()
     used = scan_corpus(ops, fams)
+    runs = modelled()
+    collectives = set(re.findall(r'\| \.(\w+)[^\n]*convergent := true',
+                                 def_body(read('MojoProof/LLVM/Intrinsic.lean'),
+                                          'def effects : Intrinsic → Effects')))
     total = len(list(CORPUS.rglob('*.ll')))
     unknown = sorted(k for k in used if k.startswith('fam:?'))
     assert not unknown, f'calls no family matches: {unknown}'
@@ -504,8 +612,22 @@ def generate() -> dict[str, str]:
             return ''
         return ('\n\nThe programs of the library\'s `mojo_kernel` theorems use it ('
                 + ', '.join(f'`{k}`' for k in ks)
-                + '). L3 counts that only through a kernel card with a recorded GPU run, and no '
-                'kernel has one.')
+                + '). L3 counts that only through a kernel card (roadmap/kernels/) with L2 '
+                'evidence, which this script does not read.')
+
+    def gpu_of(files, run):
+        """The records of GPU runs that agree, of a kernel whose file uses the construct."""
+        return [r for r, k in sorted(records.items()) if k in files] if run == 'returns' else []
+
+    def gpu_text(gpu):
+        if not gpu:
+            return ''
+        return ('\n\n## GPU runs\n\nA conformance test, not a proof. The records of GPU runs '
+                'of corpus kernels whose IR uses it: ' + ', '.join(gpu) + '. In each, the grid '
+                'evaluator ran the imported corpus program on the inputs of the GPU run, and its '
+                'output buffer agreed with the GPU\'s, bit for bit over the whole buffer, on every '
+                'launch the record lists. That covers the forms of the construct those kernels '
+                'use, on those inputs and launches, and nothing else.')
 
     out: dict[str, str] = {}
     items = []
@@ -523,28 +645,42 @@ def generate() -> dict[str, str]:
             'MojoProof.LLVM.Parser.terminator'
         sem = 'MojoProof.Sem.exec' if op.kind == 'inst' else 'MojoProof.Sem.step'
         lean = names([parser, f'MojoProof.LLVM.{typ}', sem] + helpers + lemmas)
+        run = runs.get(kw)
+        assert run, f'{MODELLED} has no row for {kw}'
+        gpu = gpu_of(files, run)
         ctors = ' or '.join(f'`{typ}.{c}`' for c in op.ctors)
         if op.opctor:
             ctors += f' with `{op.opctor}`'
         entries = [e for c in op.ctors for e in rules.get(f'{typ}.{c}', [])]
         cid = f'{"inst" if op.kind == "inst" else "term"}-{kw}'
         title = f'The `{kw}` {"instruction" if op.kind == "inst" else "terminator"}'
+        if run == 'returns':
+            sem_text = (f'the semantics gives it a meaning in `{sem}`'
+                        + (f', with {", ".join(f"`{h}`" for h in dict.fromkeys(helpers))}'
+                           if helpers else '')
+                        + f'. {MODELLED} runs a kernel of it (its row `{kw}`), and the run '
+                        'returns. ')
+        else:
+            sem_text = (f'it is parsed, not modelled: {MODELLED}\'s kernel of it (its row '
+                        f'`{kw}`) stops with `{run}`. The declarations: '
+                        + ', '.join(f'`{x}`' for x in lean) + '. ')
+            lean = []
         body = (f'# {title}\n\n'
                 f'## Rule\n\nLangRef\'s section on `{kw}` (the quote is the first sentence of its '
                 f'overview). The importer reads `{kw}` as {ctors} (`{parser.split(".", 2)[2]}`); '
-                f'the semantics gives it a meaning in `{sem}`'
-                + (f', with {", ".join(f"`{h}`" for h in dict.fromkeys(helpers))}' if helpers
-                   else '') + '. ' + checker_text(entries) + '\n\n'
-                f'## Corpus\n\n{corpus_text(files, total)}' + kernel_note(files) + '\n\n'
+                + sem_text + checker_text(entries) + '\n\n'
+                f'## Corpus\n\n{corpus_text(files, total)}' + kernel_note(files)
+                + gpu_text(gpu) + '\n\n'
                 '## Out of scope\n\nForms of the instruction the corpus does not use are read by the '
                 'same parser case, but no corpus file exercises them. That the semantics gives '
                 f'`{kw}` the meaning LLVM gives it rests on reading LangRef (docs/TRUST.md T7), '
-                'not on a check against LLVM.\n\n'
-                '## Open\n\nL2 needs a recorded GPU run of a test of the construct; there is '
-                'none.\n')
+                + ('and on the GPU runs above for their inputs, ' if gpu else '')
+                + 'not on a check against LLVM.\n\n'
+                '## Open\n\n' + open_text(run, gpu))
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), lean, sorted(files),
-                                      ['MojoProofTest.Rule', 'MojoProofTest.Corpus'], body)
-        items.append((cid, title, 'opcode'))
+                                      ['MojoProofTest.Rule', 'MojoProofTest.Corpus',
+                                       'MojoProofTest.Modelled'], body, gpu)
+        items.append((cid, title, 'opcode', run == 'returns', gpu))
     for fam in sorted(fams, key=lambda f: list(fams).index(f)):
         files = used.get('fam:' + fam, {})
         if not files:
@@ -554,6 +690,20 @@ def generate() -> dict[str, str]:
                   for e in rules.get(f'Intrinsic.{fam}', []) if e.startswith('`')]
         lean = names(['MojoProof.LLVM.Intrinsic.ofDecl', 'MojoProof.LLVM.Intrinsic',
                       'MojoProof.Sem.intrinsic'] + FAMILY_HELPERS.get(fam, []) + lemmas)
+        run = runs.get(f'Intrinsic.{fam}')
+        assert run, f'{MODELLED} has no row for Intrinsic.{fam}'
+        gpu = gpu_of(files, run)
+        if run == 'returns':
+            sem_text = ('The semantics gives a call its meaning in `MojoProof.Sem.intrinsic`'
+                        + (', and the grid completes the collective call in '
+                           '`MojoProof.Sem.Grid.fire`' if fam in collectives else '')
+                        + f'. {MODELLED} runs a kernel of a call (its row `Intrinsic.{fam}`), and '
+                        'the run returns. ')
+        else:
+            sem_text = (f'The family is parsed, not modelled: {MODELLED}\'s kernel of a call (its '
+                        f'row `Intrinsic.{fam}`) stops with `{run}`. The declarations: '
+                        + ', '.join(f'`{x}`' for x in lean) + '. ')
+            lean = []
         cid = f'intrinsic-{fam.lower()}'
         title = f'The intrinsic family `Intrinsic.{fam}`'
         src = 'PTX ISA\'s section on the instruction NVPTX lowers it to' \
@@ -564,11 +714,11 @@ def generate() -> dict[str, str]:
                 f'## Rule\n\n{src} (the quote is the section\'s first sentence). The importer '
                 f'accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its '
                 f'name and signature (`Intrinsic.name`, `Intrinsic.sig`). '
-                + FAMILY_NOTE.get(fam, '') + 'The semantics gives a call its meaning in '
-                f'`MojoProof.Sem.intrinsic`. '
+                + FAMILY_NOTE.get(fam, '') + sem_text
                 + checker_text(rules.get(f'Intrinsic.{fam}', [])) + '\n\n'
                 f'## Corpus\n\n{corpus_text(files, total)} The members called: '
-                + ', '.join(f'`{n}`' for n in names_used) + '.' + kernel_note(files) + '\n\n'
+                + ', '.join(f'`{n}`' for n in names_used) + '.' + kernel_note(files)
+                + gpu_text(gpu) + '\n\n'
                 '## Out of scope\n\nMembers of the family the corpus does not call. '
                 + ('The NVPTX backend\'s documentation of the NVVM intrinsics is not quoted (no '
                    'local copy); that the intrinsic is the PTX instruction cited rests on reading '
@@ -576,11 +726,11 @@ def generate() -> dict[str, str]:
                    + ').' if anchor in PTX_ANCHORS else
                    'That the semantics gives the family the meaning LLVM gives it rests on reading '
                    'LangRef (docs/TRUST.md T7).') + '\n\n'
-                '## Open\n\nL2 needs a recorded GPU run of a test of the construct; there is '
-                'none.\n')
+                '## Open\n\n' + open_text(run, gpu))
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), lean, sorted(files),
-                                      ['MojoProofTest.Rule', 'MojoProofTest.Corpus'], body)
-        items.append((cid, title, 'intrinsic'))
+                                      ['MojoProofTest.Rule', 'MojoProofTest.Corpus',
+                                       'MojoProofTest.Modelled'], body, gpu)
+        items.append((cid, title, 'intrinsic', run == 'returns', gpu))
     for k, (reason, files) in enumerate(sorted(refusals_tsv().items()), 1):
         asm = re.match(r'unsupported inline asm "([^"]*)"', reason)
         instr = asm.group(1).split()[0] if asm else ''
@@ -603,7 +753,7 @@ def generate() -> dict[str, str]:
                 'contract) before the importer can accept these files.\n')
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), [], files,
                                       ['MojoProofTest.Corpus'], body)
-        items.append((cid, title, 'refused'))
+        items.append((cid, title, 'refused', False, []))
     for kw, msg in parser_refusals:
         word = msg.split("'")[1]
         cid = 'refused-' + word.replace(' ', '-')
@@ -620,15 +770,37 @@ def generate() -> dict[str, str]:
                 'them.\n')
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(f'{kw}-instruction'), [], [],
                                       ['MojoProofTest.Corpus'], body)
-        items.append((cid, title, 'refused'))
-    out['README.md'] = readme(items, total, len(ops))
+        items.append((cid, title, 'refused', False, []))
+    out['README.md'] = readme(items, total, len(ops), sorted(records))
     return out
 
 
-def readme(items, total, nops) -> str:
+def readme(items, total, nops, records) -> str:
     groups = {'opcode': [], 'intrinsic': [], 'refused': []}
-    for cid, title, g in items:
-        groups[g].append(f'- [{cid}](cards/{cid}.md): {title}')
+    for cid, title, g, ok, gpu in items:
+        note = ' (tested against the GPU)' if gpu else \
+            '' if ok or g == 'refused' else ' (parsed, not modelled)'
+        groups[g].append(f'- [{cid}](cards/{cid}.md): {title}{note}')
+    constructs = [(cid, ok) for cid, _, g, ok, _ in items if g != 'refused']
+    l2 = sum(bool(gpu) for _, _, _, _, gpu in items)
+    l1 = sum(ok for _, ok in constructs)
+    unmodelled = [cid for cid, ok in constructs if not ok]
+    coverage = (f'{l1} of the {len(constructs)} opcode and family cards are L1: the importer reads '
+                'the construct, `MojoProof.Sem.exec`, `MojoProof.Sem.step` or '
+                '`MojoProof.Sem.intrinsic` gives it a meaning, and the grid evaluator runs a '
+                f'kernel of it to the end ({MODELLED}); the card repeats the block checker\'s '
+                'rules and refusals for its constructors. '
+                + (('The ' + ' and '.join(', '.join(f'`{c}`' for c in unmodelled).rsplit(', ', 1))
+                    + ' card'
+                    + ('s are' if len(unmodelled) > 1 else ' is')
+                    + ' L0, parsed but not modelled: the semantics stops a run at the construct. ')
+                   if unmodelled else '')
+                + 'The refused constructs are L0. '
+                + (f'{l2} of the L1 cards are L2: a record of a GPU run that agrees with the '
+                   'evaluator ran a corpus kernel whose IR uses the construct ('
+                   + ', '.join(records) + '; a conformance test, not a proof). '
+                   if records else 'No card is L2, since no GPU run is recorded. ')
+                + 'No card is L3: this script writes no L3 evidence.')
     return '\n'.join([
         '# LLVM IR constructs',
         '',
@@ -642,7 +814,11 @@ def readme(items, total, nops) -> str:
         'corpus file uses, every intrinsic family some corpus file calls, and every construct the '
         'importer refuses. The corpus IR declares no LLVM version (it has no `llvm.ident`); the '
         'cards cite the LangRef and PTX ISA versions the semantics was read from (LangRef '
-        '24.0.0git, PTX ISA 9.5, docs/TRUST.md T7). A card is L1 when its `lean` names exist.',
+        '24.0.0git, PTX ISA 9.5, docs/TRUST.md T7). An opcode or family card is L1 when its `lean` '
+        'names exist and the semantics runs the construct: the grid evaluator runs a kernel of it '
+        f'until every thread returns, the row `returns` of the table {MODELLED} pins (its build '
+        'checks the table). A construct the importer reads and the semantics stops at (with '
+        '`unsupported` or another fault) is L0, parsed but not modelled, and its card says so.',
         '',
         '## Items',
         '',
@@ -671,14 +847,14 @@ def readme(items, total, nops) -> str:
         '',
         '## Coverage in MojoProof',
         '',
-        'Every opcode and family card is L1: the importer reads it, `MojoProof.Sem.exec`, '
-        '`MojoProof.Sem.step` or `MojoProof.Sem.intrinsic` gives it a meaning, and the card '
-        'repeats the block checker\'s rules and refusals for its constructors. The refused '
-        'constructs are L0. No card is L2, since no GPU run is recorded, and so none is L3.',
+        coverage,
         '',
         '## Next steps',
         '',
-        '- A recorded GPU run per construct, for L2.',
+        '- A recorded GPU run of a kernel that uses the construct, for L2 of the L1 cards that '
+        'are not L2.',
+        *(['- A semantics of the constructs parsed but not modelled ('
+           + ', '.join(f'`{c}`' for c in unmodelled) + '), for L1.'] if unmodelled else []),
         '- A model of the refused inline asm (`cvt` to e4m3 and `cp.async.cg`), so the refused '
         'files import.',
         '- The block checker\'s refusals listed in each card, which bound what a proved kernel '

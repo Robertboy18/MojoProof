@@ -5,8 +5,8 @@ kind: construct
 ref: LLVM LangRef 24.0.0git #bitcast-to-instruction
 quote: "The ‘bitcast’ instruction converts value to type ty2 without changing any bits."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.bitcast, MojoProof.Sym.exec_cast
-corpus: tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_False_623520a3.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_False_fee81d5b.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_True_2e0d4661.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_True_7946e0b2.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_126ea5ea.nvptx.ll
-tests: MojoProofTest.Rule, MojoProofTest.Corpus
+corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_False_623520a3.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_False_fee81d5b.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_True_2e0d4661.nvptx.ll
+tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
 ---
@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-LangRef's section on `bitcast` (the quote is the first sentence of its overview). The importer reads `bitcast` as `Inst.cast` with `CastOp.bitcast` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.bitcast`. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (trunc, zext and sext); refused (the other casts): SState.stmt takes trunc, zext and sext only.
+LangRef's section on `bitcast` (the quote is the first sentence of its overview). The importer reads `bitcast` as `Inst.cast` with `CastOp.bitcast` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.bitcast`. MojoProofTest/Modelled.lean runs a kernel of it (its row `bitcast`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (trunc, zext and sext); refused (the other casts): SState.stmt takes trunc, zext and sext only.
 
 ## Corpus
 
-31 of the 111 corpus files use it (8031 uses); `corpus` lists the first 5 in path order.
+33 of the 114 corpus files use it (8053 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

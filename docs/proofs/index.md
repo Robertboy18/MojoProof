@@ -1,7 +1,8 @@
-# The global thread index (`Launch.index_ops`, `Launch.index_oneDim`, `Launch.index_inj`)
+# The global thread index (`Launch.index_ops`, `Launch.index_oneDim`, `Launch.index_inj`, and on 2-D launches `Launch.thread_inj`, `Launch.xy_inj`, `Launch.cell_inj`, `Launch.cell_apart`; onto: `Launch.index_onto`, `Launch.cell_onto`, `Launch.index_lt_mul`)
 
-Lean: proved, for every launch, thread number, dimension, width and flags as stated below, in
-MojoProof/Sem/Index.lean. Instance and twin: MojoProofTest/Index.lean.
+Lean: proved, for every launch, thread number, dimension, width, flags, stride, base, cell width
+and predicate as stated below, in MojoProof/Sem/Index.lean. Instances and twins:
+MojoProofTest/Index.lean.
 
 ## What the kernel computes
 
@@ -81,6 +82,98 @@ Write `t`, `c`, `k` for `tid d`, `ctaid d`, `ntid d` of thread `n` (`(L.env n).s
   `ck + t` in `x` is 0, as is thread 0's (`twin22`): without the premise on the block, 3 fails,
   and the index is not injective on thread numbers (4 still holds: `c` and `t.x` agree).
 
+## Two-dimensional launches
+
+The naive matmul kernel computes a row and a column, each a global index:
+`%24 = ctaid.x * ntid.x + tid.x` and `%35 = ctaid.y * ntid.y + tid.y` (each by the five
+operations of 2, in `x` and in `y`). It reads row `row` of A and row `col` of B and writes
+`C[row, col]` at element `row * 50257 + col`, under `row < m` and `col < n`. Its race freedom
+needs: two in-bounds threads with one cell are one thread. Write `Launch.index L n d` for
+`ck + t` of thread `n` in dimension `d` (the number whose i64 word 2 gives), `row n` for
+`Launch.index L n x` and `col n` for `Launch.index L n y`.
+
+### Statements
+
+5. `coord_linear`, `coord_inj`: for every box `d` and `a < volume d`,
+   `a = coord d a x + d x * (coord d a y + d y * coord d a z)`; so two numbers below the volume
+   with the same three coordinates are equal.
+6. `Launch.env_inj`: for every launch and threads `n`, `n'` below the thread count
+   `volume L.grid * volume L.block`, equal `ctaid` and equal `tid` in all three dimensions give
+   `n = n'`.
+7. `Launch.thread_inj`: on every valid launch, threads below the thread count whose index words
+   `[row]_64`, `[col]_64` and `[Launch.index L n z]_64` are equal are one thread.
+   `Launch.xy_inj`: if moreover the grid and the block have side 1 in `z`, equal words in `x` and
+   `y` suffice.
+8. `Launch.cell_inj`: on every valid launch of side 1 in `z`, for every stride `s` and threads
+   `n`, `n'` below the thread count with `col n < s` and `col n' < s`,
+   `row n * s + col n = row n' * s + col n'` gives `n = n'`.
+9. `Launch.cell_apart`: on the same launches, for every stride `s`, base `b`, cell width `w` and
+   predicate `p` on thread numbers such that `p n` gives `n` below the thread count and
+   `col n < s`: for distinct `n`, `n'` with `p n` and `p n'`, the cells
+   `b + (row n * s + col n) * w` and `b + (row n' * s + col n') * w` are `w` bytes apart (one ends
+   before the other starts). With `w = 4` these are the 4-byte cells of a `float` matrix with row
+   stride `s`, and `p n` is "thread `n` writes": `row n < M` and `col n < N` for the kernel's
+   sizes `M` and `N ≤ s`.
+10. `coord_onto`: for every box `d` and every point `p` with `p k < d k` in each dimension, the
+    number `a = p x + d x * (p y + d y * p z)` is below `volume d` and `coord d a = p` (the
+    converse of 5).
+11. `Launch.index_onto`: for every launch and every point `r` with `r d < L.grid d * L.block d`
+    in each dimension, some thread `n` below the thread count has `Launch.index L n d = r d` in
+    every dimension. `Launch.index_lt_mul`: for every launch with positive sides in `d`, every
+    thread's `Launch.index L n d` is below `L.grid d * L.block d`, so the bounds of 11 are sharp.
+12. `Launch.cell_onto`: on every valid launch, for every `r < L.grid x * L.block x` and
+    `c < L.grid y * L.block y`, some thread `n` below the thread count has `row n = r` and
+    `col n = c` (11 at the point `(r, c, 0)`). With side 1 in `z` that thread is unique (7), so
+    every cell `(r, c)` with `r < M` and `c < N` of a launch with `M ≤ L.grid x * L.block x` and
+    `N ≤ L.grid y * L.block y` is written by exactly one thread. No premise on `z` is needed for
+    existence: on a valid launch `L.grid z * L.block z > 0`.
+
+### Proofs
+
+5. `coord z = a / (d x · d y) mod d z = a / (d x · d y)` as `a < d x · d y · d z`; and
+   `a / (d x · d y) = a / d x / d y`, so `coord y + d y · coord z = a / d x` and then
+   `coord x + d x · (a / d x) = a` (`Nat.mod_add_div` twice).
+6. With `B = volume L.block > 0` (as `n < G B`), `tid` is `coord L.block (n mod B)` and `ctaid` is
+   `coord L.grid (n / B)`, with `n mod B < B` and `n / B < volume L.grid`: by 5, `n mod B` and
+   `n / B` are those of `n'`, and `n = B (n / B) + n mod B`.
+7. 4 in each dimension gives equal `ctaid d` and `tid d`; then 6. With side 1 in `z`,
+   `ctaid z = tid z = 0` for every thread (a coordinate mod 1), so the `z` words are equal.
+8. If `row n < row n'` then `row n * s + s ≤ row n' * s` (`stride_lt`), so
+   `row n * s + col n < row n' * s ≤ row n' * s + col n'` as `col n < s`; symmetrically, so the
+   rows are equal, then the columns, and 7 (`Launch.xy_inj`) gives `n = n'`.
+9. `apart_stride b` (`w ≤ w`) at the two cell numbers, which differ by 8.
+10. With `Y = p y + d y * p z`: `p y < d y` and `p z + 1 ≤ d z` give `Y < d y (p z + 1) ≤ d y d z`,
+    and then `a = p x + d x Y < d x (Y + 1) ≤ d x d y d z`. `a mod d x = p x` (as `p x < d x`),
+    `a / d x = Y` and `Y mod d y = p y`, and `a / (d x d y) = Y / d y = p z` with
+    `p z mod d z = p z`.
+11. Every side is positive, as `r d < L.grid d * L.block d`. Take the block point
+    `b d = r d / L.block d < L.grid d` and the thread point `t d = r d mod L.block d < L.block d`,
+    their numbers `B < volume L.grid` and `T < volume L.block` by 10, and
+    `n = B · volume L.block + T`, which is below `volume L.grid * volume L.block`. Then
+    `n / volume L.block = B` and `n mod volume L.block = T`, so `ctaid d = b d` and `tid d = t d`
+    by 10, and `ctaid d * ntid d + tid d = (r d / L.block d) L.block d + r d mod L.block d = r d`.
+    For `Launch.index_lt_mul`: `ctaid d < L.grid d` and `tid d < L.block d` (`coord_lt`), so
+    `ctaid d * L.block d + tid d < (ctaid d + 1) L.block d ≤ L.grid d * L.block d`.
+12. 11 at `r x = r`, `r y = c`, `r z = 0 < L.grid z * L.block z` (`Launch.Valid`).
+
+### Instances and twins
+
+- Instance: grid (2, 2, 1) and block (2, 2, 1) (`L2222`), valid, 16 threads. The cells
+  `row * 4 + col` of its 16 threads are `0, ..., 15` each once (`cells2222`, by evaluation), and
+  `Launch.cell_apart` gives the 4-byte cells at stride 4 apart on all of them (`apart2222`); equal
+  `x` and `y` index words are one thread (`inj2222`, `Launch.xy_inj`).
+- Twin of the `z` premise: grid (1, 1, 1) and block (1, 1, 2) (`L112`), valid, 2 threads with
+  `row = col = 0` and different `tid z` (`twin112`): `Launch.xy_inj` needs side 1 in `z`.
+- Twin of `col < s`: on `L2222` with stride 1, thread 1 (row 1, column 0) and thread 2 (row 0,
+  column 1) have cell 1 (`twin_stride`): `Launch.cell_inj` needs the columns below the stride.
+- Instance of 12: on `L2222`, every cell `(r, c)` with `r, c < 4` is some thread's below 16
+  (`onto2222`, `Launch.cell_onto`); the thread of cell `(3, 2)` is the proof's
+  `B · volume L.block + T` with block point `(1, 1, 0)`, `B = 3`, and thread point `(1, 0, 0)`,
+  `T = 1`: thread 13 (`cell32`, by evaluation).
+- Twin of the bound: no thread of `L2222`, below 16 or not, has row 4 or column 4 (`twin_onto`,
+  `Launch.index_lt_mul`), so `Launch.cell_onto` needs `r < L.grid x * L.block x` and
+  `c < L.grid y * L.block y`.
+
 ## Use
 
 `own` of T2′ for `vector_addition` is the global index. On a launch whose grid and block have
@@ -89,6 +182,11 @@ thread number (3, `Launch.index_oneDim`), so two such threads with one index are
 (`Launch.index_inj`) does not give this: it gives equal `ctaid d` and `tid d` in the one
 dimension `d` only, and on the 2-D block of `twin22` threads 0 and 2 have one index. The
 ownership argument therefore needs the premises of 3 (a one-dimensional grid and block, and
-threads in range) and goes through `Launch.index_oneDim`. The block checker's
+threads in range) and goes through `Launch.index_oneDim`. On a 2-D launch of side 1 in `z` (the
+naive matmul's), the pair of words of 7 is the thread (`Launch.xy_inj`), and the output cells of
+the threads that write are apart (`Launch.cell_apart`, 9). Conversely, every cell `(r, c)` of an
+`M × N` output with `M ≤ L.grid x * L.block x` and `N ≤ L.grid y * L.block y` is some thread's
+(`Launch.cell_onto`, 12), so a kernel whose thread writes its cell when `row < M` and `col < N`
+writes every cell of the output, each once. The block checker's
 `SNode.eval` of the `.cast` and `.bin` nodes is `lanes` of `intCast` and `intBin`, so its terms
 meet 1 and 2 by rewriting.

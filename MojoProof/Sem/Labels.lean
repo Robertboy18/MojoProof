@@ -1,3 +1,4 @@
+import MojoProof.Sem.Confluence
 import MojoProof.Sem.Skeleton
 
 /-!
@@ -50,6 +51,12 @@ reads a block outside `pay`, and a `store` or an `atomicrmw` of a payload operan
 in `pay`. An `alloca` needs nothing: `pay` names blocks to be made too, and a store of payload
 into the new block must then be in `pay`. `Labels.MemOk.of_closed`: it holds when a set of grids
 holds `g₀`, is closed under `Grid.Step` and meets `Labels.MemAll` at each of its grids.
+`Labels.MemOk.of_threads`, thread by thread: it holds when a property `I` of memories and a
+property `R n` of thread `n`'s status, which no waiting status has, hold at `g₀`, a step of a
+running thread `n` keeps `I` and `R n` at `n` from every grid that has them, and each running
+thread of such a grid meets `Labels.MemNext`; a step of `n` sets only `n`'s status
+(`Grid.advance_set`), and a collective call completes only at a waiting thread
+(`Grid.fire_trace`).
 
 Tests (MojoProofTest/Labels.lean):
 - `vadd_ok`: `vector_addition` (corpus `vadd/`) passes `Labels.Ok` with its two loaded floats and
@@ -61,6 +68,9 @@ Tests (MojoProofTest/Labels.lean):
 - `store_ok`: for every launch, on a one-thread grid that stores a payload register to block 1
   and returns, whose kernel passes `Labels.Ok`, `Labels.MemOk` holds with block 1 payload
   (`Labels.MemOk.of_closed`), and fails with no block payload;
+- `store3_ok`: for every launch, on the grid of three such threads, `Labels.MemOk` holds with
+  block 1 payload (`Labels.MemOk.of_threads`, with every memory and each thread's three statuses),
+  and fails with no block payload;
 - `payOk_twin`: a store of a vector that holds the payload register fails `Labels.Ok`;
 - `shfl_range_twin`: a shuffle of a constant into a payload register passes `Labels.Ok`, and fails
   it when the declaration's result has a `range` attribute;
@@ -176,5 +186,37 @@ theorem Labels.MemOk.of_closed {lab : Labels} {pay : Nat → Prop} {L : Launch} 
   induction h with
   | refl => exact h₀
   | tail _ hs ih => exact hS _ _ ih hs
+
+/-- **`Labels.MemOk` thread by thread.** For every labelling, payload blocks, launch, contexts and
+start grid `g₀`, every property `I` of memories and every property `R n s` of thread `n`'s status
+`s` that no waiting status has: if `g₀`'s memory has `I` and each of its statuses `R`; if a step of
+a running thread `n` from a grid whose memory has `I` and whose statuses have `R` gives a grid
+whose memory has `I` and in which `n`'s status has `R`; and if each running thread of such a grid
+meets `Labels.MemNext` in its memory; then `Labels.MemOk` holds from `g₀`. A step of `n` is at a
+running `n` (`Grid.advance_pending`) and sets only `n`'s status (`Grid.advance_set`), and no
+collective call completes, as a call completes only at a waiting thread (`Grid.fire_trace`). -/
+theorem Labels.MemOk.of_threads {lab : Labels} {pay : Nat → Prop} {L : Launch} {c : Nat → Ctx}
+    {g₀ : Grid} (I : Mem → Prop) (R : Nat → Status → Prop)
+    (hw : ∀ n t i args fn, ¬ R n (.wait t i args fn))
+    (h₀ : I g₀.mem ∧ ∀ n s, g₀.threads[n]? = some s → R n s)
+    (ha : ∀ (g g' : Grid) (n : Nat) (t : Thread), I g.mem →
+      (∀ k s, g.threads[k]? = some s → R k s) → g.threads[n]? = some (.run t) →
+        g.advance c n = .ok (some g') → I g'.mem ∧ ∀ s, g'.threads[n]? = some s → R n s)
+    (hM : ∀ (g : Grid) (n : Nat) (t : Thread), I g.mem → (∀ k s, g.threads[k]? = some s → R k s) →
+      g.threads[n]? = some (.run t) → lab.MemNext pay (c n) g.mem t) :
+    lab.MemOk pay L c g₀ := by
+  refine .of_closed (fun g => I g.mem ∧ ∀ k s, g.threads[k]? = some s → R k s) h₀ ?_
+    (fun g hg n t ht => hM g n t hg.1 hg.2 ht)
+  rintro g g' ⟨hI, hR⟩ ⟨n, h | h⟩
+  · obtain ⟨t, ht, -⟩ := Grid.advance_pending h
+    obtain ⟨hI', hn⟩ := ha g g' n t hI hR ht h
+    obtain ⟨_, _, _, -, rfl, -⟩ := Grid.advance_set h
+    refine ⟨hI', fun k s hs => ?_⟩
+    by_cases hk : k = n
+    · subst hk; exact hn s hs
+    · exact hR k s (by
+        simpa [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne (Ne.symm hk)] using hs)
+  · obtain ⟨t, i, args, fn, hn, -⟩ := Grid.fire_trace h
+    exact absurd (hR n _ hn) (hw n t i args fn)
 
 end MojoProof.Sem

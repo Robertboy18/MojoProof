@@ -1,0 +1,32 @@
+MojoProof GPU run records: notice for the files in tests/gpu/
+
+Each directory <kernel>/ holds a record of a GPU run of a corpus kernel (record.txt), the file
+the run wrote (dump.txt: its inputs and outputs) and the test driver it ran. The records are
+conformance tests, not proofs: tests/gpu/Compare.lean runs the grid evaluator on the inputs of
+the dump and compares its output buffer with the GPU's.
+
+The drivers are modified copies of Modular's code. Each keeps Modular's header, which reads:
+
+    Copyright (c) 2026, Modular Inc. All rights reserved.
+
+    Licensed under the Apache License v2.0 with LLVM Exceptions:
+    https://llvm.org/LICENSE.txt
+
+and says in a comment what was changed: the imports of its origin are kept (for the vector
+kernels also its declarations and kernel; the naive matmul kernel is imported, as there), and its
+`main` is replaced by one that runs the kernel on random inputs at several launch sizes and
+writes the dump. The license text is in tests/corpus/LICENSE-APACHE-LLVM.
+
+    vadd/vector_addition.mojo      from max/examples/gpu-functions/vector_addition.mojo in
+                                   https://github.com/modular/modular at commit
+                                   bbc13a719b6c139ede763f1434a4342ebfd843ac (bbc13a71)
+    vmul/vector_multiply.mojo      from tests/corpus/vmul/vector_multiply.mojo, itself a modified
+                                   copy of that file (tests/corpus/NOTICE)
+    vsub/vector_subtraction.mojo   from tests/corpus/vsub/vector_subtraction.mojo, itself a
+                                   modified copy of that file (tests/corpus/NOTICE)
+    naive/test_multistage_gemm_kernel.mojo
+                                   from max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo
+                                   in that repository at bbc13a71; its IR for sm_80 is
+                                   tests/corpus/mgemm_sm80/
+
+The records, the dumps and tests/gpu/Compare.lean are this repository's, under its license.

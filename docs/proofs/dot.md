@@ -3,7 +3,9 @@
 Lean: MojoProof/Sem/Dot.lean. Instances and twins: MojoProofTest/Dot.lean. The statements below
 are proved for every FloatLib format where they say so, every list of factor pairs and every
 oracle sequence. What is not proved is said in section "Scope". Section "The matmul and gemv
-cells against TorchLean" states the loop's results against TorchLean's matrix products.
+cells against TorchLean" states the loop's results against TorchLean's matrix products, and
+section "The thread's loads and accumulator" the words a thread's loads and float operations give
+against the loop.
 
 ## What the loop computes
 
@@ -76,6 +78,10 @@ order), `K` for the length of `ps`, `u = Model.unitRoundoffAt fmt`,
    `floatBin t .fmul fm` of `a`, `b` with no factors under `n₁`, followed by `floatBin t .fadd fm`
    of `acc` and its result with no factors for `acc` and the factors `(a, b)` for the product if
    `fm.contract`, under `n₂`, gives `.ok (.ofFloat t (dotStep fm.contract acc (a, b) (n₁, n₂)))`.
+4. Never-fusing numbers (`dotLoop_neverFuse`). For every format, oracle sequence `o`, word `acc`
+   and list `ps`: `dotLoop true` at the numbers `(3 * ((o j).1 / 3), 3 * ((o j).2 / 3))` is
+   `dotLoop false o acc ps`, since at a number with remainder 0 `contract` adds and `deliver`
+   reads `n / 3` (contract-off.md uses it for the naive kernel compiled with contraction off).
 
 ## Plan of the proofs
 
@@ -99,6 +105,7 @@ order), `K` for the length of `ps`, `u = Model.unitRoundoffAt fmt`,
    `Model.halfUlpAt_le` (`h x ≤ u |x| + η`). The unfused `c = false` step is the unfused case of
    `contract` (item 3 at oracle number 0).
 6. Statement 3 by evaluating `floatBin` as `floatBin_ofFloat` does.
+7. Statement 4 by induction on `ps`, one iteration by unfolding `dotStep` and `contract`.
 
 FloatLib's `roundoff` command analyzes FloatLib's configured executable floats, not `Model`
 operations chosen by an oracle, so the bound is proved by induction from `contract_error`.
@@ -164,22 +171,140 @@ and the matmul and gemv statements are its corollaries:
   `List.length_ofFn` for the length.
 
 Scope of statements 4-6. They are the float and the real half of the kernel's correctness, for
-every format and size; the kernel's loop is not connected to them. The connection point: at the
-loop's exit `%67`, the word of `%68 = phi float [ %48, %51 ]` that thread `(i, j)` stores is
-`dotLoop true o (Model.zero fmt false) (matmulPairs A B i j)`, where `A` and `B` are the input
-tensors that `Mem.tensor` reads from the buffers, the loads `%60` and `%64` of iteration `k` give
-`get2 A i k` and `get2 B k j`, and `o k` holds the oracle numbers of that iteration's `fmul` and
-`fadd`. That equation is not proved (section "Scope"). The corpus has no gemv kernel; the gemv
-statements are about the fold only, and a gemv loop with the same body would meet them at the
-same point, with `matVecPairs A v i` for the pairs.
+every format and size. Section "The thread's loads and accumulator" connects them to the words a
+thread's loads and float operations give; section "Scope" says where the loop that `exec` runs is
+connected to them (for the one program `naive`).
+The corpus has no gemv kernel; the gemv statements are about the fold only, and a gemv loop with
+the same body would meet them at the same point, with `matVecPairs A v i` for the pairs.
+
+## The thread's loads and accumulator
+
+Lean: MojoProof/Sem/Matmul.lean (second part). Instances and twins: MojoProofTest/Matmul.lean and
+MojoProofTest/NaiveRun.lean.
+
+The naive kernel reads its operands at row `%24 = ctaid.x * ntid.x + tid.x` and column
+`%35 = ctaid.y * ntid.y + tid.y`: `%60` loads element `row * 768 + k` of the buffer of `%1` (A)
+and `%64` element `col * 768 + k` of the buffer of `%2` (B), both 4-byte floats, and `%40` points
+at element `row * 50257 + col` of the buffer of `%0` (C). So B is read transposed: with A an
+`m × 768` and B a `p × 768` matrix in row-major order, thread `(row, col)` computes entry
+`(row, col)` of `A Bᵀ`, the pairs `(A[row, k], B[col, k])`. In TorchLean the transpose of
+`B : Tensor α [p, n]` is `Tensor.permute B (Shape.adjacentSwap [p, n] 0) [n, p]`, written `Bᵀ`
+below.
+
+For every layout `l`, element type `t` with codec `enc`, element type `α` of the tensors, float
+type `t'` and flags `fm`:
+
+7. Row-major reads (`rowMajor_two`, `Mem.load_get2`). Element `(r, k)` of an `M × S` tensor laid
+   out row-major from offset `o` (`rowMajor`) is at `o + (r * S + k) * l.size t`. If block `c` of
+   memory `m` is live, admits the thread and holds `A : Tensor α [M, S]` row-major from `o`
+   (`Block.Holds`, the form `Mem.Holds`, `Mem.tensor` and the preconditions use), then for every
+   `r < M`, `k < S`, address space `a` and alignment `al` the address meets, the load of type `t`
+   at offset `o + (r * S + k) * l.size t` of block `c` gives `enc (get2 A r k)`. With
+   `t = .fp .float`, `enc = Val.ofFloat .float` (`Layout.Codec.float`), `o = 0`, `S = 768`, this is
+   the reading of `%60` (`r = row`) and of `%64` (B, `r = col`).
+8. The transpose (`get2_swap`, `matmulPairs_swap`). For every `α` with TorchLean's `Storage`,
+   `get2 Bᵀ k j = get2 B j k`; so `matmulPairs A Bᵀ i j` is the list of `(get2 A i k, get2 B j k)`
+   in increasing `k`. TorchLean proves the transpose rule over `ℝ` only (`get2_transpose`,
+   TorchLean/Tensor/LinearAlgebra/Real.lean); `get2_swap` is the same rule for every `α`, from
+   TorchLean's `permute_adjacentSwap_zero_apply`.
+9. The accumulator (`dotLoop_of_floatBin`). For every float type `t'`, flags `fm` without `nnan`,
+   `ninf`, `nsz`, `reassoc`, `arcp`, `afn`, count `K`, pairs `f : Fin K → Model t'.fmt ×
+   Model t'.fmt`, start word `a₀`, oracle sequence `o`, and values `acc`, `prod` indexed by `Nat`
+   with `acc 0 = .ofFloat t' a₀`: if for each `k < K`
+
+   * `floatBin t' .fmul fm` of the words of pair `k`, with no factors for either operand, under
+     the oracle number `(o k).1`, is `.ok (prod k)`, and
+   * `floatBin t' .fadd fm` of `acc k` with no factors and `prod k` with the factors of pair `k`
+     when `fm.contract` (none otherwise), under `(o k).2`, is `.ok (acc (k + 1))`,
+
+   then `acc K = .ofFloat t' (dotLoop fm.contract o a₀ (List.ofFn f))`.
+10. The cell (`cell_of_floatBin`). Statement 9 with `f k = (get2 A i k, get2 B j k)` for
+    `A : Tensor (Model t'.fmt) [m, n]`, `B : Tensor (Model t'.fmt) [p, n]` and `a₀ = +0`: then
+    `acc n = .ofFloat t' (dotLoop fm.contract o (Model.zero t'.fmt false) (matmulPairs A Bᵀ i j))`,
+    and statements 4-6 give the word against `get2 (Tensor.matmul A Bᵀ) i j` (TorchLean's over
+    `Model`, up to NaNs when no `fadd` oracle number is 2 modulo 3) and against TorchLean's real
+    matmul (within `dotBound`, under every oracle). When the loop runs `K` iterations over
+    matrices of `S > K` columns, statement 9 applies with `f k = (get2 A i k, get2 B j k)` for
+    `k < K`, the cell of the first `K` columns (statement 11).
+11. The first `K` columns (`cols`, `get2_cols`, `take_pairs`, `matmul_take_nanEq`,
+    `matmul_take_eq`, `matmul_take_error`). For every `α` with TorchLean's `Storage`, all sizes
+    with `K ≤ s` and `A : Tensor α [m, s]`, `cols K h A : Tensor α [m, K]` is TorchLean's
+    `Tensor.slice` of `A` along axis 1 from `0` to `K` with step `1`, cast to `[m, K]`, and
+    `get2 (cols K h A) r k = get2 A r k` (`get2_cols`, with `k` cast from `Fin K` to `Fin s`).
+    In every format, for `A : Tensor (Model fmt) [m, s]` and `B : Tensor (Model fmt) [p, s]`, the
+    first `K` of the pairs `(get2 A i k, get2 B j k)`, `k < s`, are
+    `matmulPairs (cols K h A) (cols K h B)ᵀ i j` (`take_pairs`), so statements 4-6 hold for the
+    loop over them against entry `(i, j)` of `Tensor.matmul (cols K h A) (cols K h B)ᵀ`, the bound
+    with `K` terms: `matmul_take_nanEq`, `matmul_take_eq`, `matmul_take_error`, each one line from
+    `take_pairs`. With two strides `sA ≠ sB` the pairs of `cols K hA A` and `cols K hB B` are the
+    ones statement 10 takes, after `get2_cols`.
+
+The premises of statement 9 are the facts a run of the loop gives. Each is one statement of the
+thread, and in `exec`'s `.fbin` case the operands' recorded factors are `laneOf (prodOf a) 0`
+(`Frame.prods` of the register, lane 0 of a scalar):
+
+* The `fmul` `%65`: its operands `%60` and `%64` are loads, and a load records no factors (`next`
+  records `none`), so both factor arguments are `none`. It records `(x, y)`, the words of `%60`
+  and `%64`, for `%65`, because its flags include `contract`.
+* The `fadd` `%66`: `%48` is a `phi` result, set by `enter` with `Frame.set _ (some v) none`, and
+  no statement of `%52` sets it again, so its factor argument is `none` (`px = none`); the one of
+  `%65` is `some (x, y)` (`py`). A proof that goes through the block checker must keep these two
+  facts in its frame: `prods` of the accumulator's `phi` is `none` at the loop's head, and the
+  `fadd`'s second operand records the loads' words.
+* The oracle numbers. Thread `n` of a launch with oracle `oracle` runs with the oracle `oracle n`
+  (`Grid.start_ctx`), and a scalar float operation at the thread's step count `k` (the `k` of
+  `Thread` before the step) reads `oracle n (Nat.pair k 0)` (`Ctx.scope`). Every non-`phi`
+  statement and every terminator is one step; the `phi`s of a block are set by the branch into it.
+  A thread of the naive kernel that passes the bounds test runs the 37 statements of the entry
+  block at steps 0-36, its branch at 37 and `%45`'s at 38; iteration `j` then runs `%49` and the
+  branch of `%46` at steps `39 + 18 j` and `40 + 18 j`, the branch of `%50` at `41 + 18 j`, the 14
+  statements of `%52` at `42 + 18 j` to `55 + 18 j` and its branch at `56 + 18 j`. So `%65` runs
+  at step `54 + 18 j` and `%66` at `55 + 18 j`, and the oracle sequence of thread `n` is
+  `o j = (oracle n (Nat.pair (54 + 18 j) 0), oracle n (Nat.pair (55 + 18 j) 0))`.
+  This count is proved for every thread of `naive` by `NaiveThread.steps` (the path into the
+  loop adds 39 steps, a round 18, and the latch is entered 3 steps after the head), which gives
+  `NaiveThread.oN` and `NaiveSpec.o`, the numbers in `NaiveSpec.bytes`. It was first checked on
+  one launch, and the check stays as a test: MojoProofTest/NaiveRun.lean runs the grid
+  evaluator on one block of 2 × 2 threads (`K = 3`) under, for each `j < 3`, the oracle that
+  gives 2 (fuse with the product operand) at step `55 + 18 j` of every thread, and compares each
+  of the four cells with `dotLoop` under the numbers that fuse exactly iteration `j`. The data
+  make fusing iteration 1 visible in one cell and iteration 2 in another; fusing iteration 0
+  changes no word (the accumulator is `+0`), so `55` itself is checked only through the stride.
+  The twin gives 2 at step `56 + 18` and gets the unfused cells. The `fmul`'s number
+  `54 + 18 j` is not checked (it only chooses a NaN's payload).
+
+Plan of the proofs. Statement 7 rewrites `rowMajor` with TorchLean's `linearize_cons_val` and
+`val_linearize_vector`, then applies `Mem.load_holds`; `get2_eq_apply` turns the coordinate into
+`get2`. Statement 8 is `get2_eq_apply` and `permute_adjacentSwap_zero_apply`. Statement 9 is an
+induction on `j ≤ K` for the first `j` pairs: `List.ofFn_succ_last` splits off the last pair,
+`dotLoop` of a list with one more pair at the end is one more `dotStep` (an induction on the
+list, inside the proof), and `floatBin_dotStep` with the premise for `prod j` and the induction
+hypothesis for `acc j` gives `acc (j + 1)`. Statement 10 is statement 9 after statement 8. Statement 11: `get2_cols` unfolds TorchLean's
+`slice_apply` and `castShape_apply_reindex` and compares the two coordinates axis by axis
+(`Shape.Coord.ext_val`, `index_reindexEq`); `take_pairs` compares the two lists entry by entry
+after statement 8.
+
+Instances (MojoProofTest/Matmul.lean): a 2 × 3 matrix `tA` and a 2 × 3 matrix `tB` of small
+binary32 integers. Statement 7 at a memory made by `Mem.alloc` of `tB`'s bytes; statements 9 and
+10 at every cell, with `acc` and `prod` the words `floatBin` gives, and the cells are those of
+TorchLean's `Tensor.matmul tA tBᵀ`. The twin: reading B's six words untransposed, as a 3 × 2
+matrix (element `k * 2 + j` for `(k, j)`), gives pairs whose loop is not TorchLean's entry of
+`tA tBᵀ`. Statement 11 (`take_inst`): the loop over the first 2 of the 3 pairs of row 0 of `tA`
+and of `tB` gives 1, entry `(0, 0)` of the product of the first 2 columns of `tA` and the
+transpose of the first 2 columns of `tB`; its twin is the full entry, -2.
 
 ## Scope
 
-* The fold is the loop's float arithmetic only. That the kernel's loop, run by `exec` from the
-  loop's entry, reaches its exit with `%48` equal to `dotLoop` of the loaded pairs is not proved:
-  it needs the loop's control (the induction variable `%47`, the exit test `%49`), the loads'
-  values from the input tensors and the oracle numbers at the thread's step counts. Statement 3
-  is the step of that proof for one iteration.
+* Statements 1-11 stand alone: none names a program or runs `exec`. For the one program `naive`
+  (MojoProofTest/SymPhi.lean), the loop that `exec` runs is connected to the fold in
+  MojoProofTest, at every launch and memory of `Mat.Pre`: `NaiveThread.thread_run` runs the loop
+  round by round (`Round.of_inv`, with the induction variable `%47` and the exit test `%49`), each
+  round's accumulator by `floatBin_dotStep`; `NaiveThread.steps` proves the oracle positions;
+  the recorded factors are carried through the rounds in MojoProofTest/NaiveIn.lean;
+  `NaiveIn.runIn` is the run of every thread in bounds; and `NaiveSound.naive_matmul` reads the
+  cells of `NaiveKernel.correct` with statement 11 (docs/proofs/naive.md, docs/proofs/kernel.md).
+  That proof applies statement 3 once per round; statements 7, 9 and 10 are not used by it and
+  are tested on concrete words (MojoProofTest/Matmul.lean). No other program is connected.
 * Statement 1 relates the loop to FloatLib's `dotInOrder` with source, accumulator and output
   formats all equal to `fmt`, the only case a loop in one format computes.
 * Statement 2 is a forward bound against the exact sum of the decoded words' products. It does

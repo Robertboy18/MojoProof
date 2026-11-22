@@ -24,9 +24,12 @@ address space 1), so that the start's frame holds them (`cnt` has no parameters,
   the `nOf V` stores), and a tactic of 10 lines that closes the four obligations by `invB_entry`,
   `invB_step` and `invB_exit`. It generates the arguments `loopK.args n p` (`%n` as a bit vector,
   `%p` as `.ptr ⟨p, 0⟩`), the start `loopK.starts`, the thread's run `loopK.loop` and the kernel
-  theorem through the loop (`Kernel.Sound`), for every launch, arguments, memory, admission,
-  observation and predicate. With `mojo_kernel.share`, its summaries, paths and chains are those
-  of `cntk` (MojoProofTest/KernelCmd.lean): SymLoop's `cntE`, `cntH`, `cntB`, `Kernels.vadd.b3`.
+  theorem through the loop (`n.sound_loop` for `n = loopK`) on `loopK.args` (`Kernel.Sound`)
+  from `Mem.Closed`, an invariant indexed by the number of threads done, each thread's
+  precondition from the start's facts and the registers `%n` and `%p` holding the arguments, and
+  the end's check, for every launch, arguments, memory, admission, observation and predicate.
+  With `mojo_kernel.share`, its summaries, paths and chains are those of `cntk`
+  (MojoProofTest/KernelCmd.lean): SymLoop's `cntE`, `cntH`, `cntB`, `Kernels.vadd.b3`.
 * Two loops in sequence: `cnt2k`, `mojo_kernel` on SymLoop's `cnt2` with a loop clause for each
   of its loops (headers 1 and 4), each from one valuation (`V2`, `frame2`'s entry valuation on
   `out3`, then the first loop's at its trip count), with the iterates of a round (`round1`,
@@ -34,16 +37,20 @@ address space 1), so that the start's frame holds them (`cnt` has no parameters,
   postcondition, and a tactic of 8 lines per clause. `cnt2k_retLs` is SymLoop's `cnt2_retLs` by
   the generated `cnt2k.loop`. `order_twin` (the clauses in the other order) and `cnt2_open` (a
   second clause whose tactic closes only the path into its loop) check the messages.
-* `runK`, `startK`, `sizeK`, `frK`: the start on `Launch.one`, `loopK.args 3 outC.2` and SymLoop's
-  `outC` (one global writable block of three `i64` cells) at address choice `ch₀` and oracle `ω₀`
-  (MojoProofTest/Kernel.lean), evaluated; it has one thread, whose frame is `frK`.
-* `cells3`, `cntDone`, `invK`: cells 0 to 2 of `outC`'s block hold 0 to 2; the end's check (no
-  data race, `kept`, `cells3`); the invariant (the start's memory before the thread, a memory
-  passing `cntDone` after it).
+* `outC_closed`: SymLoop's `outC` (one global writable block of three `i64` cells) is closed for
+  `loopK.args 3 outC.2` (`Mem.Closed.alloc`). `runK`, `frK`: the start on `Launch.one`, those
+  arguments and `outC` at address choice `ch₀` and oracle `ω₀` (MojoProofTest/Kernel.lean),
+  evaluated, and its one thread's frame (for `trip_twin`).
+* `cells3`, `invK`, `endK`: cells 0 to 2 of `outC`'s block hold 0 to 2; the invariant (before
+  the thread, `outC`'s blocks and an empty trace; after it, a memory of the postcondition `postB`
+  from a valuation of thread 0 with `%n = 3`, `%p` at `outC`'s block and an empty trace); the
+  end's facts from `invK` (no data race, `kept`, `cells3`).
 * `kernelK`: **the kernel theorem** (`Kernel.Sound`) for `cntK` on `Launch.one` with
   `loopK.args 3 outC.2` and `outC`, at the admission of `ch₀` and `ω₀`, for the observation of the
-  blocks and `cells3`: `loopK`'s kernel theorem through the loop, with the thread's precondition
-  evaluated at the start.
+  blocks and `cells3`: `loopK`'s kernel theorem through the loop with `outC_closed` and `invK`,
+  the thread's precondition from the registers `%n` and `%p` the premise gives and `outC`'s
+  block in its memory, nothing of the start evaluated. An `example` after it leaves the
+  per-thread premise open and checks the goal that this theorem leaves (`#guard_msgs`).
 * `trip_twin`: the premises of a fourth round fail (`%i = 3` is not below `%n = 3`), so the loop
   runs 3 rounds at `%n = 3`.
 
@@ -325,17 +332,6 @@ mojo_kernel loopK := cntKP cntK
 
 /-! ## Two loops in sequence -/
 
--- SymLoop's summaries of `cnt2`'s blocks (`sym_summary`, which does not record its definitions
--- for `mojo_kernel.share`), recorded as the definitions of their values unless an earlier
--- definition has the value, so that `cnt2k` below uses them and adds no second definition of one
--- value.
-open Lean in
-run_cmd Elab.Command.liftCoreM do
-  for n in [``SymLoop.c2H, ``SymLoop.c2B, ``SymLoop.c2M, ``SymLoop.c2G, ``SymLoop.c2D] do
-    let some (.defnInfo d) := (← getEnv).find? n | throwError "{n} is not a definition"
-    unless (MojoProof.LLVM.defs.getState (← getEnv)).contains d.value do
-      modifyEnv (MojoProof.LLVM.defs.addEntry · (d.value, n))
-
 /-- The entry valuation of `cnt2`'s thread at SymLoop's `frame2` on `out3`'s memory (`%n = 2`,
 `%p` and `%s` at the two blocks). -/
 def V2 : Valuation := Valuation.entry ctx2 0 out3.1 frame2
@@ -434,19 +430,8 @@ def gK : Grid := runK.1
 /-- The start's contexts. -/
 def cK : Nat → Ctx := runK.2
 
-/-- **The launch starts**, with grid `gK` and contexts `cK` (evaluated). -/
-theorem startK :
-    Grid.start cntKP cntK .one (loopK.args (BitVec.ofNat 64 3) outC.2) outC.1 ch₀ ω₀ =
-      .ok (gK, cK) := rfl
-
-/-- The start has one thread. -/
-theorem sizeK : gK.threads.size = 1 := by decide +kernel
-
 /-- The frame of the start's thread (`SymLoop.frameC 0` if it has none). -/
 def frK : Frame := ((Grid.thread gK 0).frames.head?).getD (SymLoop.frameC 0)
-
-/-- The start's thread has the one frame `frK` (evaluated). -/
-theorem framesK : (Grid.thread gK 0).frames = [frK] := rfl
 
 /-- `outC` has no pointer byte. -/
 theorem outC_bytesIn : outC.1.BytesIn outC.1.Known :=
@@ -459,15 +444,19 @@ def cells3 (B : Nat → Option Sem.Block) : Bool := (List.range 3).all fun j =>
   | .ok (.bits _ x) => x.toNat == j
   | _ => false
 
-/-- The end's check on memory `m`: its trace has no data race and keeps the promise of
-`!invariant.load`, and its blocks pass `cells3`. -/
-def cntDone (m : Mem) : Bool := !racy m.trace && kept m.trace && cells3 m.blocks
+/-- `outC` is closed for `loopK.args 3 outC.2`: one block allocated on the empty memory
+(`Mem.Closed.alloc`), and the arguments name no block above it. -/
+theorem outC_closed : outC.1.Closed (loopK.args (BitVec.ofNat 64 3) outC.2) :=
+  Mem.closed_empty.alloc cntP.layout 1 24 8 true false .all 1 1 (fun _ _ h => by cases h)
+    (by decide +kernel)
 
-/-- The invariant by the number of threads done: the start's memory before the thread, a memory
-passing `cntDone` after it. -/
+/-- The invariant by the number of threads done: before the thread, a memory with `outC`'s blocks
+and an empty trace; after it, a memory of `postB V` for a valuation `V` of thread 0 with
+`%n = 3` (`nOf`), `%p` at `outC`'s block (`bOf`) and an empty trace. -/
 def invK : Nat → Mem → Prop
-  | 0, m => m = gK.mem
-  | _ + 1, m => cntDone m = true
+  | 0, m => (∀ b x, outC.1.blocks b = some x → m.blocks b = some x) ∧ m.trace = []
+  | _ + 1, m => ∃ V : Valuation, V.ctx.who = ⟨0, 0⟩ ∧ nOf V = 3 ∧ bOf V = outC.2 ∧
+      V.mem.trace = [] ∧ postB V m
 
 /-- A load depends on the memory's blocks alone: memories with the same blocks load the same
 value, for every layout, thread, address space, type, pointer and alignment. -/
@@ -475,45 +464,68 @@ theorem load_blocks {m m' : Mem} (h : m.blocks = m'.blocks) {l : Layout} {w : Wh
     {t : Ty} {p : Ptr} {al : Option Nat} : m.load l w a t p al = m'.load l w a t p al := by
   simp only [Mem.load, Mem.check, Mem.block, Mem.addr, h]
 
+/-- The end's check on `Launch.one`: every memory of `invK` after its one thread has a trace with
+no data race that keeps the promise of `!invariant.load` (the three stores of `cellTr`, evaluated)
+and blocks passing `cells3` (`postB`'s cells, read on the blocks alone, `load_blocks`). -/
+theorem endK (m' : Mem) (h : invK (volume Launch.one.grid * volume Launch.one.block) m') :
+    racy m'.trace = false ∧ kept m'.trace = true ∧ ∃ y, some m'.blocks = some y ∧
+      cells3 y = true := by
+  obtain ⟨V, hw, hn, hb, hT, hc, htr⟩ := (h : invK (0 + 1) m')
+  rw [hw, hb, hn, hT] at htr
+  refine ⟨by rw [htr]; decide +kernel, by rw [htr]; decide +kernel, _, rfl, ?_⟩
+  simp only [cells3, List.all_eq_true, List.mem_range]
+  intro j hj
+  have e : ({ blocks := m'.blocks } : Mem).load cntKP.layout ⟨0, 0⟩ 1 (.int 64)
+      ⟨outC.2, 8 * j⟩ (some 8) = .ok (.bits 64 (BitVec.ofNat 64 j)) := by
+    rw [load_blocks (m := { blocks := m'.blocks }) (m' := m') rfl, ← hb]
+    have := hc j (by rw [hn]; exact hj)
+    rwa [hw] at this
+  rw [e]
+  show ((BitVec.ofNat 64 j).toNat == j) = true
+  simp only [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (show j < 2 ^ 64 by omega), beq_self_eq_true]
+
 /-- **The kernel theorem for a kernel whose thread runs a loop** (`loopK.sound_loop`, generated by
 `mojo_kernel` with the pointer and loop clauses). `cntK` on `Launch.one` with
 `loopK.args 3 outC.2` (`%n = 3`, `%p` at offset 0 of `outC`'s block) and `outC`, at the admission
 of `ch₀` and `ω₀` alone, is sound (`Kernel.Sound`) for the observation of the blocks and the
-relation that cells 0 to 2 of `outC`'s block hold 0 to 2: the invariant `invK`, the start's
-precondition `preB` evaluated, and the postcondition `postB`'s cells and trace. It covers this
-one program, launch, memory, address choice and oracle. -/
+relation that cells 0 to 2 of `outC`'s block hold 0 to 2: `outC` is closed (`outC_closed`), the
+invariant is `invK`, the precondition `preB` holds at every valuation with the start's facts
+(the registers of `%n` and `%p`, `outC`'s block), and the postcondition `postB` is `invK` after
+the thread, whose end's check is `endK`. It covers this one program, launch, memory, address
+choice and oracle. -/
 theorem kernelK : Kernel.Sound cntKP cntK .one (loopK.args (BitVec.ofNat 64 3) outC.2) outC.1
     (fun ch o => ch = ch₀ ∧ o = ω₀) (fun m => some m.blocks) (fun B => cells3 B = true) := by
-  refine loopK.sound_loop outC_bytesIn (by rintro _ _ ⟨rfl, rfl⟩; exact ⟨_, _, startK⟩)
-    (fun _ _ h => congrArg some h) ?_
-  rintro _ _ g c ⟨rfl, rfl⟩ h
-  rw [startK] at h
-  obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj h)
-  refine ⟨invK, rfl, fun k hk m' f hm' hf => ?_, fun m' hm' => ?_⟩
-  · rw [sizeK, Nat.lt_one_iff] at hk
-    subst hk
-    obtain rfl : m' = gK.mem := hm'
-    obtain rfl : f = frK := (List.cons.inj (hf.symm.trans framesK)).1
-    refine ⟨⟨rfl, rfl, by decide +kernel, rfl, rfl,
-      ⟨by decide +kernel, _, rfl, rfl, rfl, rfl, rfl, by decide +kernel, rfl, nofun⟩⟩,
-      fun me ⟨hc, htr⟩ => ?_⟩
-    have h3 : cells3 me.blocks = true := by
-      simp only [cells3, List.all_eq_true, List.mem_range]
-      intro j hj
-      have e : ({ blocks := me.blocks } : Mem).load cntKP.layout ⟨0, 0⟩ 1 (.int 64)
-          ⟨outC.2, 8 * j⟩ (some 8) = .ok (.bits 64 (BitVec.ofNat 64 j)) :=
-        (load_blocks (m' := me) rfl).trans (hc j hj)
-      rw [e]
-      show ((BitVec.ofNat 64 j).toNat == j) = true
-      simp only [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (show j < 2 ^ 64 by omega),
-        beq_self_eq_true]
-    show (!racy me.trace && kept me.trace && cells3 me.blocks) = true
-    rw [htr, h3]
-    decide +kernel
-  · rw [sizeK] at hm'
-    change cntDone m' = true at hm'
-    simp only [cntDone, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hm'
-    exact ⟨hm'.1.1, hm'.1.2, _, rfl, hm'.2⟩
+  refine loopK.sound_loop _ _ outC_closed outC_bytesIn (fun _ _ h => congrArg some h) invK
+    (fun _ => And.intro) (fun k hk V hp hw _ hf h7 h8 hI => ?_) endK
+  obtain rfl : k = 0 := Nat.lt_one_iff.1 hk
+  obtain ⟨hB, hT⟩ := hI
+  have hn : nOf V = 3 := by unfold nOf; rw [h7]; rfl
+  have hb : bOf V = outC.2 := by unfold bOf; rw [h8]
+  exact ⟨⟨by rw [hp]; rfl, by rw [hf]; rfl, by rw [hn]; decide, by rw [hn]; exact h7,
+    by rw [hb]; exact h8, by rw [hn, hb]; exact ⟨by decide, _, hB _ _ rfl, rfl, rfl, rfl, rfl,
+      by decide, rfl, nofun⟩⟩, fun me h => ⟨V, by rw [hw, Nat.zero_div], hn, hb, hT, h⟩⟩
+
+/--
+error: unsolved goals
+⊢ ∀ k < volume Launch.one.grid * volume Launch.one.block,
+    ∀ (V : Valuation),
+      V.ctx.prog = cntKP →
+        V.ctx.who = { thread := k, cta := k / volume Launch.one.block } →
+          V.ctx.env = Launch.one.env k →
+            V.fn = cntK →
+              V.regs 7 = some (Val.bits 64 3#64) →
+                V.regs 8 = some (Val.ptr { block := outC.2, off := 0 }) →
+                  invK k V.mem → preB V ∧ ∀ (me : Mem), postB V me → invK (k + 1) me
+-/
+#guard_msgs in
+/-- The per-thread premise of `loopK.sound_loop` that `kernelK` proves, left open: for the one
+thread of `Launch.one`, every valuation with the start's facts and a memory of `invK 0` meets
+`preB`, and `postB` there gives `invK 1`. An `example`, so that no declaration with the open goal
+enters the environment. -/
+example : Kernel.Sound cntKP cntK .one (loopK.args (BitVec.ofNat 64 3) outC.2) outC.1
+    (fun ch o => ch = ch₀ ∧ o = ω₀) (fun m => some m.blocks) (fun B => cells3 B = true) := by
+  refine loopK.sound_loop _ _ outC_closed outC_bytesIn (fun _ _ h => congrArg some h) invK
+    (fun _ => And.intro) ?_ endK
 
 /-- **The twin of the trip count**: the premises of a fourth round fail from the third iterate of
 the header's valuation (`%i = 3` is not below `%n = 3`), so the loop runs 3 rounds at `%n = 3`

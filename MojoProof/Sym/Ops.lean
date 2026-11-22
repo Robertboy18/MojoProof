@@ -23,11 +23,15 @@ bytes `bs`, valuation `V` and node values `vs`:
 * `Elem.ret`: a path whose premises hold (`Walk`) and whose last block returns, with `Elem` after
   `k` threads at that block's entry and its effects steps from `k` to `K`, is a `Ret` to `Elem`
   after `K` threads;
-* `vals_getElem?_of_eq`: an entry of node values given as a list.
+* `vals_getElem?_of_eq`: an entry of node values given as a list;
+* `Elem.Only.Steps out S V vs es`: effects `es` keep `Elem.Only out S` (every access to block
+  `out` is by a thread of `S`); `Elem.Only.steps_nil`, `Elem.Only.steps_of` (every effect of a
+  thread of `S`, `Elem.Only.apply`) and `Elem.Only.steps_load` (a load outside `out`, by any
+  thread).
 
 ## The tactic
 
-mojo_ret (syntax `mojoRet`, elaborator `evalMojoRet`, method `Ops.run`) closes two goals:
+mojo_ret (syntax `mojoRet`, elaborator `evalMojoRet`, method `Ops.run`) closes three goals:
 
 1. `Elem m₀ out w cell bs K me`, from a hypothesis `SEff.run V (vals V S.nodes) S.effs = .ok me`
    for a concrete summary `S` and one `Elem m₀ out w cell bs k M` with `M` the memory of `V`: the
@@ -37,17 +41,23 @@ mojo_ret (syntax `mojoRet`, elaborator `evalMojoRet`, method `Ops.run`) closes t
    proves, each block's premises by mojo_obl's `walk` and its effects as steps, the blocks before
    the last by `Elem.after`, the last by `Elem.ret`. When no path is proved, it splits on a branch
    condition that `omega` decided neither way (`Decidable.byCases`, twice at most) and proves
-   each case so.
+   each case so;
+3. `Elem.Only out S me`, from the run as in goal 1 and a hypothesis `Elem.Only out S M` with `M`
+   the memory of `V`: all of the effects by `Elem.Only.steps_of` when `omega` proves the thread
+   `V.ctx.who.thread` in `S` (reducible definitions unfolded); otherwise each load by
+   `Elem.Only.steps_load`, its block other than `out` by `omega`, and the effects from the first
+   store on by `Elem.Only.steps_of`, the thread in `S` left open (`Ops.onlySteps`).
 
 The node values are mojo_obl's (`Obl.opnd`), or a hypothesis `vals V S.nodes = ws` when there is
 one. For each step: a load's block other than `out` by `omega`; a store's thread
 `V.ctx.who.thread = k`, pointer `⟨out, cell k⟩` and bytes `bs k` by mojo_vals' `Vals.conv`, its
 statement by the kernel, and its width by `decide`; a skipped thread's `bs k = none` by
-`Vals.conv`. In goal 1, and in goal 2 when no path is proved (then on the first path of the list),
-a premise it does not prove is left as a goal and logged as `mojo_ret: open goal`. Tests:
+`Vals.conv`. In goals 1 and 3, and in goal 2 when no path is proved (then on the first path of the
+list), a premise it does not prove is left as a goal and logged as `mojo_ret: open goal`. Tests:
 MojoProofTest/Ops.lean (`vadd_elem0`, `vadd_elem1` and an `example` of the statement of the
-generated `vadd.ret` on `vector_addition`'s blocks, for every valid launch and thread, and an
-open-goal twin).
+generated `vadd.ret` on `vector_addition`'s blocks, for every valid launch and thread,
+`vadd_only0` and `vadd_only1` for goal 3, and open-goal twins) and MojoProofTest/NaiveOut.lean
+(goals 1 and 3 on the naive matmul kernel's entry block).
 -/
 
 namespace MojoProof.Sym
@@ -146,6 +156,49 @@ valuation, nodes, list and `j`. -/
 theorem vals_getElem?_of_eq {ns : List SNode} {ws : List (Except Fault Val)} (h : vals V ns = ws)
     (j : Nat) : (vals V ns)[j]? = ws[j]? := by
   rw [h]
+
+/-- **Effects as steps of `Elem.Only`**: effects `es` at valuation `V` with node values `vs` run
+from every memory whose accesses to block `out` are all by threads of `S` to such a memory. -/
+def Elem.Only.Steps (out : Nat) (S : Nat → Prop) (V : Valuation) (vs : List (Except Fault Val))
+    (es : List SEff) : Prop :=
+  ∀ m me, Elem.Only out S m → es.foldlM (SEff.apply V vs) m = .ok me → Elem.Only out S me
+
+/-- No effect keeps `Elem.Only`, for every output block, set of threads, valuation and node
+values. -/
+theorem Elem.Only.steps_nil {S : Nat → Prop} : Elem.Only.Steps out S V vs [] := by
+  intro m me h hr
+  simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at hr
+  subst hr
+  exact h
+
+/-- **The effects of a thread of `S` keep `Elem.Only`**: for every output block, set of threads
+`S`, valuation `V` whose thread is in `S`, node values and effects (`Elem.Only.apply`). -/
+theorem Elem.Only.steps_of {S : Nat → Prop} (hS : S V.ctx.who.thread) {es : List SEff} :
+    Elem.Only.Steps out S V vs es := by
+  induction es with
+  | nil => exact Elem.Only.steps_nil
+  | cons e es ih =>
+    intro m me h hr
+    rw [List.foldlM_cons] at hr
+    obtain ⟨m1, h1, hr⟩ := Except.bind_eq_ok.1 hr
+    exact ih m1 me (h.apply hS h1) hr
+
+/-- **A load outside `out`, then steps of `Elem.Only`**: for every thread, label, instruction,
+pointer `p` that evaluates to an address in a block `c` other than `out`, and effects `es` that keep
+`Elem.Only`, the load followed by `es` keeps it (the load logs an access to `c`,
+`Elem.Only.log`). -/
+theorem Elem.Only.steps_load {S : Nat → Prop} {lbl pc : Nat} {p : SVal} {es : List SEff}
+    {c : Nat} {o : Int} (hv : p.eval V vs = .ok (.ptr ⟨c, o⟩)) (hc : c ≠ out)
+    (h : Elem.Only.Steps out S V vs es) : Elem.Only.Steps out S V vs (.load lbl pc p :: es) := by
+  intro m me hO hr
+  rw [List.foldlM_cons] at hr
+  obtain ⟨m1, h1, hr⟩ := Except.bind_eq_ok.1 hr
+  refine h m1 me ?_ hr
+  simp only [SEff.apply, hv, Val.addr?, bind, Except.bind, pure, Except.pure] at h1
+  split at h1
+  · cases h1
+    exact hO.log fun hb => absurd hb hc
+  · cases h1
 
 namespace Ops
 
@@ -264,25 +317,91 @@ partial def steps (E : Array Expr) (V S k K : Expr) : List Expr → M Expr
         (`P, P)]) [.kd hF, .kd hP, .rfl, .fn eqn, .pf hx, .fn hp, .fn eqn, .dec, .pf h]).1
     | _ => throwError "mojo_ret: effect{indentExpr e}"
 
-/-- **Goal `Elem E K me`**, from a run `SEff.run V vs es = .ok me` and `Elem E k M` with `M` the
-memory of `V`: the effects as steps from `k` to `K`. -/
-def elemGoal (ty : Expr) : M Expr := do
-  let some (E, K, me) := elemOf? ty | throwError "mojo_ret: not an Elem goal{indentExpr ty}"
-  let mut run? := none
+/-- A hypothesis `SEff.run V vs es = .ok me`: the hypothesis, `V`, `vs` and `es`. -/
+def runHyp (me : Expr) : MetaM (Expr × Expr × Expr × Expr) := do
   for d in ← getLCtx do
     if d.isImplementationDetail then continue
     let some (_, l, r) := (← instantiateMVars d.type).eq? | continue
     let (``SEff.run, #[V, vs, es]) := l.getAppFnArgs | continue
     let (``Except.ok, #[_, _, me']) := r.getAppFnArgs | continue
-    if me' == me then
-      run? := some (d.toExpr, V, vs, es)
-      break
-  let some (h, V, vs, es) := run? | throwError "mojo_ret: no run of effects to{indentExpr me}"
+    if me' == me then return (d.toExpr, V, vs, es)
+  throwError "mojo_ret: no run of effects to{indentExpr me}"
+
+/-- **Goal `Elem E K me`**, from a run `SEff.run V vs es = .ok me` and `Elem E k M` with `M` the
+memory of `V`: the effects as steps from `k` to `K`. -/
+def elemGoal (ty : Expr) : M Expr := do
+  let some (E, K, me) := elemOf? ty | throwError "mojo_ret: not an Elem goal{indentExpr ty}"
+  let (h, V, vs, es) ← runHyp me
   let (hE, k) ← elemHyp E V
   let S ← summaryOf vs
   seed V S
   let hS ← steps E V S k K (← klist es)
   return mkAppN hS #[mkApp (mkConst ``Valuation.mem) V, me, hE, h]
+
+/-- The output block, the set of threads and the memory of `Elem.Only out T m`. -/
+def onlyOf? (t : Expr) : Option (Expr × Expr × Expr) :=
+  match t.getAppFnArgs with
+  | (``Elem.Only, #[out, T, m]) => some (out, T, m)
+  | _ => none
+
+/-- A hypothesis `Elem.Only out T M` with `M` the memory of `V`. -/
+def onlyHyp (out T V : Expr) : MetaM Expr := do
+  let mem := mkApp (mkConst ``Valuation.mem) V
+  for d in ← getLCtx do
+    if d.isImplementationDetail then continue
+    let some (out', T', m) := onlyOf? (← instantiateMVars d.type) | continue
+    unless (← kdefeq out out') && (← kdefeq T T') && (← kdefeq m mem) do continue
+    return d.toExpr
+  throwError "mojo_ret: no hypothesis Elem.Only … of the memory of{indentExpr V}"
+
+/-- The thread of `V` is in `T`: by `omega` on `T` applied to it with reducible definitions
+unfolded, or left open when `open?`; `none` when it is not proved and not `open?`. -/
+def inSet (T V : Expr) (open? : Bool) : M (Option Expr) := do
+  let ty := (mkApp T (mkApp (mkConst ``Who.thread) (whoOf V))).headBeta
+  let k : M Expr := do return hint (← arith (← whnfR ty)) ty
+  if open? then return some (← attempt ty k)
+  let s ← (saveState : MetaM Meta.SavedState)
+  try some <$> k catch _ => do (s.restore : MetaM Unit); pure none
+
+/-- **Effects `es` of summary `S` at `V` keep `Elem.Only out T`**: all of them by
+`Elem.Only.steps_of` when the thread of `V` is in `T` (`hT`); otherwise each load by
+`Elem.Only.steps_load` (its block other than `out` by `omega`), and from the first store on by
+`Elem.Only.steps_of`, the thread in `T` left open. -/
+partial def onlySteps (out T V S : Expr) (hT : Option Expr) (es : List Expr) : M Expr := do
+  let nm := [(`out, out), (`S, T), (`V, V), (`vs, vsOf V S)]
+  let all (hT : Expr) : M Expr := do
+    return (← use ``Elem.Only.steps_of (nm ++ [(`es, ← mkListLit (mkConst ``SEff) es)])
+      [.kd hT]).1
+  if let some h := hT then return ← all h
+  match es with
+  | [] => return (← use ``Elem.Only.steps_nil nm []).1
+  | e :: es' =>
+    let e ← kdeep e 2
+    match e.getAppFnArgs with
+    | (``SEff.load, #[lbl, pc, p]) =>
+      let (v, hv) ← opnd V S none p
+      let (c, o) ← ptrMk (← ptrOf v)
+      let ty := mkNot (← mkEq c out)
+      let hc ← attempt ty (arith ty)
+      let h ← onlySteps out T V S none es'
+      return (← use ``Elem.Only.steps_load (nm ++ [(`lbl, lbl), (`pc, pc), (`p, p), (`c, c),
+        (`o, o)]) [.kd hv, .kd hc, .pf h]).1
+    | (``SEff.store, _) =>
+      let some h ← inSet T V true | throwError "mojo_ret: no thread of{indentExpr T}"
+      all h
+    | _ => throwError "mojo_ret: effect{indentExpr e}"
+
+/-- **Goal `Elem.Only out T me`**, from a run `SEff.run V vs es = .ok me` and `Elem.Only out T M`
+with `M` the memory of `V` (`onlySteps`). -/
+def onlyGoal (ty : Expr) : M Expr := do
+  let some (out, T, me) := onlyOf? ty
+    | throwError "mojo_ret: not an Elem.Only goal{indentExpr ty}"
+  let (h, V, vs, es) ← runHyp me
+  let hO ← onlyHyp out T V
+  let S ← summaryOf vs
+  seed V S
+  let hS ← onlySteps out T V S (← inSet T V false) (← klist es)
+  return mkAppN hS #[mkApp (mkConst ``Valuation.mem) V, me, hO, h]
 
 /-- The blocks `(l, ds, S)` of the path `ps`. -/
 partial def blocks (ps : Expr) : MetaM (List (Expr × Expr × Expr)) := do
@@ -379,11 +498,12 @@ def run (g : MVarId) : TacticM (Array MVarId) := g.withContext do
   -- the kernel takes no metavariables, so the local context's are instantiated first
   let lctx ← instantiateLCtxMVars (← getLCtx)
   withLCtx lctx (← getLocalInstances) do
-    let ty ← instantiateMVars (← g.getType)
-    let facts ← launchFacts
+    let ty := (← instantiateMVars (← g.getType)).consumeMData
     let k : M Expr := do
       if (elemOf? ty).isSome then return ← elemGoal ty
-      unless ty.isAppOf ``Exists do throwError "mojo_ret: not an Elem or a Ret goal{indentExpr ty}"
+      if (onlyOf? ty).isSome then return ← onlyGoal ty
+      unless ty.isAppOf ``Exists do
+        throwError "mojo_ret: not an Elem, an Elem.Only or a Ret goal{indentExpr ty}"
       try retGoal ty [] 2
       catch ex =>
         -- no path proved: the first one, its premises left open
@@ -399,7 +519,7 @@ def run (g : MVarId) : TacticM (Array MVarId) := g.withContext do
         let (``Exists, #[α, pred]) := ty.getAppFnArgs | throw ex
         return mkApp4 (mkConst ``Exists.intro [← getLevel α]) α pred p
           (mkApp4 (mkConst ``And.intro) m' r' (hint (← memOfList paths 0) m') (hint hR r'))
-    let (p, st) ← k.run { facts, name := "mojo_ret" }
+    let (p, st) ← (withFacts k).run { name := "mojo_ret" }
     g.assign (hint p ty)
     for m in st.dbgs do logInfo m
     return st.opens
@@ -416,13 +536,16 @@ end Ops
   skipped by `bs k = none` (one at most);
 * a goal `∃ ps ∈ paths, Ret V (Elem m₀ out w cell bs K) ps`, from `Elem m₀ out w cell bs k M`:
   the first path whose premises mojo_obl proves (`Walk`) and whose blocks' effects are such
-  steps, splitting on a branch condition when no path is proved outright.
+  steps, splitting on a branch condition when no path is proved outright;
+* a goal `Elem.Only out S me`, from the run of the first case and `Elem.Only out S M`: every
+  effect when `omega` proves `V`'s thread in `S`, otherwise the loads through blocks other than
+  `out` (by `omega`) and, from the first store on, every effect with the thread in `S` left open.
 
 The node values are mojo_obl's, found from the hypotheses as mojo_obl finds them, or a hypothesis
 `vals V S.nodes = ws`. Each premise it does not prove is left as a goal and logged as
 `mojo_ret: open goal`; on a `Ret` goal where no path is proved, these are the first path's. It
-fails on a goal of another form and when the hypotheses it needs (the run, the `Elem` at `V`'s
-memory) are missing. -/
+fails on a goal of another form and when the hypotheses it needs (the run, the `Elem` or
+`Elem.Only` at `V`'s memory) are missing. -/
 syntax (name := mojoRet) "mojo_ret" : tactic
 
 open Lean Elab Tactic in

@@ -140,15 +140,6 @@ def cntPost (V : Valuation) (me : Mem) : Prop :=
   ∀ j < nOf V, me.load cntP.layout V.ctx.who 1 (.int 64) ⟨bOf V, 8 * j⟩ (some 8) =
     .ok (.bits 64 (BitVec.ofNat 64 j))
 
--- SymLoop's summaries `cntE`, `cntH` and `cntB` of `cnt`'s blocks 0 to 2 (`sym_summary`, which
--- does not record its definitions for `mojo_kernel.share`), recorded as the definitions of their
--- values, so that `cntk` below uses them and adds no second definition of one value.
-open Lean in
-run_cmd Elab.Command.liftCoreM do
-  for n in [``SymLoop.cntE, ``SymLoop.cntH, ``SymLoop.cntB] do
-    let some (.defnInfo d) := (← getEnv).find? n | throwError "{n} is not a definition"
-    modifyEnv (MojoProof.LLVM.defs.addEntry · (d.value, n))
-
 -- `cntk`: the loop clause on the counting loop, header block 1; the tactic closes the path into
 -- the loop and the invariant at round 0 by `invN_entry`, a round by `invN_step` and the path out
 -- by `invN_exit`. With `mojo_kernel.share`, its blocks' summaries are SymLoop's `cntE`, `cntH`,

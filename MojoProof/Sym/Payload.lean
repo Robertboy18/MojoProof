@@ -1,4 +1,4 @@
-import MojoProof.Sym.Block
+import MojoProof.Sym.Path
 import MojoProof.Sem.SkelExec
 
 /-!
@@ -74,7 +74,7 @@ valuations:
 * `Valuation.lastI_rel` and `Block.sound_retI_rel`: along a path whose summaries pass these
   checks (`pathOk`) and whose loads and stores meet `LoadsOk` and `StoresOk` under the first run
   (`Valuation.PathMem`), the valuations stay related from block to block (`Valuation.lastI`);
-  with `Block.sound_retI` (MojoProof/Sym/Block.lean), two threads that run a returning path from
+  with `Block.sound_retR` (MojoProof/Sym/Path.lean), two threads that run a returning path from
   frames with one
   list of `allocas` return (`.done`) on memories related by `Mem.SkelEq pay`, the memories after
   the return's cleanup (`Mem.foldl_setLive_skel`). `WalkI.rel`: the second run's premises
@@ -162,7 +162,8 @@ def SVal.pay (lab : Labels) (fn : Func) (ps : List Bool) : SVal → Bool
 /-- The role of a node of function `fn` under `lab`, given the roles `ps` of the nodes before
 it: payload if an operand is (`SVal.pay`; a `select`'s condition among them), if it is a `call`,
 `getelementptr` or `load` whose statement's result register is labelled payload, and always for
-a float operation, whose NaN results the oracle chooses ((O2) of Sem/Labels.lean). -/
+a float operation, whose NaN results the oracle chooses ((O2) of Sem/Labels.lean); never for a
+float constant, which reads no payload. -/
 def SNode.pay (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
   | .bin _ _ _ a b | .icmp _ _ a b | .minmax _ _ a b => a.pay lab fn ps || b.pay lab fn ps
   | .cast _ _ a | .extract _ a => a.pay lab fn ps
@@ -172,6 +173,7 @@ def SNode.pay (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
   | .load lbl pc p => p.pay lab fn ps || (resReg fn lbl pc).any (lab.reg fn.name)
   | .fbin .. | .fbinP .. => true
   | .select _ c a b => c.pay lab fn ps || a.pay lab fn ps || b.pay lab fn ps
+  | .flit .. => false
 
 /-- The roles of the nodes of table `ns` of function `fn` under `lab`, in order (`true`:
 payload), each from the roles of the nodes before it. -/
@@ -211,8 +213,8 @@ def Summary.oblivious (lab : Labels) (fn : Func) (S : Summary) : Bool :=
     -- a `select` chooses an operand by its condition, as a branch does
     | .select _ c _ _ => free c
     -- the other nodes neither choose nor address memory
-    | .bin .. | .icmp .. | .cast .. | .extract .. | .call .. | .fbin .. | .minmax .. | .fbinP .. =>
-      true
+    | .bin .. | .icmp .. | .cast .. | .extract .. | .call .. | .fbin .. | .minmax .. | .fbinP ..
+    | .flit .. => true
 
 /-- **The roles agree with the labelling**: every register the summary sets whose entry is
 payload is labelled payload under `lab`. A register labelled payload may have a skeleton entry
@@ -375,6 +377,7 @@ theorem SNode.eval_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuati
       exact .refl (fun _ => rfl) _
     · rfl
   | fbin | fbinP => simp [SNode.pay] at hnd
+  | flit ft lit => rfl
   | select w c a b =>
     simp only [SNode.pay, Bool.or_eq_false_iff] at hnd
     simp only [SNode.eval, SVal.eval_skel h hvs hnd.1.1, SVal.eval_skel h hvs hnd.1.2,
@@ -511,8 +514,9 @@ def SNode.payOk (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
   | .select _ c _ _ => !c.pay lab fn ps
   -- related operands give related values or the same fault (`SNode.eval_rel`)
   | .icmp .. | .cast .. | .extract .. | .minmax .. => true
-  -- a special-register call has no operand, and its value is the same in both runs
-  | .call .. => true
+  -- a special-register call and a float constant have no operand, and their value is the same
+  -- in both runs
+  | .call .. | .flit .. => true
 
 /-- **(O3) on a summary's table**: each node whose role is payload passes `SNode.payOk` on the
 roles of the nodes before it. -/
@@ -710,6 +714,9 @@ theorem SNode.eval_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuatio
   | minmax sg mx a b =>
     simp only [SNode.eval]
     exact (hto a).bind fun _ _ hx => (hto b).bind fun _ _ hy => intMinMax_skel sg mx hx hy
+  | flit ft lit =>
+    simp only [SNode.eval]
+    exact Except.Rel.refl Val.Skel.refl _
 
 /-- **Every node has related values in two runs.** For every labelling `lab`, payload blocks
 `pay`, table `ns` and valuations related by `Valuation.Rel` whose skeleton loads read outside
@@ -1003,7 +1010,7 @@ def SVal.baseIn (ns : List SNode) (rs : List Nat) : SVal → Bool
     | some (.gep _ _ (.int ..) _) | some (.gep _ _ (.node _) _) => false
     | some (.bin ..) | some (.icmp ..) | some (.cast ..) | some (.extract ..) | some (.call ..)
     | some (.load ..) | some (.fbin ..) | some (.select ..) | some (.minmax ..) | some (.fbinP ..)
-    | none => false
+    | some (.flit ..) | none => false
   | .int .. => false
 
 /-- **A pointer from its base register.** For every set of blocks `B`, valuation `V`, table
@@ -1213,7 +1220,7 @@ theorem WalkI.rel {lab : Labels} {pay : Nat → Prop} {fn : Func} :
     exact hx
 
 /-- **Two runs of a returning path** (the transfer to the next block's entry, T3c, composed with
-`Block.sound_retI`). For every
+`Block.sound_retR`). For every
 program, function `fn`, labelling `lab`, payload blocks `pay` and path `(l, ds, S) :: ps` that
 the path checker accepts (`coversPathI`), whose summaries pass `pathOk` and each of whose blocks'
 obligations runs only effects of the block's summary (`Cond.effsIn`), and every two contexts of
@@ -1248,8 +1255,8 @@ theorem Block.sound_retI_rel {P : Program} {fn : Func} {lab : Labels} {pay : Nat
       (f₁.allocas.foldl (fun m b => m.setLive b false) me₁).SkelEq pay
         (f₂.allocas.foldl (fun m b => m.setLive b false) me₂) := by
   obtain ⟨-, he, hA⟩ := Valuation.lastI_rel ps h hfn hk hm
-  obtain ⟨fe₁, me₁, hS₁, hm₁, hst₁⟩ := Block.sound_retI hP hc ht₁ hfn hl₁ hp₁ hW₁ hret
-  obtain ⟨fe₂, me₂, hS₂, hm₂, hst₂⟩ := Block.sound_retI (c := c₂) (h.prog.symm.trans hP) hc ht₂
+  obtain ⟨fe₁, me₁, hS₁, hm₁, hst₁⟩ := Block.sound_retR hP hc ht₁ hfn hl₁ hp₁ hW₁ hret
+  obtain ⟨fe₂, me₂, hS₂, hm₂, hst₂⟩ := Block.sound_retR (c := c₂) (h.prog.symm.trans hP) hc ht₂
     (h.fn.symm.trans hfn) hl₂ hp₂ (WalkI.rel ps h hfn hk hd hm hW₁) (by rw [he]; exact hret)
   refine ⟨fe₁, me₁, fe₂, me₂, hS₁, hS₂, hst₁, hst₂, ?_⟩
   rw [show ((Valuation.entry c₂ t₂.k m₂ f₂).lastI l S ps).2.2 =

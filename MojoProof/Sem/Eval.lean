@@ -24,11 +24,17 @@ ones of `MojoProof.Sem.Op` lane by lane; lane `i` gets the oracle number `ch i` 
 * Pointer comparisons and `ptrtoint` read addresses (`Mem.addr`); `addrspacecast` keeps the block
   and offset, except that a cast of a null-based pointer is unsupported (LangRef does not fix its
   address). `fptoui`, `fptosi` and `inttoptr` are unsupported.
-* A float literal is parsed as LLVM's assembler does: a decimal or `0x` literal is a `double`,
-  rounded to nearest even, and must convert exactly to the operand's type; `0xH` and `0xR` are
-  the bits of a `half` and a `bfloat`.
+* A float literal is read as LangRef's "Simple Constants" says: a decimal literal is its exact
+  rational value rounded once to the operand's type, to nearest with ties to even (FloatLib's
+  `Model.ofRat`), and is refused if the rounding overflows to infinity or a nonzero value
+  underflows to zero (`-0.0` is `-0`); a `0x` literal is the bits of a `double` and must convert
+  exactly to the operand's type; `0xH` and `0xR` are the bits of a `half` and a `bfloat`. A
+  decimal literal's digits are read by `digits`, a structural parse of the characters `0`-`9`
+  (no `_`) that the kernel reduces, so `decide +kernel` can evaluate a decimal literal.
 
-This module defines functions only; it proves nothing.
+The module defines functions; it proves only that `digits` reads every string of the characters
+`0`-`9` as core's `String.toNat?` does (`digits_toList`), so `floatLit`'s decimal case on such
+digits has the value of its `String.toNat?` reading (`floatLit_dec`).
 -/
 
 namespace MojoProof.Sem
@@ -91,17 +97,28 @@ def floats2 (t : FloatTy) (f : Model t.fmt → Model t.fmt → Val) : Val → Va
     | some a, some b => pure (f a b)
     | _, _ => throw (.unsupported "float operand of the wrong type")
 
-/-- The value of float literal `lit` at float type `t`. -/
+/-- The natural number that the characters `cs` spell in decimal: `cs` is nonempty and every
+character is one of `0`-`9`; otherwise `none`. LLVM's decimal float syntax has no digit
+separator, so `_` is refused (core's `String.toNat?` skips a `_` between two digits). Every
+function it calls is structural, so the kernel reduces it; `digits_toList` proves it equal to
+`String.toNat?` on every string of the characters `0`-`9`. -/
+def digits (cs : List Char) : Option Nat :=
+  if cs ≠ [] ∧ cs.all Char.isDigit then some (Nat.ofDigitChars 10 cs 0) else none
+
+/-- The value of float literal `lit` at float type `t`, as LLVM's assembler reads it (LangRef,
+"Simple Constants"): a decimal literal `[-]i.f[e<exp>]` is the rational `i.f · 10 ^ exp` rounded
+once to `t` (`near`: FloatLib's `Model.ofRat`, nearest with ties to even), and faults if the
+rounding overflows to infinity or a nonzero literal underflows to zero; a `0x` literal (LLVM's
+legacy form, sixteen hexadecimal digits) is the bits of a `double` and faults unless it converts
+exactly to `t` (`exactIn`); `0xH` and `0xR` are the bits of a `half` and a `bfloat`. -/
 def floatLit (t : FloatTy) (lit : FloatLit) : Except Fault Val :=
   match lit with
   | .hex "H" b => if t = .half then pure (.bits 16 (BitVec.ofNat 16 b)) else wrong
   | .hex "R" b => if t = .bfloat then pure (.bits 16 (BitVec.ofNat 16 b)) else wrong
   | .hex "" b => exactIn (Model.ofNatBits b)
   | .dec neg i f e =>
-    match (i ++ f).toNat? with
-    | some d =>
-      let x := Model.ofRat .binary64 ((d : Rat) * (10 : Rat) ^ (e - f.length))
-      exactIn (if neg then Model.neg x else x)
+    match digits (i.toList ++ f.toList) with
+    | some d => near neg ((d : Rat) * (10 : Rat) ^ (e - f.length))
     | none => throw (.unsupported "malformed float literal")
   | .hex _ _ => wrong
 where
@@ -113,6 +130,47 @@ where
     let y := Model.cast .binary64 t.fmt x
     if (Model.cast t.fmt .binary64 y).toNatBits = x.toNatBits then pure (.ofFloat t y)
     else throw (.unsupported "float literal not exact in its type")
+  /-- The rational `q` rounded once to `t` by FloatLib's `Model.ofRat t.fmt q` (to nearest, ties
+  to even; FloatLib's `Model.toReal_ofRat_eq_roundAt` gives its real value when it is finite),
+  then negated if `neg` (so `-0.0` is `-0`); a fault if the rounding is infinite (overflow) or
+  `q` is nonzero and the rounding is zero (underflow). -/
+  near (neg : Bool) (q : Rat) : Except Fault Val :=
+    let x := Model.ofRat t.fmt q
+    if x.isInfinite then throw (.unsupported "decimal float literal overflows its type")
+    else if q ≠ 0 ∧ x.isZero then throw (.unsupported "decimal float literal underflows to zero")
+    else pure (.ofFloat t (if neg then Model.neg x else x))
+
+/-- For every string `s` of the characters `0`-`9`, `digits` of its characters is core's
+`String.toNat? s`: both are `none` on the empty string, and otherwise core reads the digits with
+its `_` filter, which removes nothing (core's `String.isNat_of_isDigit` and
+`String.toNat?_eq_some_ofDigitChars`). On strings with a `_` they differ: `digits` refuses
+`1_000`, which core reads as 1000. -/
+theorem digits_toList (s : String) (h : s.toList.all Char.isDigit) :
+    digits s.toList = s.toNat? := by
+  have hd : ∀ c ∈ s.toList, c.isDigit := by simpa using h
+  by_cases he : s = ""
+  · subst he
+    rw [String.toNat?_eq_none (Bool.eq_false_iff.2 fun h' => (String.isNat_iff.1 h').1 rfl)]
+    rfl
+  · rw [String.toNat?_eq_some_ofDigitChars (String.isNat_of_isDigit he hd), digits,
+      ite_eq_left ⟨fun h' => he (String.toList_eq_nil_iff.1 h'), h⟩]
+    congr
+    refine (List.filter_eq_self.2 fun c hc => ?_).symm
+    have := hd c hc
+    rw [bne_iff_ne]
+    rintro rfl
+    exact absurd this (by decide)
+
+/-- For every float type, sign, exponent and digit strings `i` and `f` of the characters
+`0`-`9`, `floatLit`'s decimal case is its reading with core's `String.toNat?` on the digits
+before and after the point. -/
+theorem floatLit_dec (t : FloatTy) (neg : Bool) (i f : String) (e : Int)
+    (h : (i ++ f).toList.all Char.isDigit) :
+    floatLit t (.dec neg i f e) = match (i ++ f).toNat? with
+      | some d => floatLit.near t neg ((d : Rat) * (10 : Rat) ^ (e - f.length))
+      | none => throw (.unsupported "malformed float literal") := by
+  rw [← digits_toList _ h, String.toList_append]
+  rfl
 
 /-- The steps of the indices `is` of a GEP with source type `src`: each index with the byte
 offset it adds. The first index steps over `src`, each later one into the current type (array and

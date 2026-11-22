@@ -15,16 +15,16 @@ level: L0
 
 ## Rule
 
-The docstring of the blocked product type (layout.mojo:1904-1911) gives each mode i the shape `(block.shape[i], tiler.shape[i])` and the stride `(block.stride[i], block.cosize * tiler.stride[i])`. The code multiplies by the block's shape product, not its cosize. The static case passes `Coord[*BlockLayoutType._shape_types].static_product` (line 1815), and the dynamic case sets `var block_cosize = Int(block.shape_coord().product())` (line 2016).
+The docstring of the blocked product type (layout.mojo:1904-1911) gives each mode i the shape `(block.shape[i], tiler.shape[i])` and the stride `(block.stride[i], block.cosize * tiler.stride[i])`: the copies of the block are placed one cosize apart, so they do not overlap.
 
 ## In scope
 
-Compact blocks, whose cosize is their size, so the documentation and the code agree.
+Compact blocks, whose cosize is their size.
 
 ## Out of scope
 
-Blocks with gaps. There the code's stride is smaller than the documented one, and tiles can overlap. This is our reading of lines 1815 and 2016; we did not run it.
+Blocks with gaps, whose cosize exceeds their size.
 
 ## Open
 
-Either a doc fix (the shape product) or a code fix (the cosize), and a Lean statement for compact blocks. MojoProof states no layout law yet.
+A Lean statement of the documented layout for compact blocks. MojoProof states no layout law yet.

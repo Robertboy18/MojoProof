@@ -15,8 +15,11 @@ liveness at a number outside `L` (`ret_twin`). The allocas invariant: the launch
 `Close.mem (some 5)` starts, and in every grid reachable from its grid every step of a running
 thread is `Mem.Changes` with `L` the blocks the thread owns (`changes`, by
 `Grid.start_reach_changes`, for every address choice and oracle). The twin: the grid of `returner`
-on `Closed.mem1` is not `Grid.Owns`, as block 1 is of every thread (`owns_twin`). Statements about
-these threads, grids and this launch, not about every thread.
+on `Closed.mem1` is not `Grid.Owns`, as block 1 is of every thread (`owns_twin`). The twin of
+`Mem.Changes.above`'s premise that `L` not have the block: making a block of poison bytes live
+(`Mem.setLive`, `Mem.Changes` with `L` that block) makes its byte 8, at its size, undefined
+(`above_twin`). Statements about these threads, grids, memories and this launch, not about every
+thread.
 -/
 
 namespace MojoProofTest.Writes
@@ -93,5 +96,24 @@ theorem owns_twin :
   obtain ⟨x, hx, ho⟩ := h 0 _ rfl _ List.mem_cons_self 1 List.mem_cons_self
   rw [mem1_owner 1 x hx] at ho
   cases ho
+
+/-- A block of 8 live bytes of every thread, all of them poison. -/
+def poisonBlk : MojoProof.Sem.Block := { blk 8 true with bytes := fun _ => .poison }
+
+/-- The twin of `Mem.Changes.above`'s premise that `L` not have the block: making block 1 of
+`memOf [(1, poisonBlk)]` live is `Mem.Changes` with `L` block 1 (`Mem.setLive_changes`), and the
+block it leaves at number 1 does not have `poisonBlk`'s bytes from its size 8 on (byte 8 becomes
+undefined). -/
+theorem above_twin :
+    (memOf [(1, poisonBlk)]).Changes (· = 1) (fun _ => False)
+        ((memOf [(1, poisonBlk)]).setLive 1 true) ∧
+      ¬ ∃ x', ((memOf [(1, poisonBlk)]).setLive 1 true).blocks 1 = some x' ∧
+        ∀ i, poisonBlk.size ≤ i → x'.bytes i = poisonBlk.bytes i := by
+  refine ⟨Mem.setLive_changes _ true rfl, fun ⟨x', hx', hb⟩ => ?_⟩
+  have e : ((memOf [(1, poisonBlk)]).setLive 1 true).blocks 1 =
+      some { poisonBlk with live := true, bytes := fun _ => .undef } := rfl
+  rw [e] at hx'
+  cases hx'
+  exact absurd (hb 8 (Nat.le_refl _)) (by decide)
 
 end MojoProofTest.Writes

@@ -118,7 +118,18 @@ MojoProof.Sem.matmul_cell_error
 MojoProof.Sem.matVec_cell_eq
 MojoProof.Sem.matVec_cell_real
 MojoProof.Sem.matVec_cell_error
-# kernel theorem (Sym/Sched, Sym/Start, Sym/Kernel, Sym/KernelCmd, Kernels/)
+MojoProof.Sem.floatLit_dec
+MojoProof.Sem.rowMajor_two
+MojoProof.Sem.matmulPairs_swap
+MojoProof.Sem.dotLoop_of_floatBin
+MojoProof.Sem.cell_of_floatBin
+MojoProof.Sem.Grid.start_reach_above
+MojoProof.Sem.Launch.cell_onto
+MojoProof.Sem.bfly_warp_add
+MojoProof.Sem.shflSource_bfly
+MojoProof.Sem.matmul_take_error
+MojoProof.Sem.Kernel.Sound.contractOff
+# kernel theorem (Sym/Sched, Sym/Start, Sym/Kernel, Sym/KernelMat, Sym/KernelCmd, Kernels/)
 MojoProof.Sym.Grid.start_ok
 MojoProof.Sym.Kernel.sound_of_paths
 MojoProof.Kernels.vadd.sound
@@ -135,10 +146,14 @@ MojoProof.Sym.Kernel.map2_real
 MojoProof.Sym.Kernel.map2_finEq
 MojoProof.Sym.Kernel.sound_of_chains
 MojoProof.Sym.Kernel.sound_mapN
+MojoProof.Sym.Kernel.sound_cells
+MojoProof.Sym.Kernel.sound_entry
+MojoProof.Sym.Kernel.sound_elem
+MojoProof.Sym.Kernel.sound_mat
 # block checker (Sym/Block, Sym/Term, Sym/Loop, Sym/PtrMem)
 MojoProof.Sym.Block.sound
 MojoProof.Sym.Block.sound_pathI
-MojoProof.Sym.Block.sound_retI
+MojoProof.Sym.Block.sound_retR
 MojoProof.Sym.Ends.edge
 MojoProof.Sym.Block.sound_loop
 MojoProof.Sym.Block.sound_path
@@ -147,6 +162,10 @@ MojoProof.Sym.Runs.of_loop
 MojoProof.Sym.SState.run_sound
 MojoProof.Sym.Block.soundC
 MojoProof.Sym.exec_fbin
+MojoProof.Sym.Runs.of_retWith
+MojoProof.Sym.Block.sound_to
+MojoProof.Sym.Chain.reach
+MojoProof.Sem.Mem.compact_csimp
 # commands and tactics (LLVM, Util, Cert, Kernels, the other Sym modules)
 MojoProof.LLVM.importFile
 MojoProof.LLVM.mojoImport
@@ -191,3 +210,8 @@ MojoProof.Sym.WalkI.nil'
 MojoProof.Sym.Valuation.into_mem
 MojoProof.Sym.Valuation.into_regs_br
 MojoProof.LLVM.Mutate.mojoKills
+MojoProof.Sym.WalkWith.nil'
+MojoProof.Sym.mojoInv
+MojoProof.Sym.evalMojoInv
+MojoProof.Sym.oblHave
+MojoProof.Sym.evalOblHave

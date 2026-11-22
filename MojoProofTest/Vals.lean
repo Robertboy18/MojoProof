@@ -17,7 +17,8 @@ logged, while the later nodes read its entry; unfolding the definition closes it
 The last test: a summary that `sym_summary` defines unfolds by `simp only` in the module that
 runs the command (`b21`, block `%21` from position 1, after its `trunc`: a summary no library
 definition holds, so the test adds no copy of one), and its exit and length are those of
-`mojo_kernel`'s summary of the whole block, `Kernels.vadd.b1`.
+`mojo_kernel`'s summary of the whole block, `Kernels.vadd.b1`. `sym_summary` records `b21` in
+`MojoProof.LLVM.defs` under its term, and `MojoProof.LLVM.share` of that term gives `b21`.
 -/
 
 namespace MojoProofTest.Vals
@@ -143,5 +144,15 @@ rewrites by `b21`'s equation lemma; the summary from position 1 has the exit of 
 example : b21.exit = Kernels.vadd.b1.exit ∧ b21.len + 1 = Kernels.vadd.b1.len := by
   simp only [b21]
   exact ⟨rfl, rfl⟩
+
+-- `sym_summary` records `b21` in `defs` under its term, so `share` of that term names `b21`
+-- (and adds no definition); the doc comment's error otherwise
+run_meta do
+  let v := (← Lean.getConstInfoDefn ``b21).value
+  let some c := (MojoProof.LLVM.defs.getState (← Lean.getEnv))[v]?
+    | Lean.throwError "b21 is not recorded in defs"
+  unless c == ``b21 do Lean.throwError "the term of b21 is recorded as {c}"
+  let e ← MojoProof.LLVM.share `MojoProofTest.Vals.b21Copy (Lean.mkConst ``Summary) v
+  unless e == Lean.mkConst ``b21 do Lean.throwError "share gives {e}, not b21"
 
 end MojoProofTest.Vals

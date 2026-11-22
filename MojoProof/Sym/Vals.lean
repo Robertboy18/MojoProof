@@ -25,18 +25,21 @@ and concrete summary `S`. For node `j` and entry `rⱼ`:
 
 1. when `rⱼ` is `.ok v`, it evaluates the node by mojo_obl's dispatch on the node's constructor
    (`Obl.nodeEval`: loads, `extractvalue`, casts, integer operators and comparisons, special
-   registers, `getelementptr`, float operators), with the facts found by type (the registers,
-   function, program and environment of `V`, struct loads, buffers, `Mem.Fits`, `Mem.Holds`,
-   alignments, the launch), and proves the value it gets equal to `v` (`Vals.conv`);
+   registers, `getelementptr`, float operators, float constants), with the facts found by type
+   (the registers, function, program and environment of `V`, struct loads, buffers, `Mem.Fits`,
+   `Mem.Holds`, alignments, the launch), and proves the value it gets equal to `v`
+   (`Vals.conv`);
 2. otherwise it reads `rⱼ` as the semantics' operation of the node on its operands' values
    (`icmpV` by `SNode.eval_icmpV`, `intBin`, `intCast`, `extractV` by `SNode.eval_bin`,
-   `SNode.eval_cast`, `SNode.eval_extract`);
+   `SNode.eval_cast`, `SNode.eval_extract`), and a float constant's as its literal's value
+   (`floatLit` by `SNode.eval_flit`);
 3. it checks the node's proof by the kernel; if a step fails, the node's equation stays a goal,
    logged as `mojo_vals: open goal (node j)`, and the later nodes read its entry `rⱼ`.
 
 `Vals.conv` proves two values equal by syntactic equality, by congruence argument by argument (a
-value followed by proofs about it, as `Fin.mk`, by `Vals.congrDep`), by an `if` on either side
-whose condition `omega` decides (`Vals.ifStep`, so `vadd.bytes`), by kernel defeq, by the local
+value followed by proofs about it, as `Fin.mk`, by `Vals.congrDep`), by an `if` on either side whose
+condition `omega` decides (`Vals.ifStep`, so `vadd.bytes`), by kernel defeq, by a subterm `decide p`
+that `omega` decides (`Vals.decStep`, so a comparison's `Val.ofBool (decide (i < n))`), by the local
 equations on the subterms of either side (`Vals.norm`), and on `Nat` and `Int` by `omega` from the
 local context and the launch facts (so `k * 4 = 4 * k`, `V.k + 6 = 23` from `V.k = 17`). With
 `set_option mojo_obl.debug true` it logs why a node stays open. Tests: MojoProofTest/Vals.lean
@@ -100,6 +103,25 @@ def ifStep (e : Expr) : M (Option (Expr × Expr)) := do
   | (``ite, #[α, c, inst, t, f]) => take ``if_pos ``if_neg c inst α t f false
   | _ => return none
 
+/-- **A comparison decided**: the first subterm `decide p` of `e` (with no bound variables) whose
+`p` or `¬ p` `omega` proves, as `(e', e = e')`, `e'` with it `true` or `false` (so the
+`Val.ofBool (decide (x < y))` of an `icmp slt` or `ult` of the words of naturals is `.bits 1 1`
+when `x < y`); `none` when there is none or `omega` decides it neither way. -/
+def decStep (e : Expr) : M (Option (Expr × Expr)) := do
+  let some d := e.find? fun x => x.isAppOfArity ``Decidable.decide 2 && !x.hasLooseBVars
+    | return none
+  let (p, inst) := (d.appFn!.appArg!, d.appArg!)
+  let r ← try some <$> do
+      pure (mkConst ``Bool.true, mkApp3 (mkConst ``decide_eq_true) p inst (← arith p))
+    catch _ => try some <$> do
+        pure (mkConst ``Bool.false, mkApp3 (mkConst ``decide_eq_false) p inst (← arith (mkNot p)))
+      catch _ => pure none
+  let some (b, h) := r | return none
+  let body ← kabstract e d
+  let e' := body.instantiate1 b
+  let h ← mkCongrArg (.lam `x (mkConst ``Bool) body .default) h
+  return some (e', hint h (← mkEq e e'))
+
 /-- `f xs x ps = f xs y qs` from `h : x = y`, for proofs `ps` and `qs` whose types name `x` and `y`
 (a value with proofs about it, as `Fin.mk`), by `Eq.ndrec` on `h`. -/
 def congrDep (pre x h : Expr) (ps qs : Array Expr) : MetaM Expr := do
@@ -155,9 +177,10 @@ mutual
 /-- **A proof of `a = b`**, `fuel` bounding the rewrites: by syntactic equality; by congruence,
 for one function of as many arguments, each pair of arguments equal (proofs by proof
 irrelevance; a value followed by proofs about it by `congrDep`); by an `if` on either side that
-`omega` decides (`ifStep`); by kernel equality (not tried on two different constructors); by the
-local equations on the subterms of either side (`norm`); or, on `Nat` and `Int`, by `omega`
-from the local context and the launch facts. -/
+`omega` decides (`ifStep`); by kernel equality (not tried on two different constructors); by a
+`decide p` on either side that `omega` decides (`decStep`); by the local equations on the
+subterms of either side (`norm`); or, on `Nat` and `Int`, by `omega` from the local context and
+the launch facts. -/
 partial def conv (a b : Expr) (fuel : Nat := 6) : M Expr := do
   let a := (← instantiateMVars a).headBeta
   let b := (← instantiateMVars b).headBeta
@@ -174,6 +197,9 @@ partial def conv (a b : Expr) (fuel : Nat := 6) : M Expr := do
   unless ← rigidNe a b do
     if ← kdefeq a b then return ← krfl a b
   if fuel > 0 then
+    if let some (b', hb) ← decStep b then
+      return ← mkEqTrans (← conv a b' (fuel - 1)) (← mkEqSymm hb)
+    if let some (a', ha) ← decStep a then return ← mkEqTrans ha (← conv a' b (fuel - 1))
     if let some (a', ha) ← norm a 6 then return ← mkEqTrans ha (← conv a' b (fuel - 1))
     if let some (b', hb) ← norm b 6 then
       return ← mkEqTrans (← conv a b' (fuel - 1)) (← mkEqSymm hb)
@@ -205,7 +231,8 @@ partial def congr (a b : Expr) (fuel : Nat) : M Expr := do
 end
 /-- **Node `nd` (number `j` of `S`) at `V` by its operation**: a proof of
 `nd.eval V (vals V (S.nodes.take j)) = t` for `t` the semantics' operation of the node on its
-operands' values (`icmpV`, `intBin`, `intCast`, `extractV`), up to `conv`. -/
+operands' values (`icmpV`, `intBin`, `intCast`, `extractV`), or for a float constant its
+literal's value (`floatLit`), up to `conv`. -/
 def raw (V S : Expr) (j : Nat) (nd t : Expr) : M Expr := do
   let op (x : Expr) := opnd V S (some j) x
   let vs := vsOf V S (some j)
@@ -233,6 +260,10 @@ def raw (V S : Expr) (j : Nat) (nd t : Expr) : M Expr := do
     let (u, ha) ← op a
     let h ← conv (mkApp2 (mkConst ``extractV) u is) t
     return (← use ``SNode.eval_extract [(`is, is), (`r, t)] [.pf ha, .kd h]).1
+  | (``SNode.flit, #[ft, lit]) =>
+    let h ← conv (mkApp2 (mkConst ``floatLit) ft lit) t
+    return (← use ``SNode.eval_flit [(`V, V), (`vs, vs), (`ft, ft), (`lit, lit), (`r, t)]
+      [.kd h]).1
   | _ => throwError "mojo_vals: node{indentExpr nd}\nis not an operation of{indentExpr t}"
 
 /-- **Node `nd` (number `j` of `S`) at `V` is `t`**: a proof of
@@ -358,9 +389,9 @@ finds them (the registers `f.regs r = some v` or `V.regs r = some v`, the functi
 `L.Valid`, struct loads `m.load … = .ok v`, buffers `m.Buffer`, `Mem.Fits`, `m.Holds` and
 alignments `A ∣ al`), then the value equal to `v` by kernel defeq, congruence and `omega`; an entry
 that is the node's operation (`icmpV`, `intBin`, `intCast`, `extractV`) on its operands' values,
-by that operation. Each node it does not prove is left as a goal and logged as
-`mojo_vals: open goal (node j)`. It fails on a goal of another form and when `ws` does not have
-one entry per node. -/
+by that operation, and a float constant's entry `floatLit ft lit` by the literal. Each node it
+does not prove is left as a goal and logged as `mojo_vals: open goal (node j)`. It fails on a
+goal of another form and when `ws` does not have one entry per node. -/
 syntax (name := mojoVals) "mojo_vals" : tactic
 
 open Lean Elab Tactic in

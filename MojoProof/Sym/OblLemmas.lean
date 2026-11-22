@@ -30,11 +30,17 @@ The node kinds, for every valuation and node values:
 * `SNode.eval_bin`, `SNode.eval_cast`, `SNode.eval_extract`: on words (an aggregate for
   `extractvalue`), the node is what the semantics' `intBin`, `intCast`, `extractV` give of them
   (the closed values follow from MojoProof/Sem/Index.lean's `intBin_add_ofNat` and the others
-  under their no-wrap conditions).
+  under their no-wrap conditions; `intBin_add_wrap`, `intBin_mul_wrap`: without `nuw` and `nsw`,
+  `add` and `mul` of two numbers' words are the word of their sum or product, modulo `2 ^ w`;
+  `intCast_sext_bits`: `sext` of any word is its sign extension).
 * `SNode.eval_icmpV`: an integer comparison node is what `icmpV` gives of its operands' values;
-  `SNode.eval_icmp`, `SNode.eval_icmp_slt_ofNat`, `SNode.eval_icmp_ult_ofNat`: of two words of its
-  width, `Val.ofBool` of the predicate, and of two small natural numbers' words, of their order
-  (`ICmp.slt_ofNat`, `ICmp.ult_ofNat`).
+  `SNode.eval_icmp`, `SNode.eval_icmp_slt_ofNat`, `SNode.eval_icmp_ult_ofNat`,
+  `SNode.eval_icmp_eq_ofNat`, `SNode.eval_icmp_sge_ofNat`: of two words of its width,
+  `Val.ofBool` of the predicate, and of two small natural numbers' words, of their order or
+  equality (`ICmp.slt_ofNat`, `ICmp.ult_ofNat`, `ICmp.eq_ofNat`, `ICmp.sge_ofNat`).
+* `SNode.eval_select_ofBool`, `SNode.eval_select_true`, `SNode.eval_select_false`: a `select`
+  on a boolean is the operand it picks; `SNode.eval_smax_ofNat`: `llvm.smax` of two small natural
+  numbers' words is the word of their maximum.
 * `SNode.eval_load`, `SNode.eval_load_at`: a `load` node is the value `Mem.load` reads, when that
   read succeeds and the value is defined if the statement says `noundef`.
 * `SNode.eval_gep_at`: a `getelementptr` node with one index is what the semantics' `gep` gives
@@ -42,6 +48,9 @@ The node kinds, for every valuation and node values:
 * `SNode.eval_fbin_ofFloat`: a float operator node on two floats of its type, with no
   `fmul contract` factors and without `nnan`, `ninf`, `nsz`, `reassoc`, `arcp` and `afn`, is the
   IEEE operation's result through `deliver` at the node's oracle number.
+* `SNode.eval_flit`: a float constant node is its literal's value (`floatLit`).
+* `SNode.eval_fbinP`: a float operator node with `fmul contract` factors is the semantics'
+  `floatBin` of its operands' values and factors, for the kernel to evaluate.
 * `withAttrs_ofNat`: return attributes that are each `noundef` or a `range` of the word's width
   containing `[lo, hi)`, of size below `2 ^ w` (`keepsWord`, a check the kernel evaluates), keep
   every word `k < 2 ^ w` with `lo ≤ k < hi`, for every layout and memory.
@@ -52,13 +61,21 @@ The node kinds, for every valuation and node values:
 
 The buffers, for every layout and memories with the same blocks:
 
-* `addr_buffer`, `gep_buffer`: in a buffer (`Mem.Buffer`) that fits (its generic address plus its
-  size at most `2 ^ (l.ptr 0).1`, 2 to the generic pointer width, which is `Mem.Fits` unfolded),
-  offset `o < size` has address `g + o`, and a `getelementptr` from `⟨c, 0⟩` by `K` elements of
-  type `src` is `⟨c, K * l.size src⟩`.
-* `load_buffer`, `store_buffer`: a load of element `K` of a buffer holding a 1-D tensor `x`
-  (`Mem.Holds`, `rowMajor_one`) gives `x K`; a store of an encodable value into element `K` of a
-  writable buffer succeeds.
+* `Mem.BufferIn`, `Mem.Buffer.bufferIn`: a buffer of address space `s` owned by `o`; a global
+  buffer (`Mem.Buffer`) is one of space 1 owned by every thread.
+* `addr_buffer`, `gep_buffer`: through a pointer of address space `a`, the generic space 0 or the
+  buffer's own space `s` (1 for global memory, 3 for shared memory), in a buffer
+  (`Mem.BufferIn`) that fits in that space (its base, the address in space `s` and the generic
+  address in space 0, plus its size at most `2 ^ (l.ptr a).1`, 2 to the space's pointer width; in
+  space 0 this is `Mem.Fits` unfolded), offset `o < size` has address `g + o`, and a
+  `getelementptr` from `⟨c, 0⟩` by `K` elements of type `src` is `⟨c, K * l.size src⟩`;
+  `gep_buffer_ok`: by any word, it is some value (a pointer or poison), not a fault.
+* `load_buffer_at`, `load_buffer`, `load_buffer2`, `store_buffer`: through a pointer of either
+  space, by a thread the buffer's owner admits, a load at the row-major offset of a coordinate
+  `i` of a buffer holding a tensor `x` (`Mem.Holds`) gives `x i`, so element `K` of a 1-D tensor
+  (`rowMajor_one`) and element `(r, k)` of an `R × S` tensor at offset `r * S + k`
+  (`rowMajor_two0`); a store of an encodable value into element `K` of a writable buffer
+  succeeds.
 
 The effects, the exits and the path, for every valuation:
 
@@ -76,8 +93,9 @@ The effects, the exits and the path, for every valuation:
 The edges into blocks with `phi`s (`Exit.phi`, `Valuation.into`), for every program, valuation,
 label and summary:
 
-* `SVal.eval_int_ofNat`, `evalV_int_ofNat`, `evalV_loc`: an integer constant of a natural number
-  is its word; a local operand is its register's value.
+* `SVal.eval_int_ofNat`, `evalV_int_ofNat`, `evalV_loc`, `evalV_float`: an integer constant of a
+  natural number is its word; a local operand is its register's value; a float constant at a
+  float type is its literal's value (`floatLit`).
 * `Exit.dest_of_target`, `Exit.dest_phi_eval`, `Exit.dest_phi_true`, `Exit.dest_phi_false`,
   `Exit.dest_phi_ofBool_true`, `Exit.dest_phi_ofBool_false`: an exit with a target goes there,
   and a branch into blocks with `phi`s goes where its condition's low bit says; `Exit.pc_of_fn`:
@@ -89,10 +107,14 @@ label and summary:
   `Valuation.after`'s with the `phi`s' registers set, and at another register `Valuation.after`'s
   (`setRegs_of_forall_ne`); `Valuation.into_regs_br`,
   `Valuation.into_regs_cond`: after another edge they are `Valuation.after`'s;
-  `Valuation.into_mem`: the memory is `Valuation.after`'s.
-* `WalkI.nil'`, `WalkI.one`, `WalkI.cons2`: a path with `phi`s from its blocks' obligations and
-  exits; `forall_lt_zero'`, `forall_lt_succ'`: a statement for every number below a literal from
-  each of them (a loop's rounds).
+  `Valuation.into_mem`: the memory is `Valuation.after`'s. `Valuation.intoWith_regs_phi`,
+  `Valuation.intoWith_regs_br`, `Valuation.intoWith_regs_cond`, `Valuation.intoWith_mem`: the
+  same with or without `fmul contract` (`Valuation.intoWith`, `Valuation.afterWith`), the plain
+  forms being these without it.
+* `WalkI.nil'`, `WalkI.one`, `WalkI.cons2`, `WalkWith.nil'`, `WalkWith.one`, `WalkWith.cons2`:
+  a path with `phi`s, without or with `fmul contract`, from its blocks' obligations and exits;
+  `forall_lt_zero'`, `forall_lt_succ'`: a statement for every number below a literal from each
+  of them (a loop's rounds).
 
 Tests: MojoProofTest/Obl.lean, through mojo_obl.
 -/
@@ -156,6 +178,31 @@ theorem SNode.eval_cast {V : Valuation} {vs : List (Except Fault Val)} {op : Cas
   subst h
   simp only [SNode.eval, ha]
   rfl
+
+/-- `add` without `nuw` and `nsw` of the words of `a` and `b` is the word of `a + b` (modulo
+`2 ^ w`), for every width and all such flags: nothing makes it poison. -/
+theorem intBin_add_wrap {w a b : Nat} {fl : IntFlags} (hu : fl.nuw = false)
+    (hs : fl.nsw = false) :
+    intBin w .add fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w (a + b))) := by
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hu, hs, Bool.false_and,
+    Bool.or_false, BitVec.ofNat_add_ofNat]
+  rfl
+
+/-- `mul` without `nuw` and `nsw` of the words of `a` and `b` is the word of `a b` (modulo
+`2 ^ w`), for every width and all such flags: nothing makes it poison. -/
+theorem intBin_mul_wrap {w a b : Nat} {fl : IntFlags} (hu : fl.nuw = false)
+    (hs : fl.nsw = false) :
+    intBin w .mul fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w (a * b))) := by
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hu, hs, Bool.false_and,
+    Bool.or_false, BitVec.ofNat_mul_ofNat]
+  rfl
+
+/-- `sext` to width `w` of every word `b` is its sign extension `b.signExtend w`, for all
+widths. -/
+theorem intCast_sext_bits {w w' : Nat} (b : BitVec w') :
+    intCast .sext w (.bits w' b) = .ok (.bits w (b.signExtend w)) := rfl
 
 /-- An `extractvalue` node is what `extractV` gives of its operand's value, for every valuation,
 indices, node values and result. -/
@@ -319,31 +366,58 @@ theorem Exit.target_cond {V : Valuation} {vs : List (Except Fault Val)} {c : SVa
 
 /-! ## Buffers -/
 
-/-- The generic address of offset `o < size` in a buffer that fits is its base `g` plus `o`, for
-every layout, memory, buffer and offset; `g + size ≤ 2 ^ (l.ptr 0).1` (the generic pointer width)
-and `al ∣ g`. -/
-theorem addr_buffer {l : Layout} {m : Mem} {c size al o : Nat} {w : Bool}
-    (hB : m.Buffer c size al w)
-    (hF : ∃ blk, m.blocks c = some blk ∧ blk.gaddr + size ≤ 2 ^ (l.ptr 0).1) (ho : o < size) :
-    ∃ g, m.addr l 0 ⟨c, (o : Int)⟩ = .ok (g + o) ∧ g + size ≤ 2 ^ (l.ptr 0).1 ∧ al ∣ g := by
-  obtain ⟨blk, hb, hsp, -, -, -, -, -, hga⟩ := hB
+/-- **A buffer of address space `s`**: block `c` of `m` is live, in address space `s`, owned by
+`o`, writable exactly if `w`, of at least `size` bytes, at addresses in its space and in the
+generic space that `al` divides. `Mem.Buffer` is the case of a global buffer (space 1, owned by
+every thread, `Mem.Buffer.bufferIn`); the semantics also makes blocks in shared memory (space 3,
+owned by a block of threads: `shared`) and `alloca` blocks (space `l.allocaSpace`, owned by one
+thread). -/
+def _root_.MojoProof.Sem.Mem.BufferIn (m : Mem) (s c size al : Nat) (o : Owner) (w : Bool) :
+    Prop :=
+  ∃ blk, m.blocks c = some blk ∧ blk.space = s ∧ blk.live = true ∧ blk.owner = o ∧
+    blk.readOnly = !w ∧ size ≤ blk.size ∧ al ∣ blk.addr ∧ al ∣ blk.gaddr
+
+/-- A global buffer is a buffer of address space 1 owned by every thread: for every memory,
+block, size, alignment and writability, `m.Buffer c size al w` gives
+`m.BufferIn 1 c size al .all w`. -/
+theorem _root_.MojoProof.Sem.Mem.Buffer.bufferIn {m : Mem} {c size al : Nat} {w : Bool}
+    (h : m.Buffer c size al w) : m.BufferIn 1 c size al .all w := h
+
+/-- The address of offset `o < size` in a buffer of address space `s` that fits, through a
+pointer of address space `a`, the generic space 0 or the buffer's own space `s`, is its base `g`
+plus `o`, for every layout, memory, space, owner, buffer and offset: the base is the block's
+address `addr` in space `s` and, for a buffer of a space `s ≠ 0`, its generic address `gaddr` in
+space 0 (`Mem.addr`); `g + size ≤ 2 ^ (l.ptr a).1` (the space's pointer width) and `al ∣ g`. In
+space 0 of a buffer of another space, `hF` is `m.Fits l c size` (`Mem.Fits`). -/
+theorem addr_buffer {l : Layout} {m : Mem} {s a c size al o : Nat} {ow : Owner} {w : Bool}
+    (hB : m.BufferIn s c size al ow w) (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1) (ho : o < size) :
+    ∃ g, m.addr l a ⟨c, (o : Int)⟩ = .ok (g + o) ∧ g + size ≤ 2 ^ (l.ptr a).1 ∧ al ∣ g := by
+  obtain ⟨blk, hb, hsp, -, -, -, -, haa, hga⟩ := hB
   obtain ⟨blk', hb', hg⟩ := hF
   rw [hb] at hb'
   cases hb'
-  have hlt : blk.gaddr + o < 2 ^ (l.ptr 0).1 := by omega
+  subst hsp
+  have hor : a = blk.space ∨ a = 0 := ha.symm
+  have hGd : al ∣ (if a = blk.space then blk.addr else blk.gaddr) := by
+    split
+    · exact haa
+    · exact hga
+  generalize hb1 : (if a = blk.space then blk.addr else blk.gaddr) = G at hg hGd
+  have hlt : G + o < 2 ^ (l.ptr a).1 := by omega
   by_cases h0 : c = 0
   · subst h0
     refine ⟨0, ?_, by omega, Nat.dvd_zero al⟩
-    have h1 : ((o : Int) % 2 ^ (l.ptr 0).1) = o :=
-      Int.emod_eq_of_lt (by omega) (by exact_mod_cast (show o < 2 ^ (l.ptr 0).1 by omega))
+    have h1 : ((o : Int) % 2 ^ (l.ptr a).1) = o :=
+      Int.emod_eq_of_lt (by omega) (by exact_mod_cast (show o < 2 ^ (l.ptr a).1 by omega))
     simp only [Mem.addr, ite_true, h1, Int.toNat_natCast, Nat.zero_add]
     rfl
-  · refine ⟨blk.gaddr, ?_, hg, hga⟩
-    have h1 : (((blk.gaddr : Int) + o) % 2 ^ (l.ptr 0).1) = ((blk.gaddr + o : Nat) : Int) := by
+  · refine ⟨G, ?_, hg, hGd⟩
+    have h1 : (((G : Int) + o) % 2 ^ (l.ptr a).1) = ((G + o : Nat) : Int) := by
       rw [Int.emod_eq_of_lt (by omega) (by exact_mod_cast hlt)]
       push_cast; rfl
-    simp only [Mem.addr, h0, ite_false, Mem.block, hb, hsp]
-    simp only [show ¬ (0 = 1) from by decide, ite_false, or_true, ite_true, h1, Int.toNat_natCast]
+    simp only [Mem.addr, h0, ite_false, Mem.block, hb, hb1, hor, ite_true, h1, Int.toNat_natCast]
     rfl
 
 /-- Two memories with the same blocks give every pointer the same address. -/
@@ -352,38 +426,41 @@ theorem Mem.addr_blocks {l : Layout} {M m : Mem} (h : M.blocks = m.blocks) (a : 
   simp only [Mem.addr, Mem.block, h]
 
 /-- **A `getelementptr` into a buffer.** For every layout, memories with the same blocks, flags,
-element type `src`, buffer `c` of `size` bytes that fits, width `w` and index `K` with
-`K * l.size src < size`, `w ≤ (l.ptr 0).1` (the generic pointer width), `2 * K < 2 ^ w` and
-`2 * (K * l.size src) < 2 ^ (l.ptr 0).1`: the `gep` in memory `M`, address space 0, from
-`⟨c, 0⟩` by the `w`-bit word `K` is the pointer `⟨c, K * l.size src⟩`. -/
-theorem gep_buffer {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty} {c size al K w : Nat}
-    {wr : Bool} (hMb : M.blocks = m.blocks) (hB : m.Buffer c size al wr)
-    (hF : ∃ blk, m.blocks c = some blk ∧ blk.gaddr + size ≤ 2 ^ (l.ptr 0).1)
-    (hw : w ≤ (l.ptr 0).1) (hK : 2 * K < 2 ^ w) (hs : 2 * (K * l.size src) < 2 ^ (l.ptr 0).1)
+element type `src`, address space `a` (the generic space 0 or the buffer's space `s`), buffer `c`
+of space `s`, any owner and `size` bytes that fits in space `a` (`addr_buffer`), width `w` and
+index `K` with `K * l.size src < size`, `w ≤ (l.ptr a).1` (the space's pointer width),
+`2 * K < 2 ^ w` and `2 * (K * l.size src) < 2 ^ (l.ptr a).1`: the `gep` in memory `M`, address
+space `a`, from `⟨c, 0⟩` by the `w`-bit word `K` is the pointer `⟨c, K * l.size src⟩`. -/
+theorem gep_buffer {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty} {s a c size al K w : Nat}
+    {ow : Owner} {wr : Bool} (hMb : M.blocks = m.blocks) (hB : m.BufferIn s c size al ow wr)
+    (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1)
+    (hw : w ≤ (l.ptr a).1) (hK : 2 * K < 2 ^ w) (hs : 2 * (K * l.size src) < 2 ^ (l.ptr a).1)
     (hin : K * l.size src < size) :
-    gep l M fl src 0 [.bits w (BitVec.ofNat w K)] (.ptr ⟨c, 0⟩) =
+    gep l M fl src a [.bits w (BitVec.ofNat w K)] (.ptr ⟨c, 0⟩) =
       .ok (.ptr ⟨c, ((K * l.size src : Nat) : Int)⟩) := by
-  obtain ⟨g, hg, hgs, -⟩ := addr_buffer (o := 0) hB hF (by omega)
+  obtain ⟨g, hg, hgs, -⟩ := addr_buffer (o := 0) hB ha hF (by omega)
   obtain ⟨blk, hb, -, -, -, -, hsz, -, -⟩ := hB
-  have hA : M.addr l 0 ⟨c, 0⟩ = .ok g := by rw [Mem.addr_blocks hMb]; simpa using hg
+  have hA : M.addr l a ⟨c, 0⟩ = .ok g := by rw [Mem.addr_blocks hMb]; simpa using hg
   have hti : (BitVec.ofNat w K).toInt = K := BitVec.toInt_ofNat_of_lt hK
   have htn : (BitVec.ofNat w K).toNat = K := by
     rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega)]
   have hMB : M.block ⟨c, 0⟩ = some blk := by simp [Mem.block, hMb, hb]
-  have hpow : (2 : Int) ^ (l.ptr 0).1 = ((2 ^ (l.ptr 0).1 : Nat) : Int) := by push_cast; rfl
-  have hout : outS (l.ptr 0).1 ((K * l.size src : Nat) : Int) = false := outS_of_lt hs
-  have hbm : Int.bmod ((K * l.size src : Nat) : Int) (2 ^ (l.ptr 0).1) =
+  have hpow : (2 : Int) ^ (l.ptr a).1 = ((2 ^ (l.ptr a).1 : Nat) : Int) := by push_cast; rfl
+  have hout : outS (l.ptr a).1 ((K * l.size src : Nat) : Int) = false := outS_of_lt hs
+  have hbm : Int.bmod ((K * l.size src : Nat) : Int) (2 ^ (l.ptr a).1) =
       ((K * l.size src : Nat) : Int) := by
-    generalize hWd : 2 ^ (l.ptr 0).1 = W at hs
+    generalize hWd : 2 ^ (l.ptr a).1 = W at hs
     have hx0 : (0 : Int) ≤ ((K * l.size src : Nat) : Int) := by omega
     have hxW : ((K * l.size src : Nat) : Int) < (W : Int) := by omega
     rw [Int.bmod_def, Int.emod_eq_of_lt hx0 hxW, ite_eq_left (by omega)]
-  have hKW : K < 2 ^ (l.ptr 0).1 := by
+  have hKW : K < 2 ^ (l.ptr a).1 := by
     have := Nat.pow_le_pow_right (by decide : 0 < 2) hw
     omega
-  have hgK : ¬ ((g : Int) + ((K * l.size src : Nat) : Int) ≥ 2 ^ (l.ptr 0).1) := by
+  have hgK : ¬ ((g : Int) + ((K * l.size src : Nat) : Int) ≥ 2 ^ (l.ptr a).1) := by
     rw [hpow]; omega
-  have hgK' : ¬ (((K * l.size src : Nat) : Int) ≥ 2 ^ (l.ptr 0).1) := by
+  have hgK' : ¬ (((K * l.size src : Nat) : Int) ≥ 2 ^ (l.ptr a).1) := by
     rw [hpow]; omega
   have hsz' : ¬ (((K * l.size src : Nat) : Int) > blk.size) := by omega
   simp [gep, gepPtr, hw, hti, htn, hA, hMB, gepSteps, gepSteps.into, bind, Except.bind,
@@ -398,65 +475,133 @@ theorem gep_buffer {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty} {c size a
     all_goals first | omega | (rw [hout] at h; cases h)
   · rfl
 
+/-- **A `getelementptr` into a buffer by any word evaluates.** For every layout, memories with
+the same blocks, flags, element type `src`, address space `a` (the generic space 0 or the
+buffer's space `s`), buffer `c` of space `s` of any owner, size and alignment, width `w` and
+word `x`: the `gep` in memory `M`, address space `a`, from `⟨c, 0⟩` by `x` is some value (a
+pointer, or poison when an `inbounds` or no-wrap condition fails), not a fault. -/
+theorem gep_buffer_ok {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty} {s a c size al w : Nat}
+    {ow : Owner} {wr : Bool} {x : BitVec w} (hMb : M.blocks = m.blocks)
+    (hB : m.BufferIn s c size al ow wr) (ha : a = 0 ∨ a = s) :
+    ∃ v, gep l M fl src a [.bits w x] (.ptr ⟨c, 0⟩) = .ok v := by
+  obtain ⟨blk, hb, hsp, -⟩ := hB
+  obtain ⟨g, hA⟩ : ∃ g, M.addr l a ⟨c, 0⟩ = .ok g := by
+    have ha' : a = blk.space ∨ a = 0 := by rw [hsp]; exact ha.symm
+    simp only [Mem.addr, Mem.block, hMb, hb, ha', ite_true]
+    split <;> exact ⟨_, rfl⟩
+  simp only [gep, gepPtr]
+  simp [hA, gepSteps, gepSteps.into, bind, Except.bind, pure, Except.pure]
+  exact ⟨_, (apply_ite (Except.ok (ε := Fault)) _ _ _).symm⟩
+
+/-- The row-major index of the coordinate of a tensor of no dimension is 0. -/
+theorem linearize_nil_val : (TorchLean.Shape.Coord.linearize (s := []) ()).val = 0 := by
+  have := (TorchLean.Shape.Coord.linearize (s := []) ()).isLt
+  simp [TorchLean.Shape.size] at this
+  omega
 
 /-- The row-major offset of element `K` of a one-dimensional tensor is `K` elements. -/
 theorem rowMajor_one {l : Layout} {t : Ty} {N K : Nat} (hK : K < N) :
     rowMajor (s := [N]) l t 0 (⟨K, hK⟩, ()) = K * l.size t := by
-  have h0 : (TorchLean.Shape.Coord.linearize (s := []) ()).val = 0 := by
-    have := (TorchLean.Shape.Coord.linearize (s := []) ()).isLt
-    simp [TorchLean.Shape.size] at this
-    omega
   have h1 := TorchLean.Shape.Coord.linearize_cons_val (n := N) (s := []) ⟨K, hK⟩ ()
   unfold rowMajor
-  erw [h1, h0]
+  erw [h1, linearize_nil_val]
   simp [TorchLean.Shape.size]
 
-/-- **A load from a buffer holding a tensor.** For every layout, memories with the same blocks,
-buffer `c` of `size` bytes that fits and holds the 1-D tensor `x` row-major, alignment `A`
-dividing the buffer's and the element size, and element `K < N` within the buffer: the load of
-element `K` gives `x K`, for every thread. -/
-theorem load_buffer {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
-    {c size al A K N : Nat} {wr : Bool} {t : Ty} {enc : α → Val} {x : TorchLean.Tensor α [N]}
-    {who : Who} (hMb : M.blocks = m.blocks) (hB : m.Buffer c size al wr)
-    (hF : ∃ blk, m.blocks c = some blk ∧ blk.gaddr + size ≤ 2 ^ (l.ptr 0).1)
-    (hH : m.Holds l c t enc (rowMajor l t 0) x) (hA : A ∣ al)
-    (hAs : A ∣ l.size t) (hK : K < N) (hin : K * l.size t < size) :
-    M.load l who 0 t ⟨c, ((K * l.size t : Nat) : Int)⟩ (some A) = .ok (enc (x (⟨K, hK⟩, ()))) := by
-  obtain ⟨g, hg, -, hga⟩ := addr_buffer hB hF hin
+/-- The row-major offset of element `(r, k)` of an `R × S` tensor is `r * S + k` elements. -/
+theorem rowMajor_two0 {l : Layout} {t : Ty} {R S r k : Nat} (hr : r < R) (hk : k < S) :
+    rowMajor (s := [R, S]) l t 0 (⟨r, hr⟩, ⟨k, hk⟩, ()) = (r * S + k) * l.size t := by
+  have h1 := TorchLean.Shape.Coord.linearize_cons_val (n := R) (s := [S]) ⟨r, hr⟩ (⟨k, hk⟩, ())
+  have h2 := TorchLean.Shape.Coord.linearize_cons_val (n := S) (s := []) ⟨k, hk⟩ ()
+  unfold rowMajor
+  erw [h1, h2, linearize_nil_val]
+  simp [TorchLean.Shape.size, Nat.mul_comm, Nat.add_comm]
+
+/-- **A load from a buffer holding a tensor, at a coordinate.** For every layout, memories with
+the same blocks, address space `a` (the generic space 0 or the buffer's space `s`), buffer `c` of
+space `s` and `size` bytes that fits in space `a` (`addr_buffer`), whose owner `ow` admits thread
+`who`, and holds the tensor `x` of any shape row-major, alignment `A` dividing the buffer's and
+the element size, and coordinate `i` at row-major offset `K` elements within the buffer: the load
+at offset `K` by `who` through a pointer of space `a` gives `x i`. -/
+theorem load_buffer_at {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
+    {s a c size al A K : Nat} {ow : Owner} {wr : Bool} {t : Ty} {enc : α → Val}
+    {sh : TorchLean.Shape} {x : TorchLean.Tensor α sh} {who : Who} (hMb : M.blocks = m.blocks)
+    (hB : m.BufferIn s c size al ow wr) (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1) (hw : ow.admits who = true)
+    (hH : m.Holds l c t enc (rowMajor l t 0) x) (hA : A ∣ al) (hAs : A ∣ l.size t)
+    (i : TorchLean.Shape.Coord sh) (hi : rowMajor l t 0 i = K * l.size t)
+    (hin : K * l.size t < size) :
+    M.load l who a t ⟨c, ((K * l.size t : Nat) : Int)⟩ (some A) = .ok (enc (x i)) := by
+  obtain ⟨g, hg, -, hga⟩ := addr_buffer hB ha hF hin
   obtain ⟨blk, hb, -, hl, ho, -, -, -, -⟩ := hB
   obtain ⟨blk', hb', hh⟩ := hH
   rw [hb] at hb'
   cases hb'
-  have hb2 : M.blocks c = some blk := by rw [hMb]; exact hb
-  have e := rowMajor_one (l := l) (t := t) hK
-  have := Mem.load_holds (l := l) (w := who) (a := 0) (al := some A) hb2 hh hl (by rw [ho]; rfl)
-    (⟨K, hK⟩, ()) (ad := g + K * l.size t) (by rw [e, Mem.addr_blocks hMb]; exact hg)
-    (by
-      intro k hk
+  have := Mem.load_holds (l := l) (w := who) (a := a) (al := some A) (by rw [hMb]; exact hb) hh hl
+    (by rw [ho]; exact hw) i (ad := g + K * l.size t) (by rw [hi, Mem.addr_blocks hMb]; exact hg)
+    (fun k hk => by
       cases hk
       exact Nat.mod_eq_zero_of_dvd
         (Nat.dvd_add (Nat.dvd_trans hA hga) (Nat.dvd_mul_left_of_dvd hAs K)))
-  rw [e] at this
-  exact this
+  rwa [hi] at this
 
-/-- **A store into a writable buffer.** For every layout, memories with the same blocks, writable
-buffer `c` of `size` bytes that fits, alignment `A` dividing the buffer's and the element size,
-value `v` the layout encodes, and element `K` within the buffer: the store of `v` at element `K`
-succeeds, for every thread. -/
-theorem store_buffer {l : Layout} {M m : Mem} {c size al A K : Nat} {t : Ty} {v : Val} {who : Who}
-    (hMb : M.blocks = m.blocks) (hB : m.Buffer c size al true)
-    (hF : ∃ blk, m.blocks c = some blk ∧ blk.gaddr + size ≤ 2 ^ (l.ptr 0).1)
+/-- **A load from a buffer holding a tensor.** For every layout, memories with the same blocks,
+address space `a` (the generic space 0 or the buffer's space `s`), buffer `c` of space `s` and
+`size` bytes that fits in space `a` (`addr_buffer`), whose owner `ow` admits thread `who`, and
+holds the 1-D tensor `x` row-major, alignment `A` dividing the buffer's and the element size, and
+element `K < N` within the buffer: the load of element `K` by `who` through a pointer of space `a`
+gives `x K`. -/
+theorem load_buffer {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
+    {s a c size al A K N : Nat} {ow : Owner} {wr : Bool} {t : Ty} {enc : α → Val}
+    {x : TorchLean.Tensor α [N]} {who : Who} (hMb : M.blocks = m.blocks)
+    (hB : m.BufferIn s c size al ow wr) (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1) (hw : ow.admits who = true)
+    (hH : m.Holds l c t enc (rowMajor l t 0) x) (hA : A ∣ al)
+    (hAs : A ∣ l.size t) (hK : K < N) (hin : K * l.size t < size) :
+    M.load l who a t ⟨c, ((K * l.size t : Nat) : Int)⟩ (some A) = .ok (enc (x (⟨K, hK⟩, ()))) :=
+  load_buffer_at hMb hB ha hF hw hH hA hAs _ (rowMajor_one hK) hin
+
+/-- **A load from a buffer holding a matrix.** `load_buffer` for the `R × S` tensor `x`: for
+every layout, memories with the same blocks, address space `a` (the generic space 0 or the
+buffer's space `s`), buffer `c` of space `s` and `size` bytes that fits in space `a`, whose owner
+`ow` admits thread `who`, and holds `x` row-major, alignment `A` dividing the buffer's and the
+element size, and element `(r, k)` with `r < R`, `k < S` within the buffer: the load at offset
+`r * S + k` elements by `who` through a pointer of space `a` gives `x (r, k)`. -/
+theorem load_buffer2 {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
+    {s a c size al A R S r k : Nat} {ow : Owner} {wr : Bool} {t : Ty} {enc : α → Val}
+    {x : TorchLean.Tensor α [R, S]} {who : Who} (hMb : M.blocks = m.blocks)
+    (hB : m.BufferIn s c size al ow wr) (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1) (hw : ow.admits who = true)
+    (hH : m.Holds l c t enc (rowMajor l t 0) x) (hA : A ∣ al)
+    (hAs : A ∣ l.size t) (hr : r < R) (hk : k < S) (hin : (r * S + k) * l.size t < size) :
+    M.load l who a t ⟨c, (((r * S + k) * l.size t : Nat) : Int)⟩ (some A) =
+      .ok (enc (x (⟨r, hr⟩, ⟨k, hk⟩, ()))) :=
+  load_buffer_at hMb hB ha hF hw hH hA hAs _ (rowMajor_two0 hr hk) hin
+
+/-- **A store into a writable buffer.** For every layout, memories with the same blocks, address
+space `a` (the generic space 0 or the buffer's space `s`), writable buffer `c` of space `s` and
+`size` bytes that fits in space `a` (`addr_buffer`), whose owner `ow` admits thread `who`,
+alignment `A` dividing the buffer's and the element size, value `v` the layout encodes, and
+element `K` within the buffer: the store of `v` by `who` at element `K` through a pointer of
+space `a` succeeds. -/
+theorem store_buffer {l : Layout} {M m : Mem} {s a c size al A K : Nat} {ow : Owner} {t : Ty}
+    {v : Val} {who : Who} (hMb : M.blocks = m.blocks) (hB : m.BufferIn s c size al ow true)
+    (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1) (hw : ow.admits who = true)
     (hA : A ∣ al) (hAs : A ∣ l.size t) (he : (l.encode t v).isSome = true)
     (hin : K * l.size t < size) (hin' : K * l.size t + l.size t ≤ size) :
-    ∃ M', M.store l who 0 t v ⟨c, ((K * l.size t : Nat) : Int)⟩ (some A) = .ok M' := by
+    ∃ M', M.store l who a t v ⟨c, ((K * l.size t : Nat) : Int)⟩ (some A) = .ok M' := by
   obtain ⟨bs, he⟩ := Option.isSome_iff_exists.1 he
-  obtain ⟨g, hg, -, hga⟩ := addr_buffer hB hF hin
+  obtain ⟨g, hg, -, hga⟩ := addr_buffer hB ha hF hin
   obtain ⟨blk, hb, -, hl, ho, hro, hsz, -, -⟩ := hB
   have hlen := Layout.encode_length l t v bs he
   have hst := Layout.stored_le_size l t
   have hb2 : M.blocks c = some blk := by rw [hMb]; exact hb
-  have hc := Mem.check_ok (l := l) (w := who) (a := 0) (n := bs.length) (al := some A)
-    (p := ⟨c, ((K * l.size t : Nat) : Int)⟩) hb2 hl (by rw [ho]; rfl) (Int.natCast_nonneg _)
+  have hc := Mem.check_ok (l := l) (w := who) (a := a) (n := bs.length) (al := some A)
+    (p := ⟨c, ((K * l.size t : Nat) : Int)⟩) hb2 hl (by rw [ho]; exact hw) (Int.natCast_nonneg _)
     (by simp only; omega) (by rw [Mem.addr_blocks hMb]; exact hg)
     (by
       intro k hk
@@ -651,6 +796,13 @@ theorem SNode.eval_fbin_ofFloat {V : Valuation} {vs : List (Except Fault Val)} {
   simp only [SNode.eval, ha, hb, bind, Except.bind, hpa, hpb, laneOf, Option.map_none]
   exact floatBin_ofFloat hf hc hn hi u u' _
 
+/-- **A float constant node** is its literal's value: for every valuation `V`, node values `vs`,
+float type `ft`, literal `lit` and result `r`, if `floatLit ft lit = r` then the node
+`SNode.flit ft lit` evaluates to `r` (it has no operand and reads no memory). -/
+theorem SNode.eval_flit {V : Valuation} {vs : List (Except Fault Val)} {ft : FloatTy}
+    {lit : FloatLit} {r : Except Fault Val} (h : floatLit ft lit = r) :
+    (SNode.flit ft lit).eval V vs = r := h
+
 /-! ## Exits and comparisons -/
 
 /-- An unconditional branch goes to its label. -/
@@ -702,6 +854,92 @@ theorem SNode.eval_icmp_ult_ofNat {V : Valuation} {vs : List (Except Fault Val)}
     (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) (hx : x < 2 ^ w) (hy : y < 2 ^ w) :
     (SNode.icmp .ult w a b).eval V vs = .ok (.ofBool (decide (x < y))) := by
   rw [SNode.eval_icmp ha hb, ICmp.ult_ofNat hx hy]
+
+/-- `icmp eq` of the words of `a` and `b` below `2 ^ w` is `a = b`. -/
+theorem ICmp.eq_ofNat {w a b : Nat} (ha : a < 2 ^ w) (hb : b < 2 ^ w) :
+    ICmp.eq.holds (BitVec.ofNat w a) (BitVec.ofNat w b) = decide (a = b) := by
+  have e : (BitVec.ofNat w a = BitVec.ofNat w b) ↔ a = b := by
+    rw [BitVec.toNat_eq, BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha,
+      Nat.mod_eq_of_lt hb]
+  simp only [ICmp.holds]
+  exact Bool.eq_iff_iff.2 (by simp [e])
+
+/-- `icmp sge` of the words of `a` and `b` with `2 a`, `2 b` below `2 ^ w` is `b ≤ a`. -/
+theorem ICmp.sge_ofNat {w a b : Nat} (ha : 2 * a < 2 ^ w) (hb : 2 * b < 2 ^ w) :
+    ICmp.sge.holds (BitVec.ofNat w a) (BitVec.ofNat w b) = decide (b ≤ a) := by
+  simp only [ICmp.holds, BitVec.sle, BitVec.toInt_ofNat_of_lt ha, BitVec.toInt_ofNat_of_lt hb]
+  simp
+
+/-- An `icmp eq` node on the words of `x` and `y` below `2 ^ w` is the boolean `x = y`, for every
+valuation and node values. -/
+theorem SNode.eval_icmp_eq_ofNat {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {a b : SVal} {x y : Nat} (ha : a.eval V vs = .ok (.bits w (BitVec.ofNat w x)))
+    (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) (hx : x < 2 ^ w) (hy : y < 2 ^ w) :
+    (SNode.icmp .eq w a b).eval V vs = .ok (.ofBool (decide (x = y))) := by
+  rw [SNode.eval_icmp ha hb, ICmp.eq_ofNat hx hy]
+
+/-- An `icmp sge` node on the words of `x` and `y`, both with `2 x`, `2 y` below `2 ^ w`, is the
+boolean `y ≤ x`, for every valuation and node values. -/
+theorem SNode.eval_icmp_sge_ofNat {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {a b : SVal} {x y : Nat} (ha : a.eval V vs = .ok (.bits w (BitVec.ofNat w x)))
+    (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) (hx : 2 * x < 2 ^ w)
+    (hy : 2 * y < 2 ^ w) :
+    (SNode.icmp .sge w a b).eval V vs = .ok (.ofBool (decide (y ≤ x))) := by
+  rw [SNode.eval_icmp ha hb, ICmp.sge_ofNat hx hy]
+
+/-! ## Selections, maxima and contracted sums -/
+
+/-- **A `select` node** on the boolean `p` with operands of values `x` and `y` is `x` if `p`,
+else `y`, for every valuation, node values and width. -/
+theorem SNode.eval_select_ofBool {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {c a b : SVal} {p : Bool} {x y : Val} (hc : c.eval V vs = .ok (.ofBool p))
+    (ha : a.eval V vs = .ok x) (hb : b.eval V vs = .ok y) :
+    (SNode.select w c a b).eval V vs = .ok (bif p then x else y) := by
+  simp only [SNode.eval, hc, ha, hb, bind, Except.bind]
+  cases p <;> rfl
+
+/-- A `select` node on a true boolean is its first operand's value (`SNode.eval_select_ofBool`). -/
+theorem SNode.eval_select_true {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {c a b : SVal} {p : Bool} {x y : Val} (hc : c.eval V vs = .ok (.ofBool p)) (hp : p = true)
+    (ha : a.eval V vs = .ok x) (hb : b.eval V vs = .ok y) :
+    (SNode.select w c a b).eval V vs = .ok x := by
+  rw [SNode.eval_select_ofBool hc ha hb, hp]; rfl
+
+/-- A `select` node on a false boolean is its second operand's value
+(`SNode.eval_select_ofBool`). -/
+theorem SNode.eval_select_false {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {c a b : SVal} {p : Bool} {x y : Val} (hc : c.eval V vs = .ok (.ofBool p)) (hp : p = false)
+    (ha : a.eval V vs = .ok x) (hb : b.eval V vs = .ok y) :
+    (SNode.select w c a b).eval V vs = .ok y := by
+  rw [SNode.eval_select_ofBool hc ha hb, hp]; rfl
+
+/-- **An `smax` node** (`llvm.smax`: `SNode.minmax` signed, maximum) on the words of `x` and `y`,
+both with `2 x`, `2 y` below `2 ^ w`, is the word of `max x y`, for every valuation and node
+values. -/
+theorem SNode.eval_smax_ofNat {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {a b : SVal} {x y : Nat} (ha : a.eval V vs = .ok (.bits w (BitVec.ofNat w x)))
+    (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) (hx : 2 * x < 2 ^ w)
+    (hy : 2 * y < 2 ^ w) :
+    (SNode.minmax true true a b).eval V vs = .ok (.bits w (BitVec.ofNat w (max x y))) := by
+  simp only [SNode.eval, ha, hb, bind, Except.bind, intMinMax, strict2]
+  have := ICmp.slt_ofNat hx hy
+  simp only [ICmp.holds] at this
+  simp only [dite_true, BitVec.cast_eq, this]
+  by_cases h : x < y
+  · simp [h, Nat.max_eq_right (Nat.le_of_lt h)]; rfl
+  · simp [h, Nat.max_eq_left (Nat.le_of_not_lt h)]; rfl
+
+/-- **A float operator node with `fmul contract` factors** (`SNode.fbinP`) on operands of values
+`x` and `y` is what `lanes2` gives of them, lane by lane `floatBin` with each operand's factors
+(`SVal.prodsWith`) and the node's oracle number, for every valuation, node values and result
+`r`: the node's definition with its operands' values in it, for the kernel to evaluate. -/
+theorem SNode.eval_fbinP {V : Valuation} {vs : List (Except Fault Val)} {op : FBinOp}
+    {fm : FastMath} {ft : FloatTy} {n : Nat} {a b : SVal} {pa pb : Option (SVal × SVal)}
+    {x y : Val} {r : Except Fault Val} (ha : a.eval V vs = .ok x) (hb : b.eval V vs = .ok y)
+    (h : lanes2 (fun i u v => floatBin ft op fm u v (laneOf (a.prodsWith V vs pa) i)
+      (laneOf (b.prodsWith V vs pb) i) (V.ctx.oracle (Nat.pair (V.k + n) i))) x y = r) :
+    (SNode.fbinP op fm ft n a b pa pb).eval V vs = r := by
+  subst h; simp only [SNode.eval, ha, hb]; rfl
 
 /-! ## Edges into blocks with `phi`s -/
 
@@ -771,6 +1009,24 @@ theorem WalkI.cons2 {V : Valuation} {l l' : Nat} {ds ds' : List Cond} {S S' : Su
     (h3 : WalkI (V.into l S) ((l', ds', S') :: ps)) :
     WalkI V ((l, ds, S) :: (l', ds', S') :: ps) := ⟨h1, h2, h3⟩
 
+/-- The empty path has its premises, with or without `fmul contract` (`WalkWith`). -/
+theorem WalkWith.nil' (c : Bool) (V : Valuation) : WalkWith c V [] := trivial
+
+/-- A path of one block has its premises, with or without `fmul contract` (`WalkWith`), if the
+block's obligations hold. -/
+theorem WalkWith.one {c : Bool} {V : Valuation} {l : Nat} {ds : List Cond} {S : Summary}
+    (h : ∀ d ∈ ds, d.Holds V (vals V S.nodes)) : WalkWith c V [(l, ds, S)] := h
+
+/-- A path of two blocks or more has its premises, with or without `fmul contract`
+(`WalkWith c`), if the first block's obligations hold, its exit goes to the second block's label
+(`Exit.dest`), and the rest has them from the valuation the edge gives
+(`Valuation.intoWith c`). -/
+theorem WalkWith.cons2 {c : Bool} {V : Valuation} {l l' : Nat} {ds ds' : List Cond}
+    {S S' : Summary} {ps : List (Nat × List Cond × Summary)}
+    (h1 : ∀ d ∈ ds, d.Holds V (vals V S.nodes)) (h2 : S.exit.dest V (vals V S.nodes) = some l')
+    (h3 : WalkWith c (V.intoWith c l S) ((l', ds', S') :: ps)) :
+    WalkWith c V ((l, ds, S) :: (l', ds', S') :: ps) := ⟨h1, h2, h3⟩
+
 /-- A predicate holds of every number below 0. -/
 theorem forall_lt_zero' (P : Nat → Prop) : ∀ i < 0, P i := fun _ h => absurd h (Nat.not_lt_zero _)
 
@@ -779,32 +1035,53 @@ theorem forall_lt_succ' {P : Nat → Prop} {n : Nat} (h : ∀ i < n, P i) (hn : 
     ∀ i < n + 1, P i := fun i hi =>
   (Nat.lt_succ_iff_lt_or_eq.1 hi).elim (h i) fun e => e ▸ hn
 
-/-- The memory at the entry of the block an edge goes to is `Valuation.after`'s, for every
-valuation, label and summary. -/
-theorem Valuation.into_mem (V : Valuation) (l : Nat) (S : Summary) :
-    (V.into l S).mem = (V.after S).mem := by
-  unfold Valuation.into
+/-- The memory at the entry of the block an edge goes to, with or without `fmul contract`, is
+`Valuation.afterWith`'s, for every flag, valuation, label and summary. -/
+theorem Valuation.intoWith_mem (c : Bool) (V : Valuation) (l : Nat) (S : Summary) :
+    (V.intoWith c l S).mem = (V.afterWith c S).mem := by
+  unfold Valuation.intoWith
   split
   · split <;> rfl
   · rfl
 
-/-- The registers at the entry of the block a `br` goes to are `Valuation.after`'s. -/
+/-- The memory at the entry of the block an edge goes to is `Valuation.after`'s, for every
+valuation, label and summary (`Valuation.intoWith_mem` without `fmul contract`). -/
+theorem Valuation.into_mem (V : Valuation) (l : Nat) (S : Summary) :
+    (V.into l S).mem = (V.after S).mem :=
+  Valuation.intoWith_mem false V l S
+
+/-- The registers at the entry of the block a `br` goes to, with or without `fmul contract`, are
+`Valuation.afterWith`'s, for every flag, valuation, label, summary and register. -/
+theorem Valuation.intoWith_regs_br {c : Bool} {V : Valuation} {l d r : Nat} {S : Summary}
+    {v : Val} (hx : S.exit = .br d) (h : (V.afterWith c S).regs r = some v) :
+    (V.intoWith c l S).regs r = some v := by
+  rw [(Exit.of_targetWith (l := l) c (V := V) (by rw [hx]; rfl :
+    S.exit.target V (vals V S.nodes) = some d)).2.2]
+  exact h
+
+/-- The registers at the entry of the block a `br` goes to are `Valuation.after`'s
+(`Valuation.intoWith_regs_br` without `fmul contract`). -/
 theorem Valuation.into_regs_br {V : Valuation} {l d r : Nat} {S : Summary} {v : Val}
-    (hx : S.exit = .br d) (h : (V.after S).regs r = some v) : (V.into l S).regs r = some v := by
-  unfold Valuation.into
+    (hx : S.exit = .br d) (h : (V.after S).regs r = some v) : (V.into l S).regs r = some v :=
+  Valuation.intoWith_regs_br (c := false) hx h
+
+/-- The registers at the entry of the block a conditional branch goes to, with or without
+`fmul contract`, are `Valuation.afterWith`'s, for every flag, valuation, label, summary and
+register. -/
+theorem Valuation.intoWith_regs_cond {c : Bool} {V : Valuation} {l d e r : Nat} {x : SVal}
+    {S : Summary} {v : Val} (hx : S.exit = .cond x d e) (h : (V.afterWith c S).regs r = some v) :
+    (V.intoWith c l S).regs r = some v := by
+  unfold Valuation.intoWith
   split
   · rename_i hp _; rw [hx] at hp; cases hp
   · exact h
 
 /-- The registers at the entry of the block a conditional branch goes to are
-`Valuation.after`'s. -/
+`Valuation.after`'s (`Valuation.intoWith_regs_cond` without `fmul contract`). -/
 theorem Valuation.into_regs_cond {V : Valuation} {l d e r : Nat} {c : SVal} {S : Summary}
     {v : Val} (hx : S.exit = .cond c d e) (h : (V.after S).regs r = some v) :
-    (V.into l S).regs r = some v := by
-  unfold Valuation.into
-  split
-  · rename_i hp _; rw [hx] at hp; cases hp
-  · exact h
+    (V.into l S).regs r = some v :=
+  Valuation.intoWith_regs_cond (c := false) hx h
 
 /-- Whether statement `st` is a `phi` (the test `enter` takes the head of a block with). -/
 def isPhi (st : Stmt) : Bool := st.inst matches .phi _ _
@@ -882,7 +1159,7 @@ theorem setRegs_of_forall_ne : ∀ {rs : List (Option Nat)} {xs : List Val}
     have hs : r ≠ s := fun e => h (some s) (by simp) (by rw [e])
     show setRegs rs xs (fun t => if t = s then some x else g t) r = g r
     rw [setRegs_of_forall_ne fun o ho => h o (List.mem_cons_of_mem _ ho)]
-    exact if_neg hs
+    exact ite_eq_right hs
   | none :: _, [], _, _, _ => rfl
   | none :: rs, _ :: xs, g, r, h => by
     show setRegs rs xs g r = g r
@@ -892,6 +1169,12 @@ theorem setRegs_of_forall_ne : ∀ {rs : List (Option Nat)} {xs : List Val}
 theorem evalV_loc {s : Scope} {t : Ty} {r : Nat} {x : Val} (h : s.regs r = some x) :
     evalV s t (.loc r) = .ok x := by
   simp only [evalV, h]; rfl
+
+/-- A float constant at a float type is its literal's value `x` when `floatLit` gives one, for
+every scope. -/
+theorem evalV_float {s : Scope} {ft : FloatTy} {lit : FloatLit} {x : Val}
+    (h : floatLit ft lit = .ok x) : evalV s (.fp ft) (.float lit) = .ok x := by
+  simp only [evalV]; exact h
 
 /-- An integer constant of a natural number at an integer type is its word. -/
 theorem evalV_int_ofNat (s : Scope) (w k : Nat) :
@@ -964,6 +1247,28 @@ theorem enter_of_phiOps {s : Scope} {f : Frame} {d : Nat} {ops : List (Option Na
     exact ⟨_, rfl, by rw [hr]; exact foldl_set_regs _ _ f⟩
   · cases hops
 
+/-- **The registers after an edge into blocks with `phi`s, with or without
+`fmul contract`.** `Valuation.into_regs_phi` from `Valuation.afterWith c` and
+`Valuation.frameAtWith c`: for every flag `c`, valuation `V`, block `l` and summary `S` whose
+exit is a branch into blocks with `phi`s that goes to `d`, when the function is `F` and the
+`phi`s of block `d` of `F` have operands `ops` for the edge from `l` (`phiOps`), with values `xs`
+in the scope of the edge's step (as `Valuation.intoWith c` evaluates them), each register of
+`Valuation.intoWith c` is `Valuation.afterWith c`'s with the `phi`s' registers set to `xs`. -/
+theorem Valuation.intoWith_regs_phi {c : Bool} {V : Valuation} {l : Nat} {S : Summary}
+    {x : SVal} {a b d : Nat} {F : Func} {ops : List (Option Nat × Ty × Value)} {xs : List Val}
+    (hx : S.exit = .phi x a b) (hd : S.exit.dest V (vals V S.nodes) = some d) (hF : V.fn = F)
+    (hops : phiOps F l d = some ops)
+    (hxs : evalOps (V.ctx.scope (V.afterWith c S).mem (V.frameAtWith c l S) (V.k + S.len)) ops =
+      .ok xs) (r : Nat) :
+    (V.intoWith c l S).regs r = setRegs (ops.map (·.1)) xs (V.afterWith c S).regs r := by
+  have hops' : phiOps (V.frameAtWith c l S).fn (V.frameAtWith c l S).label d = some ops := by
+    simp only [Valuation.frameAtWith]; rw [hF]; exact hops
+  obtain ⟨f', he, hr⟩ := enter_of_phiOps hops' hxs
+  have : V.intoWith c l S = { V.afterWith c S with regs := f'.regs, prods := f'.prods } := by
+    rw [Valuation.intoWith, hd]; simp only [hx, he]
+  rw [this]
+  exact congrFun hr r
+
 /-- **The registers after an edge into blocks with `phi`s.** For every valuation `V`, block `l`
 and summary `S` whose exit is a branch into blocks with `phi`s that goes to `d` (`Exit.dest`):
 when the function is `F` and the `phi`s of block `d` of `F` have operands `ops` for the edge from
@@ -975,13 +1280,7 @@ theorem Valuation.into_regs_phi {V : Valuation} {l : Nat} {S : Summary} {x : SVa
     (hx : S.exit = .phi x a b) (hd : S.exit.dest V (vals V S.nodes) = some d) (hF : V.fn = F)
     (hops : phiOps F l d = some ops)
     (hxs : evalOps (V.ctx.scope (V.after S).mem (V.frameAt l S) (V.k + S.len)) ops = .ok xs)
-    (r : Nat) : (V.into l S).regs r = setRegs (ops.map (·.1)) xs (V.after S).regs r := by
-  have hops' : phiOps (V.frameAt l S).fn (V.frameAt l S).label d = some ops := by
-    simp only [Valuation.frameAt]; rw [hF]; exact hops
-  obtain ⟨f', he, hr⟩ := enter_of_phiOps hops' hxs
-  have : V.into l S = { V.after S with regs := f'.regs, prods := f'.prods } := by
-    rw [Valuation.into, hd]; simp only [hx, he]
-  rw [this]
-  exact congrFun hr r
+    (r : Nat) : (V.into l S).regs r = setRegs (ops.map (·.1)) xs (V.after S).regs r :=
+  Valuation.intoWith_regs_phi (c := false) hx hd hF hops hxs r
 
 end MojoProof.Sym

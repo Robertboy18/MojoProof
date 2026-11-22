@@ -8,16 +8,18 @@ that `S` is the summary of block `lbl` of function `fn` of program `P` from posi
 that its obligations come first in the conditions `ds`.
 
 `summarize P fn lbl p0` runs block `lbl` of `fn` symbolically from position `p0` (the position
-after the block's `phi`s): each statement that defines a value appends one node to the node
-table (`SNode`, MojoProof/Sym/Term.lean) whose operands are the registers' entries in the table
-(`SState.op`: an earlier node, an entry register or a constant), sets its register to the new
-node, and adds the obligation that the node evaluates without a fault (`SState.def`); a `load`
-and a `store` also add their memory effect; the terminator gives the exit (`Exit`: a branch,
-with the obligation that a conditional branch's condition evaluates to a word, or `ret void`;
-`SState.exitAt`).
+after the block's `phi`s) from a table that holds one node per distinct float constant operand
+of the block (`SState.start`, `litNodes`: `SNode.flit`, whose value is Sem's `floatLit` of the
+literal): each statement that defines a value appends one node to the node table (`SNode`,
+MojoProof/Sym/Term.lean) whose operands are the registers' entries in the table (`SState.op`: an
+earlier node, an entry register, an integer constant or a float constant's node), sets its
+register to the new node, and adds the obligation that the node evaluates without a fault
+(`SState.def`); a `load` and a `store` also add their memory effect; the terminator gives the
+exit (`Exit`: a branch, with the obligation that a conditional branch's condition evaluates to a
+word, or `ret void`; `SState.exitAt`).
 The summary (`Summary`) is the table, the registers' entries, the effects, the obligations, the
 exit and the number of statements run (`Summary.len`, from `p0` to the terminator); its size is
-linear in the block's (one node per statement, operands by index).
+linear in the block's (one node per float constant and per statement, operands by index).
 `covers` holds when `summarize` gives the summary `S` and the obligations of `S` are the first
 conditions of `ds` (`List.isPrefixOf`: a check by position, linear).
 
@@ -29,20 +31,22 @@ names `sreg r d`, with no arguments and no fast-math flags, whose attributes `Fu
 accepts: node `SNode.call`), and calls of an integer maximum or minimum (a declaration that
 `P.intrinsics` names `minmax signed max t`, with two arguments, no fast-math flags and no
 parameter, return or call-site attributes, whose attributes `Func.check` accepts: node
-`SNode.minmax`), with operands that are registers or integer constants; `load`,
-`getelementptr`, `icmp` and special-register calls only before the block's first `store` (they
-read the entry memory); terminators `br`, `br i1`
-and `ret void`. A branch to blocks that start with `phi`s is `Exit.phi`: for each target, each
-`phi`'s incoming operand from this block must be a register or an integer constant (a float
-constant is refused: the kernel does not reduce `floatLit`), and its obligation is that the
-operand evaluates (`SState.phiConds`). Anything else (other calls among them) makes `summarize`
-fail. `summarize` and `covers` are `summarizeWith` and `coversWith` with the exit function
-`SState.exitAt`; `coversTo P fn lbl p0 d₀` is `coversWith` with `SState.exitTo`, whose `br i1`
-into blocks with `phi`s has the obligations of its edge into block `d₀` only, so a `phi`
-operand of the other edge that is outside the fragment or faults does not refuse the block.
+`SNode.minmax`), with operands that are registers, integer constants or float constants;
+`load`, `getelementptr`, `icmp` and special-register calls only before the block's first `store`
+(they read the entry memory); terminators `br`, `br i1` and `ret void`. A branch to blocks that
+start with `phi`s is `Exit.phi`: for each target, each `phi`'s incoming operand from this block
+must be a register, an integer constant or a float constant, and its obligation is that the
+operand evaluates (`SState.phiConds`; a float constant's obligation is that its node evaluates,
+which `decide` checks only when the kernel reduces `floatLit` of the literal). Anything else
+(other calls among them) makes `summarize` fail. `summarize` and `covers` are `summarizeWith`
+and `coversWith` with the exit function `SState.exitAt`; `coversTo P fn lbl p0 d₀` is
+`coversWith` with `SState.exitTo`, whose `br i1` into blocks with `phi`s has the obligations of
+its edge into block `d₀` only, so a `phi` operand of the other edge that is outside the fragment
+or faults does not refuse the block.
 
 This module holds the checker's definitions, which the kernel evaluates; MojoProof/Sym/Block.lean
-proves them sound (`Block.sound`, `Block.sound_to`, and along paths `Block.sound_pathI`).
+proves them sound (`Block.sound`, `Block.sound_to`), and MojoProof/Sym/Path.lean along paths
+(`Block.sound_pathI`).
 -/
 
 namespace MojoProof.Sym
@@ -97,10 +101,14 @@ def SState.init : SState := ⟨[], [], [], [], false⟩
 /-- The entry of register `r`: its node, or the register at the block entry. -/
 def SState.get (σ : SState) (r : Nat) : SVal := (σ.regs.lookup r).getD (.reg r)
 
-/-- The entry of operand `a` of type `t`: a register's or an integer constant. -/
+/-- The entry of operand `a` of type `t`: a register's, an integer constant, or for a float
+constant `lit` of float type `ft` the first node `SNode.flit ft lit` of the table (`none` when the
+table has none; `summarizeWith` starts from a table that holds one per float constant operand of
+the block, `SState.start`). -/
 def SState.op (σ : SState) : Ty → Value → Option SVal
   | _, .loc r => some (σ.get r)
   | .int w, .int i => some (.int w i)
+  | .fp ft, .float lit => (σ.nodes.findIdx? (· == .flit ft lit)).map .node
   | _, _ => none
 
 /-- Node `nd` appended to the table, register `res` (if any) set to it, with the obligation that
@@ -225,6 +233,44 @@ def phiCount (fn : Func) (d : Nat) : Nat :=
   | some b => (b.stmts.toList.takeWhile (·.inst matches .phi _ _)).length
   | none => 0
 
+/-- The float constant node of typed operand `a`: `SNode.flit ft lit` for the float constant
+`lit` at float type `ft`, else `none`. -/
+def SNode.litOf : TValue → Option SNode
+  | .mk (.fp ft) (.float lit) => some (.flit ft lit)
+  | _ => none
+
+/-- The typed operands for block `lbl` of the `phi`s at the head of block `d` of `fn` (empty
+when `fn` has no block `d`): the operands `SState.phiConds` takes for the edge `lbl → d`. -/
+def edgeOps (fn : Func) (lbl d : Nat) : List TValue :=
+  match fn.blocks.find? (·.label == d) with
+  | some b => (b.stmts.toList.takeWhile (·.inst matches .phi _ _)).flatMap fun st =>
+    match st.inst with
+    | .phi t inc => match inc.find? (·.2 == lbl) with
+      | some (v, _) => [⟨t, v⟩]
+      | none => []
+    | _ => []
+  | none => []
+
+/-- The blocks terminator `tm` branches to: `d` for `br d`, `d` and `e` for `br i1 c, d, e`,
+none for the others. -/
+def termDests : Term → List Nat
+  | .br d => [d]
+  | .condBr _ d e => [d, e]
+  | _ => []
+
+/-- The float constant nodes of block `b` (label `lbl`) of `fn` from position `p0`: one
+`SNode.flit` per distinct float constant among the operands of its statements from `p0` and the
+operands for `lbl` of the `phi`s of the blocks its terminator branches to, in order of first
+occurrence. -/
+def litNodes (fn : Func) (lbl p0 : Nat) (b : LLVM.Block) : List SNode :=
+  (((b.stmts.toList.drop p0).flatMap (·.inst.operands) ++
+      (termDests b.term).flatMap (edgeOps fn lbl)).filterMap SNode.litOf).eraseDups
+
+/-- The state at the entry of block `b` (label `lbl`) of `fn` from position `p0`: `SState.init`
+with the table of the block's float constants (`litNodes`), which `SState.op` refers to. -/
+def SState.start (fn : Func) (lbl p0 : Nat) (b : LLVM.Block) : SState :=
+  { SState.init with nodes := litNodes fn lbl p0 b }
+
 /-- The exit of terminator `tm` from state `σ`, with its obligations. -/
 def SState.exit (fn : Func) (σ : SState) : Term → Option (Exit × List Cond)
   | .br d => if entersAt fn d then some (.br d, []) else none
@@ -236,8 +282,8 @@ def SState.exit (fn : Func) (σ : SState) : Term → Option (Exit × List Cond)
 
 /-- The obligations of the edge from block `lbl` into block `d` of `fn`, from state `σ`: for
 each `phi` at the head of `d`, its metadata passes `checkMd` and its operand for `lbl` has an
-entry (`SState.op`: a register or an integer constant) that evaluates (`Cond.ok`). `none` when
-`fn` has no block `d` or a `phi` has no such operand (a float constant among them). -/
+entry (`SState.op`: a register, an integer constant or a float constant's node) that evaluates
+(`Cond.ok`). `none` when `fn` has no block `d` or a `phi` has no such operand. -/
 def SState.phiConds (fn : Func) (σ : SState) (lbl d : Nat) : Option (List Cond) :=
   match fn.blocks.find? (·.label == d) with
   | some b => (b.stmts.toList.takeWhile (·.inst matches .phi _ _)).mapM fun st =>
@@ -271,7 +317,7 @@ def SState.exitAt (fn : Func) (lbl : Nat) (σ : SState) (tm : Term) :
 obligation that `x` is a word and the obligations of the edge into `d₀` (`SState.phiConds`), not
 those of the other edge; other terminators give `SState.phiExit`'s. Sound when the exit goes to
 `d₀` (`Exit.dest`; `SState.exitTo_sound`), so a `phi` operand of the untaken edge that is outside
-the fragment (a float constant) does not refuse the block. -/
+the fragment (an `undef`, say) does not refuse the block. -/
 def SState.phiExitTo (fn : Func) (lbl d₀ : Nat) (σ : SState) (tm : Term) :
     Option (Exit × List Cond) :=
   match tm with
@@ -307,14 +353,16 @@ structure Summary where
   len : Nat
   deriving DecidableEq, Repr, Inhabited
 
-/-- The summary of block `lbl` of `fn` from position `p0`, with the exit and its obligations
-from exit function `ex` at the final state and the terminator, with `fmul contract` in the
-fragment when `contract` (`SState.stmt`). -/
+/-- The summary of block `lbl` of `fn` from position `p0`, run from the state with the block's
+float constants (`SState.start`), with the exit and its obligations from exit function `ex` at
+the final state and the terminator, with `fmul contract` in the fragment when `contract`
+(`SState.stmt`). -/
 def summarizeWith (P : Program) (fn : Func) (lbl p0 : Nat)
     (ex : SState → Term → Option (Exit × List Cond)) (contract : Bool := false) :
     Option Summary :=
   match fn.blocks.find? (·.label == lbl) with
-  | some b => match SState.run contract P lbl p0 (b.stmts.toList.drop p0) 0 .init with
+  | some b => match SState.run contract P lbl p0 (b.stmts.toList.drop p0) 0
+      (SState.start fn lbl p0 b) with
     | some σ => match ex σ b.term with
       | some (x, cs) => some ⟨σ.nodes, σ.regs, σ.effs, cs ++ .mem σ.effs :: σ.obls, x,
           (b.stmts.toList.drop p0).length⟩

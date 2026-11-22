@@ -21,8 +21,8 @@ special registers.
 **In Lean.** `MojoProof.Sem.Launch` is the grid and block shape and the dynamic shared memory
 size; `Launch.Valid` bounds them; `Launch.env` gives each thread its registers (`Env.sreg`,
 `Env.laneid`). `Grid.start` starts every thread, `Grid.Step` interleaves their steps over one
-memory, and `Grid.Sound` (memory safety, race freedom and the rest) and `Kernel.Sound` (for
-every valid launch) are what kernel theorems state.
+memory, and `Grid.Sound` (memory safety, race freedom and the rest) and `Kernel.Sound` (at one
+launch) are what kernel theorems state, for the launches their premises admit.
 
 **Out of scope.** Clusters, cooperative launches, and the scheduling guarantees of the
 hardware beyond the interleaving.

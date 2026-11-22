@@ -7,8 +7,10 @@ checker `coversC`) and `MojoProof/Sym/Block.lean` (the proof). Tests:
 **Scope.** Every program, function, block, entry position, condition list and summary that
 `coversC` accepts, every context of the program and every thread whose innermost frame runs the
 function at the block's position, with any memory and caller frames, whenever the conditions hold
-at the entry valuation. One block; the paths and loops of MojoProof/Sym/Block.lean and
-MojoProof/Sym/Loop.lean are not generalized (see "Not done").
+at the entry valuation. The same for paths and loops (MojoProof/Sym/Path.lean,
+MojoProof/Sym/Loop.lean): every path and loop sequence that the checkers with a `contract` flag
+accept, from every thread at its first block whose premises hold (see "Paths and loops with
+`fmul contract`").
 
 ## Why `covers` refuses `fmul contract`
 
@@ -75,7 +77,7 @@ the table before the node), which is what `fbinOf`'s value reads (`SNode.eval_fb
 the operands', so `Rel.defP` applies with `exec`'s pair.
 
 D. `SState.run_ptrs`, `SState.run_sound` and `Block.sound_withC` are the earlier proofs with the
-flag passed through; `Block.sound_with` is `Block.sound_withC` with `contract = false`, then
+flag passed through; `Block.sound_with` is `Block.sound_withC` with either flag, then
 `Ends.of_C`.
 
 ## Tests
@@ -94,7 +96,7 @@ flag passed through; `Block.sound_with` is `Block.sound_withC` with `contract = 
 
 ## The edge and a path with `fmul contract`
 
-MojoProof/Sym/Block.lean, for every program, path and thread:
+MojoProof/Sym/Path.lean, for every program, path and thread:
 
 - `Valuation.afterC` and `Valuation.intoC` are `Valuation.after` and `Valuation.into` with the
   products of the table (`regProdIn`).
@@ -122,18 +124,69 @@ Tests:
   again after its `phi`s, at `Valuation.intoC`: one trip of the loop, from the head to the head.
   `coversPathI` refuses `%46 → %50 → %52`.
 
-## Not done
+## Paths and loops with `fmul contract`
 
-The path checker with `phi`s (`coversPathI`, `WalkI`, `Valuation.lastI`) and the loop theorems
-(`LoopChain`, `Chain`, `Runs.of_chains`, MojoProof/Sym/Loop.lean) still check every block with
-`covers` and enter it with `Valuation.into`. A block with `fmul contract` can be the last block of
-a path (`Block.sound_pathC`), but not an inner block, and not a block of a loop's round. So the
-naive kernel's loop `%46 → %50 → %52 → %46` has no `LoopChain`: `coversPathI` refuses the round's
-path (`trip1_covers`), and `trip1_round` is one trip only, with its premises assumed.
+MojoProof/Sym/Path.lean and MojoProof/Sym/Loop.lean, for every program, function, path, loop
+sequence and thread. Each definition below takes a flag `contract` and checks every block with
+`coversWith … contract`, or enters every block after the first with `Valuation.intoWith contract`;
+with `contract = false` it is the old definition named after it.
 
-These definitions are recursive, so their `contract` versions are not definitionally the old ones.
-Keeping the old statements as one-line instances needs one of two things:
+Definitions.
 
-- an equivalence theorem for each definition, which the audit's `equivalences` count reports;
-- or the old definitions restated as the instances. That changes the equations that
-  MojoProof/Sym/Kernel.lean and MojoProof/Sym/Payload.lean rewrite with.
+- `coversPathWith contract` (`coversPathI`): every block of the path accepted by `coversWith` with
+  the flag, ending at `exitAt` or, for an inner block, at `exitTo` the next label.
+- `WalkWith contract` (`WalkI`), `Valuation.lastWith contract` (`Valuation.lastI`),
+  `Valuation.blocksWith contract` (`Valuation.blocksI`): the path's premises, its last block's
+  valuation, and every block's valuation, each block after the first entered through
+  `Valuation.intoWith contract`.
+- `RetWith contract` (`Ret`): `WalkWith`, then the last block returns and its effects run to a
+  memory meeting `Q`.
+- `Valuation.roundWith`, `EdgeWith`, `RoundWith`, `BackWith` (`Valuation.round`, `Edge`, `Round`,
+  `Back`): the same over `WalkWith` and `lastWith`.
+- `coversChainWith`, `LoopSeg.coversRoundWith`, `coversChainsWith` (`coversChain`,
+  `LoopSeg.coversRound`, `coversChains`): over `coversPathWith`.
+- `ChainWith contract`, `RetLsWith contract` (`Chain`, `RetLs`): over `EdgeWith`, `roundWith` and
+  `BackWith`.
+- `LoopSeg` and `LoopChain` are data (labels, positions, condition lists and summaries) and take
+  no flag: one value is checked with either.
+
+Theorems, each proved once for both values of the flag.
+
+- `Block.sound_with` (MojoProof/Sym/Block.lean) concludes `EndsWith contract`, which is `Ends`
+  without the flag and `EndsC` with it (`Block.sound_withC`, then `Ends.of_C` when the flag is
+  off); `Block.sound_atWith` and `Block.sound_toWith` are its instances at `exitAt` and `exitTo`.
+  `Block.sound_ptrs` and `Block.sound_to` are their `contract = false` instances and
+  `Block.soundC` the `contract = true` one, one line each.
+- `Valuation.lastWith_k`, `Block.sound_pathWith_ptrs`, `Block.sound_retWith`: the earlier proofs of
+  `Valuation.lastI_k`, `Block.sound_pathI_ptrs` and `Block.sound_retR` with the flag passed
+  through (`Ends.edgeWith`, `EndsWith.pre`).
+- `Block.sound_edge`, `Block.sound_loop`, `Round.of_inv`, `Block.sound_loop_inv`: generalized in
+  place, with `{contract : Bool}`.
+- `ChainWith.reach`, `ChainWith.of_iter`, `ChainWith.of_rounds`, `Runs.of_chainWith`,
+  `Runs.of_chainsWith`, `Runs.of_retWith`: the proofs of `Chain.reach`, `Chain.of_iter`,
+  `Chain.of_rounds`, `Runs.of_chain`, `Runs.of_chains` and `Runs.of_ret`, moved.
+
+The old declarations are the `contract = false` instances:
+
+- The old definitions keep their bodies, because MojoProof/Sym/Kernel.lean rewrites with their
+  equations and the obligation commands match their names. Each is definitionally its `With`
+  instance at `false`: both are structural recursions with the same cases. Lean's elaborator
+  checks that with `smartUnfolding` off, which the one-line proofs set
+  (`set_option smartUnfolding false in`); the kernel checks it either way.
+- `Chain` and `ChainWith false` are two inductive families with the same constructors, so they
+  are not definitionally equal; `Chain.with_iff` converts one into the other (by induction both
+  ways). `Chain.reach`, `Chain.of_iter`, `Runs.of_chain` and `Runs.of_chains` are one line each
+  through it. `Chain.of_rounds` is `ChainWith.of_rounds` through it after its premises' iterates
+  of `Valuation.round` are rewritten to `Valuation.roundWith false` (by `funext` and `rfl`): the
+  elaborator does not find the two iterates equal within its default limits.
+- `Valuation.lastI_k`, `Block.sound_pathI_ptrs`, `Block.sound_retR` are one line each.
+
+Test (MojoProofTest/SymNaive.lean): the naive kernel's loop `%46 → %50 → %52`, as a `LoopSeg`
+round (`naiveL`), is accepted by `LoopSeg.coversRoundWith true` and refused by
+`LoopSeg.coversRound` (the latch's `fmul contract`; `naiveL_covers`). At one concrete thread at
+`%46`'s position 2 (`frameL`: `%47 = 0`, `%48 = 0.0`, `%16 = 2`) and one memory (`mem0`), its
+rounds' premises (`RoundWith true`) hold for two rounds, by `decide +kernel` (`loop_rounds`), so
+`Block.sound_loop` with `contract = true` runs the thread through two rounds to `%46` again, at
+the second iterate of `Valuation.roundWith true`, where `%47 = 2` and `%48 = 1.0` (`loop_regs`,
+`loop_two`). This covers one thread, one memory and the trip count 2.
+

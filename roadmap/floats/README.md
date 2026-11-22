@@ -26,6 +26,7 @@ records. No copy of them is in the repository, so every quote is empty and each 
 
 ## Open
 
-No GPU run is recorded, so no rule is past L1. The rounding, `deliver` and the NaN rule are
+A rule passes L1 only with a recorded GPU run of a test of it, a conformance test and not a
+proof; STATUS.md lists the cards that have one. The rounding, `deliver` and the NaN rule are
 used by the proved kernels vadd and vmul (L3 evidence); `contract`, `maxnum` and `rsqrt.approx`
 wait for a proved kernel that uses them (the naive matmul, softmax, layer norm).

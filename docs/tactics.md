@@ -4,14 +4,17 @@ The metaprogramming around the block checker (`docs/automation.md`): `MojoProof/
 (`mojo_bounds`, the index arithmetic's obligations), `MojoProof/Sym/Obl.lean` (`mojo_obl`, the
 obligations and exits of a path of block summaries), `MojoProof/Sym/Vals.lean` (`mojo_vals`, a
 block's node values), `MojoProof/Sym/Ops.lean` (`mojo_ret`, an elementwise kernel's `Elem` steps and
-`Ret`), `MojoProof/Sym/Race.lean` (`mojo_race`, the disjointness premises of the race-freedom
+`Ret`), `MojoProof/Sym/Inv.lean` (`mojo_inv`, the registers of a loop's invariant after a path
+or rounds), `MojoProof/Sym/Race.lean` (`mojo_race`, the disjointness premises of the race-freedom
 results), `MojoProof/Sym/Command.lean` (`sym_summary`), `MojoProof/Sym/KernelCmd.lean`
 (`mojo_kernel`), `MojoProof/Sym/Info.lean` (`#mojo_info`), `MojoProof/LLVM/Mutate.lean` (the
 mutation harness, `mojo_mutant`, `mojo_kills`), `MojoProof/LLVM/Quote.lean` (`mojo_import`),
 `MojoProof/LLVM/Corpus.lean` (`mojo_corpus`) and `MojoProof/Sym/RuleAttr.lean` with
 `MojoProof/Sym/Rules.lean` (the rule table, `@[mojo_rule]`); tests in
-`MojoProofTest/SymBounds.lean`, `MojoProofTest/Obl.lean`, `MojoProofTest/Vals.lean`,
-`MojoProofTest/Ops.lean`, `MojoProofTest/Vmul.lean`, `MojoProofTest/Race.lean`,
+`MojoProofTest/SymBounds.lean`, `MojoProofTest/Obl.lean`, `MojoProofTest/OblNaive.lean`,
+`MojoProofTest/OblShared.lean`, `MojoProofTest/Vals.lean`,
+`MojoProofTest/Ops.lean`, `MojoProofTest/Vmul.lean`, `MojoProofTest/NaiveOut.lean`,
+`MojoProofTest/Inv.lean`, `MojoProofTest/Race.lean`,
 `MojoProofTest/Sym.lean`, `MojoProofTest/KernelCmd.lean`, `MojoProofTest/SymInfo.lean`,
 `MojoProofTest/Mutate.lean`, `MojoProofTest/Import.lean`, `MojoProofTest/Corpus.lean` and
 `MojoProofTest/Rule.lean`. None of them sets `maxHeartbeats` (the library has 4 such overrides, all
@@ -69,18 +72,25 @@ unchanged by a `trunc` to 32 bits (the remainder bounded by its dividend); and
 ## `mojo_obl` (`MojoProof/Sym/Obl.lean`)
 
 A tactic for the premises of a path summary: goals `Walk V ps` (each block of a path of summaries
-meets its obligations and exits to the next block; `MojoProof/Sym/Kernel.lean` asks one per
-thread), a block's obligations `∀ d ∈ ds, d.Holds V (vals V S.nodes)`, one obligation, an exit
-`S.exit.target V (vals V S.nodes) = some l`; for paths into blocks with `phi`s, `WalkI V ps`, an
-exit `S.exit.dest V (vals V S.nodes) = some l`, and a loop's `Edge h p V l ds S E` and
-`Round h p ds S B V` (`MojoProof/Sym/Loop.lean`, the premises of `Chain.loop` and
-`Runs.of_loop`); statements `∀ i < K, P i` for a literal `K`, one `P i` for each `i`; and
-conjunctions and implications of them. `V` is a valuation under `Valuation.after`s and
-`Valuation.into`s: an entry valuation `Valuation.entry c k m f` (facts on `c`, `m`, `f`) or any
-other (facts on `V.regs`, `V.fn`, `V.ctx.prog`, `V.mem`). A loop's rounds `Valuation.round h S B W`
-are first rewritten to the `Valuation.into`s of their path, an iterate `f^[k] W` with a literal `k`
-to `k` applications, and another constant to its definition. The summaries, paths and program are
-concrete (as `sym_summary` and `mojo_kernel` define them).
+meets its obligations and exits to the next block; `MojoProof/Sym/Kernel.lean` asks one per thread),
+a block's obligations `∀ d ∈ ds, d.Holds V (vals V S.nodes)`, one obligation, an exit `S.exit.target
+V (vals V S.nodes) = some l`; for paths into blocks with `phi`s, `WalkI V ps`, an exit `S.exit.dest
+V (vals V S.nodes) = some l`, and a loop's `Edge h p V l ds S E` and `Round h p ds S B V`
+(`MojoProof/Sym/Loop.lean`, the premises of `Chain.loop` and `Runs.of_loop`); their forms under a
+`fmul contract` setting `c`, `WalkWith c V ps`, `EdgeWith c h p V l ds S E` and `RoundWith c h p ds
+S B V` (the premises of `ChainWith.loop` and `Runs.of_chainsWith`, whose valuations are
+`Valuation.intoWith c`); statements `∀ i < K, P i` for a literal `K`, one `P i` for each `i`; other
+universal statements, such as `∀ i < K, P i` for a runtime trip count `K` (a variable, or `smax(x,
+0)` of an argument), proved for an arbitrary `i` with `i < K` as a hypothesis, so one proof covers
+every bound; and conjunctions and implications of them, each hypothesis (of the context or the
+goal) split into its parts, the conjuncts of a conjunction and the fields of a structure of
+propositions (`Obl.withFacts`, `Obl.withParts`; so the facts may come as one invariant or one
+structure, such as a precondition). `V` is a valuation under
+`Valuation.after`s and `Valuation.into`s: an entry valuation `Valuation.entry c k m f` (facts on
+`c`, `m`, `f`) or any other (facts on `V.regs`, `V.fn`, `V.ctx.prog`, `V.mem`). A loop's rounds
+`Valuation.round h S B W` are first rewritten to the `Valuation.into`s of their path, an iterate
+`f^[k] W` with a literal `k` to `k` applications, and another constant to its definition. The
+summaries, paths and program are concrete (as `sym_summary` and `mojo_kernel` define them).
 
 Method. mojo_obl builds each proof term itself, from the general lemmas of
 `MojoProof/Sym/OblLemmas.lean` (for every valuation, program and table) with every argument given,
@@ -92,42 +102,78 @@ and lets the kernel do the reductions: it reads the summaries, statements and pa
    `Launch.index_oneDim` (a 1-D grid and block, `k` below the thread count) its index equation.
 2. Node values, block by block along the path, node by node in order: `(vals V S.nodes)[j]? =
    some (.ok v)` by `vals_getElem?_eval` and the node kind's lemma (`SNode.eval_load_at`,
-   `eval_extract`, `eval_cast` on `intCast_ofNat`/`intCast_sext_ofNat`, `eval_bin` on
-   `intBin_add_ofNat`/`intBin_mul_ofNat`, `eval_icmp_slt_ofNat`/`eval_icmp_ult_ofNat`,
-   `eval_sreg_at`, `eval_gep_at` on `gep_buffer`, `eval_fbin_ofFloat`; the node lemmas take the
+   `eval_extract`, `eval_cast` on `intCast_ofNat`/`intCast_sext_ofNat` (or, for `sext` of a
+   word of no small number, `intCast_sext_bits`, its sign extension), `eval_bin` on
+   `intBin_add_wrap`/`intBin_mul_wrap` without `nuw` and `nsw` (the word modulo `2 ^ w`) and
+   on `intBin_add_ofNat`/`intBin_mul_ofNat` otherwise,
+   `eval_icmp_slt_ofNat`/`_ult_ofNat`/`_eq_ofNat`/`_sge_ofNat`, `eval_select_true`/`_false` (the
+   operand the condition picks, decided by `omega`) or `eval_select_ofBool`, `eval_smax_ofNat`,
+   `eval_sreg_at`, `eval_gep_at` on `gep_buffer` (or, by an index `omega` does not bound,
+   `gep_buffer_ok`: some value, a pointer or poison, taken by `Classical.choose`), a load of an
+   element of a 1-D tensor or of a row-major matrix (`load_buffer`, `load_buffer2`),
+   `eval_fbin_ofFloat`, `eval_fbinP` (a float operator with `fmul contract` factors, the
+   semantics' `floatBin` evaluated by the kernel), `eval_flit` with the
+   float constant's value `floatLit ft lit` evaluated by the kernel; the node lemmas take the
    operation's result as a premise, so their conclusions are `nd.eval V vs = r`). Registers
    after a block by `Valuation.after_regs_some` and `after_regs_none`, memory by
    `Valuation.after_mem_fold` (`Valuation.after_mem` on the fold). Registers after an edge
    (`Valuation.into`) by `Valuation.into_regs_br` and `into_regs_cond`, and into a block with
-   `phi`s by `Valuation.into_regs_phi` (from `enter_of_phiOps`: `enter` sets the `phi`s' registers
-   to their operands' values for the edge, `phiOps` and `evalOps`, each a register by `evalV_loc`
-   or an integer constant by `evalV_int_ofNat`; the other registers by `setRegs_of_forall_ne`);
-   memory after an edge by `Valuation.into_mem`; the function and context through an edge by
+   `phi`s by `Valuation.into_regs_phi` (and through `Valuation.intoWith c` by
+   `Valuation.intoWith_regs_br`, `_cond` and `_phi`; from `enter_of_phiOps`: `enter` sets the
+   `phi`s' registers
+   to their operands' values for the edge, `phiOps` and `evalOps`, each a register by `evalV_loc`,
+   an integer constant by `evalV_int_ofNat` or a float constant by `evalV_float` (its literal's
+   value by the kernel's `floatLit`); the other registers by `setRegs_of_forall_ne`);
+   memory after an edge by `Valuation.into_mem` (`Valuation.intoWith_mem`); the function and
+   context through an edge by
    `Valuation.into_k`.
 3. Premises, by kind: a hypothesis of the local context whose type unifies with the premise's or
    unfolds to it (`f.regs r = some v` or `V.regs r = some v`, `f.fn = F` or `V.fn = F`, `c.prog = P`
-   or `V.ctx.prog = P`, `m.load … = .ok v`, `m.Buffer`, `Mem.Fits` (MojoProof/Sem/Precond.lean),
-   `m.Holds`, `A ∣ al`), the entries already proved, `Eq.refl` checked by the kernel, `decide` on
-   closed propositions (the `range` attributes, `keepsWord`, and an obligation on a closed
-   valuation that the lemmas do not reach, such as a store to a block no `m.Buffer` describes,
-   which the kernel then evaluates), a special register's range by
-   `Launch.sreg_bound` (from the launch's validity), and arithmetic by `omega` on the local context
-   and the launch facts after evaluating closed `Nat` subterms.
+   or `V.ctx.prog = P`, `m.load … = .ok v`, `m.Buffer` for a global buffer or `m.BufferIn s c size
+   al o w` for a buffer of address space `s` owned by `o`, `Mem.Fits` (MojoProof/Sem/Precond.lean)
+   for a buffer reached through generic pointers, `∃ blk, m.blocks c = some blk ∧ blk.addr + size ≤
+   2 ^ (l.ptr s).1` for one reached through the buffer's space `s`, `o.admits c.who = true` for an
+   owner other than `.all` (whose case the kernel decides), `m.Holds`, `A ∣ al`), the entries
+   already proved, `A ∣ al` of two literals by `decide`, `Eq.refl` checked by the kernel, `decide`
+   on closed propositions (the `range` attributes, `keepsWord`, and an obligation on a closed
+   valuation that the lemmas do not reach, such as a store to a block no `m.Buffer` describes, which
+   the kernel then evaluates), a special register's range by `Launch.sreg_bound` (from the launch's
+   validity), and arithmetic by `omega` on the local context and the launch facts after evaluating
+   closed `Nat` subterms.
 4. Goals: `.ok x` and `.bool x` from `x`'s value, `.mem es` by running the effects
    (`SEff.apply_load_at`, `load_buffer`, `SEff.apply_store_ex`, `store_buffer`), the exit by
-   `Exit.target_br`, or `Exit.target_cond_true`/`_false` with the comparison decided by `omega`;
+   `Exit.target_br`, or `Exit.target_cond_true`/`_false` with the comparison decided by `omega`,
+   or `Exit.target_cond` on a word whose low bit the kernel computes;
    an exit's destination by `Exit.dest_of_target`, or for a branch into blocks with `phi`s by
    `Exit.dest_phi_ofBool_true`/`_false` (a comparison decided by `omega`) or
    `Exit.dest_phi_true`/`_false` (a constant word's low bit); a path with `phi`s by `WalkI.one`
-   and `WalkI.cons2`; an `Edge` or `Round` as its path's `WalkI`, its last exit's destination and
+   and `WalkI.cons2` (`WalkWith.one` and `WalkWith.cons2` under `c`); an `Edge` or `Round`
+   (`EdgeWith`, `RoundWith`) as its path's `WalkI` (`WalkWith`), its last exit's destination and
    the position it enters at, `Exit.pc_of_fn` with the function's hypothesis and `Exit.pc`
-   computed by the kernel; `∀ i < K, P i` by `forall_lt_zero'` and `forall_lt_succ'`.
+   computed by the kernel; `∀ i < K, P i` by `forall_lt_zero'` and `forall_lt_succ'` for a
+   literal `K`, else by introducing `i` and `i < K`.
+   The buffer lemmas (`addr_buffer`, `gep_buffer`, `load_buffer`, `store_buffer`) take a buffer
+   of any address space `s` and any owner (`Mem.BufferIn`; a global buffer `m.Buffer` is one of
+   space 1 owned by every thread, `Mem.Buffer.bufferIn`) and the pointer's address space `a`
+   (0 or `s`) as arguments, so the counting loop's store through a pointer of space 1 is proved
+   as `vector_addition`'s through generic ones (`MojoProofTest/Obl.lean`, `cnt_rounds`), and the
+   same loop's on a buffer of shared memory through pointers of space 3, owned by a block of
+   threads that admits the thread (`MojoProofTest/OblShared.lean`, `cnt3_rounds`).
 
 Each obligation and exit it proves is checked by the kernel against its statement
 (`Kernel.check`), and an attempt that fails, the kernel's rejection or a resource limit included,
-is undone. A goal it does not prove stays a goal, as stated, and is logged ("mojo_obl: open
-goal"); `set_option mojo_obl.debug true` logs why, with the time each attempt took. `Obl.run` is
-the method for other metaprograms.
+is undone. A goal it does not prove stays a goal, as stated, with the hypotheses of the call
+(not their parts; those of an implication it proves are kept), and is logged ("mojo_obl: open
+goal"); `set_option mojo_obl.debug true` logs why, with the time each attempt took. A goal under
+`have`'s annotation is read through it. `Obl.run` is the method for other metaprograms.
+
+`obl_have h₁ : e₁, …, hₙ : eₙ` (for every program) names the values of a path's registers and
+memory: each `eᵢ` is `V.regs r` (a register after the path's blocks and edges), `V.mem` or `(vals V
+S.nodes)[j]?`, and the tactic adds `hᵢ : eᵢ = some v` (`V.mem = m`, `… = some (.ok v)`) with `v` the
+value step 2 computes. All the items are found in one run of the method, inside `Obl.withFacts` (so
+the facts may be parts of a hypothesis), and a value two items share is normalized once; the proof
+is one conjunction, split into the `hᵢ`. An item of another form, or a node the method gives no
+value, is an error.
 
 The lemmas it chains are general. `withAttrs_ofNat` (return attributes that are `noundef` or a
 `range` containing `[lo, hi)` keep every word in it) and `SNode.eval_sreg` (a special-register call
@@ -137,25 +183,58 @@ attributes and the declaration as hypotheses.
 
 Tests (MojoProofTest/Obl.lean). `vadd_walk_launch`: for every valid 1-D launch, alignment `4 ∣ al`,
 distinct buffers `a`, `b`, `out` of `n < 2 ^ 31` floats that fit below `2 ^ 64`, every thread `k`
-and every context, memory and frame with the listed facts: `vector_addition` walks path 0
-(`%4 → %21 → %31`) when `k < n` and path 1 (`%4 → %30 → %31`) otherwise, both by `mojo_obl` (42,217
-heartbeats of the default 200,000). The twin `vadd_walk_launch_open`: with `¬ k < n` stated through
-an irreducible definition, the exit of `%4` is left open, checked by `#guard_msgs`, and closed after
+and every context, memory and frame with the listed facts: `vector_addition` walks path 0 (`%4 → %21
+→ %31`) when `k < n` and path 1 (`%4 → %30 → %31`) otherwise, both by `mojo_obl` (42,217 heartbeats
+of the default 200,000). The twin `vadd_walk_launch_open`: with `¬ k < n` stated through an
+irreducible definition, the exit of `%4` is left open, checked by `#guard_msgs`, and closed after
 `unfold`. `hand_walk` and an `example`: two hand-written summaries (an `icmp ult` of registers, a
 register read through a block that does not set it, a branch condition that is a word) and the empty
 path (the statement of `Walk.nil'`). `cnt_paths`: the counting loop `cnt` of
 `MojoProofTest/SymLoop.lean`, for every trip count `n < 4` on `outC` (the runs of `cnt_run_outC`):
-the entry edge (`Edge`), every round below `n` (`Round`) and the path out (`WalkI`), with the
-`phi` values and branches by the lemmas, and the body's address and store (to a block no
-`m.Buffer` describes, on a closed valuation) by the kernel's evaluation. `cnt_entry`: the entry
-edge for every context, step count, memory and frame of `cnt`; its twin `cnt_entry_open`, with
-`f.fn = cnt` through an irreducible definition, leaves the position `Exit.pc` open, checked by
-`#guard_msgs`. Not covered: a loop on a symbolic trip count (the rounds are proved for literal
-counts, one by one; the invariant of `Runs.of_loop` is not found); a `phi` operand other than a
-register or an integer constant of a natural number; and the nodes of the fragment that it gives
-no value, integer operators
-other than `add` and `mul` and comparisons other than `slt` and `ult`, whose obligations and exits
-stay open. The statements the block checker refuses (`fcmp`, `select` of floats, pointers or
+the entry edge (`Edge`), every round below `n` (`Round`) and the path out (`WalkI`), with the `phi`
+values and branches by the lemmas, and the body's address and store (to a block no `m.Buffer`
+describes, on a closed valuation) by the kernel's evaluation. `cnt_entry`: the entry edge for every
+context, step count, memory and frame of `cnt`; its twin `cnt_entry_open`, with `f.fn = cnt` through
+an irreducible definition, leaves the position `Exit.pc` open, checked by `#guard_msgs`.
+`cnt_rounds_struct`: the counting loop's rounds under an invariant that is a structure of
+propositions (its registers' facts one conjunction, its room one existential); the twin
+`cnt_rounds_struct_open`, with the room behind a definition the parts do not unfold (`Room`), leaves
+the store's obligation open, checked by `#guard_msgs`, and closed after `unfold`. `cnt_have`: two
+registers after a round by one `obl_have`; an `example` checks the error on an item that is no
+register, memory or node value.
+
+Tests (MojoProofTest/OblNaive.lean). `pre_obls`: for every valuation, the obligations of the naive
+matrix product's preheader `%45` (`pre` of MojoProofTest/SymPhi.lean), whose one node is the float
+constant `0.000000e+00` at type `float`, by `mojo_obl`. The twin `flit_open`: a summary whose float
+constant is an unknown literal `lit`; its obligation is left open, checked by `#guard_msgs`, and
+closed by `SNode.eval_flit` from `floatLit .float lit = .ok v`.
+
+Tests (MojoProofTest/OblShared.lean). `cnt3_rounds`: the counting loop with its array in shared
+memory (its `getelementptr` and `store` through pointers of address space 3), its rounds for every
+bound under an invariant with a buffer of space 3 owned by block of threads `g`
+(`Mem.BufferIn 3 b (8 * n) 8 (.cta g) true`) and the fact that `g` admits the thread, by
+`mojo_obl`. The twin `cnt3_rounds_open`: with that fact behind an irreducible definition, the
+store's obligation is left open, checked by `#guard_msgs`.
+
+Tests (MojoProofTest/OblMatmul.lean), on the naive matrix product `naive` (`m × 768` by the
+transpose of `n × 768` into `m × 50257`, binary32) with `fmul contract`, all by `mojo_obl`:
+`naive_rounds`, round `i < max K 0` of its loop (`RoundWith true`), for `K ≤ 768`,
+`768 m, 768 n < 2 ^ 31`, row `r < m`, column `c < n`, the loads of `A (r, i)` and `B (c, i)` from
+row-major buffers; `naive_exit`, the path out of the loop and its store into cell `50257 r + c`;
+`naive_entry`, the edge into the loop (`EdgeWith true`) of every thread in range of every valid
+launch, for `K ≤ 768`, `50257 m < 2 ^ 31`, `n ≤ 50257`, with `%16 = smax(K, 0) = max K 0`;
+`naive_skip_row` and `naive_skip_col`, the path `%6 → %44 → %69` of every thread out of range
+(row, or column with the row in range), its index arithmetic modulo `2 ^ 32`, its `sext` and
+`getelementptr inbounds` of no known value proved to evaluate. The twin `naive_rounds_open`:
+with the accumulator's register behind an irreducible definition, the latch's `fadd contract`
+obligation is left open, checked by `#guard_msgs`.
+
+Not covered: a loop on a symbolic trip count (the rounds are proved for literal counts, one by
+one; the invariant of `Runs.of_loop` is not found); a `phi` operand other than a register, an
+integer constant of a natural number or a float constant; and the nodes of the fragment that it
+gives no value, integer operators other than `add` and `mul`, comparisons other than `slt`, `ult`,
+`eq` and `sge`, and casts other than `sext` of a word of no small number, whose obligations and
+exits stay open. The statements the block checker refuses (`fcmp`, `select` of floats, pointers or
 vectors, float casts, calls other than special registers and the integer maximum and minimum,
 `alloca`, barriers) are no nodes: `summarize` gives their blocks no summary.
 
@@ -175,13 +254,16 @@ same launch facts and the same kernel-checked lemma applications):
    then `.ok v' = .ok v` by `Vals.conv`: syntactic equality, congruence argument by argument
    (proof arguments by proof irrelevance, a value followed by proofs about it by `Vals.congrDep`),
    an `if` on either side whose condition `omega` decides (`Vals.ifStep`), kernel defeq (not tried
-   on two different constructors), the local equations on subterms (`Vals.norm`), and on `Nat`
+   on two different constructors), a subterm `decide p` whose `p` or `¬ p` `omega` proves as
+   `true` or `false` (`Vals.decStep`, so a comparison's `Val.ofBool (decide (i < n))` is
+   `.bits 1 1` under `i < n`), the local equations on subterms (`Vals.norm`), and on `Nat`
    and `Int` `omega` from the local context and the launch facts
    (`k * 4 = 4 * k` for `gep_buffer`'s offsets, `V.k + 6 = 23` from `V.k = 17` for a float
    operator's oracle number).
 2. Another entry: the semantics' operation of the node on its operands' values (`Vals.raw`):
    `icmpV` by `SNode.eval_icmpV`, `intBin`, `intCast`, `extractV` by `SNode.eval_bin`,
-   `eval_cast`, `eval_extract`, up to `Vals.conv`.
+   `eval_cast`, `eval_extract`, and a float constant's `floatLit ft lit` by `eval_flit`, up to
+   `Vals.conv`.
 3. Each node's proof is checked by the kernel (`Kernel.check`) against its equation; a node it
    does not prove stays a goal and is logged ("mojo_vals: open goal (node j)"), and the later
    nodes read its entry. The later nodes read the value mojo_obl's dispatch gives when it gives
@@ -202,7 +284,10 @@ behind an irreducible definition; node 2 is left open, checked by `#guard_msgs`,
 read its entry, and `unfold` then a second `mojo_vals` close it. Not covered: an entry `.ok _` of a
 node that mojo_obl gives no value (an integer operator other than `add` and `mul`, a comparison
 other than `slt` and `ult`), which stays open unless it is given as the operation (step 2), and
-entries that are neither `.ok _` nor one of the four operations.
+entries that are neither `.ok _` nor one of the four operations nor a float literal's value.
+`pre_vals` and `pre_vals_lit` (MojoProofTest/OblNaive.lean): the node values of the naive matrix
+product's preheader `%45`, for every valuation, as the float `+0` (`Model.ofNatBits 0`) and as
+`floatLit` of the literal.
 
 ## `mojo_ret` (`MojoProof/Sym/Ops.lean`)
 
@@ -220,7 +305,10 @@ block's exit is `ret`, and that the last block's effects succeed with a memory o
    `V` (`vadd_elem0`, `vadd_elem1` in MojoProofTest/Ops.lean);
 2. `∃ ps ∈ paths, Ret V (Elem m₀ out w cell bs K) ps` for a concrete list of paths, from
    `Elem m₀ out w cell bs k M` with `M` the memory of `V` (`vadd.ret`, which `mojo_kernel`'s
-   `map2` clause generates).
+   `map2` clause generates);
+3. `Elem.Only out S me` (every access of `me`'s trace to block `out` is by a thread of `S`), from
+   the run of goal 1 and a hypothesis `Elem.Only out S M` with `M` the memory of `V`
+   (`vadd_only0`, `vadd_only1` in MojoProofTest/Ops.lean).
 
 Lemmas (for every caller's memory `m₀`, output block, cell width, cells, bytes, valuation and node
 values): `Elem.Steps … V vs k K es` (effects `es` take every memory of `Elem` after `k` threads to
@@ -229,7 +317,10 @@ one of `Elem` after `K` threads), `Elem.steps_nil`, `Elem.steps_skip` (a thread 
 `out`, by `Elem.apply_load`), `Elem.steps_store` (thread `k`'s store of `bs k` at `⟨out, cell k⟩`,
 by `Elem.apply_store`), `Elem.after` (a block's steps across `Valuation.after`, by
 `Valuation.after_mem`), `Elem.ret` (a path whose walk holds and whose last block returns with
-steps is a `Ret`) and `vals_getElem?_of_eq`.
+steps is a `Ret`) and `vals_getElem?_of_eq`; for goal 3, `Elem.Only.Steps out S V vs es` (effects
+`es` keep `Elem.Only out S`), `Elem.Only.steps_nil`, `Elem.Only.steps_of` (every effect of a
+thread of `S`, by `Elem.Only.apply`) and `Elem.Only.steps_load` (a load through a pointer to a
+block other than `out`, by any thread, by `Elem.Only.log`).
 
 Method. With mojo_obl's state (`Obl.M`, named `"mojo_ret"`), effect by effect (`Ops.steps`):
 
@@ -250,10 +341,15 @@ Method. With mojo_obl's state (`Obl.M`, named `"mojo_ret"`), effect by effect (`
    decided neither way (`Obl.St.undec`, by `Decidable.byCases`, at most two deep), each case proved
    so. For `vadd.ret` that is `k < n`: path `%4 → %21 → %31` with one store when `k < n`, path
    `%4 → %30 → %31` with `bs k = none` when not.
-6. A premise it does not prove stays a goal, logged as `mojo_ret: open goal`; in a `Ret` goal only
-   when no path or split proves it, on the first path. It fails on a goal of neither form, and when
-   a hypothesis it needs (the run of the effects in goal 1, the `Elem` at the memory of `V`) is
-   missing.
+6. An `Elem.Only` goal (`Ops.onlyGoal`): when `omega` proves the thread `V.ctx.who.thread` in `S`
+   (the predicate applied and beta-reduced, as `(· < n) k`), all the effects by
+   `Elem.Only.steps_of`; otherwise effect by effect (`Ops.onlySteps`): a load by
+   `Elem.Only.steps_load`, its block `c` and `c ≠ out` by `omega` as in step 2, and from the first
+   store on `Elem.Only.steps_of`, the thread in `S` left open when `omega` does not prove it.
+7. A premise it does not prove stays a goal, logged as `mojo_ret: open goal`; in a `Ret` goal only
+   when no path or split proves it, on the first path. It fails on a goal of none of the three
+   forms, and when a hypothesis it needs (the run of the effects in goals 1 and 3, the `Elem` or
+   `Elem.Only` at the memory of `V`) is missing.
 
 Tests (MojoProofTest/Ops.lean). `vadd_elem0` (block `%4`'s three loads keep `Elem`, for every
 context, memories, frame and bytes), `vadd_elem1` (block `%21` advances `Elem` by thread
@@ -263,11 +359,16 @@ generates, stated by `type_of%` with its hypotheses introduced unnamed (for ever
 thread `k`, `n < 2 ^ 31`, context, caller's memory, memory of `Elem` after `k` threads and frame
 with the buffer facts, some path of `vadd.paths` is a `Ret` to `Elem` after `k + 1` threads), each
 by `mojo_ret` alone. The twin (an `example`): `vadd_elem0` with `p1 ≠ out` behind an irreducible
-definition; the goal `¬p1 = out` is left open, checked by `#guard_msgs`, and closed by `unfold`. Not
-covered: loops (`RetL`, `MojoProof/Sym/Loop.lean`), paths through `phi` edges (`WalkI`, which `Ret`
-asks: mojo_ret proves `Walk`), a thread with more than one store to `out` (each store is the next
-thread's, as `Elem` counts them), loads from `out`, and cells or bytes `Vals.conv` cannot match (it
-does not rewrite under binders).
+definition; the goal `¬p1 = out` is left open, checked by `#guard_msgs`, and closed by `unfold`.
+Goal 3: `vadd_only0` (block `%4`'s three loads keep `Elem.Only out S`, for every set of threads
+`S`, with no thread fact: each load is outside `out`) and `vadd_only1` (block `%21` keeps
+`Elem.Only out (· < n)` for thread `k < n`, by `Elem.Only.steps_of`), and an open-goal twin of
+`vadd_only0` with `p1 ≠ out` hidden as above. MojoProofTest/NaiveOut.lean uses goals 1 and 3 on
+the naive matrix product's entry block for every thread out of bounds (`runOut`,
+docs/proofs/obl.md). Not covered: loops (`RetL`, `MojoProof/Sym/Loop.lean`), paths through `phi`
+edges (`WalkI`, which `Ret` asks: mojo_ret proves `Walk`), a thread with more than one store to
+`out` (each store is the next thread's, as `Elem` counts them), loads from `out`, and cells or bytes
+`Vals.conv` cannot match (it does not rewrite under binders).
 
 A second kernel (MojoProofTest/Vmul.lean): vector_multiply (`Kernels.vmul`, tests/corpus/vmul/),
 written for this repository, not upstream: `vector_addition` with `*` for `+`, compiled with
@@ -280,6 +381,59 @@ and `Kernels.vmul.b1`), and `Model.mul` for `Model.add` in the product and in th
 `Kernels.vmul.ret` by `type_of%`, as MojoProofTest/Ops.lean does `Kernels.vadd.ret`; block `%4`'s
 `Elem` step is `vadd_elem0` itself. The test summarizes nothing again. Not covered: the default
 compile (`fmul contract`), whose block `%21` `summarize` refuses.
+
+## `mojo_inv` (`MojoProof/Sym/Inv.lean`)
+
+A tactic for the register half of a loop's invariant (`Round.of_inv`, `MojoProof/Sym/Loop.lean`):
+a goal `V.regs r = some v`, or a conjunction of them, for a valuation `V` after a path or rounds
+of a loop. The hypotheses are found by type as mojo_obl finds them (the registers of an entry
+frame or valuation, the function, the program, the launch, buffers), and each hypothesis gives
+its parts, the conjuncts of a conjunction and the fields of a structure of propositions (so an
+invariant such as `SymLoop.invN` or a structure of facts as a hypothesis).
+
+Lemma (for every program, loop and path): `Valuation.iterate_regs_keep`. For every flag `c`,
+header `h`, summary `S`, path `B`, valuation `V` of function `F`, register `r` that no `phi` of
+`F` sets (`Func.phiSets F r = false`) and no summary of `S :: B` sets, and every count `i`, the
+`i`-th iterate of `Valuation.roundWith c h S B` keeps `r`'s value at `V`. One edge's registers are
+`Valuation.intoWith_regs_br`, `Valuation.intoWith_regs_cond` and `Valuation.intoWith_regs_phi`
+(`MojoProof/Sym/OblLemmas.lean`).
+
+Method (`Inv.run`, with mojo_obl's state named `"mojo_inv"`), for each register equation
+(`Inv.prove`, `Inv.reg`):
+
+1. `V` is `f^[i] W` for a round `f` (`Valuation.roundWith c h S B`, `Valuation.round h S B`, or a
+   constant that unfolds to one, as `NaiveThread.round`; `Inv.roundOf?`) and a count `i` that is
+   not a literal: `r`'s value at `W`, by `Valuation.iterate_regs_keep`, whose two conditions the
+   kernel decides.
+2. Otherwise `V` by its blocks and edges (`Inv.pathV`: a path's last block
+   `(Valuation.lastWith c W l S ps).1` by `Obl.lastIOf`, other constants unfolded, then
+   `Obl.normV`), and the register by `Obl.regOf`: through a block by its register list
+   (`Valuation.after_regs_some`, `Valuation.after_regs_none`, the node's value from mojo_obl's
+   evaluation), through an edge into blocks with `phi`s by `Valuation.intoWith_regs_phi` (the
+   `phi`'s operand for the edge; the others by `setRegs_of_forall_ne`), and through other edges
+   by `Valuation.intoWith_regs_br` and `Valuation.intoWith_regs_cond`, down to a hypothesis on the
+   entry frame's or valuation's register.
+3. The value found is proved equal to `v` by `Vals.conv`.
+
+A register equation it does not prove, and a conjunct of another form, stays a goal, logged as
+`mojo_inv: open goal`.
+
+Tests (MojoProofTest/Inv.lean). `cnt_regs`: for the counting loop `cnt`
+(MojoProofTest/SymLoop.lean), every bound `n ≤ 2 ^ 60`, round `i < n` and valuation of `invN`, the
+counter `%i` after the round `1 → 2` is `i + 1` (the `phi`'s operand `%inext`), and the bound `%n`
+after any number of rounds is `n`. `naive_regs`: for the naive matrix product's loop `naiveL` with
+`fmul contract` and `naive_rounds`' premises, `%47` after `NaiveThread.round` is `i + 1` (the
+latch's `select` picks `%47 + 1`), and `%16` after any number of rounds is `max K 0`. `naive_path`:
+at the latch's entry `NaiveThread.latchAt` (the last block of the path `%46 → %50 → %52`), `%47` is
+unchanged (method step 2 with a path), and for `K ≤ 768` and `i < max K 0` the latch's comparison
+`%49 = icmp slt %47, %16` is `.bits 1 1` (`Vals.decStep`); its twin `naive_path_open` states `%16`
+through an irreducible definition and leaves `%49` open. `naive_head`: at the loop's head, `%47` is
+0 and `%48` is `+0`, a `phi`'s float constant; its twin `naive_head_open` leaves `%48` open while
+the function is hidden. The twin `cnt_regs_open` hides the counter's register behind
+an irreducible definition; the counter's equation is left open, checked by `#guard_msgs`, and closed
+once the definition is unfolded. Not covered: the memory half of an invariant (the buffers and their
+contents after a round's stores), and registers that a `phi` sets after a symbolic number of rounds
+(the induction over the rounds stays with the caller).
 
 ## `mojo_race` (`MojoProof/Sym/Race.lean`)
 
@@ -338,24 +492,28 @@ On block `%21` the summary has three accesses (two loads, a store) and one paylo
 
 `mojo_kernel n := P fn reads x := a0, … writes y := a2, … scalars z := a3, … pointers p := a4, …
 map2 t e bytes` names the parameters of kernel `fn` of program `P` by clause (`pointers` for a plain
-pointer parameter, not `byval`) and adds the summaries `n.b<i>` of its blocks
-(`summarize`, as for `sym_summary`), its paths from the entry `n.paths`, `n.covers` (by
-`decide +kernel`) and the kernel theorem `n.sound_of`; when `fn` elaborates to a constant and `P`
-has no globals, also `n.args`, `n.starts` and `n.sound`; and with the optional `map2` clause, for a
-binary elementwise kernel, also `n.argTy`, `n.argTail`, `n.ret` (each thread's path is a `Ret`, by
-`mojo_ret`) and `n.correct` (`Kernel.sound_map2`). It refuses clauses that do not name each
-parameter once with its kind, a block outside the checker's fragment and a loop (a branch to a block
-on the current path) that no `loop` clause names, and with `map2` an `fn` that is not a constant, a program with globals and a
+pointer parameter, not `byval`) and adds the summaries `n.b<i>` of its blocks (`summarize`, as for
+`sym_summary`), its paths from the entry `n.paths`, `n.covers` (by `decide +kernel`) and the kernel
+theorem `n.sound_of`; when `fn` elaborates to a constant and `P` has no globals, also `n.args`,
+`n.starts` and `n.sound`; and with the optional `map2` clause, for a binary elementwise kernel, also
+`n.argTy`, `n.argTail`, `n.ret` (each thread's path is a `Ret`, by `mojo_ret`) and `n.correct`
+(`Kernel.sound_map2`). It refuses clauses that do not name each parameter once with its kind, a
+block outside the checker's fragment and a loop (a branch to a block on the current path) that no
+`loop` clause names, and with `map2` an `fn` that is not a constant, a program with globals and a
 kernel of another shape; a refused command adds nothing. An `n.ret` that `mojo_ret` does not prove
 is an error. A `loop h := pre inv trips post by tac` clause, one per loop for loops in sequence (a
 loop nested in another is refused), takes the loop with header block `h`, its invariant `inv` and
 trip count, and adds the loop's obligations (proved by `tac`), `n.chains`, `n.coversChains`,
-`n.loop` and `n.sound_loop`, the kernel theorem with each thread's run through the loops
-(`Kernel.sound_of_chains`). docs/kernel.md has the steps, what each definition states, the sharing
-of definitions in library modules and the tests (`MojoProofTest/KernelCmd.lean`,
-`MojoProofTest/KernelLoop.lean`); the instances are `MojoProof/Kernels/Vadd.lean`,
-`MojoProof/Kernels/Vmul.lean` and `MojoProof/Kernels/Vsub.lean`, and the loop clause's is
-`kernelK` in `MojoProofTest/KernelLoop.lean`.
+`n.loop` and, when `fn` is a constant and the program has no globals, `n.sound_loop`: the kernel
+theorem on `n.args` from `Mem.Closed` and an invariant, each thread's precondition from the start's
+facts and the registers of its scalar and pointer parameters (`Kernel.sound_entry`). docs/kernel.md
+has the steps, what each definition states, the sharing of definitions in library modules and the
+tests (`MojoProofTest/KernelCmd.lean`, `MojoProofTest/KernelLoop.lean`); the instances are
+`MojoProof/Kernels/Vadd.lean`, `MojoProof/Kernels/Vmul.lean` and `MojoProof/Kernels/Vsub.lean`, and
+the loop clause's is `kernelK` in `MojoProofTest/KernelLoop.lean`. `kernelC` in
+`MojoProofTest/KernelCells.lean` is the instance of `Kernel.sound_cells` (threads that each run a
+counted loop and then store one cell, apart only on the storing threads), proved without the
+command.
 
 ## `#mojo_info` (`MojoProof/Sym/Info.lean`)
 
@@ -419,9 +577,11 @@ refuses a block of a ptx_kernel function (so `Sym.covers` holds for no summary).
 `Instance` (kernel function, launch, arguments, memory, address choice, oracle, fuel, phases, and
 the output block with the final contents the contract fixes), the replay (`Instance.replayMutant`:
 `Kernel.replay` of `MojoProof/Sem/Replay.lean` on `Mutant.program`, by evaluation): a reported
-violation is `killed` when the mutant's index is in the caller's certified list and `refuted`
-(killed by evaluation, uncertified, counted as unknown) when it is not. `run` takes the list as
-given; `mojo_kills` (below) builds a list whose every index has a checked theorem. No violation, or
+violation is `killed` when the mutant's index is in the caller's certified kills and `refuted`
+(killed by evaluation, uncertified, counted as unknown) when it is not. The certified kills have
+the type `Kills P ms I` (for `run`, `ms` is `selected tbl P n`), whose constructor is private:
+outside `MojoProof/LLVM/Mutate.lean` a value is `Kills.empty` (the default, no kills) or one that
+`mojo_kills` (below) defines, each index with a checked theorem. No violation, or
 an undecided replay, is `passes` (counted as unknown: one instance is no proof against the contract,
 so not survived). With no instance a mutant is `unclassified`. Conforming and survived need a proof
 against the contract and no proof search runs, so they and infrastructure failure, timeout and open
@@ -451,15 +611,21 @@ oracle, the mutant is not sound for the observation of the blocks and the contra
 kernel cannot run the enumeration itself (the derived `BEq` of the nested `Ty` is `partial`, so
 `Op`'s equality does not reduce), hence the quoted term. Each certified kill is a `mojo_mutant` line
 and a theorem by `Instance.refutes` with `decide +kernel` (never `native_decide`).
-`mojo_kills ks : mutant on I R := [k₁ => t₁, ...]` defines `ks : List Nat := [k₁, ...]`, the list to
-pass as `run`'s `certified`, after checking at elaboration, for each row, that `tᵢ` is a theorem
-whose type is `Instance.Refuted I Q fn R` with the given `I` and `R` up to reducible unfolding, a
-program `Q` whose evaluation has no field (`Program.diff`) that differs from `mutant kᵢ`'s, a
-function `fn` that evaluates to that program's function `I.f`, and a proof with no axiom but
-`propext`, `Classical.choice` and `Quot.sound`; any failed check is an error and defines nothing.
-What it does not check: that `mutant` is the harness's selection (the test compares the quoted
-terms with it by `#guard`), that the instance fits the contract, and that every refuted mutant is
-listed; `run` still accepts a list written by hand.
+`mojo_kills ks : mutant on I R := [k₁ => t₁, ...]` defines `ks : Kills P ms (some I)` with
+`ks.rel = R` and `ks.ks = [k₁, ...]`, the kills to pass as `run`'s `certified`. `mutant` must
+unfold to `fun k => Mutant.program P ms[k]!` with `P` and `ms` free of `k` (as
+`fun k => ((selected tbl P n)[k]!).program P`), which gives `P` and `ms`. For each row it checks at
+elaboration that `kᵢ` is below the length of `ms`, that `tᵢ` is a theorem whose type is
+`Instance.Refuted I Q fn R` with the given `I` and `R` up to reducible unfolding, a program `Q`
+whose evaluation has no field (`Program.diff`) that differs from `mutant kᵢ`'s, a function `fn`
+that evaluates to that program's function `I.f`, and a proof with no axioms but `propext`,
+`Classical.choice` and `Quot.sound` (`foreignAxiom` with `killAxioms`); any failed check is an
+error and defines nothing. `run tbl P n I` takes only kills of type `Kills P (selected tbl P n) I`,
+so kills of another selection, program or instance do not type-check, and a hand-written list or
+structure is refused (the constructor is private). What it does not check: that the instance fits
+the contract (`rel` is not tied to `I.put`), and that every refuted mutant is listed; the type
+holds no proof (the kernel cannot run the enumeration), so its guarantee is that of the
+elaborator's checks, and a metaprogram naming the private constructor can still build a value.
 
 Tests (`MojoProofTest/Mutate.lean`), with the test table (10 `icmp` boundary swaps, `brTrue`,
 `gepIdx` plus and minus one, `storeDel`, `storeTo`, `gepTy` float to half and to double,
@@ -486,10 +652,15 @@ Tests (`MojoProofTest/Mutate.lean`), with the test table (10 `icmp` boundary swa
   operators of `fourOps` (icmp swaps, constant branch, index plus or minus one, store deletion) give
   9 candidates on vector addition; a budget of 4 selects the first mutant of each of the first
   four operators;
-* the certified lists: `vaddKills` and `vmulKills` come from `mojo_kills` with the 9 theorems
+* the certified kills: `vaddKills` and `vmulKills` come from `mojo_kills` with the 9 theorems
   (`vadd_m0` to `vadd_m7`, `vmul_m4`), and `#guard_msgs` checks that it fails on another mutant's
-  theorem, on another instance, on another kernel's mutant, on a theorem of another statement and
-  on a definition;
+  theorem, on another instance, on another kernel's mutant, on a theorem of another statement, on
+  a definition, on the right program with another function (`vadd_m0_m4`: mutant 0's program with
+  mutant 4's function), on an index beyond the selection and on a mutant term of another shape;
+  the axioms check reports each of `vadd_m0`'s axioms when it is left out of the allowed list (no
+  test declares an axiom, so mojo_kills' own refusal of a foreign one is not run); and kills
+  written by hand (the anonymous constructor, a structure instance with or without `with`, the
+  constructor's name, a plain list given to `run`) are refused;
 * the docstrings: `Kernels.vadd.prog`'s cites its corpus file and manifest digest; those of
   `vadd.m0.prog` and `vadd.m0.fn_0.b_0` cite the mutant (`vaddMutant 0`, `icmp slt->sle`, its
   site, index 0 of the selection, `Kernels.vadd.prog`) and the SHA-256 of the printed module,
@@ -538,7 +709,7 @@ same arguments, runs the same checks, keeps nothing and logs the counts.
 which adds the names `Kernels.vadd.*`, `Kernels.vmul.*` and `Kernels.matmul.*`. Untrusted as
 `mojo_import` is: the terms it adds are checked by evaluation and by the kernel.
 
-Tests (`MojoProofTest/Corpus.lean`): `#mojo_corpus` on every row (111 rows, 82 imported, 29 refused
+Tests (`MojoProofTest/Corpus.lean`): `#mojo_corpus` on every row (114 rows, 85 imported, 29 refused
 as `REFUSALS.tsv` lists; about 3 minutes, which is why the whole corpus is checked in the tests and
 not imported by `Kernels.lean`); the directory `reduction` imported under its path's name;
 `corpusName`; the names `Kernels.lean` gives (`Kernels.vadd.prog.module`, `Kernels.vmul.fn_0`,

@@ -1067,7 +1067,7 @@ theorem Grid.start_reach_byThreads {prog : Program} {fn : Func} {L : Launch} {ar
     · cases h
     cases h
     exact fun _ ha => nomatch ha
-  | tail _ hs ih => exact hs.byThreads (fun n => (Grid.start_ctx h n).2) ih
+  | tail _ hs ih => exact hs.byThreads (fun n => (Grid.start_ctx h n).2.1) ih
 
 /-! ## The case of a thread and a collective call from the start -/
 
@@ -1117,7 +1117,7 @@ theorem Grid.start_reach_fired {prog : Program} {fn : Func} {L : Launch} {args :
     rw [hPb (List.ne_nil_of_mem hb)]
     refine List.mem_map.2 ⟨k % volume L.block, List.mem_range.2 (Nat.mod_lt _ hpos), ?_⟩
     have e := Grid.mem_fired hb
-    simp only [Event.barrier.injEq, (Grid.start_ctx h k).2] at e
+    simp only [Event.barrier.injEq, (Grid.start_ctx h k).2.1] at e
     rw [← e]
     exact Nat.div_add_mod' k _)
   rw [htk] at e
@@ -1860,7 +1860,7 @@ theorem Grid.start_reach_comm {prog : Program} {fn : Func} {L : Launch} {args : 
       a.conflict a' = false) :
     ∃ g₁ g₂, gn.advance c k = .ok (some g₁) ∧ gk.advance c n = .ok (some g₂) ∧ g₁.Same g₂ :=
   Grid.advance_comm (Grid.start_reach_closed h hm hr) (Grid.reach_owns hr (Grid.start_owns h c))
-    (by rw [(Grid.start_ctx h n).2, (Grid.start_ctx h k).2]; exact hnk) hn hk hW
+    (by rw [(Grid.start_ctx h n).2.1, (Grid.start_ctx h k).2.1]; exact hnk) hn hk hW
 
 /-- **The two-thread case of the diamond under a discipline, from the start**:
 `Grid.start_reach_comm` with its premise on accesses from `Grid.pending_apart`. For every
@@ -1881,7 +1881,7 @@ theorem Grid.start_reach_comm_of_owned {ι : Type} {T : Nat → Option (Tiling �
     ∃ g₁ g₂, gn.advance c k = .ok (some g₁) ∧ gk.advance c n = .ok (some g₂) ∧ g₁.Same g₂ :=
   Grid.start_reach_comm h hm hr (fun e => hX (by rw [e])) hn hk fun a a' ha ha' =>
     Access.conflict_eq_false (Grid.pending_apart hn hk
-      (by rw [(Grid.start_ctx h n).2, (Grid.start_ctx h k).2]; exact hX)
-      (fun p hp a ha => by rw [(Grid.start_ctx h p).2]; exact hH p hp a ha) a a' ha ha')
+      (by rw [(Grid.start_ctx h n).2.1, (Grid.start_ctx h k).2.1]; exact hX)
+      (fun p hp a ha => by rw [(Grid.start_ctx h p).2.1]; exact hH p hp a ha) a a' ha ha')
 
 end MojoProof.Sem

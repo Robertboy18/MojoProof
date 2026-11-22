@@ -9,8 +9,8 @@ corpus: tests/corpus/vadd
 tests: MojoProofTest.Kernel.vadd_real, MojoProofTest.Kernel.vadd_finEq, MojoProofTest.Kernel.vadd_stable
 upstream:
 depends: launch, binary-op-rounding, deliver
-level: L0
-evidence: L2: MojoProof.Kernels.vadd.correct; L3: MojoProofTest.Kernel.vadd_real; L4: MojoProofTest.Kernel.vadd_real
+level: L4
+evidence: L1: tests/gpu/vadd/record.txt; L2: MojoProof.Kernels.vadd.correct; L3: MojoProofTest.Kernel.vadd_real; L4: MojoProofTest.Kernel.vadd_real
 ---
 
 # vector_addition
@@ -30,4 +30,8 @@ exact for finite outputs).
 **Out of scope.** Other element types and widths, other launch shapes than one dimension, and
 the bits of a NaN output (they are the delivered NaN, whose payload `deliver` leaves open).
 
-**Open.** L1: no tracked record of a GPU run of this kernel. With one, the level would be L4.
+**The GPU run (L1).** tests/gpu/vadd/record.txt: on one A100 GPU, six launches of the corpus
+file on recorded finite inputs; every word of the output buffer is the same on the GPU and in
+the evaluator. This is a conformance test, not a proof: it covers those launches and inputs.
+
+**Open.** No level is missing. The cases under "Out of scope" are not covered.

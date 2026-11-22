@@ -39,6 +39,8 @@ Proved:
   `T = Σ |aₖ bₖ|`; each iteration may be fused or not.
 * `floatBin_dotStep`: for every float type and flags without `nnan`, `ninf`, `nsz`, `reassoc`,
   `arcp`, `afn`, `floatBin`'s `fmul` and then `fadd` with the factors `exec` records is `dotStep`.
+* `dotLoop_neverFuse`: for every format, oracle numbers, word and pairs, `dotLoop true` at the
+  numbers `3 * (n / 3)` is `dotLoop false` at the numbers `n`.
 
 With the lemmas they use: `NaNEq.symm`, `NaNEq.trans`, `NaNEq.eq_isNaN`, `nanEq_deliver`,
 `cast_self_nanEq`, `contract_unfused`, `dotSum_eq`, `deliver_finite`, `dotStep_error`,
@@ -382,5 +384,22 @@ theorem floatBin_dotStep {t : FloatTy} {fm : FastMath}
   cases hcon : fm.contract <;>
     simp [floatBin, FastMath.check, hc, hcon, withFlags, FastMath.poisons, hn, hi, e1, dotStep,
       Val.ofFloat, Val.float?, fbin, Model.ofBits_toBits, bind, Except.bind, pure, Except.pure]
+
+/-- **The fold at never-fusing numbers.** For every format, oracle numbers `o`, word `acc` and
+factor pairs `ps`: `dotLoop` with `contract` at the numbers `3 * (n / 3)` of `o` (each `fmul`'s and
+`fadd`'s NaN choice kept, remainder 0) is `dotLoop` without `contract` at `o`. -/
+theorem dotLoop_neverFuse (o : Nat → Nat × Nat) (acc : Model fmt)
+    (ps : List (Model fmt × Model fmt)) :
+    dotLoop true (fun j => (3 * ((o j).1 / 3), 3 * ((o j).2 / 3))) acc ps =
+      dotLoop false o acc ps := by
+  induction ps generalizing o acc with
+  | nil => rfl
+  | cons ab ps ih =>
+    have h : dotStep true acc ab (3 * ((o 0).1 / 3), 3 * ((o 0).2 / 3)) =
+        dotStep false acc ab (o 0) := by
+      simp [dotStep, contract, Nat.mul_mod_right, Nat.mul_div_cancel_left _ (show 0 < 3 by decide)]
+    simp only [dotLoop]
+    rw [h]
+    exact ih (fun j => o (j + 1)) _
 
 end MojoProof.Sem

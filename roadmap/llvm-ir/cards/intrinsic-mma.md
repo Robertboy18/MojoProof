@@ -4,21 +4,21 @@ title: The intrinsic family `Intrinsic.mma`
 kind: construct
 ref: PTX ISA 9.5 #warp-level-matrix-instructions-mma
 quote: "Perform matrix multiply-and-accumulate operation"
-lean: MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic
+lean: not stated yet
 corpus: tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_126ea5ea.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_d7e21bec.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_01cf4f39.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_c8f5de2a.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_compute_fn_float32_float32_float32_True_1_b8699ce6f48a0bbb.nvptx.ll
-tests: MojoProofTest.Rule, MojoProofTest.Corpus
+tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
-level: L1
+level: L0
 ---
 # The intrinsic family `Intrinsic.mma`
 
 ## Rule
 
-PTX ISA's section on the instruction NVPTX lowers it to (the quote is the section's first sentence). The importer accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its name and signature (`Intrinsic.name`, `Intrinsic.sig`). The semantics gives a call its meaning in `MojoProof.Sem.intrinsic`. The block checker (MojoProof/Sym/Rules.lean): refused: SState.stmt takes calls of special registers and of minmax only.
+PTX ISA's section on the instruction NVPTX lowers it to (the quote is the section's first sentence). The importer accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its name and signature (`Intrinsic.name`, `Intrinsic.sig`). The family is parsed, not modelled: MojoProofTest/Modelled.lean's kernel of a call (its row `Intrinsic.mma`) stops with `unsupported: ldmatrix and mma in a grid`. The declarations: `MojoProof.LLVM.Intrinsic.ofDecl`, `MojoProof.LLVM.Intrinsic`, `MojoProof.Sem.intrinsic`. The block checker (MojoProof/Sym/Rules.lean): refused: SState.stmt takes calls of special registers and of minmax only.
 
 ## Corpus
 
-29 of the 111 corpus files use it (1541 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.mma.m16n8k16.row.col.bf16`, `llvm.nvvm.mma.m16n8k4.row.col.tf32`, `llvm.nvvm.mma.m16n8k8.row.col.bf16`, `llvm.nvvm.mma.m16n8k8.row.col.f32.f32`, `llvm.nvvm.mma.m16n8k8.row.col.tf32`, `llvm.nvvm.mma.m8n8k4.row.col.f64`.
+29 of the 114 corpus files use it (1541 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.mma.m16n8k16.row.col.bf16`, `llvm.nvvm.mma.m16n8k4.row.col.tf32`, `llvm.nvvm.mma.m16n8k8.row.col.bf16`, `llvm.nvvm.mma.m16n8k8.row.col.f32.f32`, `llvm.nvvm.mma.m16n8k8.row.col.tf32`, `llvm.nvvm.mma.m8n8k4.row.col.f64`.
 
 ## Out of scope
 
@@ -26,4 +26,4 @@ Members of the family the corpus does not call. The NVPTX backend's documentatio
 
 ## Open
 
-L2 needs a recorded GPU run of a test of the construct; there is none.
+L1 needs a semantics of the construct: the run of its test kernel stops with `unsupported: ldmatrix and mma in a grid`. L2 then needs a recorded GPU run of a test of it; there is none.

@@ -27,6 +27,19 @@ go into blocks with `phi`s (`Exit.phi`): for every trip count `n < 4` on `outC` 
 loop (`WalkI`). `cnt_entry` is the entry edge for every context, step count, memory and frame of
 `cnt`; `cnt_entry_open` is its twin, with `f.fn = cnt` behind an irreducible definition, so the
 position the edge enters the header at is left open, as logged.
+
+`cnt_rounds` is the loop's rounds for every bound: for every `n ≤ 2 ^ 60` and every round
+`i < n` (no literal bound, so mojo_obl proves it for an arbitrary `i`, one proof for every `n`),
+every valuation that meets the invariant `invB` (one conjunction, which mojo_obl splits) meets the
+round's premises, the store through address space 1 included. `cnt_rounds_open` is its twin, with
+the bound on the block's address behind an irreducible definition: the store is left open, as
+logged (the `getelementptr` is some value, a pointer or poison, with no bound).
+
+`cnt_rounds_struct` is `cnt_rounds` with the invariant a hypothesis of the context, a structure
+of propositions (`InvS`) whose fields and conjuncts mojo_obl reads (`Obl.parts`);
+`cnt_rounds_struct_open` is its twin, the field on the block's address behind `Room`, its store
+left open, as logged. `cnt_have` names two registers after a round in one `obl_have`; the last
+`example` is `obl_have`'s refusal of a term that is no register, memory or node value.
 -/
 
 namespace MojoProofTest.Obl
@@ -181,6 +194,136 @@ theorem cnt_entry_open (c : Ctx) (k : Nat) (m : Mem) (f : Frame) (hf : IsCnt f) 
   unfold IsCnt at hf
   exact Exit.pc_of_fn hf rfl
 
+/-- The facts of round `i` of the counting loop for the bound `n` and the block `b`, one
+conjunction: valuation `W` is in a context of `cntP` and in `cnt`, `%i = i`, `%n = n`, `%p` is at
+offset 0 of `b`, `b` is a writable buffer of `n` cells of `i64` (`8 n` bytes) aligned to 8, and
+its address plus its size is at most `2 ^ 64`, 2 to the width of the pointers of address space 1
+(`cntP_ptr`). -/
+def invB (n b i : Nat) (W : Valuation) : Prop :=
+  W.ctx.prog = cntP ∧ W.fn = cnt ∧ W.regs 4 = some (.bits 64 (BitVec.ofNat 64 i)) ∧
+    W.regs 7 = some (.bits 64 (BitVec.ofNat 64 n)) ∧ W.regs 8 = some (.ptr ⟨b, 0⟩) ∧
+    W.mem.Buffer b (8 * n) 8 true ∧
+    ∃ blk, W.mem.blocks b = some blk ∧ blk.addr + 8 * n ≤ 2 ^ (cntP.layout.ptr 1).1
+
+/-- **The counting loop's rounds for every bound**, by mojo_obl with no literal bound: for every
+bound `n ≤ 2 ^ 60`, block `b`, round `i < n` and valuation `W` of `invB n b i`, the round's
+premises hold at `W` (`Round`: the header's comparison `i < n` is true, the body's increment,
+address and store of cell `i` run, its edge goes to the header at position 1). mojo_obl proves
+`∀ i < n` for an arbitrary `i` with `i < n` as a hypothesis, and finds the registers, the
+function, the program and the buffer among `invB`'s conjuncts; the address of cell `i` and the
+store, through pointers of address space 1, by `gep_buffer` and `store_buffer` in that space. -/
+theorem cnt_rounds : ∀ n b : Nat, n ≤ 2 ^ 60 → ∀ i < n, ∀ W : Valuation, invB n b i W →
+    Round 1 1 cntH.obls cntH bodyC W := by
+  mojo_obl
+
+/-- The bound on the address of block `b` of memory `m` in `invB`, irreducible, so that mojo_obl
+does not find it. -/
+@[irreducible] def Room (m : Mem) (b n : Nat) : Prop :=
+  ∃ blk, m.blocks b = some blk ∧ blk.addr + 8 * n ≤ 2 ^ (cntP.layout.ptr 1).1
+
+/-- `invB` with the bound on the block's address stated as `Room`. -/
+def invR (n b i : Nat) (W : Valuation) : Prop :=
+  W.ctx.prog = cntP ∧ W.fn = cnt ∧ W.regs 4 = some (.bits 64 (BitVec.ofNat 64 i)) ∧
+    W.regs 7 = some (.bits 64 (BitVec.ofNat 64 n)) ∧ W.regs 8 = some (.ptr ⟨b, 0⟩) ∧
+    W.mem.Buffer b (8 * n) 8 true ∧ Room W.mem b n
+
+/--
+info: mojo_obl: open goal
+  Cond.Holds (W.into 1 cntH) (vals (W.into 1 cntH) cntB.nodes)
+    (Cond.mem [SEff.store 2 2 (SVal.reg 4) (SVal.node 1)])
+-/
+#guard_msgs (whitespace := lax) in
+/-- **The twin of `cnt_rounds`**: with the bound on the block's address behind the irreducible
+`Room`, mojo_obl finds no no-wrap fact for the body's pointer, so it leaves open the obligation
+that needs the address of cell `i` (the store), as logged, and proves the rest, the value of the
+`getelementptr` as some value, a pointer or poison (`gep_buffer_ok`); unfolding `Room` lets it
+close the store. -/
+theorem cnt_rounds_open : ∀ n b : Nat, n ≤ 2 ^ 60 → ∀ i < n, ∀ W : Valuation, invR n b i W →
+    Round 1 1 cntH.obls cntH bodyC W := by
+  mojo_obl
+  unfold Room at *
+  mojo_obl
+
+/-- The facts of `invB` as a structure of propositions, one field each and the registers one
+conjunction: valuation `W` is in a context of `cntP` and in `cnt`, `%i = i`, `%n = n`, `%p` is at
+offset 0 of `b`, `b` is a writable buffer of `n` cells of `i64` aligned to 8, and its address plus
+its size is at most `2 ^ 64`. -/
+structure InvS (n b i : Nat) (W : Valuation) : Prop where
+  /-- Builds `InvS` from its fields. -/
+  mk ::
+  /-- `W` is in a context of `cntP`. -/
+  prog : W.ctx.prog = cntP
+  /-- `W` is in `cnt`. -/
+  fn : W.fn = cnt
+  /-- `%i = i`, `%n = n` and `%p` is at offset 0 of `b`. -/
+  regs : W.regs 4 = some (.bits 64 (BitVec.ofNat 64 i)) ∧
+    W.regs 7 = some (.bits 64 (BitVec.ofNat 64 n)) ∧ W.regs 8 = some (.ptr ⟨b, 0⟩)
+  /-- `b` is a writable buffer of `n` cells of `i64` aligned to 8. -/
+  buf : W.mem.Buffer b (8 * n) 8 true
+  /-- The block's address plus its size is at most `2 ^ 64`. -/
+  room : ∃ blk, W.mem.blocks b = some blk ∧ blk.addr + 8 * n ≤ 2 ^ (cntP.layout.ptr 1).1
+
+/-- **The counting loop's rounds from a structure in the context**, by mojo_obl: for every bound
+`n ≤ 2 ^ 60`, block `b`, round `i < n` and valuation `W` with a hypothesis `h : InvS n b i W`,
+the round's premises hold at `W` (`Round`); mojo_obl finds the program, the function, the buffer
+and its room among the fields of `h` and the registers among the conjuncts of its field `regs`
+(`Obl.parts`). -/
+theorem cnt_rounds_struct (n b i : Nat) (hn : n ≤ 2 ^ 60) (hi : i < n) (W : Valuation)
+    (h : InvS n b i W) : Round 1 1 cntH.obls cntH bodyC W := by
+  mojo_obl
+
+/-- `InvS` with the bound on the block's address stated as `Room`. -/
+structure InvSR (n b i : Nat) (W : Valuation) : Prop where
+  /-- Builds `InvSR` from its fields. -/
+  mk ::
+  /-- `W` is in a context of `cntP`. -/
+  prog : W.ctx.prog = cntP
+  /-- `W` is in `cnt`. -/
+  fn : W.fn = cnt
+  /-- `%i = i`, `%n = n` and `%p` is at offset 0 of `b`. -/
+  regs : W.regs 4 = some (.bits 64 (BitVec.ofNat 64 i)) ∧
+    W.regs 7 = some (.bits 64 (BitVec.ofNat 64 n)) ∧ W.regs 8 = some (.ptr ⟨b, 0⟩)
+  /-- `b` is a writable buffer of `n` cells of `i64` aligned to 8. -/
+  buf : W.mem.Buffer b (8 * n) 8 true
+  /-- The block's address plus its size is at most `2 ^ 64`, irreducible. -/
+  room : Room W.mem b n
+
+/--
+info: mojo_obl: open goal
+  Cond.Holds (W.into 1 cntH) (vals (W.into 1 cntH) cntB.nodes)
+    (Cond.mem [SEff.store 2 2 (SVal.reg 4) (SVal.node 1)])
+-/
+#guard_msgs (whitespace := lax) in
+/-- **The twin of `cnt_rounds_struct`**: with the field `room` behind the irreducible `Room`,
+mojo_obl finds no no-wrap fact for the body's pointer among the parts of `h`, so it leaves the
+store open, as logged, and proves the rest. The goal left open has the hypotheses of the call,
+not the parts of `h`; the field taken by `have` (whose goal carries an annotation mojo_obl looks
+through) and unfolded lets it close the store. -/
+theorem cnt_rounds_struct_open (n b i : Nat) (hn : n ≤ 2 ^ 60) (hi : i < n) (W : Valuation)
+    (h : InvSR n b i W) : Round 1 1 cntH.obls cntH bodyC W := by
+  mojo_obl
+  have hr := h.room
+  unfold Room at hr
+  mojo_obl
+
+/-- **Two registers after a round in one `obl_have`**: for every bound `n ≤ 2 ^ 60`, block `b`,
+round `i < n` and valuation `W` with `h : InvS n b i W`, the counter `%i` and the bound `%n` have
+values after the round `1 → 2`, both from one run of the evaluator on the facts of `h`'s
+parts. -/
+theorem cnt_have (n b i : Nat) (hn : n ≤ 2 ^ 60) (hi : i < n) (W : Valuation)
+    (h : InvS n b i W) : ∃ v w, (Valuation.round 1 cntH bodyC W).regs 4 = some v ∧
+      (Valuation.round 1 cntH bodyC W).regs 7 = some w := by
+  obl_have h4 : (Valuation.round 1 cntH bodyC W).regs 4,
+    h7 : (Valuation.round 1 cntH bodyC W).regs 7
+  exact ⟨_, _, h4, h7⟩
+
 end Loop
+
+/-- error: obl_have: not a register, memory or node value
+  V.k -/
+#guard_msgs in
+example (V : Valuation) : V.k = V.k := by
+  obl_have h : V.k
+  rfl
 
 end MojoProofTest.Obl

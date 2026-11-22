@@ -15,12 +15,17 @@ replayed on one launch and memory (`vaddAt`, `vmulAt`: `MojoProofTest/Kernel.lea
 `mem5`, `ch₀`, `ω₀`); their reports are pinned below, every mutant with its outcome. The kills
 with a theorem by `decide +kernel` (`vadd_m0` to `vadd_m7`, `vmul_m4`) are certified, and a test
 checks that every index the reports list as certified has its theorem; the other refuted mutants
-and those that pass are unknown. Controls: the identity edit is admitted and is the original; the
-smaller table `fourOps` of four operators (icmp swaps, constant-true branch, index plus or minus
-one, store deletion) gives 9 candidates on vector addition. A malformed edit (a branch to a local
-that is no block, or that the name table lacks, or a getelementptr whose indices do not index its
-type) is classified malformed, and on tiled_matmul, whose barrier calls the block checker refuses,
-an admitted mutant is unsupported.
+and those that pass are unknown. The certified kills are `Kills` values from `mojo_kills`; tests
+check that `mojo_kills` refuses a wrong row (another mutant's theorem, another instance, another
+kernel's mutant, another statement, a definition, the right program with another function, an
+index beyond the selection, a mutant term of another shape), that its axioms check reports an
+axiom left out of the allowed list, and that kills written by hand (the anonymous constructor, a
+structure instance, the constructor's name, a list) are refused. Controls: the identity edit is
+admitted and is the original; the smaller table `fourOps` of four operators (icmp swaps,
+constant-true branch, index plus or minus one, store deletion) gives 9 candidates on vector
+addition. A malformed edit (a branch to a local that is no block, or that the name table lacks,
+or a getelementptr whose indices do not index its type) is classified malformed, and on
+tiled_matmul, whose barrier calls the block checker refuses, an admitted mutant is unsupported.
 -/
 
 namespace MojoProofTest.Mutate
@@ -176,11 +181,11 @@ mojo_kills vaddKills : vaddMutant on vaddAt vaddOut :=
   [0 => vadd_m0, 1 => vadd_m1, 2 => vadd_m2, 3 => vadd_m3, 4 => vadd_m4, 5 => vadd_m5,
     6 => vadd_m6, 7 => vadd_m7]
 mojo_kills vmulKills : vmulMutant on vmulAt vmulOut := [4 => vmul_m4]
-#guard vaddKills == [0, 1, 2, 3, 4, 5, 6, 7] && vmulKills == [4]
+#guard vaddKills.ks == [0, 1, 2, 3, 4, 5, 6, 7] && vmulKills.ks == [4]
 
 -- Each certified mutant's term is the harness's selected mutant.
 #guard [vadd.m0.prog, vadd.m1.prog, vadd.m2.prog, vadd.m3.prog, vadd.m4.prog, vadd.m5.prog,
-    vadd.m6.prog, vadd.m7.prog].map (·.module) == vaddKills.map (vaddMutant · |>.module)
+    vadd.m6.prog, vadd.m7.prog].map (·.module) == vaddKills.ks.map (vaddMutant · |>.module)
 #guard vmul.m4.prog.module == (vmulMutant 4).module
 
 -- A wrong theorem fails the build: another mutant's (index 1 with `vadd_m0`), another instance
@@ -211,6 +216,85 @@ mojo_kills bad4 : vaddMutant on vaddAt vaddOut := [0 => vadd_m0, 2 => Nat.le_ref
 /-- error: mojo_kills: vaddAt does not refute mutant 0: it is not a theorem -/
 #guard_msgs (whitespace := lax) in
 mojo_kills bad5 : vaddMutant on vaddAt vaddOut := [0 => vaddAt]
+
+set_option profiler true in
+/-- Mutant 0's program with mutant 4's kernel function (the store deleted) is refuted on
+`vaddAt`: the right program for index 0 but another function, which `mojo_kills` refuses. -/
+theorem vadd_m0_m4 : vaddAt.Refuted vadd.m0.prog vadd.m4.fn_0 vaddOut :=
+  Instance.refutes (fun _ hB => hB.1) (by decide +kernel) (by decide +kernel)
+
+-- More wrong rows: the right program with another function, an index beyond the selection, and a
+-- mutant term that is not the selected mutants' programs.
+/--
+error: mojo_kills: vadd_m0_m4 does not refute mutant 0: its function vadd.m4.fn_0 is not function 0
+of mutant 0
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kills bad6 : vaddMutant on vaddAt vaddOut := [0 => vadd_m0_m4]
+/--
+error: mojo_kills: vadd_m0 does not refute mutant 31: there are 31 mutants in
+selected table Kernels.vadd.prog 32
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kills bad7 : vaddMutant on vaddAt vaddOut := [31 => vadd_m0]
+/--
+error: mojo_kills: fun x => vadd.m0.prog does not unfold to `Mutant.program P ms[k]!` with `P` and
+`ms : List Mutant` free of `k`
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kills bad8 : (fun _ => vadd.m0.prog) on vaddAt vaddOut := [0 => vadd_m0]
+
+-- The axioms check: `vadd_m0` depends on axioms of `killAxioms` only, and with any one of them
+-- left out of the allowed list, `foreignAxiom` (mojo_kills' check) reports that one. No test
+-- theorem depends on an axiom outside `killAxioms` (none is declared), so mojo_kills' refusal of
+-- one is checked through `foreignAxiom` only.
+run_meta do
+  let axs ← Lean.collectAxioms ``vadd_m0
+  if axs.isEmpty then Lean.throwError "vadd_m0 depends on no axioms"
+  match ← foreignAxiom killAxioms ``vadd_m0 with
+  | some b => Lean.throwError m!"vadd_m0 uses {b}"
+  | none => pure ()
+  for a in axs do
+    unless (← foreignAxiom (killAxioms.erase a) ``vadd_m0) == some a do
+      Lean.throwError "foreignAxiom does not report {a}"
+
+/-- The type of vector_addition's kills on `vaddAt`, as `run` takes them. -/
+abbrev VaddKills : Type :=
+  Kills Kernels.vadd.prog (selected table Kernels.vadd.prog 32) (some vaddAt)
+
+-- Kills cannot be written by hand: the constructor is private, so the anonymous constructor, a
+-- structure instance (with or without `with`) and the constructor's name are refused, and a list
+-- is not kills.
+/--
+error: Invalid `⟨...⟩` notation: Constructor for `MojoProof.LLVM.Mutate.Kills` is marked as private
+-/
+#guard_msgs (whitespace := lax) in
+example : VaddKills := ⟨vaddOut, [0, 12]⟩
+/--
+error: invalid {...} notation, constructor for `Kills` is marked as private
+-/
+#guard_msgs (whitespace := lax) in
+example : VaddKills := { rel := vaddOut, ks := [0, 12] }
+/--
+error: invalid {...} notation, constructor for `Kills` is marked as private
+-/
+#guard_msgs (whitespace := lax) in
+example : VaddKills := { vaddKills with ks := [0, 12] }
+/-- error: Unknown constant `MojoProof.LLVM.Mutate.Kills.mk` -/
+#guard_msgs (whitespace := lax) in
+example : VaddKills := Kills.mk vaddOut [0, 12]
+/--
+error: Application type mismatch: The argument
+  [0, 12]
+has type
+  List ℕ
+but is expected to have type
+  optParam (Kills Kernels.vadd.prog (selected table Kernels.vadd.prog 32) (some vaddAt)) Kills.empty
+in the application
+  run table Kernels.vadd.prog 32 (some vaddAt) [0, 12]
+-/
+#guard_msgs (whitespace := lax) in
+example : Report := run table Kernels.vadd.prog 32 (some vaddAt) ([0, 12] : List Nat)
 
 -- The control: the identity mutant (11) replays with no violation.
 #guard (vaddAt.replay (vaddMutant 11) Kernels.vadd.fn_0).passed

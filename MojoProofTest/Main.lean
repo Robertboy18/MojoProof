@@ -1,6 +1,7 @@
 import MojoProof.LLVM.Import
 import MojoProof.LLVM.Printer
 import MojoProofTest.Eval
+import MojoProofTest.Gpu
 
 /-!
 # The test runner (`lake test`)
@@ -13,7 +14,9 @@ import MojoProofTest.Eval
    `tests/corpus/REFUSALS.tsv` (and every listed file is refused).
 4. The evaluator on `vector_addition` and `tiled_matmul` (`MojoProofTest.Eval`).
 
-Exits with status 1 on any failure.
+Exits with status 1 on any failure. With the first argument `gpu`, it is instead the comparison of
+a GPU run with the evaluator, `MojoProofTest.Gpu.main` on the other arguments, compiled (the
+run of `lean --run tests/gpu/Compare.lean` interprets it).
 -/
 
 open MojoProof MojoProof.LLVM
@@ -72,8 +75,10 @@ def rows (path : System.FilePath) : IO (List (List String)) := do
 /-- The test driver `lake test` runs, on the corpus directory `args` names (default
 `tests/corpus`): the SHA-256 vectors, the importer's refusals, and for every `MANIFEST.tsv` row its
 digest, its parse, print and reparse, and its import or its listed refusal; then the evaluation
-tests. Exit code 0 when every check passes, 1 otherwise. -/
+tests. Exit code 0 when every check passes, 1 otherwise. With the first argument `gpu`,
+`MojoProofTest.Gpu.main` on the other arguments. -/
 def main (args : List String) : IO UInt32 := do
+  if args.head? == some "gpu" then return ← MojoProofTest.Gpu.main args.tail
   let root : System.FilePath := args.headD "tests/corpus"
   let mut fails : Array String := #[]
   for (msg, d) in shaVectors do

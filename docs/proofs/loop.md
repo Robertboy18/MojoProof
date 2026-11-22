@@ -7,6 +7,16 @@ position `p`, after its `phi`s, through the body to the latch) that `coversPathI
 every trip count `n`, every context of `P` and every thread whose innermost frame runs `fn` at
 block `h`'s position `p`.
 
+`Block.sound_edge`, `Block.sound_loop`, `Round.of_inv` and `Block.sound_loop_inv` take a flag
+`contract`, and `ChainWith.reach`, `ChainWith.of_iter`, `ChainWith.of_rounds`, `Runs.of_chainWith`
+and `Runs.of_chainsWith` are `Chain.reach`, `Chain.of_iter`, `Chain.of_rounds`, `Runs.of_chain` and
+`Runs.of_chains` with it (`LoopPaths`, `Runs.of_loop` and `Runs.of_loops` take none). This file
+states the `contract = false` case; with `contract = true` (blocks with `fmul contract`) read
+`coversPathWith true`, `WalkWith true`, `Valuation.lastWith true`, `Valuation.roundWith true`,
+`EdgeWith true`, `RoundWith true`, `BackWith true`, `coversChainWith true` and `ChainWith true` for
+`coversPathI`, `WalkI`, `Valuation.lastI`, `Valuation.round`, `Edge`, `Round`, `Back`, `coversChain`
+and `Chain` (docs/proofs/contract.md). The proofs are the same.
+
 ## Statement
 
 `Valuation.round h S B V` is the valuation at the header after one round from header valuation
@@ -43,7 +53,7 @@ The first two steps are `Block.sound_edge`; `Steps.trans_step` composes the step
 ## Dependencies
 
 `Block.sound_rounds`, `Block.sound_edge` (MojoProof/Sym/Loop.lean);
-`Block.sound_pathI`, `Ends.edge`, `Valuation.lastI_k`, `Steps.trans_step`
+`Block.sound_pathI`, `Ends.edge`, `Valuation.lastI_k` (MojoProof/Sym/Path.lean); `Steps.trans_step`
 (MojoProof/Sym/Block.lean); `Function.iterate_succ_apply'` (Mathlib);
 `succs` (MojoProof/Sym/Info.lean) for `backEdges`.
 
@@ -141,7 +151,7 @@ on memories, every context of `P`, and every thread with one frame of `fn`.
      `I 0` holds there.
    - `Block.sound_rounds` reaches `h`'s position `p` again, at a valuation of `I n`; with no
      nested loop each round is `Block.sound_edge` of the loop path.
-   - The exit hypothesis there gives `WalkI` and `ret`. `Block.sound_retI` then gives the steps
+   - The exit hypothesis there gives `WalkI` and `ret`. `Block.sound_retR` then gives the steps
      to the `ret` and its `.done` step on the memory the effects make, which is the memory of `Q`
      because `Except.ok` is injective.
    - The `alloca` blocks are still `f`'s (each part keeps them), and `Steps.trans` composes the
@@ -160,8 +170,8 @@ Each round of `Block.sound_loop` is `Block.sound_edge` (the proof in the first s
 ## Dependencies
 
 - `Block.sound_rounds`, `Runs.of_chain`, `Runs.of_chains` (MojoProof/Sym/Loop.lean);
-- `Block.sound_pathI`, `Block.sound_retI`, `Ends.edge`, `Valuation.lastI_k`, `Steps.trans`,
-  `Steps.trans_step` (MojoProof/Sym/Block.lean);
+- `Block.sound_pathI`, `Block.sound_retR`, `Ends.edge`, `Valuation.lastI_k`
+  (MojoProof/Sym/Path.lean); `Steps.trans`, `Steps.trans_step` (MojoProof/Sym/Block.lean);
 - `Runs` (MojoProof/Sym/Sched.lean);
 - `Mem.setLive`, `Mem.set`, `Mem.load` (MojoProof/Sem/);
 - `Function.iterate_succ_apply'` (Mathlib).
@@ -366,7 +376,7 @@ Theorems.
      - The induction hypothesis on the path out, at a valuation of `I n`, reaches the last path.
 
      `Steps.trans` composes the runs.
-3. `Chain.reach` reaches the last path, where `Ret` gives `WalkI` and `ret`. `Block.sound_retI`
+3. `Chain.reach` reaches the last path, where `Ret` gives `WalkI` and `ret`. `Block.sound_retR`
    gives the steps and the `.done` step. `Except.ok.inj` matches the memory, and the `alloca`
    blocks are `f`'s.
 4. `coversChains` gives the chosen chain's start label and `coversChain` from 0
@@ -380,7 +390,7 @@ Theorems.
 
 ## Dependencies
 
-`Block.sound_edge`, `Block.sound_retI`, `Steps.trans`, `Ret`, `Valuation.round`,
+`Block.sound_edge`, `Block.sound_retR`, `Steps.trans`, `Ret`, `Valuation.round`,
 `Function.iterate_succ_apply'`, `List.all_eq_true`, `List.mem_map_of_mem`.
 
 ## Instances
@@ -464,3 +474,102 @@ valuation.
   bound needs each loop's invariant steps, as `invN_step` gives them for `cnt`.
 - `Kernel.sound_of_paths` and `mojo_kernel` (MojoProof/Sym/Kernel.lean) still take loop-free
   paths.
+
+# The naive kernel's thread through its loop (`thread_run`, `thread_skip`, `thread0`)
+
+Lean: `MojoProofTest/NaiveThread.lean`, with `Valuation.roundWith_k` in
+`MojoProof/Sym/Loop.lean`. The kernel is the naive matmul (`naive`,
+MojoProofTest/SymPhi.lean); the plan of its kernel theorem is in docs/proofs/kernel.md, and this
+section is that plan's run of one thread of `S` (its step 4).
+
+**Scope.** `Valuation.roundWith_k`: every flag, header label, summary, path, valuation and number
+of rounds. `steps` and `thread_run`: every valuation of `naive`'s function (so every thread of
+every launch, at any step count), every list of factor pairs (the trip count `K` is its length),
+and every predicate on the head's valuations and on the memory at the return. `thread_skip`:
+every valuation and predicate on the memory at the return. `thread0`, `thread0_twin` and
+`skip_threads` are tests: one launch, one memory, one address choice, one oracle.
+
+## Statement
+
+1. `Valuation.roundWith_k`. `i` rounds (`Valuation.roundWith contract`'s `i`-th iterate) keep
+   the context and the function and add `i * (pathLen S B + 1)` to the step count.
+2. `steps`. For the naive kernel's chain `chainN` (the path `%6 → %45` into `%46`'s position 2,
+   then the loop `naiveL`, accepted by `coversChainsWith true`: `chainN_covers`): the path adds 39
+   steps, a round adds 18, and the latch `%52` is entered 3 steps after the head. Its `fmul`
+   (statement 12) and `fadd` (statement 13) in round `j` are thus the steps `k0 + 54 + 18 j` and
+   `k0 + 55 + 18 j` of a thread whose entry valuation has step count `k0`, and their oracle numbers
+   are `oN c k0 j`, the context's oracle at those steps, lane 0. The positions are proved from
+   the step count, not read off a run.
+3. `Inv o ps j W`: `%47 = j` and `%48` holds `dotLoop true o +0 (ps.take j)`.
+4. `thread_run`. For a valuation `V` with `V.fn = naive.fn_0`, pairs `ps` and predicates `G`
+   (on head valuations) and `Q` (on memories), suppose:
+   - `hE`: the entry block `%6`'s obligations hold at `V` and its branch goes to `%45` (the thread
+     is in bounds);
+   - `h0`: `Inv (oN V.ctx V.k) ps 0` and `G` at the head after `%6 → %45`;
+   - `hR`: for every `j < ps.length` and every head valuation `W` with `V`'s context and step
+     count `V.k + 39 + 18 j` where `Inv` and `G` hold: the round's premises (`RoundWith true`),
+     `G` after it, `%47 = j + 1` after it, and `%48` after it is the `fadd contract` of `%48`
+     before it and the `fmul contract` of pair `j`, at the oracle numbers of the latch's
+     statements 12 and 13;
+   - `hX`: at the head after `ps.length` rounds where `Inv` and `G` hold, the path out
+     `%46 → %51 → %67 → %69` returns with a memory of `Q` (`RetWith true`).
+
+   Then `∃ C ∈ [chainN], RetLsWith true Q C.loops V C.l C.ds C.S C.E`. With
+   `V = Valuation.entry (c k) 0 m' f` this is the second disjunct of the per-thread premise of
+   the kernel theorem with `fmul contract` for `chains = [chainN]`.
+5. `thread_skip`. For a valuation `V` and a predicate `Q` on memories: if `%6`'s obligations hold
+   at `V`, its branch goes to `%44` (the thread is out of bounds), and `Q` holds of the memory
+   that `%6`'s effects give (its three loads, which add trace entries), then
+   `RetWith true V Q skipN`, where `skipN` is the path `%6 → %44 → %69`, accepted by
+   `coversPathWith true` (`skipN_covers`): the first disjunct of that premise, for
+   `paths = [skipN]`. No store runs on the path.
+
+The premises are the obligations the checker does not decide, each at a symbolic `W`: the
+bounds `%47 < %16` with `%16 = smax(K, 0)`, the address arithmetic of the latch's loads (they
+read pair `j`) and of the store, and the in-bounds test of `%6`. The oracle positions are not
+premises.
+
+## Proof
+
+`steps` is `Valuation.roundWith_k` at the path (one round of `%6 → %45`, whose `pathLen` is 38)
+and at `naiveL` (`pathLen` 17), and `Valuation.lastWith_k` with the latch's length 14, the
+lengths by `decide +kernel`. `thread_run` applies `Round.of_inv` with the invariant
+`W.ctx = V.ctx ∧ W.k = V.k + 39 + 18 j ∧ Inv … j W ∧ G W`. In a round, `hR` gives the
+registers after it; `steps` turns the latch's oracle steps into `oN`'s, `floatBin_dotStep`
+turns the `fmul` and `fadd` into `dotStep true`, and `dotLoop` of `ps.take (j + 1)` is
+`dotStep` of `dotLoop` of `ps.take j`. The rounds then give `ChainWith.of_rounds`, the edge
+`%45 → %46` is `SymNaive.pre_edge` (every valuation), and `hX` closes the chain with
+`ChainWith.last`. `thread_skip` unfolds `RetWith`: `%44` and `%69` have no effect and the one
+obligation `.mem []`, `%44` is a `br`, and the memory at `%69`'s entry is that of `%6`'s effects
+(`Valuation.intoWith` keeps `Valuation.after`'s memory).
+
+## Instances
+
+- `thread0_chain`, `thread0`: the start `startN` of `naive` on one block of 2 × 2 threads with
+  `m = n = 1` and `K = 2` (`argsN`), the memory `memN` (C one cell, A and B row 0 of
+  MojoProofTest/NaiveRun.lean's matrices), the address choice 0 and the oracle `ωN`, which gives 2
+  (fuse the `fadd`) at step 73. All of `thread_run`'s premises at thread 0, the one in bounds,
+  are closed by `decide +kernel`, with `G` the three head valuations. `Runs.of_chainsWith true`
+  then runs thread 0 from `Grid.start`'s frame to its end, and cell `(0, 0)` holds
+  `dotLoop true (oN (cN 0) 0) +0 psN`, the word `0xa8800000` (`-2 ^ -46`). The oracle numbers
+  used are those of steps 54, 55, 72 and 73 (0, 0, 0 and 2).
+- `thread0_twin`: under `oN (cN 0) 1`, the numbers one step later (55, 56, 73, 74), round 1's
+  `fadd` does not fuse, `dotLoop` gives `+0`, and `Inv` fails at the head after two rounds.
+- `skip_threads`: at the same start, threads 1 to 3 (out of bounds) run to their end by
+  `thread_skip` and `Runs.of_retWith`, with the memory of their three loads, the premises closed
+  by `decide +kernel`; thread 0's branch goes to `%45`, so `thread_skip`'s premise fails there.
+  With `thread0`, every thread of the launch runs to its end.
+
+## Limits
+
+- `startN`'s launch has `m = n = 1` and blocks of one and two floats, so it does not meet
+  `NaiveSpec.At`. MojoProofTest/NaiveStart.lean has an evaluated start that does (`m = 1`,
+  `n = 2`, `C` of `50257 * 4` bytes, `A` and `B` read-only, every `A`, `B`, `K ≤ 768` and
+  oracle), with `NaiveIn.runIn` and `NaiveOut.runOut` at each of its four threads
+  (`NaiveStart.runs12`). `thread0`, `thread0_twin` and `skip_threads` are about `memN` and `ωN`
+  (a concrete cell value, a failing invariant, the memory of the loads), so they are not
+  corollaries of it.
+- The kernel theorem for `naive` still needs the premises of `thread_run` and `thread_skip`
+  discharged at a symbolic thread (the obligation prover), the start facts for the three
+  `byval` structs, and the `Elem` bookkeeping of the plan's steps 2, 3 and 5 (among it, that an
+  out-of-bounds thread's loads keep the cells).

@@ -1,6 +1,8 @@
-# The checks of CONTRIBUTING.md ("Building and checking"), the roadmap check and the site's
-# build and check, on pull requests that change Lean code, the corpus, the scripts or the roadmap (and by hand
-# from the Actions tab). Pushes to main only rebuild the site.
+# The checks of CONTRIBUTING.md ("Building and checking"): the build, the tests, the text check, the
+# audit, near_dups.py and the counts' limits (scripts/counts.py), cited.py, the corpus and the two
+# roadmap checks, then the site's build and check. On pull requests that change Lean code, the
+# corpus, the scripts or the roadmap (and by hand from the Actions tab). Pushes to main only rebuild
+# the site.
 name: CI
 
 on:
@@ -51,8 +53,19 @@ jobs:
       - name: Run the tests
         run: lake test
 
+      - name: No sorry, admit, native_decide, axiom, implemented_by or extern in MojoProof/
+        run: "! grep -rnwE 'sorry|admit|native_decide|axiom|implemented_by|extern' MojoProof"
+
       - name: Audit
-        run: lake env lean --run scripts/Audit.lean
+        shell: bash
+        run: set -o pipefail; lake env lean --run scripts/Audit.lean | tee audit.log
+
+      - name: Near-duplicate theorems
+        shell: bash
+        run: set -o pipefail; python3 scripts/near_dups.py . --lib MojoProof --list 5 | tee near.log
+
+      - name: Counts within scripts/counts.tsv
+        run: python3 scripts/counts.py audit.log near.log
 
       - name: Names cited in docstrings
         run: python3 scripts/cited.py
@@ -62,6 +75,9 @@ jobs:
 
       - name: Roadmap status is current
         run: python3 scripts/roadmap_status.py --check
+
+      - name: The llvm-ir roadmap is what the importer generates
+        run: python3 scripts/roadmap_llvm.py --check
 
       - name: Build and check the site
         run: |

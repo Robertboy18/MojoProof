@@ -15,7 +15,7 @@
 <polygon fill="none" stroke="black" points="152.5,-398 13.5,-398 13.5,-345 152.5,-345 152.5,-398"/>
 <text text-anchor="middle" x="83" y="-382.8" font-family="Helvetica" font-size="14.00">MojoProof</text>
 <text text-anchor="middle" x="83" y="-367.8" font-family="Helvetica" font-size="14.00">this repository</text>
-<text text-anchor="middle" x="83" y="-352.8" font-family="Helvetica" font-size="14.00">130 modules loaded</text>
+<text text-anchor="middle" x="83" y="-352.8" font-family="Helvetica" font-size="14.00">155 modules loaded</text>
 </g>
 <!-- mathlib -->
 <g id="node2" class="node">
@@ -51,7 +51,7 @@
 <polygon fill="none" stroke="black" points="534.5,-398 391.5,-398 391.5,-345 534.5,-345 534.5,-398"/>
 <text text-anchor="middle" x="463" y="-382.8" font-family="Helvetica" font-size="14.00">floatlib</text>
 <text text-anchor="middle" x="463" y="-367.8" font-family="Helvetica" font-size="14.00">fc2fad1f9c7d (v4.1.0)</text>
-<text text-anchor="middle" x="463" y="-352.8" font-family="Helvetica" font-size="14.00">574 modules loaded</text>
+<text text-anchor="middle" x="463" y="-352.8" font-family="Helvetica" font-size="14.00">575 modules loaded</text>
 </g>
 <!-- MojoProof&#45;&gt;floatlib -->
 <g id="edge3" class="edge">

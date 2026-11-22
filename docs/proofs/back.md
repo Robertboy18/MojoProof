@@ -1,6 +1,6 @@
 # A `ret` to a caller frame (`Block.sound_retR`, `Block.sound_back`)
 
-Lean: `MojoProof/Sym/Block.lean`. Test: `MojoProofTest/SymPhi.lean`, the section "A `ret` to a caller
+Lean: `MojoProof/Sym/Path.lean`. Test: `MojoProofTest/SymPhi.lean`, the section "A `ret` to a caller
 frame".
 
 **Scope.** The results hold for every program `P` and function `fn`, and for every path
@@ -10,8 +10,8 @@ frame `f` runs `fn` at block `l`'s position `p0` above any caller frames `rest`.
 `Block.sound_back`, the caller frame `g` is any frame whose block `covers` accepts from
 `g.pc + 1`.
 
-**Why.** `Block.sound_retI` on its own covers only a thread with one frame, whose `ret` step is
-`.done`; a callee's `ret` back into its caller needs these results.
+**Why.** A kernel's thread has one frame, whose `ret` step is `.done`; a callee's `ret` back into
+its caller needs the case of a caller frame too, so item 1 is stated under any caller frames.
 
 ## Statement
 
@@ -26,9 +26,8 @@ frame `f` runs `fn` at block `l`'s position `p0` above any caller frames `rest`.
      - `.done me'` if `rest = []`;
      - `.next ⟨{ g.set f.dest none none with pc := g.pc + 1 } :: gs, t.k + pathLen S ps + 1⟩ me'`
        if `rest = g :: gs`.
-2. `Block.sound_retI` is item 1 with `rest = []`, in one line.
-3. `Frame.set_none`: `g.set r none p = g`, since `ret void` sets no register.
-4. `Block.sound_back`. Take item 1's premises with `t.frames = f :: g :: rest`, and `dg` and `Sg`
+2. `Frame.set_none`: `g.set r none p = g`, since `ret void` sets no register.
+3. `Block.sound_back`. Take item 1's premises with `t.frames = f :: g :: rest`, and `dg` and `Sg`
    with `covers P g.fn g.label (g.pc + 1) dg Sg = true`. Suppose that every memory `me` the last
    block's effects make satisfies every `d ∈ dg` at `W`, which is the entry valuation of
    `{ g with pc := g.pc + 1 }` at step count `t.k + pathLen S ps + 1` on `me` with `f`'s `alloca`
@@ -37,13 +36,12 @@ frame `f` runs `fn` at block `l`'s position `p0` above any caller frames `rest`.
 
 ## Proof
 
-1. This is `Block.sound_retI`'s proof, with `ht : t.frames = f :: rest`. `Block.sound_pathI`
+1. `Block.sound_pathI`
    gives `Ends` of the last block, and with it the frame's `alloca` blocks and caller's register
    (`hal`, `hde`). The `ret`'s `Exit.next` is `step`'s result (`hn`, `hst`), and it is the match
    on `rest`.
-2. Item 1 with `rest = []`.
-3. By cases on `r`: `Frame.set` with no value is the identity.
-4. Item 1 with `rest = g :: rest`, simplified by item 3, gives the step to
+2. By cases on `r`: `Frame.set` with no value is the identity.
+3. Item 1 with `rest = g :: rest`, simplified by item 2, gives the step to
    `{ g with pc := g.pc + 1 } :: rest`. `Block.sound` on the caller's block, from that thread and
    at its step count, gives `Ends`. `Ends.pre` prepends item 1's steps and the return's step.
 

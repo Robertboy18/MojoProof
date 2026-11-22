@@ -5,8 +5,8 @@ kind: construct
 ref: LLVM LangRef 24.0.0git #sub-instruction
 quote: "The ‘sub’ instruction returns the difference of its two operands."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.intBin, MojoProof.Sym.exec_bin
-corpus: tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs256_762bdc07.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs64_f6f88241.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w4_bs1024_43a5be9b.nvptx.ll
-tests: MojoProofTest.Rule, MojoProofTest.Corpus
+corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs256_762bdc07.nvptx.ll
+tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
 ---
@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-LangRef's section on `sub` (the quote is the first sentence of its overview). The importer reads `sub` as `Inst.bin` with `BinOp.sub` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.intBin`. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_bin`.
+LangRef's section on `sub` (the quote is the first sentence of its overview). The importer reads `sub` as `Inst.bin` with `BinOp.sub` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.intBin`. MojoProofTest/Modelled.lean runs a kernel of it (its row `sub`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_bin`.
 
 ## Corpus
 
-72 of the 111 corpus files use it (1983 uses); `corpus` lists the first 5 in path order.
+74 of the 114 corpus files use it (1986 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

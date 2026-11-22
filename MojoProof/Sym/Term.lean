@@ -5,10 +5,11 @@ import MojoProof.Sem.Thread
 
 The terms the block checker (`summarize`, MojoProof/Sym/Checker.lean) writes a block's
 registers, memory effects and obligations in, and what they denote. A block's symbolic values
-form a DAG stored as a node table: one node (`SNode`) per statement that defines a value, in the
-statements' order, whose operands (`SVal`) are atoms or earlier nodes by index, so a value used
-twice is one node referred to twice (the table has as many nodes as the block has value-defining
-statements, whatever the sharing).
+form a DAG stored as a node table: one node (`SNode`) per distinct float constant, then one per
+statement that defines a value, in the statements' order, whose operands (`SVal`) are atoms or
+earlier nodes by index, so a value used twice is one node referred to twice (the table has as
+many nodes as the block has distinct float constants and value-defining statements, whatever the
+sharing).
 
 * `SVal`: an operand. Atoms are the registers at the block entry (kernel arguments and values
   from earlier blocks alike, `SVal.reg`) and integer constants (`SVal.int`); `SVal.node j` is
@@ -20,18 +21,21 @@ statements, whatever the sharing).
   with its width (`SNode.select`) and the integer maximum and minimum (`SNode.minmax`, the
   calls of `llvm.smax`, `llvm.smin`, `llvm.umax` and `llvm.umin`), and float operators whose
   operands' `fmul contract` operands are terms of the table (`SNode.fbinP`, for the checker
-  `coversC`; `SNode.factors`, `SVal.factors`: the operand terms of an `fmul contract` node). A
-  node whose instruction has a type the node does not hold (a `getelementptr`'s source type, a
-  `load`'s type, a call's declaration) names the statement by its block label and position, and
-  its value reads the type there.
+  `coversC`; `SNode.factors`, `SVal.factors`: the operand terms of an `fmul contract` node), and
+  float constants (`SNode.flit`, which carries the literal; the table holds one per float
+  constant operand of the block, before the statements' nodes). A node whose instruction has a
+  type the node does not hold (a `getelementptr`'s source type, a `load`'s type, a call's
+  declaration) names the statement by its block label and position, and its value reads the type
+  there.
 * `SNode.eval`, `SVal.eval`, `vals`: the value of a node given the values of the nodes before
   it, under a `Valuation` (the context, the function, the thread's step count, the memory,
   registers and `fmul contract` operands at the block entry), computed by the semantics' own
   operations (`intBin`, `icmpV`, `intCast`, `extractV`, `withAttrs`, `gep`, `Mem.load`,
-  `floatBin`, `selectV`, `intMinMax`), faults included, with the `fmul contract` operands of an
-  `fbinP` node's operands from their terms (`prodVal`, `SVal.prodsWith`); `vals V ns` is the
-  list of the values of table `ns`, each node evaluated once, from the values before it (a fold
-  over the table).
+  `floatBin`, `selectV`, `intMinMax`, `floatLit`), faults included, with the `fmul contract`
+  operands of an `fbinP` node's operands from their terms (`prodVal`, `SVal.prodsWith`);
+  `vals V ns` is the list of the values of table `ns`, each node evaluated once, from the values
+  before it (a fold over the table), so a float constant's literal is evaluated once however
+  often the block uses it.
 * `SEff`, `SEff.run`: a block's memory effects (the trace entry of a `load`, the bytes and trace
   entry of a `store`) and the memory they make from the entry memory.
 * `Cond`, `Cond.Holds`: the obligations a block summary carries (an operand evaluates without a
@@ -41,12 +45,14 @@ statements, whatever the sharing).
 Proved, for every valuation and table: `vals_length` (one value per node), `vals_snoc` (the
 value of an appended node is its evaluation on the values before it), `vals_append` (appending
 nodes keeps the values before), `vals_getElem?` (entry `j` is node `j`'s value on the values
-before it), `SVal.eval_append` (an operand that refers to nodes of a prefix has the same value on
-the longer table); and the effect-run lemmas `SEff.run_snoc`, `SEff.run_prefix`,
+before it), `vals_flit` (a float constant node's value is its literal's, `floatLit`),
+`SVal.eval_append` (an operand that refers to nodes of a prefix has the same value on the longer
+table); and the effect-run lemmas `SEff.run_snoc`, `SEff.run_prefix`,
 `SEff.run_append`.
 
 `SVal`, `SNode`, `SEff` and `Cond` have decidable equality that the kernel reduces (derived; no
-field has the type `Ty`, whose derived equality the kernel does not reduce), so `covers`
+field has the type `Ty`, whose derived equality the kernel does not reduce; two `SNode.flit`
+nodes compare their literals' strings and numbers, so no `floatLit` is evaluated), so `covers`
 compares a computed summary with a given one by `decide`, in time linear in the table's size.
 -/
 
@@ -95,6 +101,11 @@ inductive SNode where
   result of an `fmul contract` of the same block, whose operand terms these are. -/
   | fbinP (op : FBinOp) (fm : FastMath) (ft : FloatTy) (n : Nat) (a b : SVal)
       (pa pb : Option (SVal × SVal))
+  /-- The float constant `lit` at float type `ft`: Sem's `floatLit ft lit`
+  (MojoProof/Sem/Eval.lean), the value `evalV` gives the constant. It reads neither the
+  valuation nor other nodes; the checker puts one at the head of the table for each float
+  constant operand of the block (`litNodes`, MojoProof/Sym/Checker.lean). -/
+  | flit (ft : FloatTy) (lit : FloatLit)
   deriving DecidableEq, Repr, Inhabited
 
 /-- The operand terms of node `nd` when it is an `fmul contract` (an `fbin` or `fbinP` node with
@@ -204,6 +215,7 @@ def SNode.eval (V : Valuation) (vs : List (Except Fault Val)) : SNode → Except
     let y ← b.eval V vs
     lanes2 (fun i u v => floatBin ft op fm u v (laneOf (a.prodsWith V vs pa) i)
       (laneOf (b.prodsWith V vs pb) i) (V.ctx.oracle (Nat.pair (V.k + n) i))) x y
+  | .flit ft lit => floatLit ft lit
 
 /-- The values of the nodes of table `ns` under valuation `V`, in order: each node is evaluated
 once, on the values of the nodes before it. -/
@@ -255,6 +267,13 @@ theorem vals_getElem? (V : Valuation) (ns : List SNode) (j : Nat) :
     simp [vals_length, List.length_take, Nat.min_eq_left (Nat.le_of_lt hj)]
   · rw [List.getElem?_eq_none (by rw [vals_length]; omega), List.getElem?_eq_none (by omega)]
     rfl
+
+/-- **A float constant node's value**: for every valuation and table `ns` whose node `j` is
+`SNode.flit ft lit`, entry `j` of `vals V ns` is the literal's value `floatLit ft lit`. -/
+theorem vals_flit (V : Valuation) {ns : List SNode} {j : Nat} {ft : FloatTy} {lit : FloatLit}
+    (h : ns[j]? = some (.flit ft lit)) : (vals V ns)[j]? = some (floatLit ft lit) := by
+  rw [vals_getElem?, h]
+  rfl
 
 /-- An operand that refers to nodes of `vs` only has its value on `vs` on every longer table. -/
 theorem SVal.eval_append {V : Valuation} {vs : List (Except Fault Val)} {x : SVal} {v : Val}

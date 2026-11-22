@@ -1,0 +1,33 @@
+GPU run record: a conformance test, not a proof.
+
+kernel: tests/corpus/vmul/vector_multiply_vector_multiply_vector_multiply6A6A_227fc544da3deaff.nvptx.ll
+kernel sha256: 3270cf2f35a8fe3f37cd819e17d2eea1cf948d4cc7ad6ed02d473b3e7d072fb4
+program: tests/gpu/vmul/vector_multiply.mojo
+program sha256: ef08f25a1dd855ce27daece15c816550c4c7c82b42cdda3a5b919bbce14eb62c
+program origin: tests/corpus/vmul/vector_multiply.mojo, its kernel, imports and declarations unchanged and its main replaced
+mojo: Mojo 1.3.0.dev2026112105 (f23ed0af), the newest nightly installed where the run was made
+build: mojo build --fp-mode contract=off -o vmul tests/gpu/vmul/vector_multiply.mojo
+ir: mojo build --emit llvm --target-accelerator sm_80 --fp-mode contract=off of the program, with this Mojo, emits the kernel's IR identical, byte for byte, to the corpus file (the same sha256). The corpus row records Mojo 1.3.0.dev2026111705 (298d4f45); this version emits the same IR.
+gpu: NVIDIA A100-SXM4-80GB (compute capability 8.0, sm_80), NVIDIA driver 580.167.08, one GPU selected with CUDA_VISIBLE_DEVICES
+run: vmul 20261122 dump.txt
+seed: 20261122
+inputs: for each launch, the lhs then the rhs buffer, n + 64 words each: the successive outputs of the program's xorshift64* generator (next_word; the state starts at the seed and continues across launches) with exponent 255 changed to 254 (finite), so every input is a finite float32 (32 of the 6644 input words of this run are subnormal, none is zero); the output buffer starts with every word 0x7FBADBAD
+launches: n grid block words, where words = n + 64 is the length of each buffer:
+launch: 1 1 1 65
+launch: 37 3 16 101
+launch: 100 4 32 164
+launch: 700 3 256 764
+launch: 1000 4 128 1064
+launch: 1100 2 1024 1164
+dump: tests/gpu/vmul/dump.txt, sha256 45c9b284a908873854115659301697d74ab13024e62b702c0479c98c74e01a0f: the inputs and the output buffer after each launch, on the GPU
+compare: lake env lean --run tests/gpu/Compare.lean vmul tests/gpu/vmul/dump.txt 6
+evaluator: program vmul: corpus file sha256 3270cf2f35a8fe3f37cd819e17d2eea1cf948d4cc7ad6ed02d473b3e7d072fb4
+evaluator: n 1 grid 1 block 1: 65 words agree
+evaluator: n 37 grid 3 block 16: 101 words agree
+evaluator: n 100 grid 4 block 32: 164 words agree
+evaluator: n 700 grid 3 block 256: 764 words agree
+evaluator: n 1000 grid 4 block 128: 1064 words agree
+evaluator: n 1100 grid 2 block 1024: 1164 words agree
+evaluator: 6 launches, 0 differ
+result: agree: on every launch, every word of the output buffer (the n words the kernel writes, the words past the last thread when n exceeds the thread count, and the 64 padding words) is the same on the GPU and in the evaluator
+scope: a conformance test, not a proof. One compiled kernel, these 6 launches and these inputs, on one GPU. The evaluator ran the corpus program (Kernels.vmul.prog, the library's import of the kernel file) with the three buffers in address space 1 and the oracle that is always 0. It says nothing about other launches, inputs, GPUs or Mojo versions.

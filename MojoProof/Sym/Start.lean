@@ -27,8 +27,7 @@ oracle.
   that succeeds.
 * `Grid.start_args`: the start's grid has `volume L.grid * volume L.block` threads, each at the
   start of the kernel with the arguments `launchArgs` makes for it, whose blocks the grid's memory
-  keeps. `Grid.start_env`: thread `n`'s context has the launch's special registers `L.env n` and
-  the oracle's row `oracle n`.
+  keeps.
 * `Param.byval?`, `byvalBlock`, `LaunchArg`: a parameter's `byval` type, the block `launchArgs`
   makes for such an argument, and what it makes for each parameter. `foldlM_zipIdx_inv`: an
   invariant indexed by the position of a fold over a list with its indices.
@@ -329,26 +328,6 @@ theorem Grid.start_args {prog : Program} {fn : Func} {L : Launch} {args : List V
     exact hk
   obtain ⟨m₁, m₂, as, t, h1, h2, h3, h4⟩ := I.2 k hk'
   exact ⟨m₁, m₂, as, t, h1, h2, h3, fun b x hb => by simpa [Mem.compact_eq] using h4 b x hb⟩
-
-/-- The start's contexts give thread `n` the launch's special registers for thread `n`
-(`L.env n`) and the oracle's row `oracle n`, for every program, kernel, launch, argument values,
-memory, address choice and oracle. -/
-theorem Grid.start_env {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
-    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
-    (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) (n : Nat) :
-    (c n).env = L.env n ∧ (c n).oracle = oracle n := by
-  unfold Grid.start at h
-  simp only [bind, Except.bind] at h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  cases h
-  exact ⟨rfl, rfl⟩
 
 /-- The type `T` of the first `byval(T)` attribute of parameter `p`, the one `launchArgs` reads;
 `none` if `p` has no `byval` attribute. -/

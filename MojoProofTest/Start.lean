@@ -73,7 +73,7 @@ theorem invariants (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
   have hst : (Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 two2 argsV memV ch oracle).map
       (fun x => (x.1.threads.size, x.1.mem.trace)) = .ok (4, []) := rfl
   simp only [h, Except.map, Except.ok.injEq, Prod.mk.injEq] at hst
-  refine ⟨g, c, h, hst.1, fun n s hs => ?_, hst.2, fun n => Grid.start_ctx h n, fun g' hr =>
+  refine ⟨g, c, h, hst.1, fun n s hs => ?_, hst.2, fun n => (Grid.start_ctx h n).imp_right And.left, fun g' hr =>
     ⟨Grid.start_reach_closed h memV_bytesIn hr, Grid.reach_owns hr (Grid.start_owns h c),
       Grid.start_reach_byThreads h hr, Grid.start_reach_atCalls h hr, Grid.reach_keeps hr⟩⟩
   obtain ⟨-, -, t, -, e⟩ := Grid.start_run h n s hs

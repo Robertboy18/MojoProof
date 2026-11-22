@@ -352,9 +352,9 @@ def read_status() -> list[dict]:
             return re.sub(r'\\(.)', r'\1', v[1:-1])
         if v.startswith('['):
             return [x.strip() for x in v[1:-1].split(',') if x.strip()]
-        if v.startswith('{'):
-            return {k.strip(): int(n) for k, n in
-                    (x.split(':') for x in v[1:-1].split(',') if x.strip())}
+        if v.startswith('{'):   # counts, or quoted texts that may hold commas
+            return {k: value(x) for k, x in
+                    re.findall(r'(\w+):\s*("(?:[^"\\]|\\.)*"|[^,}]+)', v[1:-1])}
         return int(v) if v.isdigit() else v
 
     areas: list[dict] = []
@@ -643,6 +643,10 @@ every level below it.</p>
               ('Evidence present above the level', present_html)]
         if ev_items:
             dl.append(('Evidence', '<ul>' + ''.join(ev_items) + '</ul>'))
+        if c.get('evidence_scope'):
+            dl.append(('Scope of the cited theorems', '<ul>' + ''.join(
+                f'<li>{lv}: {esc(sc)}</li>' for lv, sc in sorted(c['evidence_scope'].items()))
+                + '</ul>'))
         dl += [('Reference', ref_html), ('Quote', quote_html),
                ('Lean declarations', code_list(lean, 'Not stated yet.')),
                ('Corpus files', corpus_html),

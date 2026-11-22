@@ -1,6 +1,7 @@
 import MojoProof.Sem.Precond
 import MojoProofTest.SymLaunch
 import MojoProofTest.Elementwise
+import MojoProofTest.NaiveSpec
 
 /-!
 # Instances and twins of the precondition of a binary elementwise kernel
@@ -27,6 +28,18 @@ closed for the arguments and `vadd` starts on them on every launch, but `Map2.Pr
 (`next` is 4), `memX` is not closed for the arguments (`missing_twin`). Of `Map2.Pre.fits`: with
 every block at generic address `2 ^ 64 - 16` (`memW`), block 1 is a `Mem.Buffer` of 5 floats but
 does not fit below `2 ^ 64`, and `Map2.pre_mem`'s premise `hG` fails (`fits_twin`).
+
+A store at another block (`Mem.Buffer.store`, `Mem.Fits.store`, `Mem.Holds.store`): a store of a
+float at block 3 of `memX` succeeds and keeps `pre5`'s buffer, fit and `x` at block 1, the first
+input (`store_x`).
+
+`Mat.pre_mem` at the naive matmul kernel's layout (`lN`), binary32, alignment 4, row strides 768,
+768 and 50257 (the naive kernel's, MojoProofTest/NaiveSpec.lean), `m = 2`, `n = 3`, `K = 5`, inputs
+`xN` (`2 × 768`) and `yN` (`3 × 768`) whose cells all differ, and block `i + 1` at address
+`4 (i + 1)` in both spaces: `memN` meets `Mat.Pre` with the output at block 1 (`preN`), with the
+tail value `NaiveSpec.z`. Twins: with the output at block 2, the input `A`, `memN` is closed for the
+arguments but `Mat.Pre` fails (`overlap_twin`); with the output at block 7, which `memN` does not
+have, `Mat.Pre` fails (`absent_twin`).
 -/
 
 namespace MojoProofTest.Precond
@@ -118,5 +131,57 @@ theorem fits_twin : memW.Buffer 1 (5 * lV.size (.fp .float)) 16 false ∧
     fun ⟨blk, hb, hle⟩ => ?_, by decide +kernel⟩
   obtain rfl := Option.some.inj hb
   exact absurd hle (by decide +kernel)
+
+/-- **A store at another block keeps an input**: a store of a float from thread 0 at offset 0 of
+block 3 of `memX`, the output, succeeds, and after it block 1 is the same read-only buffer, fits
+its space and holds `x5`, as before (`pre5.bufs`, `pre5.fits`, `pre5.x`; `Mem.Buffer.store`,
+`Mem.Fits.store`, `Mem.Holds.store`). -/
+theorem store_x : ∃ m', memX.store lV ⟨0, 0⟩ 1 (.fp .float) (Val.ofFloat .float (f32 0)) ⟨3, 0⟩
+    (some 4) = .ok m' ∧ m'.Buffer 1 (5 * lV.size (.fp .float)) 16 false ∧
+      m'.Fits lV 1 (5 * lV.size (.fp .float)) ∧
+      m'.Holds lV 1 (.fp .float) (Val.ofFloat .float) (rowMajor lV (.fp .float) 0) x5 := by
+  obtain ⟨m', h⟩ : ∃ m', memX.store lV ⟨0, 0⟩ 1 (.fp .float) (Val.ofFloat .float (f32 0)) ⟨3, 0⟩
+    (some 4) = .ok m' := ⟨_, rfl⟩
+  exact ⟨m', h, Mem.Buffer.store h (by decide) pre5.bufs.1,
+    Mem.Fits.store h (by decide) pre5.fits.1, Mem.Holds.store h (by decide) pre5.x⟩
+
+/-- The naive matmul kernel's data layout. -/
+abbrev lN : Layout := MojoProofTest.SymPhi.naive.prog.layout
+
+/-- A `2 × 768` binary32 matrix whose cells all differ: cell `(r, k)` is the word
+`0x3f800000 + 768 r + k`. -/
+def xN : Tensor (Model FloatTy.float.fmt) [2, 768] :=
+  Tensor.Rep.ofFn fun c => f32 (0x3f800000 + c.1.val * 768 + c.2.1.val)
+
+/-- A `3 × 768` binary32 matrix whose cells all differ: cell `(r, k)` is the word
+`0x40000000 + 768 r + k`. -/
+def yN : Tensor (Model FloatTy.float.fmt) [3, 768] :=
+  Tensor.Rep.ofFn fun c => f32 (0x40000000 + c.1.val * 768 + c.2.1.val)
+
+/-- The caller memory `Mat.mem` builds for `xN`, `yN` and an output of row stride 50257 at
+alignment 4, block `i + 1` at address `4 (i + 1)` in both spaces. -/
+def memN : Mem :=
+  Mat.mem lN (.fp .float) (Val.ofFloat .float) 4 xN yN 50257 (fun i => i.val + 1)
+    (fun i => i.val + 1)
+
+/-- **The instance of `Mat.pre_mem`**: `memN` meets the matmul precondition with the output at
+block 1, the inputs at blocks 2 and 3, `m = 2`, `n = 3`, `K = 5` and strides 768, 768, 50257. -/
+theorem preN : Mat.Pre lN (.fp .float) (Val.ofFloat .float) 4 NaiveSpec.z memN 1 2 3 2 3 5 768 768
+    50257 xN yN :=
+  Mat.pre_mem (Layout.Codec.float lN .float) (fun _ => trivial) 4 xN yN (by decide) (by decide)
+    (fun i => i.val + 1) (fun i => i.val + 1) (by decide +kernel) (by decide +kernel) rfl
+
+/-- **The twin of `Mat.Pre.ne`**: with the output at block 2, the input `A`, `memN` is closed for
+the arguments, but it does not meet the precondition. -/
+theorem overlap_twin : memN.Closed (Mat.args NaiveSpec.z 2 2 3 2 3 5) ∧
+    ¬ Mat.Pre lN (.fp .float) (Val.ofFloat .float) 4 NaiveSpec.z memN 2 2 3 2 3 5 768 768 50257
+      xN yN :=
+  ⟨{ preN.closed with vals := by decide +kernel }, fun h => h.ne.1 rfl⟩
+
+/-- **The twin of `Mat.Pre.closed`**: with the output at block 7, which `memN` does not have,
+`memN` does not meet the precondition (it is not closed for the arguments). -/
+theorem absent_twin : ¬ Mat.Pre lN (.fp .float) (Val.ofFloat .float) 4 NaiveSpec.z memN 7 2 3 2 3 5
+    768 768 50257 xN yN :=
+  fun h => absurd h.closed.vals (by decide +kernel)
 
 end MojoProofTest.Precond

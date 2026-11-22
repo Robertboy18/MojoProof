@@ -170,7 +170,7 @@ theorem Grid.owned_reach (h : Grid.start prog fn L args m ch oracle = .ok (g₀,
       rcases List.mem_append.1 ha with ha | ha
       · obtain ⟨x, hx, hadm⟩ := Grid.advance_admits hn a ha
         obtain ⟨x', hx', -, hown, -⟩ := hold _ x hx
-        have hwa : a.who.thread = n := by rw [Grid.pending_who ha, (Grid.start_ctx h n).2]
+        have hwa : a.who.thread = n := by rw [Grid.pending_who ha, (Grid.start_ctx h n).2.1]
         rw [← Grid.pending_who ha] at hadm
         refine ⟨by rw [hwa]; exact hnt, x', hx', by rw [hown]; exact hadm, ?_, fun hi => ?_⟩
         · rcases hH g hr n a ha with ho | ⟨y, hy, hyo⟩

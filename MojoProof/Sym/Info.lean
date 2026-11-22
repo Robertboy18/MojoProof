@@ -34,9 +34,10 @@ def succs : LLVM.Term → List Nat
 
 /-- The position of the first statement of block `b` of `fn` from position `p0` that the checker
 refuses, the number of statements when the terminator is refused, `none` when the block is in
-the fragment. -/
+the fragment. It runs from the checker's start state (`SState.start`, the block's float
+constants as nodes), as `summarizeWith` does. -/
 def refusal (P : Program) (fn : Func) (b : LLVM.Block) (p0 : Nat) : Option Nat :=
-  go (b.stmts.toList.drop p0) 0 .init
+  go (b.stmts.toList.drop p0) 0 (SState.start fn b.label p0 b)
 where
   /-- From statements `sts`, `n` after `p0`, in state `σ`. -/
   go : List Stmt → Nat → SState → Option Nat

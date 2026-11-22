@@ -18,7 +18,11 @@ threads after are not related by `Thread.Skel` (`branch_twin`).
 The instance of `Labels.MemOk`: for every launch, the grid of one thread that stores the payload
 register 0 to block 1 (through the pointer in register 1) and returns (`storeGrid`) meets it with
 block 1 payload, by `Labels.MemOk.of_closed` on the three kinds of grid it reaches; its twin: with
-no block payload it does not, as the store writes payload outside `pay` (`store_ok`). The twin of
+no block payload it does not, as the store writes payload outside `pay` (`store_ok`). The instance
+of `Labels.MemOk.of_threads`: the grid of three such threads (`storeGrid3`) meets it with block 1
+payload, from each thread's statuses on its own (`Store3`: at the store, at `ret void`,
+returned) on every memory, as the store's step reaches `ret void` on every memory
+(`storeAt_step`); its twin: with no block payload it does not (`store3_ok`). The twin of
 `TValue.payOk`: a store of a vector that holds the payload register fails `Labels.Ok`
 (`payOk_twin`; an AST form, as the parser refuses a local in a constant). (O3)'s `range`
 check at a shuffle: the butterfly shuffle of the constant 5 into the payload register 0
@@ -228,5 +232,74 @@ theorem store_ok (L : Launch) : Labels.Ok (.ofFunc (kernel #[store01])) lab0 = t
       simp [storeAt, kernel] at hs
     · simp at ht
   · rcases n with _ | n <;> simp at ht
+
+/-- On every memory, a step of `⟨[storeAt 0], 0⟩` that succeeds reaches `⟨[storeAt 1], 1⟩`. -/
+theorem storeAt_step (n : Nat) (m : Mem) {r : Step} (h : step (cS n) ⟨[storeAt 0], 0⟩ m = .ok r) :
+    ∃ m', r = .next ⟨[storeAt 1], 1⟩ m' := by
+  obtain ⟨e, he, h⟩ := Except.bind_eq_ok.1
+    (show Except.bind (exec (cS n) ((cS n).scope m (storeAt 0) 0) 0 (storeAt 0) store01) _ = .ok r
+      from h)
+  obtain ⟨m', -, he⟩ := Except.bind_eq_ok.1
+    (show Except.bind (m.store (cS n).prog.layout (cS n).who 0 (.int 8) (.bits 8 7) ⟨1, 0⟩
+        (some ((cS n).prog.layout.align (.int 8)))) _ = .ok e from he)
+  simp only [pure, Except.pure, Except.ok.injEq] at he
+  subst he
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  exact ⟨m', h.symm⟩
+
+/-- Three threads at `storeAt 0`, each to store the payload register 0 to block 1, on the memory of
+block 1 of 8 live bytes. -/
+def storeGrid3 : Grid :=
+  { threads := #[.run ⟨[storeAt 0], 0⟩, .run ⟨[storeAt 0], 0⟩, .run ⟨[storeAt 0], 0⟩],
+    mem := memOf [(1, blk 8 true)] }
+
+/-- The statuses of thread `n` of `storeGrid3` on its own: at the store, at `ret void`, or
+returned. -/
+def Store3 (n : Nat) (s : Status) : Prop :=
+  n < 3 ∧ (s = .run ⟨[storeAt 0], 0⟩ ∨ s = .run ⟨[storeAt 1], 1⟩ ∨ s = .done)
+
+/-- The instance of `Labels.MemOk.of_threads`: for every launch, `storeGrid3` meets `Labels.MemOk`
+with block 1 payload, with every memory and the statuses `Store3`; the twin: with no block payload
+it does not, as each store writes payload to block 1. -/
+theorem store3_ok (L : Launch) : lab0.MemOk (· = 1) L cS storeGrid3 ∧
+    ¬ lab0.MemOk (fun _ => False) L cS storeGrid3 := by
+  refine ⟨.of_threads (fun _ => True) Store3 (fun _ _ _ _ _ h => by simp [Store3] at h)
+    ⟨trivial, fun n s hs => ?_⟩ ?_ ?_, fun h => h _ .refl 0 _ rfl _ _ _ _ rfl rfl rfl rfl _ rfl⟩
+  · rcases n with _ | _ | _ | n <;> simp [storeGrid3] at hs ⊢ <;> simp [Store3, ← hs]
+  · intro g g' n t _ hR ht h
+    have hlt : n < g.threads.size := (Array.getElem?_eq_some_iff.1 ht).1
+    obtain ⟨hn, e | e | e⟩ := hR n _ ht
+    · cases e
+      simp only [Grid.advance, ht] at h
+      obtain ⟨r, hr, h⟩ := Except.bind_eq_ok.1 h
+      obtain ⟨m', rfl⟩ := storeAt_step n g.mem hr
+      simp only [pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+      subst h
+      refine ⟨trivial, fun s hs => ⟨hn, .inr (.inl ?_)⟩⟩
+      simp [Array.set!_eq_setIfInBounds, hlt] at hs
+      exact hs.symm
+    · cases e
+      have es : step (cS n) ⟨[storeAt 1], 1⟩ g.mem = .ok (.done g.mem) := rfl
+      simp only [Grid.advance, ht, es, bind, Except.bind, pure, Except.pure, Except.ok.injEq,
+        Option.some.injEq] at h
+      subst h
+      refine ⟨trivial, fun s hs => ⟨hn, .inr (.inr ?_)⟩⟩
+      simp [Array.set!_eq_setIfInBounds, hlt] at hs
+      exact hs.symm
+    · cases e
+  · intro g n t _ hR ht f rest b st hf hb hs
+    obtain ⟨-, e | e | e⟩ := hR n _ ht
+    · cases e
+      cases hf
+      cases hb
+      cases hs
+      rintro - q hq
+      cases hq
+      rfl
+    · cases e
+      cases hf
+      cases hb
+      simp [storeAt, kernel] at hs
+    · cases e
 
 end MojoProofTest.Labels

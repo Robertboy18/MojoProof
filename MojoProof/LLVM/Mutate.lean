@@ -40,15 +40,17 @@ The harness `run tbl P n` on program `P` (an imported kernel file):
    address choice, oracle, fuel, phases, and the output block the contract fixes with its final
    bytes): every other admitted mutant that is neither equivalent nor a duplicate is replayed by
    evaluation (`Instance.replayMutant`, `Kernel.replay` on `Mutant.program`). A reported violation
-   makes it `killed` when its index is in the list `certified` that the caller passes, and else
-   `refuted` (by evaluation only). `classify` takes the list as given; mojo_kills builds a list
-   from theorems and checks each at elaboration: for each listed index, a theorem whose type is
-   `Instance.Refuted` on the instance and relation, for the program and kernel function of that
-   index's mutant (compared by evaluation), with no axioms but the three standard ones. The theorem
+   makes it `killed` when its index is in the kills `certified` that the caller passes, and else
+   `refuted` (by evaluation only). The kills have the type `Kills P ms I`, whose constructor is
+   private: outside this module, the only values are `Kills.empty` (no kills) and those
+   mojo_kills defines. mojo_kills builds them from theorems and checks each at elaboration: for
+   each listed index, a theorem whose type is `Instance.Refuted` on the instance and relation, for
+   the program and kernel function of that index's mutant (compared by evaluation), with no
+   axioms but the three standard ones. The theorem
    comes from mojo_mutant, which quotes the mutant's program as a term, and `Instance.refutes`,
    which gives `Instance.Refuted` (`¬ Kernel.Sound` for every admission of the choice and oracle)
    from the replay decided by the kernel on that term. In MojoProofTest/Mutate.lean the theorems
-   `vadd_m0` to `vadd_m7` and `vmul_m4` are these, and mojo_kills defines the lists `vaddKills`
+   `vadd_m0` to `vadd_m7` and `vmul_m4` are these, and mojo_kills defines the kills `vaddKills`
    and `vmulKills` from them. No violation, or a replay that cannot decide, leaves it `passes`.
    Without an instance it is unclassified.
 
@@ -461,9 +463,9 @@ inductive Outcome where
   | timeout
   /-- A proof obligation stays open. -/
   | openProof
-  /-- The replay reports the violation `what` and the caller listed the mutant as certified
-  (`classify`'s `certified`, taken as given): a list from `mojo_kills` has, for each index, a
-  theorem checked to be `Instance.Refuted` for that mutant's mojo_mutant term. -/
+  /-- The replay reports the violation `what` and the mutant's index is in `classify`'s
+  `certified` (`Kills`): kills from `mojo_kills` have, for each index, a theorem checked to be
+  `Instance.Refuted` for that mutant's mojo_mutant term. -/
   | killed (what : String)
   /-- Certified equal to the original: its admitted AST is the original's. -/
   | equivalent
@@ -499,15 +501,37 @@ def Outcome.label : Outcome → String
   | .passes e => s!"passes ({e})"
   | .unclassified => "unclassified"
 
+/-- **Certified kills** of the mutants `ms` of program `P` on instance `I`: the indices `ks` of
+mutants in `ms` and the relation `rel` on the blocks they are refuted for. The constructor is
+private, so outside this module a value is `Kills.empty` or one that `mojo_kills` defines, after
+checking for each index in `ks` a theorem `Instance.Refuted I' Q fn rel` (with `I = some I'`)
+whose `Q` and `fn` evaluate to that mutant's program and kernel function. The type carries no proof
+(the kernel cannot run the enumeration that computes `ms`; see the module docstring): the check
+is `mojo_kills`' at elaboration, and a metaprogram that names the private constructor can still
+build any value. `classify` and `run` take their certified kills as this type, not as a list. -/
+structure Kills (P : Program) (ms : List Mutant) (I : Option Instance) : Type where
+  /-- The kills from their relation and indices (private: `mojo_kills` builds them). -/
+  private mk ::
+  /-- The relation on the blocks that each kill is refuted for. -/
+  rel : (Nat → Option Sem.Block) → Prop
+  /-- The indices in `ms` of the certified kills. -/
+  ks : List Nat
+
+/-- No certified kills (the relation `True` and no index), for every program, mutant list and
+instance: `classify`'s and `run`'s default. -/
+def Kills.empty {P : Program} {ms : List Mutant} {I : Option Instance} : Kills P ms I :=
+  ⟨fun _ => True, []⟩
+
 /-- **Classification** of mutants `ms` of program `P`, in order: `malformed` when admission fails
 (`admission`); else `equivalent` when the admitted AST is `P.module`; else `duplicate j` when it is
 that of the `j`-th mutant of `ms`, an earlier one; else `unsupported` when the checker refuses it
 (`refused`); else, with instance `I`, by the replay (`Instance.replay`): `killed` when it reports a
-violation and the mutant's index is in `certified`, `refuted` when it reports one and the index is
-not, `passes` when it reports none; with no instance, `unclassified`. `certified` is the caller's
-claim that it proves each listed kill (`Instance.refutes`); it is not checked here. -/
+violation and the mutant's index is in `certified.ks`, `refuted` when it reports one and the
+index is not, `passes` when it reports none; with no instance, `unclassified`. `certified` is a
+`Kills P ms I`, so outside this module it is `Kills.empty` or a value `mojo_kills` checked
+(`Kills`); `classify` does not check it again. -/
 def classify (P : Program) (ms : List Mutant) (I : Option Instance := none)
-    (certified : List Nat := []) : Array (Mutant × Outcome) := Id.run do
+    (certified : Kills P ms I := .empty) : Array (Mutant × Outcome) := Id.run do
   let mut out : Array (Mutant × Outcome) := #[]
   let mut seen : List (Module × Nat) := []
   for mu in ms do
@@ -525,7 +549,7 @@ def classify (P : Program) (ms : List Mutant) (I : Option Instance := none)
             | none, some I =>
               let r := I.replayMutant P mu
               if r.bad then
-                if out.size ∈ certified then .killed (found r) else .refuted (found r)
+                if out.size ∈ certified.ks then .killed (found r) else .refuted (found r)
               else .passes (found r))
   return out
 
@@ -611,12 +635,13 @@ structure Report where
 
 /-- **The harness** on program `P` with operator table `tbl` and budget `n`: enumeration
 (`mutants`), selection of at most `n` (`select`), and classification (`classify`: admission,
-exact AST deduplication, the checker, and the replay on instance `I` with the indices `certified`
-of the kills the caller proves), with the counts. Its `killed` count is the number of replayed
-violations whose index the caller listed in `certified`; `run` takes the list as given, and
-`mojo_kills` builds one whose every index has its theorem (see `Outcome.killed`). -/
+exact AST deduplication, the checker, and the replay on instance `I` with the certified kills
+`certified` of the selected mutants), with the counts. Its `killed` count is the number of
+replayed violations whose index is in `certified.ks`; outside this module `certified` is
+`Kills.empty` or kills that `mojo_kills` defines, each index with its checked theorem (`Kills`,
+`Outcome.killed`). -/
 def run (tbl : List Op) (P : Program) (n : Nat) (I : Option Instance := none)
-    (certified : List Nat := []) : Report :=
+    (certified : Kills P (selected tbl P n) I := .empty) : Report :=
   let ms := mutants tbl P.module
   let rs := classify P (selected tbl P n) I certified
   ⟨.of ms.length rs, rs⟩
@@ -709,15 +734,25 @@ it evaluates `e` and the term it adds. -/
 /-- The axioms a certified kill's proof may use (`mojo_kills`). -/
 def killAxioms : List Lean.Name := [``propext, ``Classical.choice, ``Quot.sound]
 
+open Lean in
+/-- The first of the axioms that constant `c` depends on (`collectAxioms`, in its order) that is
+not in `allowed`, or `none` when all are: `mojo_kills` refuses a theorem for which this is not
+`none` with `allowed := killAxioms`. -/
+def foreignAxiom (allowed : List Name) (c : Name) : CoreM (Option Name) :=
+  return (← collectAxioms c).find? (!allowed.contains ·)
+
 open Lean Elab Command Meta in
-/-- `mojo_kills ks : mutant on I R := [k₁ => t₁, ...]` defines `ks : List Nat := [k₁, ...]`, the
-indices of certified kills to pass as `run`'s `certified`, after checking each theorem `tᵢ`: it
-is a theorem, its type is `Instance.Refuted I Q fn R` (`Instance.refutes` gives that type), with
-the given `I` and `R` up to reducible unfolding, a program `Q` that evaluates to `mutant kᵢ`
-(`mutant : Nat → Program`, the harness's selected mutants as programs, `Mutant.program`), a
-function `fn` that evaluates to that program's function `I.f` (`I.fn` when it has none, as
-`Mutant.func`), and its proof uses no axioms but `propext`, `Classical.choice` and `Quot.sound`
-(`killAxioms`). A failed check is an error, and then nothing is defined. -/
+/-- `mojo_kills ks : mutant on I R := [k₁ => t₁, ...]` defines `ks : Kills P ms (some I)` with
+`ks.rel = R` and `ks.ks = [k₁, ...]`, the certified kills to pass as `run`'s or `classify`'s
+`certified`. `mutant : Nat → Program` must unfold (its head constants, at most 16 times, at a
+local `k`) to `Mutant.program P ms[k]!` with `P` and `ms : List Mutant` free of `k` (as
+`fun k => ((selected tbl P n)[k]!).program P`, the harness's selected mutants as programs). It
+checks each row: `kᵢ` is below the length of `ms` (evaluated); `tᵢ` is a theorem; its type is
+`Instance.Refuted I Q fn R` (`Instance.refutes` gives that type), with the given `I` and `R` up
+to reducible unfolding, a program `Q` that evaluates to `mutant kᵢ`, a function `fn` that
+evaluates to that program's function `I.f` (`I.fn` when it has none, as `Mutant.func`); and its
+proof uses no axioms but `propext`, `Classical.choice` and `Quot.sound` (`killAxioms`,
+`foreignAxiom`). A failed check is an error, and then nothing is defined. -/
 syntax (name := mojoKills) "mojo_kills " ident " : " term:max " on " term:max term:max " := "
   "[" (num " => " ident),* "]" : command
 
@@ -730,21 +765,36 @@ and each theorem's program and function. -/
     let some k := r[0].isNatLit? | throwErrorAt r[0] "mojo_kills: an index"
     return (k, r[2])
   let progTy := mkConst ``Program
-  let thms ← liftTermElabM do
+  let msTy := mkApp (mkConst ``List [.zero]) (mkConst ``Mutant)
+  let ctor := (getStructureCtor (← getEnv) ``Kills).name
+  let (ty, val, thms) ← liftTermElabM do
     let mutE ← Term.elabTermEnsuringType stx[3] (← mkArrow (mkConst ``Nat) progTy)
     let IE ← Term.elabTermEnsuringType stx[5] (mkConst ``Instance)
-    let RE ← Term.elabTerm stx[6] none
+    let blocks ← mkArrow (mkConst ``Nat) (mkApp (mkConst ``Option [.zero]) (mkConst ``Sem.Block))
+    let RE ← Term.elabTermEnsuringType stx[6] (← mkArrow blocks (mkSort .zero))
     Term.synthesizeSyntheticMVarsNoPostponing
     let mutE ← instantiateMVars mutE
     let IE ← instantiateMVars IE
     let RE ← instantiateMVars RE
+    let shape ← withLocalDeclD `k (mkConst ``Nat) fun k => do
+      let some (P, mu) ← mutantSource.go 16 (mkApp mutE k).headBeta | return none
+      unless mu.isAppOfArity ``GetElem?.getElem! 8 && mu.appArg! == k do return none
+      let ms := mu.appFn!.appArg!
+      if P.containsFVar k.fvarId! || ms.containsFVar k.fvarId! then return none
+      unless ← isDefEq (← inferType ms) msTy do return none
+      return some (P, ms)
+    let some (PE, msE) := shape
+      | throwErrorAt stx[3] m!"mojo_kills: {mutE} does not unfold to `Mutant.program P ms[k]!` \
+          with `P` and `ms : List Mutant` free of `k`"
     let mutant ← evalExpr (Nat → Program) (← mkArrow (mkConst ``Nat) progTy) mutE
+    let ms ← evalExpr (List Mutant) msTy msE
     let I ← evalExpr Instance (mkConst ``Instance) IE
-    rows.mapM fun (k, id) => do
+    let thms ← rows.mapM fun (k, id) => do
       let thm ← realizeGlobalConstNoOverloadWithInfo id
       let fail {α : Type} (why : MessageData) : TermElabM α :=
         throwErrorAt id
           m!"mojo_kills: {MessageData.ofConstName thm} does not refute mutant {k}: {why}"
+      unless k < ms.length do fail m!"there are {ms.length} mutants in {msE}"
       let some (.thmInfo t) := (← getEnv).find? thm | fail m!"it is not a theorem"
       unless t.type.isAppOfArity ``Instance.Refuted 4 do
         fail m!"its type{indentExpr t.type}\nis not an `Instance.Refuted`"
@@ -759,15 +809,17 @@ and each theorem's program and function. -/
         fail m!"its program {args[1]!} is not mutant {k}'s: they differ in {diff}"
       unless (← evalExpr Func (mkConst ``Func) args[2]!) == (want.module.funcs[I.f]?.getD I.fn) do
         fail m!"its function {args[2]!} is not function {I.f} of mutant {k}"
-      if let some a := (← collectAxioms thm).find? (!killAxioms.contains ·) then
+      if let some a ← foreignAxiom killAxioms thm then
         fail m!"its proof depends on {a}, which is not in killAxioms"
       return (k, thm)
-  let ks := thms.map (·.1)
-  liftCoreM <| addDef name (mkApp (mkConst ``List [.zero]) (mkConst ``Nat)) (toExpr ks)
+    let IS := mkApp2 (mkConst ``Option.some [.zero]) (mkConst ``Instance) IE
+    let ks := toExpr (thms.map (·.1))
+    return (mkApp3 (mkConst ``Kills) PE msE IS, mkApp5 (mkConst ctor) PE msE IS RE ks, thms)
+  liftCoreM <| addDef name ty val
   let cited := ", ".intercalate (thms.map fun (k, t) => s!"{k} (`{t}`)")
-  addDocStringCore name s!"The indices of the certified kills of `{stx[3].prettyPrint}` on \
-    `{stx[5].prettyPrint}` for `{stx[6].prettyPrint}`, each with its theorem, which `mojo_kills` \
-    checked to be the refutation of that mutant's program: {cited}."
+  addDocStringCore name s!"The certified kills of `{stx[3].prettyPrint}` on \
+    `{stx[5].prettyPrint}` for `{stx[6].prettyPrint}` (`Kills`), each index with its theorem, \
+    which `mojo_kills` checked to be the refutation of that mutant's program: {cited}."
 
 /-- The report as text: the counts (`Counts.lines`), then one line per selected mutant: its index,
 operator, site and outcome. -/

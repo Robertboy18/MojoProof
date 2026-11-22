@@ -51,15 +51,19 @@ What each one checks:
   neither does a field name standing in for a qualified name.
 - `scripts/corpus.py check`: every corpus file matches its manifest row (sha256, line count, kernel
   name, arch, PTX version), and no `.ll` file under `tests/corpus/` is missing from the manifest.
+  A row whose source lacks the Apache-LLVM line is flagged `UNLICENSED`, and a row whose `lib` is
+  not a comma-separated list of `.mojo` paths (or `-`) is flagged `BADLIB`.
 - `python3 scripts/near_dups.py . --lib MojoProof --list 5`: the theorems of `MojoProof/` whose text
   is identical once widths and types are replaced (`width families`), and the clusters of theorems
   of 15 or more lines that share at least 70% of their 5-token shingles (`near-duplicate
   clusters`), with the five largest clusters listed.
 
-The audit exits with an error only for an axiom. Compare the counts it prints with their limits in
+The audit exits with an error only for an axiom. The counts it prints have limits in
 `scripts/counts.tsv`, which are all 0; if a count drops below its limit, lower the limit.
 `near_dups` and `width_families` in that file are the `near-duplicate clusters` and `width families`
-counts that `scripts/near_dups.py` prints.
+counts that `scripts/near_dups.py` prints. `python3 scripts/counts.py <audit output> <near_dups
+output>` checks every limit and exits 1 if a count exceeds its limit or is missing; CI saves the
+two outputs and runs it.
 
 After a change that adds, deletes or moves declarations or imports, regenerate the dependency
 documents and check them:
@@ -85,7 +89,7 @@ python3 scripts/deps.py check /tmp/facts.json
 2. Add the files and their manifest rows:
 
    ```
-   python3 scripts/corpus.py add [--mojo "<version>"] <family> <src.mojo> <source-path> "<flags>" <file.nvptx.ll>...
+   python3 scripts/corpus.py add [--mojo "<version>"] [--lib PATHS] <family> <src.mojo> <source-path> "<flags>" <file.nvptx.ll>...
    ```
 
    This copies each file to `tests/corpus/<family>/` and writes its `MANIFEST.tsv` row:
@@ -96,7 +100,9 @@ python3 scripts/deps.py check /tmp/facts.json
    - the Mojo version (`--mojo`, else `MOJO`);
    - `<flags>`, which must be the exact flags passed to `mojo build` (for example
      `--emit llvm --target-accelerator sm_80`);
-   - the source and the source's sha256.
+   - the source and the source's sha256;
+   - `--lib PATHS`: the library files that define the kernel, read from the source's imports
+     (comma-separated `.mojo` paths; `-`, the default, when the source defines it).
 
    `<source-path>` is the source's path in the modular repository at the commit `corpus.py` records
    (`MODULAR`). For a source kept in this repository, write `repo:<path>` instead, with `<path>`
@@ -104,8 +110,10 @@ python3 scripts/deps.py check /tmp/facts.json
 
    Add the source to `tests/corpus/NOTICE`, with its commit and its license. Read the license in
    the source's header: the corpus takes only sources under the Apache License v2.0 with LLVM
-   Exceptions, whose text is `tests/corpus/LICENSE-APACHE-LLVM`. A source kept in this repository
-   that is a modified copy of a Modular file keeps that file's header and says what was changed.
+   Exceptions, whose text is `tests/corpus/LICENSE-APACHE-LLVM`. `corpus.py add` refuses a source
+   whose header lacks the Apache-LLVM line, before it copies anything. A source kept in this
+   repository that is a modified copy of a Modular file keeps that file's header and says what was
+   changed.
 3. Run `python3 scripts/corpus.py check` and `lake test`. A file the importer refuses must be listed
    in `tests/corpus/REFUSALS.tsv` with the exact reason the test prints. A refusal that is not listed,
    or a listed one that does not occur, fails the test. A new row also changes the counts that
@@ -174,8 +182,8 @@ request, and rebuilds and publishes it from main when the pull request is merged
   kernel files are compiled from, with their commit and license, and `LICENSE-APACHE-LLVM`, the
   license of those sources. `tests/stale/`: a changed file that the digest check must refuse.
   `tests/upstream/`: Mojo reproducers for the upstream rows of `docs/BUGS.md`.
-- `scripts/`: `Audit.lean`, `cited.py`, `corpus.py`, `deps.py`, `counts.tsv`, `targets.txt`,
-  `trust.tsv`, and `SymBench.lean` (the block checker's benchmark).
+- `scripts/`: `Audit.lean`, `cited.py`, `corpus.py`, `deps.py`, `counts.tsv` and `counts.py`,
+  `targets.txt`, `trust.tsv`, and `SymBench.lean` (the block checker's benchmark).
 - `docs/`: `TRUST.md` (the trusted base), `BUGS.md` (issues), `new-kernel.md`, `kernel.md`,
   `automation.md` and `tactics.md` (how to prove a kernel), `proofs/` (the proofs written out),
   `DEPENDENCIES.md` and `deps/` (generated).

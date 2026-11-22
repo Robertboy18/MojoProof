@@ -140,8 +140,10 @@ below). It needs neither `Grid.RaceEnabled` nor L7.
   In Lean (MojoProof/Sem/Writes.lean, for every context, thread and memory): `Mem.Changes L N m m'`
   says that `m'` keeps every block of `m` with its shape, read-only flag and owner (and `Mem.Keeps`),
   adds blocks only at numbers of `N`, and has the trace of `m` with events `d` in front, and that a
-  block at a number outside `L` keeps its liveness, and its bytes but those an access of `d` writes
-  (`Access.Writes`). `step_changes`: a step of thread `c.who.thread` that continues or returns
+  block at a number outside `L` keeps its liveness, and its bytes but those below its size that an
+  access of `d` writes (`Access.Writes`; a store's check bounds the bytes it writes by the block's
+  size, `Mem.store_changes`). So such a block keeps its owner, its size and its bytes from its size
+  on (`Mem.Changes.above`). `step_changes`: a step of thread `c.who.thread` that continues or returns
   satisfies `Mem.Changes L N m m'` if `L` has every block the thread owns and every alloca of its
   frames, and `N` has `m.fresh c.who.thread t.k`; by `step_pending`, `d` is its pending accesses.
   The premise on the allocas is needed: a return makes the frame's allocas dead (`Mem.setLive`),
@@ -156,6 +158,15 @@ below). It needs neither `Grid.RaceEnabled` nor L7.
   `Mem.Changes` with `L` the blocks thread `(c n).who.thread` owns and `N` its fresh block
   `fresh (c n).who.thread t.k`. The twin of the invariant: the grid of a thread whose frame lists a
   block of every thread among its allocas is not `Grid.Owns` (`owns_twin`).
+  `Grid.start_reach_above`, for the same scope: in every grid reachable from the start, every
+  block of the start's memory whose owner is no thread has its owner, its size and its bytes from
+  its size on (a step by `Mem.Changes.above`, a fire changes no block), and the caller's blocks are
+  blocks of the start's memory (`Grid.start_blocks`). This is the part of the equality of a final
+  block with an expected one that evaluation cannot check, the bytes being a function: a check of
+  the fields and of the bytes below a bound at least every block's size gives the rest. The
+  premise on the owner is needed: making a block live (`Mem.setLive`) makes every byte of it
+  undefined, those from its size on too (MojoProofTest/Writes.lean, `above_twin`). Instance:
+  vector_addition's run on one thread (MojoProofTest/SkelVadd.lean, `above_vadd`).
 - L2 (frame): let `t` be a thread `n` with step count `k`, and let its *names* be the block numbers of the
   pointers it holds (`Grid.Closed` below) and, if it is at an `alloca`, `m.fresh n k`. If `m₁` and `m₂` agree
   on three things, then the steps of `t` from `m₁` and from `m₂` both fault, or both succeed with the same

@@ -89,10 +89,18 @@ Kernel cards:
 | Level | Meaning | Evidence (the `evidence` entry) |
 |---|---|---|
 | L0 | card written | the card, with every check passing |
-| L1 | imported, and the evaluator agrees with a GPU run | `L1:` a file of this repository recording a run on a GPU of a corpus file of the card: the GPU and its driver, the file and its digest, the launch and inputs, and the outputs of the GPU and of the evaluator, equal |
-| L2 | memory safety and race freedom for every launch | `L2:` a theorem `Kernel.Sound` for every valid launch (`MojoProof.Kernels.vadd.correct`) |
-| L3 | equal to the TorchLean operation over the reals | `L3:` a theorem that the outputs are the TorchLean operation's (`MojoProofTest.Kernel.vadd_real`) |
+| L1 | imported, and the evaluator agrees with a GPU run: a conformance test of the evaluator against the GPU on the recorded inputs, not a proof | `L1:` a file of this repository recording a run on a GPU of a corpus file of the card: the GPU and its driver, the file and its digest, the launch and inputs, and the outputs of the GPU and of the evaluator, equal |
+| L2 | memory safety and race freedom for every valid launch of the shape the theorem states | `L2:` a theorem `Kernel.Sound` (`MojoProof.Kernels.vadd.correct`, for one-dimensional launches, the shape `vector_addition` indexes: its index reads `tid.x` and not `tid.y`, so the theorem's premises exclude a two-dimensional block, `MojoProofTest.Kernel.twin_2d`) |
+| L3 | the outputs are the TorchLean operation's, under the theorem's premises | `L3:` a theorem that the outputs are the TorchLean operation's (`MojoProofTest.Kernel.vadd_real`: where an output is finite it is TorchLean's `x + y`, and its real value is the real sum rounded to binary32) |
 | L4 | an IEEE bound, or bit-exact | `L4:` a theorem bounding the outputs' error against the real result, or giving their exact bits |
+
+So L3 is not equality over the reals: a binary32 sum is rounded (`1 + 2⁻²⁴` is `1`), and the
+theorem may assume a finite output. STATUS.md's column "Scope of the cited theorems" says, for
+each kernel card, what the premises of the theorems it cites restrict: the launches they admit
+(one-dimensional: grid and block of side 1 in `y` and `z`), and for L3 and L4 whether an output
+is assumed finite and whether its real value is the exact one rounded. The script reads these
+from the theorems' statements in their source (for a name `mojo_kernel` adds, from its
+statement template), not from the card.
 
 Construct cards:
 
@@ -100,11 +108,13 @@ Construct cards:
 |---|---|---|
 | L0 | card written | the card, with every check passing |
 | L1 | modelled in Lean | the card's `lean` names (not `not stated yet`); no `evidence` entry |
-| L2 | tested against the GPU | `L2:` a file of this repository recording a run on a GPU of a test of the construct, as for kernel L1 |
+| L2 | tested against the GPU: a conformance test of the model against the GPU on the recorded inputs, not a proof | `L2:` a file of this repository recording a run on a GPU of a test of the construct, as for kernel L1 |
 | L3 | used by a proved kernel | `L3:` kernel card ids, each with L2 evidence |
 
-The repository has no record of a GPU run yet, so no kernel card is past L0 and no construct
-card past L1, whatever their higher evidence.
+Kernel L1 and construct L2 are the only levels a theorem does not give: they compare the model
+with a GPU on the inputs a record lists, which tests the model on those inputs and proves
+nothing about the others. A kernel card with no record of a GPU run stays at L0, and a
+construct card with none at L1, whatever their higher evidence.
 
 ## The script
 

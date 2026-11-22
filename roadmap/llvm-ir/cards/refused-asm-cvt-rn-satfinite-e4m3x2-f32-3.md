@@ -18,7 +18,7 @@ The importer refuses a call of inline assembly: `Parser.inst` reads no `asm` cal
 
 ## Corpus
 
-1 of the 111 corpus files use it (1 uses).
+1 of the 114 corpus files use it (1 uses).
 
 ## Out of scope
 

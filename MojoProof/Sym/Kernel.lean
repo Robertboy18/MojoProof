@@ -17,8 +17,9 @@ address choice and oracle.
   whose last block returns, and whose last block's effects succeed with a memory of a predicate
   `Q`), a thread with one frame, no `alloca` blocks, at the first block of a path the path checker
   with `phi`s accepts (`coversPathI`) and that is a `Ret` from the frame's entry valuation, runs to
-  its end (`Runs`) leaving a memory of `Q` (`Block.sound_retI`). `Walk.walkI`: a path whose premises
-  without `phi`s hold (`Walk`) has them with `phi`s and the same last block.
+  its end (`Runs`) leaving a memory of `Q` (`Runs.of_retWith` at `contract = false`).
+  `Walk.walkI`: a path whose premises without `phi`s hold (`Walk`) has them with `phi`s and the
+  same last block.
 * `Grid.start_thread`: every thread of the grid `Grid.start` gives has one frame of the kernel,
   at its first block's label, instruction 0, with no `alloca` blocks, and step count 0.
 * What a thread's frame holds at the start. `Grid.start_arg`: each register a parameter names
@@ -40,6 +41,17 @@ address choice and oracle.
   covers kernels whose threads each run one path without a cycle or one sequence of loops to
   `ret`, with no call of a defined function and no collective call. `Kernel.sound_of_paths`: its
   case without loops (`chains = []`).
+* `coversEntryWith`, `Kernel.sound_of_chainsWith`: the same with the flag `contract` of the path
+  checker (`coversPathWith`, `coversChainsWith`, `RetWith`, `RetLsWith`): at `true` a block with
+  `fmul contract` is summarized with its operands recorded (`summarizeC`). `coversEntry` and
+  `Kernel.sound_of_chains` are its `false` case (`Chain.with_iff`).
+* `Kernel.sound_entryWith`, `Kernel.sound_entry`: the kernel theorem from an invariant `I m₀ k`
+  over the start's memory `m₀`, with each thread's premise over every valuation whose context is
+  the thread's (program, thread, environment, oracle) and whose registers hold the start's facts:
+  each scalar parameter's argument under its attributes (`Grid.start_scalar`), and for each
+  `byval(T)` parameter whose argument has a codec, a pointer to a block of `m₀` owned by the
+  thread from which the load of a `T` gives the argument (`Grid.start_buffer`).
+  `Kernel.sound_entry` is its `false` case with `I` not depending on `m₀`.
 * `Ret.check`, `Ret.out`, `Ret.of_check`: a Boolean test of `Ret` and the memory the path
   leaves, with the theorem that a path it accepts is a `Ret` to that memory. `Ret.pick`: the first
   path of a list that `Ret.check` accepts. `Kernel.mems`, `Kernel.check`: the memories threads
@@ -54,7 +66,7 @@ address choice and oracle.
   a memory with an empty trace meets it from itself with no thread done. `Elem.succ`: a thread's
   store to its cell, with no other block changed and owned accesses, keeps it. `Elem.safe`: with
   cells `w` apart, the trace of every memory of `Elem` has no data race and keeps the promise of
-  `!invariant.load` (`racy_kept_of_cells`).
+  `!invariant.load` (`Elem.safe_on` with every thread in `S`).
 * `Elem.log`: an owned access keeps `Elem`. `Elem.skip`: a thread that puts no bytes keeps it.
   `Elem.store`: a thread's store of its bytes to its cell keeps it (`Mem.store_inv`).
   `Elem.load`, `Mem.load_of_block`: a load from another block than `out` gives what it gives on
@@ -66,28 +78,43 @@ address choice and oracle.
 * `Elem.fits`: the output block still fits (`Mem.Fits`, Sem/Precond.lean).
   `Elem.apply_load`: a load effect outside the output block keeps `Elem`. `Elem.apply_store`: a
   thread's store effect of its bytes to its cell advances it.
-* `apart_mul`: cells `w i` of `w` bytes are apart.
-* `Elem.Out`, `Kernel.sound_elem`: the kernel theorem of an elementwise kernel at every address
-  choice and one oracle, for the observation of the blocks: the output block holds every
-  thread's bytes at its cell and the caller's other blocks are unchanged, from each thread's
-  `Ret` from every memory of `Elem k` to `Elem (k + 1)` (`Kernel.sound_of_paths`).
+* `Elem.Only`: every access to the output block is by a thread of a set `S`.
+  `Elem.Only.log`, `Elem.Only.apply`: an access or an effect of a thread of `S` keeps it.
+  `Elem.safe_on`: with the cells of the threads of `S` `w` apart (the others may overlap them),
+  the trace of every memory of `Elem` and `Elem.Only` has no data race and keeps the promise of
+  `!invariant.load`.
+* `Elem.Out`, `Kernel.sound_cells`: the kernel theorem of an elementwise kernel at every
+  admitted address choice and oracle, for the observation of the blocks: the output block holds
+  every thread's bytes at its cell and the caller's other blocks are unchanged, from each
+  thread's `Ret` of a covered path or `RetLs` of a covered sequence of loops from every memory of
+  `Elem k` and `Elem.Only` to `Elem (k + 1)` and `Elem.Only` (`Kernel.sound_of_chains`).
+  `Kernel.sound_cellsWith`: the same with the flag `contract` (`Kernel.sound_of_chainsWith`);
+  `Kernel.sound_cells` is its `false` case. `Kernel.sound_elem`: its case with no loops, every
+  thread in `S` and one oracle.
 * `take_names`: parameters named by their positions name no register twice.
-  `Kernel.sound_mapN`: the same for a kernel whose parameters `%0` to `%n` are `n` `byval`
-  structs of buffer pointers then a count of any type, on an output block owned by all threads,
-  with the start facts derived: each thread's premise is a `Ret` from a frame whose registers
-  point to its `byval` structs and hold the count, on a memory where the caller's other blocks
-  are unchanged. `Kernel.sound_map2`: its case of three structs and an `i32` count on
+  `Kernel.sound_mapNWith`: `Kernel.sound_cellsWith` for a kernel whose parameters are `byval`
+  structs of buffer pointers then any number of scalars, each named by its position, on an output
+  block owned by all threads, with the start facts derived: each thread's premise is a
+  `RetWith contract` or a `RetLsWith contract` from a frame whose registers point to its `byval`
+  structs and hold the scalars, on a memory where the caller's other blocks are unchanged.
+  `Kernel.sound_mapN`: its case without `fmul contract`, with no loops, one scalar, every thread
+  in `S` and one oracle. `Kernel.sound_map2`: its case of three structs and an `i32` count on
   `Map2.args` and a caller's memory of `Map2.Pre` (Sem/Precond.lean), whose premise also has the
   buffers of `Map2.Pre`.
 * `Elem.put_succ`, `Elem.put_of_none`: a thread's put. `Elem.Out.min`: `Elem.Out` after `M`
   threads whose bytes from thread `n` on are none holds after `min n M`. `Elem.put_read`: the
-  bytes at a cell after the puts.
+  bytes at the cell of a thread that has bytes after the puts, with the cells apart on the
+  threads that have bytes. `Elem.put_out`: the bytes outside every thread's bytes are the block's.
 * `Elem.agree`, `Elem.outBelow`, `Elem.Out.outBelow`: `Elem.Out` checked by evaluation at the
-  blocks and offsets below bounds, which `Elem.Out` passes. `Elem.canaries`: the canaries of
-  the output, five wrong outputs made from the right one by Sem/Replay.lean's probes, one
-  definition for every kernel. `Kernel.replay_canaries`: each is refuted, for every
-  admission of the choice and oracle, when the trace-replay checker reports its violation
-  (`Kernel.replay_block`).
+  blocks and offsets below bounds, which `Elem.Out` passes. `Elem.agree_eq`, `Elem.put_above`,
+  `Elem.Out.of_outBelow`: the converse, when the memory has no block from the bound on, the
+  bytes end by the bound of offsets, and the blocks agree from it on. `Elem.canaries`: the
+  canaries of the output, five wrong outputs made from the right one by Sem/Replay.lean's
+  probes, one definition for every kernel. `Elem.Out.of_run`: `Elem.Out` of the blocks at the
+  end of a run from `Elem.outBelow`, when the caller's blocks are owned by no thread and end by
+  the bound of offsets (`Grid.start_reach_above`). `Kernel.replay_canaries`: each is refuted,
+  for every admission of the choice and oracle, when the trace-replay checker reports its
+  violation (`Kernel.replay_block`).
 * The corollaries of a binary float map, for every kernel whose theorem is `Kernel.Sound` for
   `Elem.Out` with `Elem.map2`'s bytes. `Kernel.Obs`: an observation of a complete run;
   `Kernel.Sound.obs`: it meets the relation. `Elem.map2`: the bytes thread `k` puts for
@@ -119,24 +146,18 @@ theorem Walk.walkI : ∀ (ps : List (Nat × List Cond × Summary)) {V : Valuatio
     obtain ⟨hW'', he⟩ := Walk.walkI ps hW'
     exact ⟨⟨hds, hd, by rw [hi]; exact hW''⟩, by rw [Valuation.lastI, Valuation.last, hi, he]⟩
 
+set_option smartUnfolding false in
 /-- **A thread along a covered path to its end.** For every program `P`, function `fn`, context
 of `P`, path `ps` the path checker with `phi`s accepts from position `p0` (`coversPathI`) and
 thread `t` with one frame `f` of `fn` at the path's first label and position `p0`, with no
 `alloca` blocks, on memory `m`: if `ps` is a `Ret` to `Q` from `f`'s entry valuation, `t` runs to
-its end (`Runs`) leaving a memory of `Q` (`Block.sound_retI`). -/
+its end (`Runs`) leaving a memory of `Q`: `Runs.of_retWith` at `contract = false`. -/
 theorem Runs.of_ret {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P) {p0 : Nat}
     {ps : List (Nat × List Cond × Summary)} (hc : coversPathI P fn p0 ps = true)
     {t : Thread} {m : Mem} {f : Frame} (ht : t.frames = [f]) (hfn : f.fn = fn)
     (hl : ps.head?.map (·.1) = some f.label) (hp : f.pc = p0) (ha : f.allocas = [])
-    {Q : Mem → Prop} (hR : Ret (Valuation.entry c t.k m f) Q ps) : ∃ m', Runs c t m m' ∧ Q m' := by
-  rcases ps with _ | ⟨⟨l, ds, S⟩, ps⟩
-  · exact (hR : False).elim
-  have hl' : f.label = l := by simpa using hl.symm
-  obtain ⟨hW, hret, me, hme, hQ⟩ := hR
-  obtain ⟨fe, me', hS, hrun, hst⟩ := Block.sound_retI hP hc ht hfn hl' hp hW hret
-  obtain rfl : me = me' := Except.ok.inj (hme.symm.trans hrun)
-  rw [ha] at hst
-  exact ⟨_, ⟨_, _, hS, hst⟩, hQ⟩
+    {Q : Mem → Prop} (hR : Ret (Valuation.entry c t.k m f) Q ps) : ∃ m', Runs c t m m' ∧ Q m' :=
+  Runs.of_retWith (contract := false) hP hc ht hfn hl hp ha hR
 
 /-- **The start's threads.** For every program, kernel `fn`, launch, arguments, memory, address
 choice and oracle whose start gives grid `g`: every thread `k` of `g` (`Grid.thread`) has one
@@ -243,7 +264,7 @@ theorem Grid.start_buffer {prog : Program} {fn : Func} {L : Launch} {args : List
   obtain ⟨bs', he', -, hd⟩ := hc.round x
   rw [he, Option.some.injEq] at he'
   subst he'
-  exact ⟨q, _, hw, hb, rfl, Mem.load_byval hb he hd (by rw [(Grid.start_ctx h k).2]) hal hal'⟩
+  exact ⟨q, _, hw, hb, rfl, Mem.load_byval hb he hd (by rw [(Grid.start_ctx h k).2.1]) hal hal'⟩
 
 /-- **A non-`byval` argument at the start.** For every program, kernel, launch, argument values,
 memory, address choice and oracle whose start gives `(g, c)`, thread `k` of `g` with frame `f`,
@@ -270,6 +291,63 @@ def coversEntry (P : Program) (fn : Func) (paths : List (List (Nat × List Cond 
   paths.all fun ps => decide (ps.head?.map (·.1) = fn.blocks[0]?.map (·.label)) &&
     coversPathI P fn 0 ps
 
+/-- **The entry check, with or without `fmul contract`**: every path of `paths` starts at the
+label of `fn`'s first block and is accepted by `coversPathWith contract` from position 0. Without
+`contract` it is `coversEntry` (definitionally). -/
+def coversEntryWith (contract : Bool) (P : Program) (fn : Func)
+    (paths : List (List (Nat × List Cond × Summary))) : Bool :=
+  paths.all fun ps => decide (ps.head?.map (·.1) = fn.blocks[0]?.map (·.label)) &&
+    coversPathWith contract P fn 0 ps
+
+/-- **Kernel soundness from one covered path or sequence of loops per thread, with or without
+`fmul contract`.** For every flag `contract`, program `prog`, kernel `fn`, launch `L`, arguments,
+caller's memory `m` whose pointer bytes are known (`Mem.BytesIn`), admission `adm` of address
+choices and oracles, observation `obs` that reads only the blocks, predicate `R`, list `paths` of
+paths that each start at `fn`'s first block and are accepted from position 0
+(`coversEntryWith contract`), and list `chains` of sequences of loops that each start at `fn`'s
+first block and whose paths are accepted (`coversChainsWith contract`): if the start succeeds on
+every admitted choice and oracle, and for each such start, with grid `g` and contexts `c`, there is
+a family `P` of memory predicates indexed by the number of threads done with `P 0 g.mem`, such that
+each thread `k` (`Grid.thread`, one frame `f`), from every memory `m'` of `P k`, either takes some
+path of `paths` that is a `RetWith contract` to `P (k + 1)` from `f`'s entry valuation on `m'`, or
+runs some sequence `C` of `chains` from that valuation through its loops to `ret` with a memory of
+`P (k + 1)` (`RetLsWith contract`), and every memory of `P N` (`N` threads) has a trace with no
+data race (`racy`) that keeps the promise of `!invariant.load` (`kept`) and an observation `y`
+with `R y`, then the kernel is sound (`Kernel.Sound`). With `contract` the blocks may have
+`fmul contract` and `fadd contract` (each thread's fused operands in its valuation's record).
+`Seq.start_sound_inv`, `Grid.start_thread`, `Runs.of_retWith` for a path, `Runs.of_chainsWith`
+for a sequence of loops. -/
+theorem Kernel.sound_of_chainsWith {contract : Bool} {prog : Program} {fn : Func} {L : Launch}
+    {args : List Val} {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type}
+    {obs : Mem → Option β} {R : β → Prop} {paths : List (List (Nat × List Cond × Summary))}
+    {chains : List LoopChain} (hc : coversEntryWith contract prog fn paths = true)
+    (hcL : coversChainsWith contract prog fn chains = true) (hm : m.BytesIn m.Known)
+    (hs : ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m')
+    (H : ∀ ch oracle g c, adm ch oracle → Grid.start prog fn L args m ch oracle = .ok (g, c) →
+      ∃ P : Nat → Mem → Prop, P 0 g.mem ∧
+        (∀ k < g.threads.size, ∀ m' f, P k m' → (Grid.thread g k).frames = [f] →
+          (∃ ps ∈ paths, RetWith contract (Valuation.entry (c k) 0 m' f) (P (k + 1)) ps) ∨
+            ∃ C ∈ chains, RetLsWith contract (P (k + 1)) C.loops (Valuation.entry (c k) 0 m' f)
+              C.l C.ds C.S C.E) ∧
+        (∀ m', P g.threads.size m' → racy m'.trace = false ∧ kept m'.trace = true ∧
+          ∃ y, obs m' = some y ∧ R y)) :
+    Kernel.Sound prog fn L args m adm obs R := by
+  intro ch oracle ha
+  obtain ⟨g, c, h⟩ := hs ch oracle ha
+  obtain ⟨P, h0, hk, hb⟩ := H ch oracle g c ha h
+  refine ⟨g, c, h, Seq.start_sound_inv h hm hO h0 (fun k hk' m' hm' => ?_)
+    (fun m' hm' => ⟨(hb m' hm').1, (hb m' hm').2.1⟩) fun m' hm' => (hb m' hm').2.2⟩
+  obtain ⟨f, ht, hfn, hl, hp, ha'⟩ := Grid.start_thread h hk'
+  rw [ht]
+  rcases hk k hk' m' f hm' (by rw [ht]) with ⟨ps, hps, hR⟩ | hR
+  · have hcp := List.all_eq_true.1 hc ps hps
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hcp
+    exact Runs.of_retWith (t := ⟨[f], 0⟩) (Grid.start_ctx h k).1 hcp.2 rfl hfn (hcp.1.trans hl)
+      hp ha' hR
+  · exact Runs.of_chainsWith (t := ⟨[f], 0⟩) (Grid.start_ctx h k).1 hcL rfl hfn hl hp ha' hR
+
+set_option smartUnfolding false in
 /-- **Kernel soundness from one covered path or sequence of loops per thread.** For every
 program `prog`, kernel `fn`, launch `L`, arguments, caller's memory `m` whose pointer bytes are
 known (`Mem.BytesIn`), admission `adm` of address choices and oracles, observation `obs` that
@@ -285,8 +363,8 @@ valuation on `m'`, or runs some sequence `C` of `chains` from that valuation thr
 `ret` with a memory of `P (k + 1)` (`RetLs`: for each loop an invariant indexed by the round and a
 trip count), and every memory of `P N` (`N` threads) has a trace with no data race (`racy`) that
 keeps the promise of `!invariant.load` (`kept`) and an observation `y` with `R y`, then the
-kernel is sound (`Kernel.Sound`). `Seq.start_sound_inv`, `Grid.start_thread`, `Runs.of_ret` for a
-path, `Runs.of_chains` for a sequence of loops. -/
+kernel is sound (`Kernel.Sound`). `Kernel.sound_of_chainsWith` without `fmul contract`
+(`Chain.with_iff`). -/
 theorem Kernel.sound_of_chains {prog : Program} {fn : Func} {L : Launch} {args : List Val}
     {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type} {obs : Mem → Option β}
     {R : β → Prop} {paths : List (List (Nat × List Cond × Summary))} {chains : List LoopChain}
@@ -302,20 +380,119 @@ theorem Kernel.sound_of_chains {prog : Program} {fn : Func} {L : Launch} {args :
               C.S C.E) ∧
         (∀ m', P g.threads.size m' → racy m'.trace = false ∧ kept m'.trace = true ∧
           ∃ y, obs m' = some y ∧ R y)) :
-    Kernel.Sound prog fn L args m adm obs R := by
-  intro ch oracle ha
-  obtain ⟨g, c, h⟩ := hs ch oracle ha
-  obtain ⟨P, h0, hk, hb⟩ := H ch oracle g c ha h
-  refine ⟨g, c, h, Seq.start_sound_inv h hm hO h0 (fun k hk' m' hm' => ?_)
-    (fun m' hm' => ⟨(hb m' hm').1, (hb m' hm').2.1⟩) fun m' hm' => (hb m' hm').2.2⟩
-  obtain ⟨f, ht, hfn, hl, hp, ha'⟩ := Grid.start_thread h hk'
-  rw [ht]
-  rcases hk k hk' m' f hm' (by rw [ht]) with ⟨ps, hps, hR⟩ | hR
-  · have hcp := List.all_eq_true.1 hc ps hps
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hcp
-    exact Runs.of_ret (t := ⟨[f], 0⟩) (Grid.start_ctx h k).1 hcp.2 rfl hfn (hcp.1.trans hl) hp
-      ha' hR
-  · exact Runs.of_chains (t := ⟨[f], 0⟩) (Grid.start_ctx h k).1 hcL rfl hfn hl hp ha' hR
+    Kernel.Sound prog fn L args m adm obs R :=
+  Kernel.sound_of_chainsWith (contract := false) hc hcL hm hs hO fun ch oracle g c ha h =>
+    (H ch oracle g c ha h).elim fun P ⟨h0, hk, hb⟩ =>
+      ⟨P, h0, fun k hk' m' f hm' hf => (hk k hk' m' f hm' hf).imp id
+        fun ⟨C, hC, hR⟩ => ⟨C, hC, Chain.with_iff.1 hR⟩, hb⟩
+
+/-- **Kernel soundness from each thread's entry facts, with or without `fmul contract`.** For
+every flag `contract`, program `prog`, kernel `fn`, launch `L`, arguments `args`, caller's memory
+`m` whose pointer bytes are known (`Mem.BytesIn`), admission `adm`, observation `obs` that reads
+only the blocks, predicate `R`, list `paths` of paths from the entry (`coversEntryWith contract`),
+list `chains` of sequences of loops from the entry (`coversChainsWith contract`) and family `I`
+of memory predicates indexed by the start's memory `m₀` and the number of threads done: if the
+start succeeds on every admitted choice and oracle, `I m₀ 0 m₀` holds of every memory `m₀` that
+has `m`'s blocks and an empty trace, and, for every admitted choice and oracle `oracle` and every
+memory `m₀` that has `m`'s blocks, each thread `k` of the launch (`k < volume L.grid * volume
+L.block`), from every valuation `V` with the start's facts and a memory of `I m₀ k`, either takes
+some path of `paths` that is a `RetWith contract` to `I m₀ (k + 1)` or runs some sequence of
+`chains` to `ret` with a memory of `I m₀ (k + 1)` (`RetLsWith contract`), and every memory of
+`I m₀` after all threads has a trace with no data race that keeps the promise of
+`!invariant.load` and an observation `y` with `R y`, then the kernel is sound (`Kernel.Sound`).
+The start's facts: `V`'s program is `prog`, its identity `⟨k, k / volume L.block⟩`, its special
+registers `L.env k`, its oracle `oracle k`, its function `fn`; each named parameter with no
+`byval` and no earlier parameter of its name holds in its register the value that its attributes
+make of its argument on every memory; and each named `byval(t)` parameter with no earlier
+parameter of its name, whose argument is `enc x` for a codec `enc` of `t` (`Layout.Codec`), holds
+in its register a pointer to offset 0 of a block of `m₀` owned by thread `k` from which a load of
+a `t` at every alignment `al` dividing `t`'s and the generic space's gives `enc x`.
+`Kernel.sound_of_chainsWith` with `P := I g.mem`: the start's memory has `m`'s blocks
+(`Grid.start_blocks`) and an empty trace (`Grid.start_trace`), and each thread's frame and context
+have the facts (`Grid.start_thread`, `Grid.start_ctx`, `Grid.start_scalar`,
+`Grid.start_buffer`). -/
+theorem Kernel.sound_entryWith {contract : Bool} {prog : Program} {fn : Func} {L : Launch}
+    {args : List Val} {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type}
+    {obs : Mem → Option β} {R : β → Prop} {paths : List (List (Nat × List Cond × Summary))}
+    {chains : List LoopChain} (hc : coversEntryWith contract prog fn paths = true)
+    (hcL : coversChainsWith contract prog fn chains = true) (hm : m.BytesIn m.Known)
+    (hs : ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') (I : Mem → Nat → Mem → Prop)
+    (h0 : ∀ m₀ : Mem, (∀ b x, m.blocks b = some x → m₀.blocks b = some x) → m₀.trace = [] →
+      I m₀ 0 m₀)
+    (H : ∀ ch oracle, adm ch oracle → ∀ m₀ : Mem,
+      (∀ b x, m.blocks b = some x → m₀.blocks b = some x) →
+      ∀ k < volume L.grid * volume L.block, ∀ V : Valuation, V.ctx.prog = prog →
+      V.ctx.who = ⟨k, k / volume L.block⟩ → V.ctx.env = L.env k → V.ctx.oracle = oracle k →
+      V.fn = fn →
+      (∀ i p v w r, fn.params[i]? = some p → args[i]? = some v → p.name = some r →
+        (fn.params.take i).all (·.name != some r) = true → p.byval? = none →
+        (∀ m', withAttrs prog.layout m' p.ty p.attrs v = .ok w) → V.regs r = some w) →
+      (∀ i p r t, fn.params[i]? = some p → p.name = some r →
+        (fn.params.take i).all (·.name != some r) = true → p.byval? = some t →
+        ∀ (α : Type) (enc : α → Val), prog.layout.Codec t enc → ∀ x al,
+        args[i]? = some (enc x) → al ∣ prog.layout.align t → al ∣ 2 ^ (prog.layout.ptr 0).1 →
+        ∃ q blk, V.regs r = some (.ptr ⟨q, 0⟩) ∧ m₀.blocks q = some blk ∧
+          blk.owner = .thread k ∧
+          m₀.load prog.layout V.ctx.who 0 t ⟨q, 0⟩ (some al) = .ok (enc x)) →
+      I m₀ k V.mem →
+      (∃ ps ∈ paths, RetWith contract V (I m₀ (k + 1)) ps) ∨
+        ∃ C ∈ chains, RetLsWith contract (I m₀ (k + 1)) C.loops V C.l C.ds C.S C.E)
+    (hend : ∀ m₀ m', I m₀ (volume L.grid * volume L.block) m' → racy m'.trace = false ∧
+      kept m'.trace = true ∧ ∃ y, obs m' = some y ∧ R y) :
+    Kernel.Sound prog fn L args m adm obs R :=
+  Kernel.sound_of_chainsWith hc hcL hm hs hO fun ch oracle g c ha h => by
+    have hn := (Grid.start_args h).1
+    refine ⟨I g.mem, h0 _ (fun _ _ => Grid.start_blocks h) (Grid.start_trace h),
+      fun k hk m' f hm' hf => ?_, fun m' h' => hend g.mem m' (hn ▸ h')⟩
+    obtain ⟨f', ht, hfn, -⟩ := Grid.start_thread h hk
+    obtain rfl : f' = f := by rw [ht] at hf; exact (List.cons.inj hf).1
+    obtain ⟨hp, hw, he, ho⟩ := Grid.start_ctx h k
+    exact H ch oracle ha g.mem (fun _ _ => Grid.start_blocks h) k (hn ▸ hk) _ hp hw he ho hfn
+      (fun _ _ _ _ _ hp hv hr hu hb hw => Grid.start_scalar h hk hf hp hr hu hb hv hw)
+      (fun _ _ _ _ hp hr hu hb _ _ hcod _ _ hv hal hal' =>
+        Grid.start_buffer h hk hf hp hr hu hb hcod hv hal hal') hm'
+
+set_option smartUnfolding false in
+/-- **Kernel soundness from each thread's entry facts.** For every program `prog`, kernel `fn`,
+launch `L`, arguments `args`, caller's memory `m` whose pointer bytes are known (`Mem.BytesIn`),
+admission `adm`, observation `obs` that reads only the blocks, predicate `R`, list `paths` of
+paths from the entry (`coversEntry`), list `chains` of sequences of loops from the entry
+(`coversChains`) and family `I` of memory predicates indexed by the number of threads done: if
+the start succeeds on every admitted choice and oracle, `I 0` holds of every memory that has
+`m`'s blocks and an empty trace, each thread `k` of the launch (`k < volume L.grid * volume
+L.block`) from every valuation `V` with the start's facts (`V`'s program is `prog`, its identity
+`⟨k, k / volume L.block⟩`, its special registers `L.env k`, its function `fn`, and each named
+parameter with no `byval` and no earlier parameter of its name holds in its register the value
+that its attributes make of its argument on every memory) and a memory of `I k` either takes some
+path of `paths` that is a `Ret` to `I (k + 1)` or runs some sequence of `chains` to `ret` with a
+memory of `I (k + 1)` (`RetLs`), and every memory of `I` after all threads has a trace with no
+data race that keeps the promise of `!invariant.load` and an observation `y` with `R y`, then
+the kernel is sound (`Kernel.Sound`). `Kernel.sound_entryWith` without `fmul contract`, with `I`
+not depending on the start's memory (`Chain.with_iff`). -/
+theorem Kernel.sound_entry {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type} {obs : Mem → Option β}
+    {R : β → Prop} {paths : List (List (Nat × List Cond × Summary))} {chains : List LoopChain}
+    (hc : coversEntry prog fn paths = true) (hcL : coversChains prog fn chains = true)
+    (hm : m.BytesIn m.Known)
+    (hs : ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') (I : Nat → Mem → Prop)
+    (h0 : ∀ m₀ : Mem, (∀ b x, m.blocks b = some x → m₀.blocks b = some x) → m₀.trace = [] →
+      I 0 m₀)
+    (H : ∀ k < volume L.grid * volume L.block, ∀ V : Valuation, V.ctx.prog = prog →
+      V.ctx.who = ⟨k, k / volume L.block⟩ → V.ctx.env = L.env k → V.fn = fn →
+      (∀ i p v w r, fn.params[i]? = some p → args[i]? = some v → p.name = some r →
+        (fn.params.take i).all (·.name != some r) = true → p.byval? = none →
+        (∀ m', withAttrs prog.layout m' p.ty p.attrs v = .ok w) → V.regs r = some w) →
+      I k V.mem →
+      (∃ ps ∈ paths, Ret V (I (k + 1)) ps) ∨ ∃ C ∈ chains, RetLs (I (k + 1)) C.loops V C.l C.ds
+        C.S C.E)
+    (hend : ∀ m', I (volume L.grid * volume L.block) m' → racy m'.trace = false ∧
+      kept m'.trace = true ∧ ∃ y, obs m' = some y ∧ R y) :
+    Kernel.Sound prog fn L args m adm obs R :=
+  Kernel.sound_entryWith (contract := false) hc hcL hm hs hO (fun _ => I) h0
+    (fun _ _ _ _ _ k hk V hp hw he _ hfn hr _ hI => (H k hk V hp hw he hfn hr hI).imp id
+      fun ⟨C, hC, hR⟩ => ⟨C, hC, Chain.with_iff.1 hR⟩) fun _ => hend
 
 /-- **Kernel soundness from one covered path per thread**: `Kernel.sound_of_chains` with no
 sequence of loops (`chains = []`), for every program, kernel, launch, arguments, memory whose
@@ -374,14 +551,25 @@ theorem Ret.of_check {V : Valuation} {d : Mem} :
       exact ⟨me, hme, by simp only⟩
     · cases he
 
-/-- **`Ret` is monotone in its predicate**: a path that is a `Ret` from `V` to `Q` is one to every
-`Q'` that holds of every memory of `Q`, for every valuation, predicates and path. -/
-theorem Ret.mono {V : Valuation} {Q Q' : Mem → Prop} (h : ∀ m, Q m → Q' m) :
-    ∀ {ps : List (Nat × List Cond × Summary)}, Ret V Q ps → Ret V Q' ps
+/-- **`RetWith contract` is monotone in its predicate**: for every flag, valuation `V`, predicates
+`Q`, `Q'` with `Q'` holding of every memory of `Q`, and path, a path that is a `RetWith contract`
+from `V` to `Q` is one to `Q'`. -/
+theorem RetWith.mono {contract : Bool} {V : Valuation} {Q Q' : Mem → Prop}
+    (h : ∀ m, Q m → Q' m) :
+    ∀ {ps : List (Nat × List Cond × Summary)}, RetWith contract V Q ps → RetWith contract V Q' ps
   | [], hR => (hR : False).elim
   | (_, _, _) :: _, hR => by
     obtain ⟨hW, hx, me, hr, hQ⟩ := hR
     exact ⟨hW, hx, me, hr, h me hQ⟩
+
+set_option smartUnfolding false in
+/-- **`Ret` is monotone in its predicate**: a path that is a `Ret` from `V` to `Q` is one to every
+`Q'` that holds of every memory of `Q`, for every valuation, predicates and path
+(`RetWith.mono` without `fmul contract`; the two agree definitionally with `smartUnfolding`
+off). -/
+theorem Ret.mono {V : Valuation} {Q Q' : Mem → Prop} (h : ∀ m, Q m → Q' m) :
+    ∀ {ps : List (Nat × List Cond × Summary)}, Ret V Q ps → Ret V Q' ps :=
+  fun {_} hR => RetWith.mono (contract := false) h hR
 
 /-- The first path of `paths` that `Ret.check` accepts from `V` (the empty path if none). -/
 def Ret.pick (V : Valuation) (paths : List (List (Nat × List Cond × Summary))) :
@@ -512,15 +700,6 @@ theorem Elem.succ {m₀ : Mem} {out w : Nat} {cell : Nat → Nat} {bs : Nat → 
   rest b hb := (hrest b hb).trans (h.rest b hb)
   owned a ha := (htr a ha).elim (h.owned a) id
 
-/-- **The elementwise discipline is safe**: for every memory meeting `Elem` with cells `w` bytes
-apart (`Apart`), its trace has no data race and keeps the promise of `!invariant.load`
-(`racy_kept_of_cells`). -/
-theorem Elem.safe {m₀ : Mem} {out w : Nat} {cell : Nat → Nat} {bs : Nat → Option (List MemByte)}
-    {k : Nat} {m : Mem} (hap : Apart cell w) (h : Elem m₀ out w cell bs k m) :
-    racy m.trace = false ∧ kept m.trace = true :=
-  racy_kept_of_cells hap (fun a ha hb => (h.owned a ha).1 hb) (fun a ha hb => (h.owned a ha).2.1 hb)
-    fun a ha hi => (h.owned a ha).2.2 hi
-
 /-- A load reads only its pointer's block: on two memories with the same block there, every load
 through the pointer gives the same result, for every layout, thread, space, type and alignment. -/
 theorem Mem.load_of_block {l : Layout} {m m' : Mem} {p : Ptr}
@@ -644,32 +823,6 @@ theorem Elem.fits {m₀ : Mem} {out w : Nat} {cell : Nat → Nat} {bs : Nat → 
   obtain ⟨blk, hb, h1⟩ := hF
   exact ⟨_, by rw [h.cells, hb]; rfl, by rw [(Elem.put_fields cell bs k blk).2.2.2.2.2.2]; exact h1⟩
 
-/-- `Mem.Buffer` at block `q` reads only block `q`: it holds in every memory that has `m`'s block
-`q`, for every memory, block number, size, alignment and writability. -/
-theorem _root_.MojoProof.Sem.Mem.Buffer.of_block {m m' : Mem} {q size al : Nat} {w : Bool}
-    (hq : ∀ x, m.blocks q = some x → m'.blocks q = some x) (h : m.Buffer q size al w) :
-    m'.Buffer q size al w := by
-  obtain ⟨blk, hb, hP⟩ := h
-  exact ⟨blk, hq _ hb, hP⟩
-
-/-- `Mem.Fits` at block `q` reads only block `q`: it holds in every memory that has `m`'s block
-`q`, for every layout, memory, block number and size. -/
-theorem _root_.MojoProof.Sem.Mem.Fits.of_block {l : Layout} {m m' : Mem} {q size : Nat}
-    (hq : ∀ x, m.blocks q = some x → m'.blocks q = some x) (h : m.Fits l q size) :
-    m'.Fits l q size := by
-  obtain ⟨blk, hb, hP⟩ := h
-  exact ⟨blk, hq _ hb, hP⟩
-
-/-- `Mem.Holds` at block `q` reads only block `q`: it holds in every memory that has `m`'s block
-`q`, for every layout, memory, block number, element type, encoder, offsets and tensor. -/
-theorem _root_.MojoProof.Sem.Mem.Holds.of_block {α : Type} [TorchLean.Storage α]
-    {s : TorchLean.Shape} {l : Layout} {m m' : Mem} {q : Nat} {t : Ty} {enc : α → Val}
-    {off : TorchLean.Shape.Coord s → Nat} {x : TorchLean.Tensor α s}
-    (hq : ∀ y, m.blocks q = some y → m'.blocks q = some y) (h : m.Holds l q t enc off x) :
-    m'.Holds l q t enc off x := by
-  obtain ⟨blk, hb, hP⟩ := h
-  exact ⟨blk, hq _ hb, hP⟩
-
 /-- A block of the caller's memory `m` other than `out` is, unchanged, a block of every memory of
 `Elem` from the start's memory (`Elem.rest`, `Grid.start_blocks`): for every program, kernel,
 launch, arguments, address choice and oracle whose start succeeds, output block, cell width,
@@ -727,10 +880,192 @@ def Elem.Out (m : Mem) (out : Nat) (cell : Nat → Nat) (bs : Nat → Option (Li
   (∀ x, m.blocks out = some x → B out = some (Elem.put cell bs N x)) ∧
   ∀ b x, b ≠ out → m.blocks b = some x → B b = some x
 
-/-- Cells `w i` of `w` bytes are apart (`Apart`), for every width `w` (`apart_stride`). -/
-theorem _root_.MojoProof.Sem.apart_mul (w : Nat) : Apart (fun i : Nat => w * i) w :=
-  fun i j hij => by
-    simpa only [Nat.zero_add, Nat.mul_comm] using apart_stride 0 (Nat.le_refl w) i j hij
+/-- Every access to block `out` in memory `m`'s trace is by a thread of `S`, for every output
+block, set of threads and memory. -/
+def Elem.Only (out : Nat) (S : Nat → Prop) (m : Mem) : Prop :=
+  ∀ a, Event.access a ∈ m.trace → a.ptr.block = out → S a.who.thread
+
+/-- Logging an access keeps `Elem.Only` if, when it is to block `out`, its thread is in `S`; for
+every output block, set of threads, memory and access. -/
+theorem Elem.Only.log {out : Nat} {S : Nat → Prop} {m : Mem} (h : Elem.Only out S m) {a : Access}
+    (ha : a.ptr.block = out → S a.who.thread) : Elem.Only out S (m.log (.access a)) := by
+  intro a' ha' hb
+  simp only [Mem.log, List.mem_cons] at ha'
+  rcases ha' with e | e
+  · injection e with e
+    subst e
+    exact ha hb
+  · exact h a' e hb
+
+/-- **An effect of a thread of `S` keeps `Elem.Only`.** For every output block, set of threads
+`S`, memory, valuation `V` whose thread is in `S`, node values and effect: the memory the effect
+gives (`SEff.apply`: a load or a store logs one access by `V`'s thread, `Mem.store_inv`) has
+every access to `out` by a thread of `S` if the memory before it has. -/
+theorem Elem.Only.apply {out : Nat} {S : Nat → Prop} {m : Mem} (h : Elem.Only out S m)
+    {V : Valuation} {vs : List (Except Fault Val)} {e : SEff} {m' : Mem}
+    (hS : S V.ctx.who.thread) (ha : SEff.apply V vs m e = .ok m') : Elem.Only out S m' := by
+  cases e with
+  | load lbl pc p =>
+    simp only [SEff.apply] at ha
+    split at ha
+    · obtain ⟨v, -, ha⟩ := Except.bind_eq_ok.1 ha
+      obtain ⟨q, -, ha⟩ := Except.bind_eq_ok.1 ha
+      cases ha
+      exact h.log fun _ => hS
+    · cases ha
+  | store lbl pc v p =>
+    simp only [SEff.apply] at ha
+    split at ha
+    · obtain ⟨x, -, ha⟩ := Except.bind_eq_ok.1 ha
+      obtain ⟨pv, -, ha⟩ := Except.bind_eq_ok.1 ha
+      obtain ⟨q, -, ha⟩ := Except.bind_eq_ok.1 ha
+      obtain ⟨blk, bs', -, -, -, rfl⟩ := Mem.store_inv ha
+      exact h.log fun _ => hS
+    · cases ha
+
+/-- **Cells apart on the threads that access the output are safe**: for every memory meeting
+`Elem` whose accesses to block `out` are by threads of `S` (`Elem.Only`), with the cells of the
+threads of `S` `w` bytes apart (`Apart` on the subtype of `S`; cells of other threads may
+overlap them), its trace has no data race and keeps the promise of `!invariant.load`
+(`racy_kept_of_cells` for cells equal to `cell` on the finitely many threads that access `out`
+and `w` apart past their maximum on the others). -/
+theorem Elem.safe_on {m₀ : Mem} {out w : Nat} {cell : Nat → Nat}
+    {bs : Nat → Option (List MemByte)} {k : Nat} {m : Mem} {S : Nat → Prop}
+    (hap : Apart (fun i : {i // S i} => cell i) w) (h : Elem m₀ out w cell bs k m)
+    (hS : Elem.Only out S m) : racy m.trace = false ∧ kept m.trace = true := by
+  classical
+  obtain ⟨ts, hts, hS'⟩ : ∃ ts : List Nat,
+      (∀ a, Event.access a ∈ m.trace → a.ptr.block = out → a.who.thread ∈ ts) ∧ ∀ i ∈ ts, S i :=
+    ⟨m.trace.filterMap fun e => match e with
+        | .access a => if a.ptr.block = out then some a.who.thread else none
+        | .barrier _ => none,
+      fun a ha hb => List.mem_filterMap.2 ⟨_, ha, by simp [hb]⟩, fun i hi => by
+        obtain ⟨e, he, hi⟩ := List.mem_filterMap.1 hi
+        cases e with
+        | access a =>
+          by_cases hb : a.ptr.block = out
+          · simp only [hb, ↓reduceIte, Option.some.injEq] at hi
+            subst hi
+            exact hS a he hb
+          · simp [hb] at hi
+        | barrier _ => cases hi⟩
+  have hK : ∀ l : List Nat, ∃ K, ∀ i ∈ l, cell i + w ≤ K := fun l => by
+    induction l with
+    | nil => exact ⟨0, fun _ h => by cases h⟩
+    | cons x l ih =>
+      obtain ⟨K, hK⟩ := ih
+      refine ⟨K + cell x + w, fun i hi => ?_⟩
+      rcases List.mem_cons.1 hi with rfl | hi
+      · omega
+      · have := hK i hi
+        omega
+  obtain ⟨K, hK⟩ := hK ts
+  refine racy_kept_of_cells (cell := fun i => if i ∈ ts then cell i else K + w * i) ?_
+    (fun a ha hb => by simp only [hts a ha hb, ↓reduceIte]; exact (h.owned a ha).1 hb)
+    (fun a ha hb => (h.owned a ha).2.1 hb) fun a ha hi => (h.owned a ha).2.2 hi
+  intro i j hij
+  by_cases hi : i ∈ ts <;> by_cases hj : j ∈ ts <;> simp only [hi, hj, ↓reduceIte]
+  · exact hap ⟨i, hS' i hi⟩ ⟨j, hS' j hj⟩ fun e => hij (congrArg Subtype.val e)
+  · have := hK i hi
+    omega
+  · have := hK j hj
+    omega
+  · have := apart_mul w i j hij
+    simp only at this
+    omega
+
+/-- **The elementwise discipline is safe**: for every memory meeting `Elem` with cells `w` bytes
+apart (`Apart`), its trace has no data race and keeps the promise of `!invariant.load`
+(`Elem.safe_on` with every thread in `S`). -/
+theorem Elem.safe {m₀ : Mem} {out w : Nat} {cell : Nat → Nat} {bs : Nat → Option (List MemByte)}
+    {k : Nat} {m : Mem} (hap : Apart cell w) (h : Elem m₀ out w cell bs k m) :
+    racy m.trace = false ∧ kept m.trace = true :=
+  Elem.safe_on (S := fun _ => True) (hap.comp Subtype.val_injective) h fun _ _ _ => trivial
+
+/-- **The kernel theorem of an elementwise kernel with loops and cells apart where it stores, with
+or without `fmul contract`.** For every flag `contract`, program, kernel `fn`, launch `L`,
+arguments, caller's memory `m` whose pointer bytes are known, admission `adm` of address choices
+and oracles, paths from the entry (`coversEntryWith contract`), sequences of loops from the entry
+(`coversChainsWith contract`), output block `out`, cells `cell` of `w` bytes, bytes `bs` and set
+`S` of threads whose cells are `w` bytes apart (`Apart` on the subtype of `S`; the cells of other
+threads may overlap them): if the start succeeds on every admitted choice and oracle, and on each
+start every thread `k`, from every memory of `Elem` after `k` threads whose accesses to `out` are
+by threads of `S` (`Elem.Only`), either takes some path of `paths` that is a `RetWith contract`,
+or runs some sequence of loops of `chains` to `ret` (`RetLsWith contract`), to a memory of `Elem`
+after `k + 1` threads whose accesses to `out` are by threads of `S`, then the kernel is sound
+(`Kernel.Sound`) for the observation of the blocks and `Elem.Out`: block `out` (if `m` has it) is
+`m`'s with the bytes `bs i` of the `volume L.grid * volume L.block` threads put in turn at their
+cells (`Elem.put`), and every other block of `m` is unchanged (`Kernel.sound_of_chainsWith` with
+the invariant `Elem` and `Elem.Only`, `Elem.zero`, `Elem.safe_on`, `Grid.start_blocks`,
+`Grid.start_args`). It covers kernels whose threads each run one path without a cycle or one
+sequence of loops to `ret`, with `fmul contract` and `fadd contract` when `contract`; a thread
+outside `S` may share a cell but must not access `out`. The per-thread runs are the caller's
+premise. -/
+theorem Kernel.sound_cellsWith {contract : Bool} {prog : Program} {fn : Func} {L : Launch}
+    {args : List Val} {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop}
+    {paths : List (List (Nat × List Cond × Summary))} {chains : List LoopChain} {out w : Nat}
+    {cell : Nat → Nat} {bs : Nat → Option (List MemByte)} {S : Nat → Prop}
+    (hc : coversEntryWith contract prog fn paths = true)
+    (hcL : coversChainsWith contract prog fn chains = true) (hm : m.BytesIn m.Known)
+    (hs : ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hap : Apart (fun i : {i // S i} => cell i) w)
+    (H : ∀ ch oracle g c, adm ch oracle → Grid.start prog fn L args m ch oracle = .ok (g, c) →
+      ∀ k < g.threads.size, ∀ m' f, Elem g.mem out w cell bs k m' → Elem.Only out S m' →
+        (Grid.thread g k).frames = [f] →
+        (∃ ps ∈ paths, RetWith contract (Valuation.entry (c k) 0 m' f)
+          (fun me => Elem g.mem out w cell bs (k + 1) me ∧ Elem.Only out S me) ps) ∨
+        ∃ C ∈ chains, RetLsWith contract
+          (fun me => Elem g.mem out w cell bs (k + 1) me ∧ Elem.Only out S me)
+          C.loops (Valuation.entry (c k) 0 m' f) C.l C.ds C.S C.E) :
+    Kernel.Sound prog fn L args m adm (fun m => some m.blocks)
+      (Elem.Out m out cell bs (volume L.grid * volume L.block)) := by
+  refine Kernel.sound_of_chainsWith hc hcL hm hs (fun _ _ h => congrArg some h) ?_
+  intro ch oracle g c ha h
+  refine ⟨fun k me => Elem g.mem out w cell bs k me ∧ Elem.Only out S me,
+    ⟨Elem.zero (Grid.start_trace h), fun a ha => by rw [Grid.start_trace h] at ha; cases ha⟩,
+    fun k hk m' f hm' => H ch oracle g c ha h k hk m' f hm'.1 hm'.2,
+    fun m' hm' => ⟨(Elem.safe_on hap hm'.1 hm'.2).1, (Elem.safe_on hap hm'.1 hm'.2).2, _, rfl,
+      And.intro (fun x hx => ?_) fun b x hb hx => ?_⟩⟩
+  · rw [hm'.1.cells, Grid.start_blocks h hx, (Grid.start_args h).1]
+    rfl
+  · rw [hm'.1.rest b hb, Grid.start_blocks h hx]
+
+set_option smartUnfolding false in
+/-- **The kernel theorem of an elementwise kernel with loops and cells apart where it stores.**
+For every program, kernel `fn`, launch `L`, arguments, caller's memory `m` whose pointer bytes
+are known, admission `adm` of address choices and oracles, paths from the entry (`coversEntry`),
+sequences of loops from the entry (`coversChains`), output block `out`, cells `cell` of `w`
+bytes, bytes `bs` and set `S` of threads whose cells are `w` bytes apart (`Apart` on the subtype
+of `S`; the cells of other threads may overlap them): if the start succeeds on every admitted
+choice and oracle, and on each start every thread `k`, from every memory of `Elem` after `k`
+threads whose accesses to `out` are by threads of `S` (`Elem.Only`), either takes some path of
+`paths` that is a `Ret`, or runs some sequence of loops of `chains` to `ret` (`RetLs`), to a
+memory of `Elem` after `k + 1` threads whose accesses to `out` are by threads of `S`, then the
+kernel is sound (`Kernel.Sound`) for the observation of the blocks and `Elem.Out`: block `out`
+(if `m` has it) is `m`'s with the bytes `bs i` of the `volume L.grid * volume L.block` threads
+put in turn at their cells (`Elem.put`), and every other block of `m` is unchanged
+(`Kernel.sound_cellsWith` without `fmul contract`, `Chain.with_iff`). It covers kernels whose
+threads each run one path without a cycle or one sequence of loops to `ret`; a thread outside
+`S` may share a cell but must not access `out`. The per-thread runs are the caller's premise. -/
+theorem Kernel.sound_cells {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
+    {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {paths : List (List (Nat × List Cond × Summary))}
+    {chains : List LoopChain} {out w : Nat} {cell : Nat → Nat} {bs : Nat → Option (List MemByte)}
+    {S : Nat → Prop} (hc : coversEntry prog fn paths = true)
+    (hcL : coversChains prog fn chains = true) (hm : m.BytesIn m.Known)
+    (hs : ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hap : Apart (fun i : {i // S i} => cell i) w)
+    (H : ∀ ch oracle g c, adm ch oracle → Grid.start prog fn L args m ch oracle = .ok (g, c) →
+      ∀ k < g.threads.size, ∀ m' f, Elem g.mem out w cell bs k m' → Elem.Only out S m' →
+        (Grid.thread g k).frames = [f] →
+        (∃ ps ∈ paths, Ret (Valuation.entry (c k) 0 m' f)
+          (fun me => Elem g.mem out w cell bs (k + 1) me ∧ Elem.Only out S me) ps) ∨
+        ∃ C ∈ chains, RetLs (fun me => Elem g.mem out w cell bs (k + 1) me ∧ Elem.Only out S me)
+          C.loops (Valuation.entry (c k) 0 m' f) C.l C.ds C.S C.E) :
+    Kernel.Sound prog fn L args m adm (fun m => some m.blocks)
+      (Elem.Out m out cell bs (volume L.grid * volume L.block)) :=
+  Kernel.sound_cellsWith (contract := false) hc hcL hm hs hap
+    fun ch oracle g c ha h k hk m' f hE hS hf => (H ch oracle g c ha h k hk m' f hE hS hf).imp id
+      fun ⟨C, hC, hR⟩ => ⟨C, hC, Chain.with_iff.1 hR⟩
 
 /-- **The kernel theorem of an elementwise kernel.** For every program,
 kernel `fn`, launch `L`, arguments, caller's memory `m` whose pointer bytes are known, oracle `ω`,
@@ -740,10 +1075,10 @@ every thread `k`, from every memory of `Elem` after `k` threads, takes some path
 is a `Ret` to a memory of `Elem` after `k + 1` threads, then the kernel is sound at every address
 choice and `ω` (`Kernel.Sound`) for the observation of the blocks and `Elem.Out`: block `out`
 (if `m` has it) is `m`'s with the bytes `bs i` of the `volume L.grid * volume L.block` threads
-put in turn at their cells (`Elem.put`), and every other block of `m` is unchanged
-(`Kernel.sound_of_paths` with the invariant `Elem`, `Elem.zero`, `Elem.safe`,
-`Grid.start_blocks`, `Grid.start_args`). It covers kernels whose threads each run one path
-without a cycle to `ret`; the per-thread `Ret` is the caller's premise. -/
+put in turn at their cells (`Elem.put`), and every other block of `m` is unchanged. It is
+`Kernel.sound_cells` with no sequence of loops, every thread in `S` and the admission of `ω`
+alone. It covers kernels whose threads each run one path without a cycle to `ret`; the
+per-thread `Ret` is the caller's premise. -/
 theorem Kernel.sound_elem {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
     {ω : Nat → Nat → Nat} {paths : List (List (Nat × List Cond × Summary))} {out w : Nat}
     {cell : Nat → Nat} {bs : Nat → Option (List MemByte)}
@@ -754,16 +1089,12 @@ theorem Kernel.sound_elem {prog : Program} {fn : Func} {L : Launch} {args : List
         (Grid.thread g k).frames = [f] →
         ∃ ps ∈ paths, Ret (Valuation.entry (c k) 0 m' f) (Elem g.mem out w cell bs (k + 1)) ps) :
     Kernel.Sound prog fn L args m (fun _ ω' => ω' = ω) (fun m => some m.blocks)
-      (Elem.Out m out cell bs (volume L.grid * volume L.block)) := by
-  refine Kernel.sound_of_paths hc hm (fun ch _ h => by subst h; exact hs ch)
-    (fun _ _ h => congrArg some h) ?_
-  rintro ch _ g c rfl h
-  refine ⟨fun k => Elem g.mem out w cell bs k, Elem.zero (Grid.start_trace h), H ch g c h,
-    fun m' hm' => ⟨(Elem.safe hap hm').1, (Elem.safe hap hm').2, _, rfl,
-      And.intro (fun x hx => ?_) fun b x hb hx => ?_⟩⟩
-  · rw [hm'.cells, Grid.start_blocks h hx, (Grid.start_args h).1]
-    rfl
-  · rw [hm'.rest b hb, Grid.start_blocks h hx]
+      (Elem.Out m out cell bs (volume L.grid * volume L.block)) :=
+  Kernel.sound_cells (chains := []) (S := fun _ => True) hc rfl hm (fun ch _ e => e ▸ hs ch)
+    (hap.comp Subtype.val_injective) fun ch _ g c e h k hk m' f hE _ hf => .inl <| by
+      subst e
+      exact (H ch g c h k hk m' f hE hf).imp fun _ ⟨hp, hR⟩ =>
+        ⟨hp, hR.mono fun _ h => ⟨h, fun _ _ _ => trivial⟩⟩
 
 /-- Parameters named by their positions name no register twice: for every function whose
 parameter at each position `j` is named `%j` and every position `i`, no parameter before `i` is
@@ -778,6 +1109,100 @@ theorem take_names {fn : Func} (hn : ∀ j (p : Param), fn.params[j]? = some p �
   simp only [bne_iff_ne, ne_eq, Option.some.injEq]
   omega
 
+/-- **The kernel theorem of an elementwise kernel over any number of buffer structs and scalars,
+with loops, cells apart where it stores and every admitted oracle, with or without
+`fmul contract`.** For every flag `contract`, program `prog`, kernel `fn` whose parameters are
+`ps ++` the parameters of `sc`, the one at each position `j` named `%j`, every one of `ps`
+`byval` of a struct type `T` whose values `.agg [.ptr p, z]` have a codec (`Layout.Codec`) and
+none of `sc`'s `byval`, alignment `al'` of `T` and of the generic space's addresses, launch `L`,
+paths from the entry (`coversEntryWith contract`), sequences of loops from the entry
+(`coversChainsWith contract`), block numbers `bl`, one for each of `ps`, scalars `sc` (each a
+parameter, an argument and the value its attributes take it to on every memory), caller's memory
+`m` whose pointer bytes are known and which has an output block `o` owned by all threads,
+admission `adm` of address choices and oracles, set `S` of threads whose cells `cell` are `w`
+bytes apart (`Apart` on the subtype of `S`) and bytes `bs`: if the start on the structs of `bl`
+then the arguments of `sc` succeeds on every admitted choice and oracle, and `H` holds, then `fn`
+is sound (`Kernel.Sound`) for the observation of the blocks and `Elem.Out`
+(`Kernel.sound_cellsWith`). `H`: for every admitted choice and oracle, thread `k` of the launch,
+context of `prog` with thread `k`'s registers, identity and oracle, memory `m₀` that has `m`'s
+block `o`, memory `m'` of `Elem` after `k` threads whose accesses to `o` are by threads of `S`
+(`Elem.Only`) and on which every block of `m` but `o` is unchanged, and frame of `fn` whose
+register `%i`, for each position `i` of `bl`, points to a block other than `o` from which `T`
+loads at alignment `al'` as the struct of `bl[i]`, and whose register `%(n + j)` (`n` the length
+of `bl`) is the value of `sc[j]`, either some path of `paths` from the frame's entry is a
+`RetWith contract`, or some sequence of loops of `chains` runs to `ret` (`RetLsWith contract`),
+to a memory of `Elem` after `k + 1` threads whose accesses to `o` are by threads of `S`. The
+start gives these facts (`Grid.start_buffer`, `Grid.start_scalar`, `Elem.start_block`,
+`Elem.load`). It covers the family of kernels with this parameter shape, with no bound on the
+number of structs or scalars; `H` and the start on every choice are the caller's premises. -/
+theorem Kernel.sound_mapNWith {contract : Bool} {prog : Program} {fn : Func} {L : Launch}
+    {paths : List (List (Nat × List Cond × Summary))} {chains : List LoopChain}
+    (hc : coversEntryWith contract prog fn paths = true)
+    (hcL : coversChainsWith contract prog fn chains = true) {ps : List Param}
+    {sc : List (Param × Val × Val)} (hps : fn.params = ps ++ sc.map (·.1))
+    (hn : ∀ j (p : Param), fn.params[j]? = some p → p.name = some j) {T : Ty}
+    (hT : ∀ p ∈ ps, p.byval? = some T) (hsc : ∀ s ∈ sc, s.1.byval? = none)
+    {z : Val} (hcod : prog.layout.Codec T fun p => .agg [.ptr p, z]) {al' : Nat}
+    (hal' : al' ∣ prog.layout.align T ∧ al' ∣ 2 ^ (prog.layout.ptr 0).1)
+    {bl : List Nat} (hbl : bl.length = ps.length)
+    (hw : ∀ s ∈ sc, ∀ m', withAttrs prog.layout m' s.1.ty s.1.attrs s.2.1 = .ok s.2.2) {m : Mem}
+    (hm : m.BytesIn m.Known) {o : Nat} (hO : ∃ x, m.blocks o = some x ∧ x.owner = .all)
+    {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop}
+    (hs : ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L
+      (bl.map (fun a => Val.agg [.ptr ⟨a, 0⟩, z]) ++ sc.map (·.2.1)) m ch oracle = .ok (g, c))
+    {S : Nat → Prop} {w : Nat} {cell : Nat → Nat} (hap : Apart (fun i : {i // S i} => cell i) w)
+    {bs : Nat → Option (List MemByte)}
+    (H : ∀ ch oracle, adm ch oracle → ∀ k, k < volume L.grid * volume L.block →
+      ∀ c : Ctx, c.prog = prog → c.env = L.env k → c.who = ⟨k, k / volume L.block⟩ →
+      c.oracle = oracle k → ∀ (m₀ m' : Mem) (f : Frame), f.fn = fn →
+      (∀ i (hi : i < bl.length), ∃ q, f.regs i = some (.ptr ⟨q, 0⟩) ∧ q ≠ o ∧
+        m'.load prog.layout c.who 0 T ⟨q, 0⟩ (some al') = .ok (.agg [.ptr ⟨bl[i], 0⟩, z])) →
+      (∀ j (hj : j < sc.length), f.regs (bl.length + j) = some sc[j].2.2) →
+      (∀ q, q ≠ o → ∀ x, m.blocks q = some x → m'.blocks q = some x) →
+      (∀ x, m.blocks o = some x → m₀.blocks o = some x) →
+      Elem m₀ o w cell bs k m' → Elem.Only o S m' →
+      (∃ ps ∈ paths, RetWith contract (Valuation.entry c 0 m' f)
+        (fun me => Elem m₀ o w cell bs (k + 1) me ∧ Elem.Only o S me) ps) ∨
+      ∃ C ∈ chains, RetLsWith contract
+        (fun me => Elem m₀ o w cell bs (k + 1) me ∧ Elem.Only o S me)
+        C.loops (Valuation.entry c 0 m' f) C.l C.ds C.S C.E) :
+    Kernel.Sound prog fn L (bl.map (fun a => Val.agg [.ptr ⟨a, 0⟩, z]) ++ sc.map (·.2.1)) m adm
+      (fun m => some m.blocks) (Elem.Out m o cell bs (volume L.grid * volume L.block)) := by
+  refine Kernel.sound_cellsWith hc hcL hm hs hap fun ch oracle g c ha h k hk m' f hE hS hfr => ?_
+  obtain ⟨xo, hxo, hxo'⟩ := hO
+  have hgo := Grid.start_blocks h hxo
+  obtain ⟨f', ht, hf, -⟩ := Grid.start_thread h hk
+  have e : [f'] = [f] := by rw [← hfr, ht]
+  refine H ch oracle ha k (by rw [← (Grid.start_args h).1]; exact hk) (c k)
+    (Grid.start_ctx h k).1 (Grid.start_ctx h k).2.2.1 (Grid.start_ctx h k).2.1
+    (Grid.start_ctx h k).2.2.2 g.mem m' f (by rw [← (List.cons.inj e).1]; exact hf)
+    (fun i hi => ?_) (fun j hj => ?_) (fun q hq => Elem.start_block h hE hq)
+    (fun _ hx => Grid.start_blocks h hx) hE hS
+  · have hi' : i < ps.length := hbl ▸ hi
+    have hp : fn.params[i]? = some ps[i] := by
+      rw [hps, List.getElem?_append_left hi']
+      exact List.getElem?_eq_getElem hi'
+    obtain ⟨q, B, hr, hb, ho, hv⟩ := Grid.start_buffer h hk hfr hp (hn i _ hp) (take_names hn i)
+      (hT _ (List.getElem_mem hi')) hcod (x := ⟨bl[i], 0⟩)
+      (by rw [List.getElem?_append_left (by simpa using hi), List.getElem?_map,
+        List.getElem?_eq_getElem hi]; rfl) hal'.1 hal'.2
+    have hqo : q ≠ o := by
+      rintro rfl
+      rw [hgo, Option.some.injEq] at hb
+      subst hb
+      rw [hxo'] at ho
+      cases ho
+    exact ⟨q, hr, hqo, (hE.load (p := ⟨q, 0⟩) hqo _ _ _ _ _).trans hv⟩
+  · have hp : fn.params[bl.length + j]? = some sc[j].1 := by
+      rw [hps, List.getElem?_append_right (by omega), hbl, Nat.add_sub_cancel_left,
+        List.getElem?_map, List.getElem?_eq_getElem hj]
+      rfl
+    exact Grid.start_scalar h hk hfr hp (hn _ _ hp) (take_names hn _)
+      (hsc _ (List.getElem_mem hj))
+      (by rw [List.getElem?_append_right (by simp), List.length_map, Nat.add_sub_cancel_left,
+        List.getElem?_map, List.getElem?_eq_getElem hj]; rfl) (hw _ (List.getElem_mem hj))
+
+set_option smartUnfolding false in
 /-- **The kernel theorem of an elementwise kernel over any number of buffer structs and a count
 of any type.** For every program `prog`, kernel `fn` whose parameters are `ps ++ [pc]`, the one
 at each position `j` named `%j`, every one of `ps` `byval` of a struct type `T` whose values
@@ -788,16 +1213,18 @@ memory, caller's memory `m` whose pointer bytes are known and which has an outpu
 owned by all threads, oracle `ω`, cells `cell` of `w` bytes apart (`Apart`) and bytes `bs`: if
 the start on the structs of `bl` then `v` succeeds on every address choice at `ω`, and `H`
 holds, then `fn` is sound at every address choice and `ω` (`Kernel.Sound`) for the observation
-of the blocks and `Elem.Out` (`Kernel.sound_elem`). `H`: for every thread `k` of the launch,
-context of `prog` with thread `k`'s registers, identity and oracle `ω k`, memory `m₀` that has
-`m`'s block `o`, memory `m'` of `Elem` after `k` threads on which every block of `m` but `o` is
-unchanged, and frame of `fn` whose register `%i`, for each position `i` of `bl`, points to a
-block other than `o` from which `T` loads at alignment `al'` as the struct of `bl[i]`, and whose
-register `%n` (`n` the length of `bl`) is `u`, some path of `paths` from the frame's entry is a
-`Ret` to `Elem` after `k + 1` threads. The start gives these facts (`Grid.start_buffer`,
-`Grid.start_scalar`, `Elem.start_block`, `Elem.load`). It covers the family of kernels with this
-parameter shape at one oracle `ω`, with no bound on the number of structs and no condition on the
-count's type or width; `H` and the start on every choice are the caller's premises. -/
+of the blocks and `Elem.Out` (`Kernel.sound_mapNWith` without `fmul contract`, with no loops,
+the one scalar `pc`, the set `S` of all threads and the admission of `ω` alone). `H`: for every
+thread `k` of the launch, context of `prog` with thread `k`'s registers, identity and oracle
+`ω k`, memory `m₀` that has `m`'s block `o`, memory `m'` of `Elem` after `k` threads on which
+every block of `m` but `o` is unchanged, and frame of `fn` whose register `%i`, for each position
+`i` of `bl`, points to a block other than `o` from which `T` loads at alignment `al'` as the
+struct of `bl[i]`, and whose register `%n` (`n` the length of `bl`) is `u`, some path of `paths`
+from the frame's entry is a `Ret` to `Elem` after `k + 1` threads. The start gives these facts
+(`Grid.start_buffer`, `Grid.start_scalar`, `Elem.start_block`, `Elem.load`). It covers the family
+of kernels with this parameter shape at one oracle `ω`, with no bound on the number of structs
+and no condition on the count's type or width; `H` and the start on every choice are the
+caller's premises. -/
 theorem Kernel.sound_mapN {prog : Program} {fn : Func} {L : Launch}
     {paths : List (List (Nat × List Cond × Summary))} (hc : coversEntry prog fn paths = true)
     {ps : List Param} {pc : Param} (hps : fn.params = ps ++ [pc])
@@ -824,36 +1251,15 @@ theorem Kernel.sound_mapN {prog : Program} {fn : Func} {L : Launch}
       ∃ ps ∈ paths, Ret (Valuation.entry c 0 m' f) (Elem m₀ o w cell bs (k + 1)) ps) :
     Kernel.Sound prog fn L (bl.map (fun a => Val.agg [.ptr ⟨a, 0⟩, z]) ++ [v]) m
       (fun _ ω' => ω' = ω) (fun m => some m.blocks)
-      (Elem.Out m o cell bs (volume L.grid * volume L.block)) := by
-  refine Kernel.sound_elem hc hm hs hap fun ch g c h k hk m' f hE hfr => ?_
-  obtain ⟨xo, hxo, hxo'⟩ := hO
-  have hgo := Grid.start_blocks h hxo
-  obtain ⟨f', ht, hf, -⟩ := Grid.start_thread h hk
-  have e : [f'] = [f] := by rw [← hfr, ht]
-  refine H k (by rw [← (Grid.start_args h).1]; exact hk) (c k) (Grid.start_ctx h k).1
-    (Grid.start_env h k).1 (Grid.start_ctx h k).2 (Grid.start_env h k).2 g.mem m' f
-    (by rw [← (List.cons.inj e).1]; exact hf) (fun i hi => ?_) ?_
-    (fun q hq => Elem.start_block h hE hq) (fun _ hx => Grid.start_blocks h hx) hE
-  · have hi' : i < ps.length := hbl ▸ hi
-    have hp : fn.params[i]? = some ps[i] := by
-      rw [hps, List.getElem?_append_left hi']
-      exact List.getElem?_eq_getElem hi'
-    obtain ⟨q, B, hr, hb, ho, hv⟩ := Grid.start_buffer h hk hfr hp (hn i _ hp) (take_names hn i)
-      (hT _ (List.getElem_mem hi')) hcod (x := ⟨bl[i], 0⟩)
-      (by rw [List.getElem?_append_left (by simpa using hi), List.getElem?_map,
-        List.getElem?_eq_getElem hi]; rfl) hal'.1 hal'.2
-    have hqo : q ≠ o := by
-      rintro rfl
-      rw [hgo, Option.some.injEq] at hb
-      subst hb
-      rw [hxo'] at ho
-      cases ho
-    exact ⟨q, hr, hqo, (hE.load (p := ⟨q, 0⟩) hqo _ _ _ _ _).trans hv⟩
-  · have hp : fn.params[bl.length]? = some pc := by
-      rw [hps, List.getElem?_append_right (by omega), hbl, Nat.sub_self]
-      rfl
-    exact Grid.start_scalar h hk hfr hp (hn _ _ hp) (take_names hn _) hpc
-      (by rw [List.getElem?_append_right (by simp), List.length_map, Nat.sub_self]; rfl) hw
+      (Elem.Out m o cell bs (volume L.grid * volume L.block)) :=
+  Kernel.sound_mapNWith (contract := false) (chains := []) (sc := [(pc, v, u)])
+    (S := fun _ => True) hc rfl hps hn hT (fun _ hs => by rw [List.mem_singleton.1 hs]; exact hpc)
+    hcod hal' hbl (fun _ hs => by rw [List.mem_singleton.1 hs]; exact hw) hm hO
+    (fun ch _ e => e ▸ hs ch) (hap.comp Subtype.val_injective)
+    fun ch _ e k hk c hP hE hW hω m₀ m' f hf hb hr hq ho hE' _ => .inl <| by
+      subst e
+      exact (H k hk c hP hE hW hω m₀ m' f hf hb (hr 0 (by simp)) hq ho hE').imp
+        fun _ ⟨hp, hR⟩ => ⟨hp, hR.mono fun _ h => ⟨h, fun _ _ _ => trivial⟩⟩
 
 /-- **The kernel theorem of a binary elementwise kernel from its threads' `Ret`s.** For every
 program `prog`, kernel `fn` whose parameters `p0` to `p3` are named `%0` to `%3`, the first three
@@ -864,7 +1270,7 @@ space's addresses, launch `L`, paths from the entry (`coversEntry`), element typ
 `m` of `Map2.Pre`, oracle `ω`, cells `cell` of `w` bytes apart (`Apart`) and bytes `bs`: if the
 start on `Map2.args z a b o n` succeeds on every address choice at `ω`, and `H` holds, then `fn`
 is sound at every address choice and `ω` (`Kernel.Sound`) for the observation of the blocks and
-`Elem.Out` (`Kernel.sound_elem`). `H`: for every thread `k` of the launch, context of `prog` with
+`Elem.Out` (`Kernel.sound_mapN`). `H`: for every thread `k` of the launch, context of `prog` with
 thread `k`'s registers, identity and oracle `ω k`, memories `m₀` and `m'` of `Elem` after `k`
 threads, and frame of `fn` whose registers `%0` to `%2` point to blocks `q0` to `q2` other than `o`
 from which `T` loads at alignment `al'` as the structs of `a`, `b` and `o`, and whose `%3` is `n`,
@@ -962,31 +1368,33 @@ theorem Elem.Out.min {m : Mem} {out : Nat} {cell : Nat → Nat} {bs : Nat → Op
   · rw [Nat.min_eq_right hn]
     exact h
 
-/-- Reading cell `k`'s `w` bytes after `Elem.put` on `x`, with cells `w` apart and every
-thread's bytes `w` long: thread `k`'s bytes if `k < N` and it has some, `x`'s otherwise. -/
-theorem Elem.put_read {cell : Nat → Nat} {w : Nat} (hap : Apart cell w)
-    {bs : Nat → Option (List MemByte)} (hl : ∀ k l, bs k = some l → l.length = w)
-    (x : Sem.Block) (k : Nat) : ∀ N, (Elem.put cell bs N x).read (cell k) w =
+/-- Reading cell `k`'s `w` bytes after `Elem.put` on `x`, for every thread `k` that has bytes,
+with the cells of the threads that have bytes `w` apart (`Apart` on their subtype; a thread
+without bytes may share a cell) and every thread's bytes `w` long: thread `k`'s bytes if `k < N`,
+`x`'s otherwise. -/
+theorem Elem.put_read {cell : Nat → Nat} {w : Nat} {bs : Nat → Option (List MemByte)}
+    (hap : Apart (fun i : {i // bs i ≠ none} => cell i) w)
+    (hl : ∀ k l, bs k = some l → l.length = w) (x : Sem.Block) {k : Nat} (hk : bs k ≠ none) :
+    ∀ N, (Elem.put cell bs N x).read (cell k) w =
       if k < N then (bs k).getD (x.read (cell k) w) else x.read (cell k) w
   | 0 => rfl
   | N + 1 => by
     rw [Elem.put_succ]
-    have ih := Elem.put_read hap hl x k N
+    have ih := Elem.put_read hap hl x hk N
     cases hN : bs N with
     | none =>
       simp only [Option.elim, ih]
-      by_cases hk : k = N
-      · subst hk
-        simp [hN]
-      · simp only [show k < N + 1 ↔ k < N by omega]
+      have : k ≠ N := fun e => hk (e ▸ hN)
+      simp only [show k < N + 1 ↔ k < N by omega]
     | some l =>
       simp only [Option.elim]
-      by_cases hk : k = N
-      · subst hk
+      by_cases hkN : k = N
+      · subst hkN
         rw [← hl _ l hN, Block.read_put_self]
         simp [hN]
       · rw [Block.read_put_apart _ (o := cell N) (o' := cell k) (n := w) l
-          (by rw [hl N l hN]; exact hap k N hk), ih]
+          (by rw [hl N l hN]; exact hap ⟨k, hk⟩ ⟨N, by simp [hN]⟩ fun e => hkN (congrArg (·.1) e)),
+          ih]
         simp only [show k < N + 1 ↔ k < N by omega]
 
 /-! ### `Elem.Out` checked by evaluation, and its canaries -/
@@ -1025,6 +1433,102 @@ theorem Elem.Out.outBelow {m : Mem} {out : Nat} {cell : Nat → Nat}
     · subst hb
       simp [h.1 x hx, Elem.agree_self]
     · simp [h.2 b x hb hx, hb, Elem.agree_self]
+
+/-- Blocks `y` and `x` that `Elem.agree K` accepts (every field but the bytes, and the bytes
+below `K`) and whose bytes agree at every offset of at least `K` are equal, for every `K`. -/
+theorem Elem.agree_eq {K : Nat} {y x : Sem.Block} (h : Elem.agree K y x = true)
+    (hb : ∀ i, K ≤ i → y.bytes i = x.bytes i) : y = x := by
+  cases y
+  cases x
+  simp only [Elem.agree, Bool.and_eq_true, beq_iff_eq, List.all_eq_true, List.mem_range] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, h8⟩ := h
+  congr 1
+  funext i
+  by_cases hi : i < K
+  · exact h8 i hi
+  · exact hb i (by omega)
+
+/-- `Elem.put` keeps the bytes outside every cell: for every block `x`, cells, bytes, number of
+threads `N` and offset `i` outside the bytes of every thread below `N` (`i < cell k` or
+`cell k + l.length ≤ i` for every `k < N` with bytes `l`), `Elem.put cell bs N x` has `x`'s byte
+at `i`. -/
+theorem Elem.put_out {cell : Nat → Nat} {bs : Nat → Option (List MemByte)} (x : Sem.Block)
+    {N i : Nat} (hi : ∀ k < N, ∀ l ∈ bs k, i < cell k ∨ cell k + l.length ≤ i) :
+    (Elem.put cell bs N x).bytes i = x.bytes i := by
+  induction N with
+  | zero => rfl
+  | succ N ih =>
+    rw [Elem.put_succ]
+    have ih := ih fun k hk => hi k (by omega)
+    cases hN : bs N with
+    | none => exact ih
+    | some l =>
+      have := hi N (by omega) l (Option.mem_def.2 hN)
+      simp only [Option.elim, Sem.Block.put]
+      split
+      · omega
+      · exact ih
+
+/-- `Elem.put` keeps the bytes from offset `K` on: for every block `x`, cells, bytes, offset `K`
+and number of threads `N` whose bytes end by `K` (`cell i + l.length ≤ K` for every `i < N`),
+`Elem.put cell bs N x` has `x`'s byte at every offset of at least `K` (`Elem.put_out`). -/
+theorem Elem.put_above {cell : Nat → Nat} {bs : Nat → Option (List MemByte)} {K : Nat}
+    (x : Sem.Block) {N : Nat} (hc : ∀ i < N, ∀ l ∈ bs i, cell i + l.length ≤ K) (o : Nat)
+    (ho : K ≤ o) : (Elem.put cell bs N x).bytes o = x.bytes o :=
+  Elem.put_out x fun k hk l hl => .inr (le_trans (hc k hk l hl) ho)
+
+/-- **`Elem.Out` from its bounded check** (the converse of `Elem.Out.outBelow`): for every
+caller's memory `m`, output block, cells, bytes, number of threads `N`, numbers `nb` of blocks and
+`K` of offsets, and blocks `B`, if `B` passes `Elem.outBelow` at `nb` and `K`, `m` has no block
+from `nb` on, the bytes of the threads below `N` end by offset `K`, and every block of `m` and
+`B`'s block at its number agree from offset `K` on, then `B` is `Elem.Out`'s (`Elem.agree_eq`,
+`Elem.put_above`). -/
+theorem Elem.Out.of_outBelow {m : Mem} {out : Nat} {cell : Nat → Nat}
+    {bs : Nat → Option (List MemByte)} {N nb K : Nat} {B : Nat → Option Sem.Block}
+    (h : Elem.outBelow m out cell bs N nb K B = true)
+    (hnb : ∀ b, nb ≤ b → m.blocks b = none)
+    (hc : ∀ i < N, ∀ l ∈ bs i, cell i + l.length ≤ K)
+    (hK : ∀ b x y, m.blocks b = some x → B b = some y → ∀ i, K ≤ i → y.bytes i = x.bytes i) :
+    Elem.Out m out cell bs N B := by
+  have key : ∀ b x, m.blocks b = some x →
+      B b = some (if b = out then Elem.put cell bs N x else x) := by
+    intro b x hx
+    have hb : b < nb := Nat.lt_of_not_le fun hb => by rw [hnb b hb] at hx; cases hx
+    unfold Elem.outBelow at h
+    have hc' := List.all_eq_true.1 h b (List.mem_range.2 hb)
+    cases hy : B b with
+    | none => simp only [hx, hy, Option.all_some, Option.any_none] at hc'; cases hc'
+    | some y =>
+      simp only [hx, hy, Option.all_some, Option.any_some] at hc'
+      refine congrArg some (Elem.agree_eq hc' fun i hi => ?_)
+      rw [hK b x y hx hy i hi]
+      split
+      · exact (Elem.put_above x hc i hi).symm
+      · rfl
+  exact ⟨fun x hx => by simpa using key out x hx, fun b x hb hx => by simpa [hb] using key b x hx⟩
+
+/-- **`Elem.Out` at the end of a run, from its bounded check.** For every program, kernel, launch,
+arguments, caller's memory `m`, address choice and oracle whose start gives `(g, c)`, grid `z`
+that `g` reaches, output block, cells, bytes, and numbers `N` of threads, `nb` of blocks and `K`
+of offsets: if `z`'s blocks pass `Elem.outBelow` at `nb` and `K`, `m` has no block from `nb` on,
+the bytes of the threads below `N` end by offset `K`, and every block of `m` is owned by no thread
+and has at most `K` bytes, then `z`'s blocks are `Elem.Out`'s (`Elem.Out.of_outBelow`, whose
+premise on the bytes from `K` on is `Grid.start_reach_above`). -/
+theorem Elem.Out.of_run {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
+    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g z : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hr : Relation.ReflTransGen (Grid.Step L c) g z) {out : Nat} {cell : Nat → Nat}
+    {bs : Nat → Option (List MemByte)} {N nb K : Nat}
+    (hb : Elem.outBelow m out cell bs N nb K z.mem.blocks = true)
+    (hnb : ∀ b, nb ≤ b → m.blocks b = none) (hc : ∀ i < N, ∀ l ∈ bs i, cell i + l.length ≤ K)
+    (hm : ∀ b x, m.blocks b = some x → (∀ w, x.owner ≠ .thread w) ∧ x.size ≤ K) :
+    Elem.Out m out cell bs N z.mem.blocks :=
+  Elem.Out.of_outBelow hb hnb hc fun b x y hx hy i hi => by
+    obtain ⟨x', hx', -, -, hby⟩ :=
+      Grid.start_reach_above h hr (Grid.start_blocks h hx) (hm b x hx).1
+    rw [hx', Option.some.injEq] at hy
+    subst hy
+    exact hby i (by have := (hm b x hx).2; omega)
 
 /-- **The canaries of `Elem.Out`** (probes of the observation): the bytes of five wrong
 outputs made from the right bytes `bs` of `n` cells of type `t` under layout `l` by the probes of
@@ -1154,7 +1658,8 @@ theorem Elem.Out.map2_word {m : Mem} {out : Nat} {cell : Nat → Nat} {l : Layou
     · exact he
     · rename_i h
       exact absurd ⟨hk, hkN⟩ h
-  simp [Elem.word, h.1 blk hb, Elem.put_read hap hl blk k M, hkM, e, hd]
+  simp [Elem.word, h.1 blk hb,
+    Elem.put_read (hap.comp Subtype.val_injective) hl blk (k := k) (by simp [e]) M, hkM, e, hd]
 
 /-- A result delivered as a finite word is not a NaN, for every oracle number (`isNaN_deliver`). -/
 theorem isNaN_eq_false_of_deliver {fmt : FloatFormat} {r : Model fmt} {n : Nat}

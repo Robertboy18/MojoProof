@@ -745,7 +745,7 @@ theorem Mem.Changes.agree {L N : Nat → Prop} {m m' : Mem} {w : Who} {P : List 
     all_goals rcases hl with hl | ⟨hv, hbs⟩
     all_goals try simp [hL b x hb hl hx] at ha
     · exact hv.symm
-    · rcases hbs i with e | ⟨a, ha', hwr⟩
+    · rcases hbs i with e | ⟨-, a, ha', hwr⟩
       · exact e.symm
       · exact absurd hwr (hd d ht b x i a hb hx ha hi ha')
 

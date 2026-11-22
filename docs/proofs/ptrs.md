@@ -1,7 +1,7 @@
 # The pointer facts of a block summary (`Block.sound_ptrs`)
 
-Lean: `MojoProof/Sym/Block.lean` (the pointer facts) and `MojoProof/Sym/PtrMem.lean` (the memory
-premises of a path from them). Tests: `MojoProofTest/SymRun.lean` (`vadd21_ptrs`,
+Lean: `MojoProof/Sym/Block.lean` and `MojoProof/Sym/Path.lean` (the pointer facts) and
+`MojoProof/Sym/PtrMem.lean` (the memory premises of a path from them). Tests: `MojoProofTest/SymRun.lean` (`vadd21_ptrs`,
 `vadd21_memNext_twin`, `store_pathMem`).
 
 **Scope.** Every program `P`, function `fn`, block `lbl`, entry position `p0`, condition list
@@ -23,15 +23,17 @@ every path the checkers accept.
 
 ## Statement
 
-Definitions (MojoProof/Sym/Block.lean).
+Definitions (MojoProof/Sym/Block.lean; `Valuation.blocksI` in MojoProof/Sym/Path.lean).
 
 - `PtrIs ld st s pv`: `st` is a `load` (`ld = true`) or a `store` (`ld = false`) whose
   pointer operand `(.ptr a) q` has `evalV s (.ptr a) q = pv`.
-- `StoreVal regs x w`: the term `x` describes the stored operand `w` with the register
-  entries `regs`. For a register `w = .loc r`, `x = .reg r` (its value at the block's entry) or
-  `(r, x) ∈ regs`; for any other operand, `x` is an integer constant `.int n i`.
-- `StoreAt fn lbl pc regs x`: statement `pc` of block `lbl` of `fn` is a `store` whose
-  stored operand `w` has `StoreVal regs x w`.
+- `StoreVal ns regs x w`: the term `x` describes the stored operand `w` with the node table
+  `ns` and the register entries `regs`. For a register `w = .loc r`, `x = .reg r` (its value at
+  the block's entry) or `(r, x) ∈ regs`; for a float constant `.float lit`, `x` is a node `.node j`
+  with `ns[j]? = some (.flit ft lit)`; for any other operand, `x` is an integer constant
+  `.int n i`.
+- `StoreAt fn lbl pc ns regs x`: statement `pc` of block `lbl` of `fn` is a `store` whose
+  stored operand `w` has `StoreVal ns regs x w`.
 - `StmtPtrs V vs lbl pc σ σ' st s`: the pointer facts of one statement, which takes `σ`
   to `σ'`. A `load` node at index `j ≥ σ.nodes.length` of `σ'` is node `σ.nodes.length`, at
   `lbl` and `pc`, with `PtrIs true st s (p.eval V (vals V σ.nodes))`. A `store` effect
@@ -51,13 +53,13 @@ Definitions (MojoProof/Sym/Block.lean).
     `PtrAt c t m rest V.fn l pc true (p.eval V (vals V (S.nodes.take j)))`;
   - for each `SEff.store l pc v p ∈ S.effs`,
     `PtrAt c t m rest V.fn l pc false (p.eval V (vals V S.nodes))` and
-    `StoreAt V.fn l pc S.regs v`.
+    `StoreAt V.fn l pc S.nodes S.regs v`.
 
   These are the terms and values that `LoadsOk` and `StoresOk` read.
 - `Valuation.blocksI V l S ps`: the blocks of the path, each with its entry valuation
   (`Valuation.into` of the blocks before it).
 
-Theorems (MojoProof/Sym/Block.lean).
+Theorems (MojoProof/Sym/Block.lean; 6 and 7 in MojoProof/Sym/Path.lean).
 
 1. `SState.stmt_sound` also concludes
    `StmtPtrs V vs lbl fi.pc σ σ' st (V.ctx.scope mi fi k)`. That scope is the one `exec` runs the
@@ -66,14 +68,15 @@ Theorems (MojoProof/Sym/Block.lean).
    facts:
    - `PtrAt V.ctx ⟨fi :: rest, kk⟩ mi rest V.fn l pc true (p.eval V (vals V (σf.nodes.take j)))`
      for each `load` node `j ≥ σ.nodes.length` of `σf`;
-   - `PtrAt … false (p.eval V vs)` and `StoreAt V.fn l pc σf.regs v` for each `store` effect
-     `SEff.store l pc v p` that the run appends.
+   - `PtrAt … false (p.eval V vs)` and `StoreAt V.fn l pc σf.nodes σf.regs v` for each `store`
+     effect `SEff.store l pc v p` that the run appends.
 
    `SState.run_sound` is its first component.
 3. `SState.stmt_mono` and `SState.run_mono`: a statement in the fragment, and a run
    of statements, keep the obligations, extend the effects and the table, and put entries in
    front of the register entries (`σf.regs = rs ++ σ.regs` for some `rs`).
-4. `Block.sound_with` and `Block.sound_to` conclude
+4. `Block.sound_with` without `fmul contract` (with it, `EndsWith true` in place of `Ends`;
+   docs/proofs/contract.md) and `Block.sound_to` conclude
    `Ends c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
    Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S)`.
 5. `Block.sound_ptrs` has `Block.sound`'s premises and the conclusion `Ends … ∧ Ptrs …`.
@@ -91,10 +94,11 @@ payload blocks, `c` a context, `t` a thread, `m` a memory and `rest` a list of f
 `hM : ∀ t' m', Steps c t m t' m' → lab.MemNext pay c m' t'` says that every state the thread's
 steps reach meets `Labels.MemNext`.
 
-8. `StoreVal.mentions`. For every labelling, function, roles `ps`, register entries `regs`,
-   term `x` and operand `w` with `StoreVal regs x w`: if `x.pay lab fn ps = true` and every
-   entry `(r, y) ∈ regs` with `y.pay lab fn ps = true` has `lab.reg fn.name r = true`, then
-   `w.mentions (lab.reg fn.name) = true`.
+8. `StoreVal.mentions`. For every labelling, function, node table `ns`, register entries
+   `regs`, term `x` and operand `w` with `StoreVal ns regs x w`, with `ps` the roles of `ns`
+   (`roles lab fn ns`): if `x.pay lab fn ps = true` and every entry `(r, y) ∈ regs` with
+   `y.pay lab fn ps = true` has `lab.reg fn.name r = true`, then
+   `w.mentions (lab.reg fn.name) = true` (a float constant's node is never payload).
 9. `Ptrs.loadsOk`. For every valuation `V`, label `lbl` and summary `S`:
 
    ```lean
@@ -143,7 +147,8 @@ steps reach meets `Labels.MemNext`.
      `σ.nodes ++ [nd]`.
    - A `store` effect is either in the statement's own effects (item 1) or in the rest of the run
      (the induction hypothesis and `PtrAt.pre`). For its own, `σ.op t w = some v` gives
-     `StoreVal (rs ++ σ.regs) v w` for every `rs` (`SState.op_storeVal`), and `σf`'s register
+     `StoreVal (σ.nodes ++ ns) (rs ++ σ.regs) v w` for every `ns` and `rs`
+     (`SState.op_storeVal`), and `σf`'s table is `σ.nodes` with nodes after it and its register
      entries are `σ.regs` with entries in front (item 3).
 3. Case analysis of `SState.stmt` (`SState.def_regs` for the statements that set a register),
    then induction on the statement list.

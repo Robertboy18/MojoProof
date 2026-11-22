@@ -7,13 +7,14 @@ The lemma on what a step writes (L1b of docs/proofs/schedule-owned.md). `Mem.Cha
 `m'` keeps every block of `m` (`Mem.Keeps`: at its number and with its shape; the same `next`; no
 new block below `next`) with its read-only flag and owner, adds blocks only at numbers of `N`, and
 has the trace of `m` with events `d` in front; a block of `m` at a number outside `L` keeps its
-liveness, and its bytes but those that an access of `d` writes (`Access.Writes`). It is reflexive
-and transitive (`Mem.Changes.refl`, `Mem.Changes.trans`).
+liveness, and its bytes but those below its size that an access of `d` writes (`Access.Writes`).
+It is reflexive and transitive (`Mem.Changes.refl`, `Mem.Changes.trans`), and a block outside `L`
+keeps its owner, its size and its bytes from its size on (`Mem.Changes.above`).
 
 For every context, scope, thread and memory: memory operations (`Mem.log_changes`;
 `Mem.setLive_changes` at a number of `L`; `Mem.foldl_setLive_changes`; `Mem.alloc_changes` at a
 number of `N` from `next` on with no block; `Mem.store_changes`: a store writes only the bytes of
-the access it logs), intrinsics (`intrinsic_changes`: the lifetime markers change only a block the
+the access it logs, which are below its block's size), intrinsics (`intrinsic_changes`: the lifetime markers change only a block the
 thread owns, which they check), statements (`exec_changes`) and steps (`step_changes`). A step of
 thread `c.who.thread` that continues or returns changes the memory only at the liveness and bytes
 of blocks the thread owns or its frames allocated (if `L` has them), at the bytes that its new
@@ -33,7 +34,9 @@ had, `Thread.resume_allocas`); so does every grid reachable from one that has it
 memory, address choice and oracle: in every grid reachable from the start, the step of the running
 thread `t` at `n` changes the memory only at the liveness and bytes of the blocks that thread
 `(c n).who.thread` owns, at the bytes that its new trace events write, and by adding block
-`fresh (c n).who.thread t.k`.
+`fresh (c n).who.thread t.k`. `Grid.start_reach_above`, for the same: in every grid reachable from
+the start, every block of the start's memory that no thread owns has its owner, its size and its
+bytes from its size on.
 -/
 
 namespace MojoProof.Sem
@@ -47,8 +50,8 @@ def Access.Writes (a : Access) (b i : Nat) : Prop :=
 /-- Memory `m'` is `m` changed as a step may change it, at the blocks of `L` and with new blocks
 at numbers of `N`: `m'` keeps every block of `m` (`Mem.Keeps`) with its read-only flag and owner,
 adds a block only at a number of `N`, and has the trace of `m` with events `d` in front; a block of
-`m` at a number outside `L` keeps its liveness, and its bytes but those that the accesses of `d`
-write. -/
+`m` at a number outside `L` keeps its liveness, and its bytes but those below its size that the
+accesses of `d` write. -/
 structure Mem.Changes (L N : Nat → Prop) (m m' : Mem) : Prop where
   /-- The changes from their three parts, `keeps`, `new` and `old`. -/
   mk ::
@@ -59,11 +62,12 @@ structure Mem.Changes (L N : Nat → Prop) (m m' : Mem) : Prop where
   new : ∀ b, m.blocks b = none → (m'.blocks b).isSome → N b
   /-- The trace of `m'` is that of `m` with events `d` in front, and every block of `m` has a block
   of `m'` at its number with the same read-only flag and owner; unless `L` has the number, that
-  block has the same liveness and, at every byte, the same byte or one that an access of `d`
-  writes. -/
+  block has the same liveness and, at every byte, the same byte or one below the block's size that
+  an access of `d` writes. -/
   old : ∃ d, m'.trace = d ++ m.trace ∧ ∀ b x, m.blocks b = some x → ∃ x', m'.blocks b = some x' ∧
     x'.readOnly = x.readOnly ∧ x'.owner = x.owner ∧
-    (L b ∨ x'.live = x.live ∧ ∀ i, x'.bytes i = x.bytes i ∨ ∃ a, .access a ∈ d ∧ a.Writes b i)
+    (L b ∨ x'.live = x.live ∧ ∀ i, x'.bytes i = x.bytes i ∨
+      i < x.size ∧ ∃ a, .access a ∈ d ∧ a.Writes b i)
 
 /-- Every memory is itself changed, for every `L` and `N`. -/
 theorem Mem.Changes.refl {L N : Nat → Prop} (m : Mem) : m.Changes L N m :=
@@ -83,17 +87,37 @@ theorem Mem.Changes.trans {L N : Nat → Prop} {m₁ m₂ m₃ : Mem} (h₁ : m�
     | some y => exact h₁.new b hb (by simp [h₂b])
   · obtain ⟨y, hy, hr₁, ho₁, hl₁⟩ := ho₁ b x hx
     obtain ⟨z, hz, hr₂, ho₂, hl₂⟩ := ho₂ b y hy
+    have hs := h₁.keeps.blocks b x hx
+    simp only [hy, Option.map_some, Option.some.injEq, Block.shape, Prod.mk.injEq] at hs
     refine ⟨z, hz, hr₂.trans hr₁, ho₂.trans ho₁, ?_⟩
     rcases hl₁ with hl | ⟨hv₁, hb₁⟩
     · exact .inl hl
     rcases hl₂ with hl | ⟨hv₂, hb₂⟩
     · exact .inl hl
     refine .inr ⟨hv₂.trans hv₁, fun i => ?_⟩
-    rcases hb₂ i with e₂ | ⟨a, ha, hw⟩
-    · rcases hb₁ i with e₁ | ⟨a, ha, hw⟩
+    rcases hb₂ i with e₂ | ⟨hi, a, ha, hw⟩
+    · rcases hb₁ i with e₁ | ⟨hi, a, ha, hw⟩
       · exact .inl (e₂.trans e₁)
-      · exact .inr ⟨a, List.mem_append_right _ ha, hw⟩
-    · exact .inr ⟨a, List.mem_append_left _ ha, hw⟩
+      · exact .inr ⟨hi, a, List.mem_append_right _ ha, hw⟩
+    · exact .inr ⟨hs.2.1 ▸ hi, a, List.mem_append_left _ ha, hw⟩
+
+/-- **A block outside `L` keeps its bytes from its size on.** If `m'` is `m` changed
+(`Mem.Changes L N`), every block `x` of `m` at a number `b` outside `L` is, in `m'`, a block with
+the owner and size of `x` and, at every offset of at least `x.size`, the byte of `x`. -/
+theorem Mem.Changes.above {L N : Nat → Prop} {m m' : Mem} (h : m.Changes L N m') {b : Nat}
+    {x : Block} (hx : m.blocks b = some x) (hb : ¬ L b) :
+    ∃ x', m'.blocks b = some x' ∧ x'.owner = x.owner ∧ x'.size = x.size ∧
+      ∀ i, x.size ≤ i → x'.bytes i = x.bytes i := by
+  obtain ⟨d, -, ho⟩ := h.old
+  obtain ⟨x', hx', -, hown, hl⟩ := ho b x hx
+  have hs := h.keeps.blocks b x hx
+  simp only [hx', Option.map_some, Option.some.injEq, Block.shape, Prod.mk.injEq] at hs
+  refine ⟨x', hx', hown, hs.2.1, fun i hi => ?_⟩
+  rcases hl with hl | ⟨-, hy⟩
+  · exact absurd hl hb
+  rcases hy i with e | ⟨hi', -⟩
+  · exact e
+  · omega
 
 /-- Logging event `e` changes memory `m`, for every `L` and `N`. -/
 theorem Mem.log_changes {L N : Nat → Prop} (m : Mem) (e : Event) : m.Changes L N (m.log e) :=
@@ -164,7 +188,8 @@ theorem Mem.check_off {l : Layout} {m : Mem} {w : Who} {a n : Nat} {p : Ptr} {al
     repeat' split at h
     all_goals first | cases ‹throw _ = Except.ok _› | (cases h; exact ⟨by omega, rfl⟩) | cases h
 
-/-- A store changes its block only at the bytes it writes, which the access it logs writes. -/
+/-- A store changes its block only at the bytes it writes, which the access it logs writes and
+which are below the block's size. -/
 theorem Mem.store_changes {L N : Nat → Prop} {l : Layout} {m m' : Mem} {w : Who} {a : Nat} {t : Ty}
     {v : Val} {p : Ptr} {al : Option Nat} {op : Option RmwOp}
     (h : m.store l w a t v p al op = .ok m') : m.Changes L N m' := by
@@ -188,6 +213,7 @@ theorem Mem.store_changes {L N : Nat → Prop} {l : Layout} {m m' : Mem} {w : Wh
         · cases hw
           obtain ⟨hp, ho⟩ := Mem.check_off hc
           have hb := (Mem.check_block hc).1
+          have hin := (Mem.check_inv hc).2.2.2.1
           refine ⟨hk, fun c hc' h' => ?_, [_], rfl, fun c x hx => ?_⟩
           · by_cases e : c = p.block
             · subst e
@@ -202,7 +228,7 @@ theorem Mem.store_changes {L N : Nat → Prop} {l : Layout} {m m' : Mem} {w : Wh
               simp only [Block.put]
               split
               · rename_i hi
-                refine .inr ⟨_, List.mem_singleton_self _, ?_⟩
+                refine .inr ⟨by omega, _, List.mem_singleton_self _, ?_⟩
                 unfold Access.Writes
                 dsimp only
                 exact ⟨rfl, rfl, by omega, by omega⟩
@@ -492,6 +518,34 @@ theorem Grid.start_reach_changes {prog : Program} {fn : Func} {L : Launch} {args
       g₂.mem :=
   Grid.advance_changes ht (fun _ x hx ho => ⟨x, hx, ho⟩)
     (Grid.reach_owns hr (Grid.start_owns h c) n _ ht) rfl h₂
+
+/-- **A run keeps the blocks no thread owns from their sizes on**, for every program, kernel,
+launch, arguments, memory, address choice and oracle: in every grid `g₁` reachable from the
+start's grid `g`, every block `x` of `g`'s memory whose owner is no thread (not `.thread w` for
+any `w`) is a block of `g₁`'s memory at its number with the owner and size of `x` and, at every
+offset of at least `x.size`, the byte of `x`. A step is `Mem.Changes` with `L` the blocks its
+thread owns (`Grid.start_reach_changes`, `Mem.Changes.above`), and a fire changes no block
+(`Grid.fire_blocks`). The blocks of the caller's memory are blocks of `g`'s
+(`Grid.start_blocks`). -/
+theorem Grid.start_reach_above {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g g₁ : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g, c))
+    (hr : Relation.ReflTransGen (Grid.Step L c) g g₁) {b : Nat} {x : Block}
+    (hx : g.mem.blocks b = some x) (ho : ∀ w, x.owner ≠ .thread w) :
+    ∃ x', g₁.mem.blocks b = some x' ∧ x'.owner = x.owner ∧ x'.size = x.size ∧
+      ∀ i, x.size ≤ i → x'.bytes i = x.bytes i := by
+  induction hr with
+  | refl => exact ⟨x, hx, rfl, rfl, fun _ _ => rfl⟩
+  | tail hr hs ih =>
+    obtain ⟨y, hy, hyo, hys, hyb⟩ := ih
+    obtain ⟨n, hn | hn⟩ := hs
+    · obtain ⟨t, ht, -⟩ := Grid.advance_pending hn
+      obtain ⟨z, hz, hzo, hzs, hzb⟩ := (Grid.start_reach_changes h hr ht hn).above hy
+        fun ⟨y', hy', hw⟩ => ho _ (by rw [hy] at hy'; cases hy'; rw [← hyo]; exact hw)
+      exact ⟨z, hz, hzo.trans hyo, hzs.trans hys, fun i hi =>
+        (hzb i (by omega)).trans (hyb i hi)⟩
+    · rw [(Grid.fire_blocks hn).1]
+      exact ⟨y, hy, hyo, hys, hyb⟩
 
 end Owns
 

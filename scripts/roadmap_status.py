@@ -29,11 +29,22 @@ card and checks, reporting every problem it finds:
   construct L2) are files of this repository (the record of the run), and construct L3's
   items are kernel card ids whose card has L2 evidence;
 * level is the computed level: the highest level whose evidence, and that of every level below
-  it, is present (L0 is the card itself; construct L1's evidence is its lean names).
+  it, is present (L0 is the card itself; construct L1's evidence is its lean names);
+* a kernel's L2 evidence states `Kernel.Sound`.
+
+For a kernel's L2 to L4 evidence it also reads what the cited theorems' premises restrict, from
+the theorem's statement and the section variables it takes (those it `include`s or names), in
+its source, or for a name a `mojo_kernel` command adds, from the command's statement template
+in MojoProof/Sym/KernelCmd.lean: the launches (`L.Valid`, and a grid or block of side 1 in `y`
+and `z`, `grid .y = 1`, is a one-dimensional launch), and above L2 whether an output is assumed
+finite (`isFinite = true →`) and whether its real value is the exact one rounded (`roundAt`).
+This reads text, not Lean: another premise on the launch's shape is reported as such, without
+its meaning.
 
 It writes roadmap/STATUS.md (a table per area: each card's level, the evidence present above
-it, and what the next level needs), roadmap/status.yaml (the same as data), roadmap/graph.dot
-(the areas as clusters, the cards, and an edge from each card to each card it depends on) and
+it, the scope of the theorems it cites, and what the next level needs), roadmap/status.yaml
+(the same as data), roadmap/graph.dot (the areas as clusters, the cards, and an edge from each
+card to each card it depends on) and
 roadmap/graph.svg (`/usr/bin/dot -Tsvg` on graph.dot, skipped if dot is missing). The output is
 sorted and has no timestamps, so it is the same for the same cards and code.
 
@@ -60,31 +71,38 @@ NONE = {'lean': 'not stated yet', 'corpus': 'none', 'tests': 'none'}
 LADDER = {
     'kernel': [
         ('L0', 'card written', 'the card, with every check passing'),
-        ('L1', 'imported, and the evaluator agrees with a GPU run',
+        ('L1', 'imported, and the evaluator agrees with a GPU run: a conformance test of the '
+         'evaluator against the GPU on the recorded inputs, not a proof',
          'a tracked record of a GPU run of the corpus kernel (a file of this repository)'),
-        ('L2', 'memory safety and race freedom for every launch',
-         'a Kernel.Sound theorem for every valid launch (declaration name)'),
-        ('L3', 'equal to the TorchLean operation over the reals',
-         'a theorem equating the output with the TorchLean operation (declaration name)'),
+        ('L2', 'memory safety and race freedom for every valid launch of the shape the theorem '
+         'states',
+         'a Kernel.Sound theorem (declaration name); the launches its premises admit are listed '
+         'per card'),
+        ('L3', 'the outputs are the TorchLean operation\'s, under the theorem\'s premises',
+         'a theorem equating the output with the TorchLean operation (declaration name); its '
+         'launch shape, and whether it needs a finite output and gives the real value rounded, '
+         'are listed per card'),
         ('L4', 'an IEEE bound, or bit-exact',
-         'a theorem bounding the error, or giving the exact bits (declaration name)'),
+         'a theorem bounding the error, or giving the exact bits (declaration name); its '
+         'premises are listed per card as for L3'),
     ],
     'construct': [
         ('L0', 'card written', 'the card, with every check passing'),
         ('L1', 'modelled in Lean', 'the card\'s lean names'),
-        ('L2', 'tested against the GPU',
+        ('L2', 'tested against the GPU: a conformance test of the model against the GPU on the '
+         'recorded inputs, not a proof',
          'a tracked record of a GPU run of a test of the construct (a file of this repository)'),
         ('L3', 'used by a proved kernel', 'a kernel card id whose card has L2 evidence'),
     ],
 }
 GPU_LEVEL = {'kernel': 'L1', 'construct': 'L2'}
 NEXT = {
-    ('kernel', 'L1'): 'L1 needs a recorded GPU run',
+    ('kernel', 'L1'): 'L1 needs a recorded GPU run (a conformance test, not a proof)',
     ('kernel', 'L2'): 'L2 needs a Kernel.Sound theorem',
     ('kernel', 'L3'): 'L3 needs a theorem against TorchLean',
     ('kernel', 'L4'): 'L4 needs an IEEE bound or bit-exact theorem',
     ('construct', 'L1'): 'L1 needs a Lean model',
-    ('construct', 'L2'): 'L2 needs a recorded GPU run',
+    ('construct', 'L2'): 'L2 needs a recorded GPU run (a conformance test, not a proof)',
     ('construct', 'L3'): 'L3 needs a proved kernel that uses it',
 }
 
@@ -99,6 +117,119 @@ KERNEL = re.compile(r'^mojo_kernel\s+([^\s:]+)\s+:=')
 EVIDENCE = re.compile(r'^\s*(L\d)\s*:\s*(.*?)\s*$')
 REPO_REF = re.compile(r'^repo:([^:]+):(\d+)$')
 ISSUE = re.compile(r'^(#\d+|\S+/(issues|pull)/\d+)$')
+THEOREM = re.compile(
+    r'^\s*(?:@\[[^\]]*\]\s*)?(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([^\s:({\[]+)')
+SCOPE = re.compile(r'^\s*(namespace|section|end)\b\s*(.*)$')
+VARIABLE = re.compile(r'^\s*variable\b(.*)$')
+INCLUDE = re.compile(r'^\s*include\b(.*)$')
+TEMPLATE = re.compile(r'theorem \$(\w+)Id\b')
+SIDE = re.compile(r'\b(grid|block)\s+\.([xyz])\s*=\s*1\b')
+SHAPE = re.compile(r'\b(grid|block)\s+\.[xyz]\s*(=|≤|<|≥|>|∣)')
+VALID = re.compile(r'\bL\.Valid\b|\bLaunch\.Valid\b')
+FINITE = re.compile(r'isFinite\s*=\s*true\s*→')
+ROUNDED = re.compile(r'\broundAt\b')
+OPEN, CLOSE = '({[⦃', ')}]⦄'
+
+
+def binders(text: str) -> list[tuple[list[str], str]]:
+    """The binders `(a b : T)`, `{a : T}`, `[T]` of `text` at bracket depth 0: names and text."""
+    out, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch in OPEN:
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch in CLOSE and depth:
+            depth -= 1
+            if depth == 0:
+                b = text[start:i + 1]
+                head = b[1:-1].split(' : ', 1)
+                names = head[0].split() if len(head) == 2 else []
+                out.append((names, b))
+    return out
+
+
+def premises_of(text: str) -> dict[str, str]:
+    """The theorems a Lean file declares, by full name, each with the text of its statement and of
+    the section variables it takes (those it `include`s or names). Comments are blanked first."""
+    text = cited.COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text)
+    lines = text.split('\n')
+    out: dict[str, str] = {}
+    stack: list[tuple[str, list, set]] = []   # (namespace segment or '', variables, included)
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if m := SCOPE.match(line):
+            if m.group(1) == 'end':
+                if stack:
+                    stack.pop()
+            else:
+                seg = m.group(2).split()[0] if m.group(1) == 'namespace' and m.group(2).split() \
+                    else ''
+                stack.append((seg, [], set()))
+        elif (m := VARIABLE.match(line)) and stack:
+            body = [m.group(1)]
+            while i + 1 < len(lines) and lines[i + 1][:1] == ' ':
+                i += 1
+                body.append(lines[i])
+            stack[-1][1].extend(binders(' '.join(body)))
+        elif (m := INCLUDE.match(line)) and stack:
+            stack[-1][2].update(m.group(1).split())
+        elif m := THEOREM.match(line):
+            body = []
+            j = i
+            while j < len(lines):
+                body.append(lines[j].split(':=', 1)[0])
+                if ':=' in lines[j]:
+                    break
+                j += 1
+            stmt = ' '.join(body)
+            words = set(re.findall(r"[^\s(){}\[\]⦃⦄,:]+", stmt))
+            taken = [b for _, vs, inc in stack for names, b in vs
+                     if any(n in inc or n in words for n in names)]
+            cur = '.'.join(seg for seg, _, _ in stack if seg)
+            out[f'{cur}.{m.group(1)}' if cur else m.group(1)] = ' '.join(taken + [stmt])
+            i = j
+        i += 1
+    return out
+
+
+def launch_scope(text: str) -> str:
+    """The launches a statement admits, from its premises `grid .y = 1`, ... and `L.Valid`."""
+    sides: dict[str, set[str]] = {}
+    for part, d in SIDE.findall(text):
+        sides.setdefault(part, set()).add(d)
+    valid = 'valid ' if VALID.search(text) else ''
+    other = ' (and other premises on the shape)' if SHAPE.search(SIDE.sub('', text)) else ''
+    if not sides:
+        return (f'every {valid}launch' if valid and not other
+                else 'the launches its premises admit')
+    by_dims: dict[tuple[str, ...], list[str]] = {}
+    for part, ds in sides.items():
+        by_dims.setdefault(tuple(sorted(ds)), []).append(part)
+    shape = ', '.join(f'{" and ".join(sorted(ps))} of side 1 in {" and ".join(ds)}'
+                      for ds, ps in sorted(by_dims.items()))
+    if sides.get('grid') == {'y', 'z'} and sides.get('block') == {'y', 'z'}:
+        return f'{valid}one-dimensional launches ({shape}){other}'
+    return f'{valid}launches with {shape}{other}'
+
+
+def scope(level: str, text: str | None) -> str:
+    """What a cited theorem's premises restrict: for L2 the launches, above it also whether a
+    finite output is assumed and whether the real value is the exact one rounded."""
+    if text is None:
+        return 'premises not read'
+    qs = [launch_scope(text)]
+    if level != 'L2':
+        fin, rnd = FINITE.search(text), ROUNDED.search(text)
+        if fin and rnd:
+            qs.append('where the output is finite and is the exact real result rounded to the '
+                      'format')
+        elif fin:
+            qs.append('where the output is finite')
+        elif rnd:
+            qs.append('where the output is the exact real result rounded to the format')
+    return ', '.join(qs)
 
 
 class Index:
@@ -108,14 +239,20 @@ class Index:
         self.decls: set[str] = set()
         self.generated: set[str] = set()   # the names mojo_kernel commands add
         self.kernels: set[str] = set()     # their kernels' full names, for `n.b<i>`
+        self.statements: dict[str, str] = {}   # theorem name: its statement with premises
+        self.templates: dict[str, str] = {}    # generated suffix: the command's statement text
         for d in ('MojoProof', 'MojoProofTest'):
             for p in sorted((ROOT / d).rglob('*.lean')):
                 self.add_file(p.read_text())
+        cmd = (ROOT / 'MojoProof' / 'Sym' / 'KernelCmd.lean').read_text()
+        for m in TEMPLATE.finditer(cmd):
+            self.templates.setdefault(m.group(1), cmd[m.start():].split(':=', 1)[0])
         self.packages: dict[str, set[str]] = {}
 
     def add_file(self, text: str) -> None:
         decls = cited.scan(text)[0]
         self.decls |= decls
+        self.statements.update(premises_of(text))
         lines = text.split('\n')
         prev = ''
         for i, line in enumerate(lines):
@@ -150,6 +287,15 @@ class Index:
                     break
             self.packages[root] = found
         return self.packages[root]
+
+    def statement(self, name: str) -> str | None:
+        """The statement of theorem `name` with its premises: from its source, or for a name a
+        `mojo_kernel` command adds, from the command's template."""
+        if name in self.statements:
+            return self.statements[name]
+        if name in self.generated:
+            return self.templates.get(name.rpartition('.')[2])
+        return None
 
     def has(self, name: str) -> bool:
         if name in self.decls or name in self.generated:
@@ -219,6 +365,7 @@ class Card:
         self.level = 'L0'
         self.present: list[str] = []   # levels above `level` with evidence present
         self.files = 0                 # corpus kernels (.ll files) matched
+        self.scopes: dict[str, str] = {}   # kernel level: what its theorems' premises restrict
 
     @property
     def key(self) -> str:
@@ -292,7 +439,23 @@ def check_card(c: Card, index: Index) -> list[str]:
             for n in its:
                 if not index.has(n):
                     errs.append(f'{lv} evidence {n} is no declaration')
+            if k['kind'] == 'kernel':
+                c.scopes[lv] = '; '.join(dict.fromkeys(scope(lv, index.statement(n))
+                                                       for n in its))
+                if lv == 'L2':
+                    for n in its:
+                        st = index.statement(n)
+                        if index.has(n) and st is not None and 'Kernel.Sound' not in st:
+                            errs.append(f'L2 evidence {n} does not state Kernel.Sound')
     return errs
+
+
+def scope_line(c: Card) -> str:
+    """The scopes of the card's cited theorems, levels with the same scope together."""
+    groups: dict[str, list[str]] = {}
+    for lv in sorted(c.scopes):
+        groups.setdefault(c.scopes[lv], []).append(lv)
+    return '; '.join(f'{", ".join(lvs)}: {sc}' for sc, lvs in groups.items())
 
 
 def resolve(ref: str, area: str, cards: dict[str, Card]) -> Card | None:
@@ -382,12 +545,14 @@ def write_status(areas: dict[str, str], cards: dict[str, Card]) -> str:
         '']
     for a in sorted(areas):
         out += [f'## {md(areas[a])}', '', f'[{a}/README.md]({a}/README.md)', '',
-                '| Card | Kind | Level | Evidence above the level | Next | Corpus kernels |',
-                '|---|---|---|---|---|---|']
+                '| Card | Kind | Level | Evidence above the level | Scope of the cited theorems | '
+                'Next | Corpus kernels |',
+                '|---|---|---|---|---|---|---|']
         for c in sorted((c for c in cards.values() if c.area == a), key=lambda c: c.id):
             present, nxt = status_line(c)
             out.append(f'| [{c.id}]({a}/cards/{c.id}.md): {md(c.keys["title"])} | '
-                       f'{c.keys["kind"]} | {c.level} | {present or "-"} | {nxt} | {c.files} |')
+                       f'{c.keys["kind"]} | {c.level} | {present or "-"} | '
+                       f'{md(scope_line(c)) or "-"} | {nxt} | {c.files} |')
         out.append('')
     return '\n'.join(out)
 
@@ -410,6 +575,8 @@ def write_yaml(areas: dict[str, str], cards: dict[str, Card]) -> str:
             out += [f'      - id: {c.id}', f'        title: {yq(c.keys["title"])}',
                     f'        kind: {c.keys["kind"]}', f'        level: {c.level}',
                     '        evidence_present: [' + ', '.join(c.present) + ']',
+                    '        evidence_scope: {' + ', '.join(
+                        f'{lv}: {yq(sc)}' for lv, sc in sorted(c.scopes.items())) + '}',
                     f'        next: {yq(nxt)}', f'        corpus_kernels: {c.files}',
                     '        lean: [' + ', '.join(
                         [] if c.keys['lean'] == NONE['lean'] else items(c.keys['lean'])) + ']',

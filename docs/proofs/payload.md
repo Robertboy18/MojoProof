@@ -868,8 +868,9 @@ the `phi` operand `splat (i32 %p)`, a constant expression on a payload register,
 
 ### Along a path, and two runs of a returning path (MojoProof/Sym/Payload.lean)
 
-For every labelling `lab`, payload blocks `pay`, function `fn` and path `(l, ds, S) :: ps` (lane
-C's `coversPathI` and `WalkI`, whose blocks after the first are entered through `Valuation.into`).
+For every labelling `lab`, payload blocks `pay`, function `fn` and path `(l, ds, S) :: ps` (the
+block checker's `coversPathI` and `WalkI`, whose blocks after the first are entered through
+`Valuation.into`).
 
 **Definitions.**
 - `pathOk lab fn l S ps`: every summary of the path is oblivious, agrees with `lab` on its exit's
@@ -909,7 +910,7 @@ C's `coversPathI` and `WalkI`, whose blocks after the first are entered through 
    valuations, which keep the function (`Valuation.into_k`), and the induction hypothesis applies
    to the rest. `lastI`'s label and summary are the path's last, so they do not depend on the
    valuation.
-2. `Block.sound_retI` for each thread (the second's program and function are the first's by
+2. `Block.sound_retR` for each thread (the second's program and function are the first's by
    `Valuation.Rel`, and its last block is the first's by (1)): each run's steps reach the last
    block's end on the memory `me` that its effects make from its entry valuation (`SEff.run`),
    and the next step returns. That memory is `Valuation.after`'s, so (1) relates the two. The

@@ -9,6 +9,8 @@ for every program: a thread runs a block that the checker accepts as its summary
 summary's obligations hold. The proof relates the symbolic state to the thread's frame and memory
 statement by statement (`Rel`, `SState.stmt_sound`, with the `exec_*` lemmas for the statements
 of the fragment), then the terminator's step to the summary's exit (`SState.exitAt_sound`).
+The run starts from the block's float constants (`SState.start`), each a node whose value is its
+literal's (`Rel.lits`, `litNodes_flit`), so a float constant operand is a node of the table.
 
 `Block.sound`: for every program `P`, function `fn`, label `lbl`, position `p0`, conditions `ds`
 and summary `S` with `covers P fn lbl p0 ds S = true`, every context `c` of program `P` and
@@ -26,42 +28,14 @@ its obligations hold (`SState.exitAt_sound`); its instance `Block.sound_to` is t
 `Block.soundC`: the same for the checker with `fmul contract` (`coversC`), concluding `EndsC`:
 `Ends` with the frame's `fmul contract` operands at the block's end given by the table
 (`regProdIn`: for a register the block sets, the values of its node's `fmul contract` operand
-terms). Both are instances of `Block.sound_withC`, whose relation `Rel` holds the frame's
-products as `regProdIn` (`Rel.prods`, `Rel.fwf`); `Block.sound_with` gets `Ends` from it by
-`Ends.of_C`, since without `fmul contract` no node of the table has operand terms
-(`summarizeWith_factors`).
+terms). Both are instances of `Block.sound_with` with a flag `contract`, whose conclusion
+`EndsWith contract` is `Ends` without the flag and `EndsC` with it (`Block.sound_atWith`). It is
+`Block.sound_withC`, whose relation `Rel` holds the frame's products as `regProdIn`
+(`Rel.prods`, `Rel.fwf`), and without the flag `Ends.of_C`, since then no node of the table has
+operand terms (`summarizeWith_factors`).
 
-`Block.sound_pathI`: `Block.sound` along a path of the control-flow graph of any length, for
-every program `P`, function `fn` and path `(l, ds, S) :: ps` (blocks with their conditions and
-summaries) that the path checker accepts (`coversPathI`: the first block from position `p0`,
-each one after from the position its edge enters it at, `Exit.pc`: after its `phi`s for
-`Exit.phi`, else 0; each block but the last by `covers`, or by `coversTo` for the edge into the
-next block), every context of `P` and thread at block `l`'s position `p0`: if the
-path's premises hold (`WalkI`: each block's conditions hold under its entry valuation, which is
-`Valuation.into` of the block before, with the step count after its statements and branch, the
-memory of its effects, and its registers and `fmul contract` operands with the target's `phi`s
-set as `enter` sets them; each exit but the last goes to the next block, `Exit.dest`), the
-thread's steps run every block, each edge by `Ends.edge`, and the last one ends from its entry
-valuation (`Valuation.lastI`), at step count `t.k + pathLen S ps` (`Valuation.lastI_k`).
-`Block.sound_retR`: a path whose last block returns (`ret void`), under any caller frames: its steps
-reach the last block's end, on the memory the last block's effects make, and the next step is the
-`ret`'s: `.done` without a caller (`Block.sound_retI`, a thread with one frame), else back to the
-caller after its call. `Ret`: a path whose premises with `phi`s hold, whose last exit is `ret` and
-whose last block's effects succeed with a memory of a predicate `Q` (used by the loop theorems,
-Sym/Loop.lean, and the kernel theorem, Sym/Kernel.lean). `Block.sound_back`: then the
-caller's block from the position after the call ends too (`Block.sound` there). `Block.sound_path`
-and `Block.sound_ret` are their corollaries for the path checker without `phi`s (`coversPath`,
-`Walk`, `Valuation.last`), through `Walk.toI`: there every exit has a target (`Exit.target`), whose
-step enters it at position 0 and resolves no `phi` (`Exit.next_target`), and `Valuation.into` is
-`Valuation.after` (`Exit.of_target`).
-
-With `fmul contract`: `Valuation.afterC` and `Valuation.intoC` are `Valuation.after` and
-`Valuation.into` with the table's `fmul contract` operands (`regProdIn`), and `Ends.edgeC` is
-`Ends.edge` from `EndsC`. Each pair is the instance with and without `contract` of one
-declaration (`prodsWith`, `Valuation.afterWith`, `Valuation.intoWith`, `EndsWith`,
-`Ends.edgeWith`, `EndsWith.pre`), proved once. `Block.sound_pathC`: a path that `coversPathI`
-accepts, then the block its last exit goes to, accepted by `coversC`: it ends (`EndsC`) from
-`Valuation.into` of the path's last block.
+The theorems along a path of blocks, with `phi`s, returns and `fmul contract`, are in
+MojoProof/Sym/Path.lean.
 -/
 
 namespace MojoProof.Sym
@@ -142,10 +116,21 @@ structure Rel (V : Valuation) (vs : List (Except Fault Val)) (f : Frame) (σ : S
   /-- The `fmul contract` operand terms of the table's nodes refer to nodes of the table. -/
   fwf : ∀ (x : SVal) (pq : SVal × SVal) (j : Nat), x.factors σ.nodes = some pq →
     (pq.1 = .node j ∨ pq.2 = .node j) → j < σ.nodes.length
+  /-- The table's float constant nodes have their literal's value (`floatLit`). -/
+  lits : ∀ j ft lit, σ.nodes[j]? = some (.flit ft lit) → (SVal.node j).eval V vs = floatLit ft lit
   /-- The memory is the one the state's effects make. -/
   mem : SEff.run V vs σ.effs = .ok mi
   /-- Before a `store`, the memory is the entry memory with another trace. -/
   trace : σ.stored = false → ∃ tr, mi = { V.mem with trace := tr }
+
+/-- The entry `SState.op` gives a float constant: a node of the table that is the constant's
+`SNode.flit`. -/
+theorem SState.op_flit {σ : SState} {ft : FloatTy} {lit : FloatLit} {x : SVal}
+    (h : (σ.nodes.findIdx? (· == .flit ft lit)).map SVal.node = some x) :
+    ∃ j, x = .node j ∧ σ.nodes[j]? = some (.flit ft lit) := by
+  obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.1 h
+  obtain ⟨hlt, hp, -⟩ := List.findIdx?_eq_some_iff_getElem.1 hj
+  exact ⟨j, rfl, by rw [List.getElem?_eq_getElem hlt, beq_iff_eq.1 hp]⟩
 
 /-- An operand's entry that evaluates gives the operand's value. -/
 theorem SState.op_eval {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
@@ -175,6 +160,9 @@ theorem SState.op_eval {V : Valuation} {vs : List (Except Fault Val)} {f fi : Fr
     simp only [SVal.eval, pure, Except.pure, Except.ok.injEq] at hv
     subst hv
     rfl
+  · obtain ⟨j, rfl, hj⟩ := SState.op_flit h
+    rw [hR.lits j _ _ hj] at hv
+    exact hv
   · cases h
 
 /-- An operand's entry refers to nodes of the state's table only. -/
@@ -197,6 +185,9 @@ theorem SState.op_wf {V : Valuation} {vs : List (Except Fault Val)} {f fi : Fram
       rw [hl, Option.getD_none] at h
       cases h
   · cases h
+  · obtain ⟨j', he, hj'⟩ := SState.op_flit h
+    cases he
+    exact (List.getElem?_eq_some_iff.1 hj').1
   · cases h
 
 /-- The value of the node a state appends, from the obligation that it evaluates in the final
@@ -250,18 +241,34 @@ theorem regProdIn_append {V : Valuation} {vs : List (Except Fault Val)} {ns : Li
     obtain ⟨j, rfl, hj⟩ := hwf r y hl
     simp only [SVal.factors, List.getElem?_append_left hj]
 
+/-- The entry at or past the length of a list with one more element is that element. -/
+theorem getElem?_snoc_ge {α : Type} {l : List α} {a b : α} {j : Nat} (hj : l.length ≤ j)
+    (h : (l ++ [a])[j]? = some b) : j = l.length ∧ a = b := by
+  rw [List.getElem?_append_right hj] at h
+  obtain ⟨hlt, he⟩ := List.getElem?_eq_some_iff.1 h
+  simp only [List.length_singleton] at hlt
+  exact ⟨by omega, by simpa only [List.getElem_singleton] using he⟩
+
 /-- `Rel` after a statement that appends a node `nd` and sets register `res` (if any) to the
 node's value `x` with `fmul contract` operands `pr`, with the memory unchanged: when `nd`'s
-`fmul contract` operand terms refer to nodes of the table and their values are `pr`. -/
+`fmul contract` operand terms refer to nodes of the table and their values are `pr`, and `nd` is
+not a float constant node. -/
 theorem Rel.defP {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
     {mi : Mem} (hR : Rel V vs f σ fi mi) (res : Option Nat) {nd : SNode} {x : Val}
     {pr : Option (Val × Val)} (hv : (SVal.node σ.nodes.length).eval V vs = .ok x)
     (hfw : ∀ (pq : SVal × SVal) (j : Nat), nd.factors = some pq →
       (pq.1 = .node j ∨ pq.2 = .node j) → j < σ.nodes.length)
-    (hp : nd.factors.bind (prodVal V vs) = pr) :
+    (hp : nd.factors.bind (prodVal V vs) = pr) (hnl : ∀ ft lit, nd ≠ .flit ft lit) :
     Rel V vs f (σ.def res nd) { fi.set res (some x) pr with pc := fi.pc + 1 } mi := by
   have hlen : (σ.def res nd).nodes.length = σ.nodes.length + 1 := by
     simp only [SState.def, List.length_append, List.length_singleton]
+  have hlit : ∀ j ft lit, (σ.def res nd).nodes[j]? = some (.flit ft lit) →
+      (SVal.node j).eval V vs = floatLit ft lit := by
+    intro j ft lit hj
+    by_cases hi : j < σ.nodes.length
+    · simp only [SState.def, List.getElem?_append_left hi] at hj
+      exact hR.lits j ft lit hj
+    · exact absurd (getElem?_snoc_ge (l := σ.nodes) (Nat.le_of_not_lt hi) hj).2 (hnl ft lit)
   have hfw' : ∀ (y : SVal) (pq : SVal × SVal) (j : Nat), y.factors (σ.def res nd).nodes = some pq →
       (pq.1 = .node j ∨ pq.2 = .node j) → j < (σ.def res nd).nodes.length := by
     intro y pq j hy hj
@@ -284,12 +291,12 @@ theorem Rel.defP {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {
   | none =>
     refine ⟨hR.fn, hR.label, hR.allocas, hR.dest, hR.regs,
       fun s => (hR.prods s).trans (regProdIn_append hR.wf [nd] s).symm, fun r y hy => ?_, hfw',
-      hR.mem, hR.trace⟩
+      hlit, hR.mem, hR.trace⟩
     obtain ⟨j, rfl, hj⟩ := hR.wf r y hy
     exact ⟨j, rfl, by rw [hlen]; omega⟩
   | some r =>
     refine ⟨hR.fn, hR.label, hR.allocas, hR.dest, fun s => ?_, fun s => ?_, fun s u hu => ?_,
-      hfw', hR.mem, hR.trace⟩
+      hfw', hlit, hR.mem, hR.trace⟩
     · show (if s = r then some x else fi.regs s) =
         regVal V vs ((r, .node σ.nodes.length) :: σ.regs) s
       by_cases hs : s = r
@@ -314,27 +321,29 @@ theorem Rel.defP {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {
       · obtain ⟨j, rfl, hj⟩ := hR.wf s u ((lookup_ne hs).symm.trans hu)
         exact ⟨j, rfl, by rw [hlen]; omega⟩
 
-/-- `Rel` after a statement that appends a node with no `fmul contract` operand terms and sets
-register `res` (if any) to the node's value `x`, with the memory unchanged (`Rel.defP`). -/
+/-- `Rel` after a statement that appends a node with no `fmul contract` operand terms, other than
+a float constant node, and sets register `res` (if any) to the node's value `x`, with the memory
+unchanged (`Rel.defP`). -/
 theorem Rel.def {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
     {mi : Mem} (hR : Rel V vs f σ fi mi) (res : Option Nat) {nd : SNode} {x : Val}
-    (hv : (SVal.node σ.nodes.length).eval V vs = .ok x) (hnd : nd.factors = none := by rfl) :
+    (hv : (SVal.node σ.nodes.length).eval V vs = .ok x) (hnd : nd.factors = none := by rfl)
+    (hnl : ∀ ft lit, nd ≠ .flit ft lit := by intro _ _ h; cases h) :
     Rel V vs f (σ.def res nd) { fi.set res (some x) none with pc := fi.pc + 1 } mi :=
-  hR.defP res hv (fun _ _ h => by rw [hnd] at h; cases h) (by rw [hnd]; rfl)
+  hR.defP res hv (fun _ _ h => by rw [hnd] at h; cases h) (by rw [hnd]; rfl) hnl
 
 /-- `Rel` after an effect `e` that applies to the memory. -/
 theorem Rel.push {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
     {mi mi' : Mem} {e : SEff} (hR : Rel V vs f σ fi mi) (he : e.apply V vs mi = .ok mi')
     (htr : σ.stored = false → ∃ tr, mi' = { V.mem with trace := tr }) :
     Rel V vs f { σ with effs := σ.effs ++ [e] } fi mi' :=
-  ⟨hR.fn, hR.label, hR.allocas, hR.dest, hR.regs, hR.prods, hR.wf, hR.fwf,
+  ⟨hR.fn, hR.label, hR.allocas, hR.dest, hR.regs, hR.prods, hR.wf, hR.fwf, hR.lits,
     SEff.run_append hR.mem he, htr⟩
 
 /-- `Rel` after a `store` effect `e` that applies to the memory. -/
 theorem Rel.store {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
     {mi mi' : Mem} {e : SEff} (hR : Rel V vs f σ fi mi) (he : e.apply V vs mi = .ok mi') :
     Rel V vs f { σ with effs := σ.effs ++ [e], stored := true } { fi with pc := fi.pc + 1 } mi' :=
-  ⟨hR.fn, hR.label, hR.allocas, hR.dest, hR.regs, hR.prods, hR.wf, hR.fwf,
+  ⟨hR.fn, hR.label, hR.allocas, hR.dest, hR.regs, hR.prods, hR.wf, hR.fwf, hR.lits,
     SEff.run_append hR.mem he, by intro h; cases h⟩
 
 /-- `SState.def` puts at most one entry in front of the register entries. -/
@@ -436,6 +445,17 @@ theorem SState.run_factors {P : Program} {lbl p0 : Nat} :
       exact SState.run_factors h (SState.stmt_factors hσ hf)
     · cases h
 
+/-- Every node of a block's float constant table (`litNodes`) is a float constant node. -/
+theorem litNodes_flit {fn : Func} {lbl p0 : Nat} {b : LLVM.Block} {nd : SNode}
+    (h : nd ∈ litNodes fn lbl p0 b) : ∃ ft lit, nd = .flit ft lit := by
+  rw [litNodes, List.mem_eraseDups, List.mem_filterMap] at h
+  obtain ⟨a, -, ha⟩ := h
+  unfold SNode.litOf at ha
+  split at ha
+  · cases ha
+    exact ⟨_, _, rfl⟩
+  · cases ha
+
 /-- A summary without `fmul contract` (`summarizeWith` with `contract = false`) has no
 `fmul contract` node. -/
 theorem summarizeWith_factors {P : Program} {fn : Func} {lbl p0 : Nat}
@@ -447,7 +467,9 @@ theorem summarizeWith_factors {P : Program} {fn : Func} {lbl p0 : Nat}
     · rename_i σ hσ
       split at h
       · cases h
-        exact SState.run_factors hσ (fun _ hnd => by cases hnd)
+        exact SState.run_factors hσ fun _ hnd => by
+          obtain ⟨_, _, rfl⟩ := litNodes_flit hnd
+          rfl
       · cases h
     · cases h
   · cases h
@@ -883,23 +905,29 @@ def PtrIs : Bool → Stmt → Scope → Except Fault Val → Prop
   | false, st, s, pv => ∃ a q vol v al, st.inst = .store vol v (.mk (.ptr a) q) al ∧
       evalV s (.ptr a) q = pv
 
-/-- The stored operand `w` of a `store` whose effect stores the term `x`, with register entries
-`regs`: a register `r` that is `x` (`.reg r`, its value at the block's entry) or that an entry of
-`regs` sets to `x`, or another operand, whose term `x` is an integer constant. -/
-def StoreVal (regs : List (Nat × SVal)) (x : SVal) : Value → Prop
+/-- The stored operand `w` of a `store` whose effect stores the term `x`, with node table `ns`
+and register entries `regs`: a register `r` that is `x` (`.reg r`, its value at the block's
+entry) or that an entry of `regs` sets to `x`, a float constant whose term `x` is a node of `ns`
+that is the constant's `SNode.flit`, or another operand, whose term `x` is an integer
+constant. -/
+def StoreVal (ns : List SNode) (regs : List (Nat × SVal)) (x : SVal) : Value → Prop
   | .loc r => x = .reg r ∨ (r, x) ∈ regs
+  | .float lit => ∃ j ft, x = .node j ∧ ns[j]? = some (.flit ft lit)
   | _ => ∃ n i, x = .int n i
 
 /-- Statement `pc` of block `lbl` of function `fn` is a `store` whose stored operand the term `x`
-describes with register entries `regs` (`StoreVal`). -/
-def StoreAt (fn : Func) (lbl pc : Nat) (regs : List (Nat × SVal)) (x : SVal) : Prop :=
+describes with node table `ns` and register entries `regs` (`StoreVal`). -/
+def StoreAt (fn : Func) (lbl pc : Nat) (ns : List SNode) (regs : List (Nat × SVal)) (x : SVal) :
+    Prop :=
   ∃ b st vol t w ptr al, fn.blocks.find? (·.label == lbl) = some b ∧ b.stmts[pc]? = some st ∧
-    st.inst = .store vol (.mk t w) ptr al ∧ StoreVal regs x w
+    st.inst = .store vol (.mk t w) ptr al ∧ StoreVal ns regs x w
 
-/-- The entry `x` of operand `w` describes it (`StoreVal`) with the register entries of the state
-and any entries put in front of them. -/
+/-- The entry `x` of operand `w` describes it (`StoreVal`) with the table of the state and any
+nodes appended to it, and the register entries of the state and any entries put in front of
+them. -/
 theorem SState.op_storeVal {σ : SState} {t : Ty} {w : Value} {x : SVal}
-    (h : σ.op t w = some x) (rs : List (Nat × SVal)) : StoreVal (rs ++ σ.regs) x w := by
+    (h : σ.op t w = some x) (ns : List SNode) (rs : List (Nat × SVal)) :
+    StoreVal (σ.nodes ++ ns) (rs ++ σ.regs) x w := by
   unfold SState.op at h
   split at h
   · rename_i r
@@ -913,6 +941,9 @@ theorem SState.op_storeVal {σ : SState} {t : Ty} {w : Value} {x : SVal}
       exact .inr (List.mem_append_right _ (by rw [he]; simp))
   · cases h
     exact ⟨_, _, rfl⟩
+  · obtain ⟨j, rfl, hj⟩ := SState.op_flit h
+    obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hj
+    exact ⟨j, _, rfl, by rw [List.getElem?_append_left hlt]; exact hj⟩
   · cases h
 
 /-- The pointer facts of statement `st` at position `pc` of block `lbl`, which takes state `σ`
@@ -928,14 +959,6 @@ def StmtPtrs (V : Valuation) (vs : List (Except Fault Val)) (lbl pc : Nat) (σ �
   ∀ l pc' v p, SEff.store l pc' v p ∈ σ'.effs.drop σ.effs.length →
     l = lbl ∧ pc' = pc ∧ PtrIs false st s (p.eval V vs) ∧
       ∃ vol t w ptr al, st.inst = .store vol (.mk t w) ptr al ∧ σ.op t w = some v
-
-/-- The entry at or past the length of a list with one more element is that element. -/
-theorem getElem?_snoc_ge {α : Type} {l : List α} {a b : α} {j : Nat} (hj : l.length ≤ j)
-    (h : (l ++ [a])[j]? = some b) : j = l.length ∧ a = b := by
-  rw [List.getElem?_append_right hj] at h
-  obtain ⟨hlt, he⟩ := List.getElem?_eq_some_iff.1 h
-  simp only [List.length_singleton] at hlt
-  exact ⟨by omega, by simpa only [List.getElem_singleton] using he⟩
 
 /-- A statement that appends a node other than a `load` and no effect has no pointer facts. -/
 theorem SState.def_ptrs {V : Valuation} {vs : List (Except Fault Val)} {lbl pc : Nat}
@@ -1176,10 +1199,15 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
             | none => rfl
           · cases h
             rfl
+          · obtain ⟨j, rfl, hj⟩ := SState.op_flit h
+            show none = SVal.prodsWith V _ (.node j) (σ.nodes[j]?.bind SNode.factors)
+            rw [hj]
+            rfl
           · cases h
         refine ⟨_, _, exec_fbinC hmd hi he (SState.op_eval hR rfl hx hxu)
           (SState.op_eval hR rfl hy hyu) (by rw [hp hx, hp hy]; exact hw'),
-          hR.defP st.res hw (fun pq j hf hj => ?_) ?_, rfl,
+          hR.defP st.res hw (fun pq j hf hj => ?_) ?_
+            (fun _ _ h => by unfold SNode.fbinOf at h; split at h <;> cases h), rfl,
           SState.def_ptrs fun _ _ _ h => by unfold SNode.fbinOf at h; split at h <;> cases h⟩
         · -- the new node's `fmul contract` operand terms are its operands
           rw [SNode.factors_fbinOf] at hf
@@ -1305,7 +1333,7 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
           (p.eval V (vals V (σf.nodes.take j)))) ∧
       ∀ l pc v p, SEff.store l pc v p ∈ σf.effs.drop σ.effs.length →
         PtrAt V.ctx ⟨fi :: rest, kk⟩ mi rest V.fn l pc false (p.eval V vs) ∧
-          StoreAt V.fn l pc σf.regs v
+          StoreAt V.fn l pc σf.nodes σf.regs v
   | [], _, σ, σf, fi, mi, kk, _, _, _, hR, h, _ => by
     simp only [SState.run, Option.some.injEq] at h
     subst h
@@ -1366,8 +1394,8 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
         rcases hm with hm | hm
         · obtain ⟨rfl, rfl, hq, vol, ty, w, ptr, al, hi, hop⟩ := hSt l pc v p hm
           refine ⟨here hq, b, st, vol, ty, w, ptr, al, hb, by rw [hpc]; exact hst, hi, ?_⟩
-          rw [hmo4, hr₁, ← List.append_assoc]
-          exact SState.op_storeVal hop _
+          rw [hmo3, hn₁, hmo4, hr₁]
+          simpa only [List.append_assoc] using SState.op_storeVal hop (ns₁ ++ ns) (rs ++ rs₁)
         · obtain ⟨hq, hv⟩ := hSt' l pc v p (by rw [hmo2, List.drop_left]; exact hm)
           exact ⟨PtrAt.pre (.cons hstep (.refl _ _)) hq, hv⟩
     · cases h
@@ -1435,6 +1463,24 @@ theorem Ends.of_C {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Fram
       | some nd => rw [Option.bind_some, hf nd (List.mem_of_getElem? hj)]; rfl
     | _ => rfl
 
+/-- The `fmul contract` operands of the frame at the end of the block that summary `S`
+describes from valuation `V`: with `contract`, the table's (`regProdIn`, as `EndsC` gives them),
+else `regProd`'s (as `Ends` gives them). -/
+def prodsWith (contract : Bool) (V : Valuation) (S : Summary) : Nat → Option (Val × Val) :=
+  cond contract (regProdIn V (vals V S.nodes) S.nodes S.regs) (regProd V S.regs)
+
+/-- `Ends` with the `fmul contract` operands `prodsWith contract` of the frame at the block's
+end: without `contract` it is `Ends`, with it `EndsC` (both definitionally). -/
+def EndsWith (contract : Bool) (c : Ctx) (t : Thread) (m : Mem) (f : Frame) (rest : List Frame) :
+    Valuation × Nat × Summary → Prop
+  | (V, lbl, S) => ∃ fe me, Steps c t m ⟨fe :: rest, V.k + S.len⟩ me ∧ fe.fn = V.fn ∧
+      fe.label = lbl ∧ fe.allocas = f.allocas ∧ fe.dest = f.dest ∧
+      (∀ r, fe.regs r = regVal V (vals V S.nodes) S.regs r) ∧
+      (∀ r, fe.prods r = prodsWith contract V S r) ∧
+      SEff.run V (vals V S.nodes) S.effs = .ok me ∧
+      ∃ r, S.exit.next V (vals V S.nodes) rest (V.k + S.len) fe me = .ok r ∧
+        step c ⟨fe :: rest, V.k + S.len⟩ me = .ok r
+
 /-- **The pointer facts** of block `lbl` with summary `S`, entered with valuation `V`, from
 thread `t` on memory `m`, in frames above frames `rest`: the thread's steps reach the statement
 of each `load` node `j` of `S` and of each `store` effect of `S` (`PtrAt`), whose pointer operand
@@ -1449,7 +1495,8 @@ def Ptrs (c : Ctx) (t : Thread) (m : Mem) (rest : List Frame) :
     (∀ (j l pc : Nat) (p : SVal), S.nodes[j]? = some (.load l pc p) →
       PtrAt c t m rest V.fn l pc true (p.eval V (vals V (S.nodes.take j)))) ∧
     ∀ l pc v p, SEff.store l pc v p ∈ S.effs →
-      PtrAt c t m rest V.fn l pc false (p.eval V (vals V S.nodes)) ∧ StoreAt V.fn l pc S.regs v
+      PtrAt c t m rest V.fn l pc false (p.eval V (vals V S.nodes)) ∧
+        StoreAt V.fn l pc S.nodes S.regs v
 
 /-- `Ptrs` after steps before it. -/
 theorem Ptrs.pre {c : Ctx} {t t₁ : Thread} {m m₁ : Mem} {rest : List Frame}
@@ -1466,7 +1513,7 @@ whose innermost frame `f` runs `fn` at block `lbl` and position `p0`, with memor
 condition of `ds` holds under the entry valuation and, at the block's end, `ex`'s exit is the
 terminator's step whenever its obligations hold (`hex`), the block ends with the frame's
 `fmul contract` operands given by the table (`EndsC`) from the entry valuation, and its pointer
-facts hold (`Ptrs`). `Block.sound_with` and `Block.soundC` are its instances. -/
+facts hold (`Ptrs`). `Block.sound_with` is its corollary, for both values of `contract`. -/
 theorem Block.sound_withC {P : Program} {fn : Func} {lbl p0 : Nat}
     {ex : SState → Term → Option (Exit × List Cond)} {ds : List Cond} {S : Summary}
     {contract : Bool} (hc : coversWith P fn lbl p0 ex ds S contract = true) {c : Ctx}
@@ -1502,45 +1549,64 @@ theorem Block.sound_withC {P : Program} {fn : Func} {lbl p0 : Nat}
         split at hS
         · rename_i x cs hx
           cases hS
+          obtain ⟨-, -, ⟨ns, hns⟩, -⟩ := SState.run_mono hσ
           have hR0 : Rel (Valuation.entry c k m f) (vals (Valuation.entry c k m f) σ.nodes) f
-              .init f m :=
-            ⟨rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, (by intro r v h; cases h),
-              (by intro x pq j h; cases x <;> cases h), rfl, fun _ => ⟨m.trace, rfl⟩⟩
+              (SState.start f.fn f.label f.pc b) f m := by
+            refine ⟨rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, (by intro r v h; cases h),
+              fun x pq j h => ?_, fun j ft lit hj => ?_, rfl, fun _ => ⟨m.trace, rfl⟩⟩
+            · cases x with
+              | node i =>
+                obtain ⟨nd, hnd, hf⟩ := Option.bind_eq_some_iff.1 h
+                obtain ⟨_, _, rfl⟩ := litNodes_flit (List.mem_of_getElem? hnd)
+                cases hf
+              | _ => cases h
+            · obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hj
+              simp only [SVal.eval]
+              rw [vals_flit _ (by rw [hns, List.getElem?_append_left hlt]; exact hj)]
+              rfl
           have hG : Good (Valuation.entry c k m f) (vals (Valuation.entry c k m f) σ.nodes) σ :=
             ⟨fun d hd => hO d (List.mem_append.2 (Or.inr (List.mem_cons_of_mem _ hd))),
               hO (.mem σ.effs) (List.mem_append.2 (Or.inr (List.Mem.head _))),
               [], (List.append_nil _).symm⟩
           obtain ⟨⟨fe, me, hS, hR, hpc⟩, hL, hSt⟩ := SState.run_ptrs
             (V := Valuation.entry c k m f) (rest := rest) (p0 := f.pc) hb rfl rfl
-            (b.stmts.toList.drop f.pc) 0 .init σ f m k rfl rfl rfl hR0 hσ hG
+            (b.stmts.toList.drop f.pc) 0 (SState.start f.fn f.label f.pc b) σ f m k rfl rfl rfl hR0
+            hσ hG
           have hpcn : ¬ fe.pc < b.stmts.size := by
             simp only [List.length_drop, Array.length_toList] at hpc
             omega
           obtain ⟨r, hr1, hr2⟩ := hex (k := k + (b.stmts.toList.drop f.pc).length) hR
             (by rw [hR.fn, hR.label]; exact hb) hpcn hx
             (fun d hd => hO d (List.mem_append.2 (Or.inl hd)))
-          exact ⟨⟨fe, me, hS, hR.fn, hR.label, hR.allocas, hR.dest, hR.regs, hR.prods, hR.mem,
-            r, hr1, hr2⟩, fun j l pc p hn => hL j l pc p (Nat.zero_le _) hn,
-            fun l pc v p hm => hSt l pc v p hm⟩
+          refine ⟨⟨fe, me, hS, hR.fn, hR.label, hR.allocas, hR.dest, hR.regs, hR.prods, hR.mem,
+            r, hr1, hr2⟩, fun j l pc p hn => ?_, fun l pc v p hm => hSt l pc v p hm⟩
+          -- the table's head holds float constant nodes, no `load`
+          by_cases hj : (SState.start f.fn f.label f.pc b).nodes.length ≤ j
+          · exact hL j l pc p hj hn
+          · have hn' : σ.nodes[j]? = some (.load l pc p) := hn
+            rw [hns, List.getElem?_append_left (by omega)] at hn'
+            obtain ⟨_, _, he⟩ := litNodes_flit (List.mem_of_getElem? hn')
+            cases he
         · cases hS
       · cases hS
     · cases hS
   · cases hc
 
-/-- **Soundness of the block checker with an exit function** `ex`, for every program, function,
-block, entry position, conditions `ds` and summary `S` that `coversWith` accepts with `ex`, every
-context `c` of the program and thread whose innermost frame `f` runs `fn` at block `lbl` and
-position `p0`, with memory `m`: if every condition of `ds` holds under the entry valuation and,
-at the block's end, `ex`'s exit is the terminator's step whenever its obligations hold (`hex`),
-the block ends (`Ends`) from the entry valuation, and its pointer facts hold (`Ptrs`)
-(`Block.sound_withC` without `fmul contract`, whose summary has no `fmul contract` node:
-`summarizeWith_factors`, `Ends.of_C`). `Block.sound_ptrs` and `Block.sound_to` are its
-instances. -/
+/-- **Soundness of the block checker with an exit function** `ex`, with or without
+`fmul contract`: for every flag `contract`, program, function, block, entry position, conditions
+`ds` and summary `S` that `coversWith` accepts with `ex` and `contract`, every context `c` of the
+program and thread whose innermost frame `f` runs `fn` at block `lbl` and position `p0`, with
+memory `m`: if every condition of `ds` holds under the entry valuation and, at the block's end,
+`ex`'s exit is the terminator's step whenever its obligations hold (`hex`), the block ends with
+the `fmul contract` operands `prodsWith contract` (`EndsWith`: `Ends` without the flag, `EndsC`
+with it) from the entry valuation, and its pointer facts hold (`Ptrs`) (`Block.sound_withC`;
+without the flag the summary has no `fmul contract` node, `summarizeWith_factors`, so
+`Ends.of_C`). `Block.sound_atWith` and `Block.sound_toWith` are its instances. -/
 theorem Block.sound_with {P : Program} {fn : Func} {lbl p0 : Nat}
     {ex : SState → Term → Option (Exit × List Cond)} {ds : List Cond} {S : Summary}
-    (hc : coversWith P fn lbl p0 ex ds S = true) {c : Ctx} (hP : c.prog = P) {t : Thread}
-    {m : Mem} {f : Frame} {rest : List Frame} (ht : t.frames = f :: rest) (hfn : f.fn = fn)
-    (hl : f.label = lbl) (hp : f.pc = p0)
+    {contract : Bool} (hc : coversWith P fn lbl p0 ex ds S contract = true) {c : Ctx}
+    (hP : c.prog = P) {t : Thread} {m : Mem} {f : Frame} {rest : List Frame}
+    (ht : t.frames = f :: rest) (hfn : f.fn = fn) (hl : f.label = lbl) (hp : f.pc = p0)
     (hds : ∀ d ∈ ds, d.Holds (Valuation.entry c t.k m f)
       (vals (Valuation.entry c t.k m f) S.nodes))
     (hex : ∀ {σ : SState} {fe : Frame} {me : Mem} {b : LLVM.Block} {k : Nat} {cs : List Cond},
@@ -1550,24 +1616,47 @@ theorem Block.sound_with {P : Program} {fn : Func} {lbl p0 : Nat}
       (∀ d ∈ cs, d.Holds (Valuation.entry c t.k m f) (vals (Valuation.entry c t.k m f) S.nodes)) →
       ∃ r, S.exit.next (Valuation.entry c t.k m f) (vals (Valuation.entry c t.k m f) S.nodes) rest
         k fe me = .ok r ∧ step c ⟨fe :: rest, k⟩ me = .ok r) :
-    Ends c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
+    EndsWith contract c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
       Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S) := by
   obtain ⟨hE, hQ⟩ := Block.sound_withC hc hP ht hfn hl hp hds hex
-  refine ⟨Ends.of_C hE ?_, hQ⟩
-  unfold coversWith at hc
-  split at hc
-  · rename_i S' hS
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-    obtain ⟨rfl, -⟩ := hc
-    exact summarizeWith_factors hS
-  · cases hc
+  refine ⟨?_, hQ⟩
+  cases contract
+  · refine Ends.of_C hE ?_
+    unfold coversWith at hc
+    split at hc
+    · rename_i S' hS
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+      obtain ⟨rfl, -⟩ := hc
+      exact summarizeWith_factors hS
+    · cases hc
+  · exact hE
+
+/-- **Soundness of the block checker at the block's terminator, with or without
+`fmul contract`**: for every flag `contract`, program, function, block, entry position,
+conditions and summary that `coversWith` accepts with `SState.exitAt` and `contract`, every
+context of the program and thread at the block's position whose conditions hold at the entry
+valuation of its innermost frame, the block ends (`EndsWith contract`) and its pointer facts hold
+(`Ptrs`) (`Block.sound_with`, `SState.exitAt_sound`). `Block.sound_ptrs` and `Block.soundC` are
+its instances. -/
+theorem Block.sound_atWith {contract : Bool} {P : Program} {fn : Func} {lbl p0 : Nat}
+    {ds : List Cond} {S : Summary}
+    (hc : coversWith P fn lbl p0 (fun σ tm => σ.exitAt fn lbl tm) ds S contract = true) {c : Ctx}
+    (hP : c.prog = P) {t : Thread} {m : Mem} {f : Frame} {rest : List Frame}
+    (ht : t.frames = f :: rest) (hfn : f.fn = fn) (hl : f.label = lbl) (hp : f.pc = p0)
+    (hds : ∀ d ∈ ds, d.Holds (Valuation.entry c t.k m f)
+      (vals (Valuation.entry c t.k m f) S.nodes)) :
+    EndsWith contract c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
+      Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S) :=
+  Block.sound_with (ex := fun σ tm => σ.exitAt fn lbl tm) hc hP ht hfn hl hp hds
+    fun hR hb hpc hx hcs => SState.exitAt_sound hR hb hpc
+      (by rw [hR.fn, hR.label, hfn, hl]; exact hx) hcs
 
 /-- **Soundness of the block checker with its pointer facts**: for every program, function,
 block, entry position, conditions and summary that `covers` accepts, every context of the
 program and thread at the block's position whose conditions hold at the entry valuation of its
 innermost frame, the block ends (`Ends`) and its pointer facts hold (`Ptrs`: at each `load` node
 and `store` effect, the statement's pointer operand in the thread's scope at that step is the
-summary term's pointer value) (`Block.sound_with`, `SState.exitAt_sound`). -/
+summary term's pointer value) (`Block.sound_atWith` without `fmul contract`). -/
 theorem Block.sound_ptrs {P : Program} {fn : Func} {lbl p0 : Nat} {ds : List Cond} {S : Summary}
     (hc : covers P fn lbl p0 ds S = true) {c : Ctx} (hP : c.prog = P) {t : Thread} {m : Mem}
     {f : Frame} {rest : List Frame} (ht : t.frames = f :: rest) (hfn : f.fn = fn)
@@ -1576,9 +1665,7 @@ theorem Block.sound_ptrs {P : Program} {fn : Func} {lbl p0 : Nat} {ds : List Con
       (vals (Valuation.entry c t.k m f) S.nodes)) :
     Ends c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
       Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S) :=
-  Block.sound_with (ex := fun σ tm => σ.exitAt fn lbl tm) hc hP ht hfn hl hp hds
-    fun hR hb hpc hx hcs => SState.exitAt_sound hR hb hpc
-      (by rw [hR.fn, hR.label, hfn, hl]; exact hx) hcs
+  Block.sound_atWith (contract := false) hc hP ht hfn hl hp hds
 
 /-- **Soundness of the block checker**: for every program `P`, function `fn`, block `lbl`, entry
 position `p0`, conditions `ds` and summary `S` that `covers` accepts, every context of `P` and
@@ -1604,7 +1691,7 @@ every context of `P` and thread whose innermost frame `f` (above frames `rest`) 
 valuation and the values of `S`'s table, the block ends (`EndsC`): the thread's steps reach the
 block's end at step count `t.k + S.len` with the summary's registers, the `fmul contract`
 operands its table gives (`regProdIn`), on the memory the summary's effects make, and the
-terminator's step there is the summary exit's (`Block.sound_withC`, `SState.exitAt_sound`). One
+terminator's step there is the summary exit's (`Block.sound_atWith` with `fmul contract`). One
 thread; the obligations are premises. -/
 theorem Block.soundC {P : Program} {fn : Func} {lbl p0 : Nat} {ds : List Cond} {S : Summary}
     (hc : coversC P fn lbl p0 ds S = true) {c : Ctx} (hP : c.prog = P) {t : Thread} {m : Mem}
@@ -1613,733 +1700,6 @@ theorem Block.soundC {P : Program} {fn : Func} {lbl p0 : Nat} {ds : List Cond} {
     (hds : ∀ d ∈ ds, d.Holds (Valuation.entry c t.k m f)
       (vals (Valuation.entry c t.k m f) S.nodes)) :
     EndsC c t m f rest (Valuation.entry c t.k m f, lbl, S) :=
-  (Block.sound_withC (ex := fun σ tm => σ.exitAt fn lbl tm) hc hP ht hfn hl hp hds
-    fun hR hb hpc hx hcs => SState.exitAt_sound hR hb hpc
-      (by rw [hR.fn, hR.label, hfn, hl]; exact hx) hcs).1
-
-/-! ## Along a path -/
-
-/-- The block exit `x` goes to, given the values `vs` of the nodes: a branch's target, the
-target a conditional branch's condition selects (`none` when it is not a word), and `none` for
-`ret void` and for branches into blocks with `phi`s (`Exit.dest` gives their targets). -/
-def Exit.target (V : Valuation) (vs : List (Except Fault Val)) : Exit → Option Nat
-  | .br d => some d
-  | .cond x d e => match x.eval V vs with
-    | .ok (.bits _ b) => some (if b.getLsbD 0 then d else e)
-    | _ => none
-  | .ret => none
-  | .phi .. => none
-
-/-- The valuation at the entry of the block that summary `S` exits to, from valuation `V` at its
-entry: the step count after the block's `S.len` statements and its branch, the memory the
-summary's effects make (`V`'s memory if they fault), and the registers and `fmul contract`
-operands the summary gives (`regVal`, `regProd`); the context and function are `V`'s. -/
-def Valuation.after (V : Valuation) (S : Summary) : Valuation :=
-  ⟨V.ctx, V.fn, V.k + S.len + 1, (SEff.run V (vals V S.nodes) S.effs).toOption.getD V.mem,
-    regVal V (vals V S.nodes) S.regs, regProd V S.regs⟩
-
-/-- The block exit `x` goes to, given the values `vs` of the nodes: `Exit.target`'s, and for a
-branch into blocks with `phi`s the target its condition selects (`none` when it is not a
-word). -/
-def Exit.dest (V : Valuation) (vs : List (Except Fault Val)) : Exit → Option Nat
-  | .phi x d e => match x.eval V vs with
-    | .ok (.bits _ b) => some (if b.getLsbD 0 then d else e)
-    | _ => none
-  | x => x.target V vs
-
-/-- The position at which exit `x`'s step enters block `d` of `fn`: after the `phi`s
-(`phiCount`) for a branch into blocks with `phi`s, 0 otherwise. -/
-def Exit.pc (fn : Func) (d : Nat) : Exit → Nat
-  | .phi .. => phiCount fn d
-  | _ => 0
-
-/-- `SState.exitAt_sound` for `SState.exitTo`, the exit with the obligations of the edge into
-block `d₀` only: when the exit goes to `d₀` (`Exit.dest`), the terminator's step is the exit's. -/
-theorem SState.exitTo_sound {V : Valuation} {vs : List (Except Fault Val)} {f fe : Frame}
-    {σ : SState} {me : Mem} (hR : Rel V vs f σ fe me) {b : LLVM.Block} {rest : List Frame}
-    {k : Nat} (hb : fe.fn.blocks.find? (·.label == fe.label) = some b)
-    (hpc : ¬ fe.pc < b.stmts.size) {d₀ : Nat} {x : Exit} {cs : List Cond}
-    (hx : σ.exitTo fe.fn fe.label d₀ b.term = some (x, cs)) (hcs : ∀ d ∈ cs, d.Holds V vs)
-    (hd : x.dest V vs = some d₀) :
-    ∃ r, x.next V vs rest k fe me = .ok r ∧ step V.ctx ⟨fe :: rest, k⟩ me = .ok r := by
-  unfold SState.exitTo at hx
-  cases he : σ.exit fe.fn b.term with
-  | some y =>
-    rw [he] at hx
-    cases hx
-    exact SState.exit_sound hR hb hpc he hcs
-  | none =>
-    rw [he] at hx
-    change σ.phiExitTo fe.fn fe.label d₀ b.term = some (x, cs) at hx
-    unfold SState.phiExitTo at hx
-    split at hx
-    · rename_i cv d e hterm
-      split at hx
-      · rename_i y c₀ hy h₀
-        cases hx
-        obtain ⟨w, bv, hv⟩ := hcs (.bool y) (List.Mem.head _)
-        have hcv := SState.op_eval hR (s := V.ctx.scope me fe k) rfl hy hv
-        have hd' : (if bv.getLsbD 0 then d else e) = d₀ := by
-          simpa only [Exit.dest, hv, Option.some.injEq] using hd
-        rw [← hd'] at h₀
-        obtain ⟨f', hf'⟩ := SState.enter_ok hR (s := V.ctx.scope me fe k) rfl h₀
-          fun c hc => hcs c (List.mem_cons_of_mem _ hc)
-        refine ⟨.next ⟨f' :: rest, k + 1⟩ me, ?_, ?_⟩
-        · (simp only [Exit.next, hv, hf', bind, Except.bind, pure, Except.pure])
-        · (simp only [step, hb, hpc, ↓reduceDIte, hterm, hcv, hf', bind, Except.bind, pure,
-            Except.pure])
-      · cases hx
-    · exact SState.exitAt_sound hR hb hpc (by unfold SState.exitAt; rw [he]; exact hx) hcs
-
-/-- **Soundness of the block checker for one edge**: `Block.sound` for a block that `coversTo`
-accepts for the edge into block `d₀` (with the obligations of that edge only), when its exit goes
-to `d₀` (`Exit.dest`) from the entry valuation, with its pointer facts (`Ptrs`). For every
-program, function, block, position, target, conditions, summary, context of the program and
-thread at the block's position (`Block.sound_with`, `SState.exitTo_sound`). -/
-theorem Block.sound_to {P : Program} {fn : Func} {lbl p0 d₀ : Nat} {ds : List Cond}
-    {S : Summary} (hc : coversTo P fn lbl p0 d₀ ds S = true) {c : Ctx} (hP : c.prog = P)
-    {t : Thread} {m : Mem} {f : Frame} {rest : List Frame} (ht : t.frames = f :: rest)
-    (hfn : f.fn = fn) (hl : f.label = lbl) (hp : f.pc = p0)
-    (hds : ∀ d ∈ ds, d.Holds (Valuation.entry c t.k m f)
-      (vals (Valuation.entry c t.k m f) S.nodes))
-    (hd : S.exit.dest (Valuation.entry c t.k m f) (vals (Valuation.entry c t.k m f) S.nodes) =
-      some d₀) :
-    Ends c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
-      Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S) :=
-  Block.sound_with (ex := fun σ tm => σ.exitTo fn lbl d₀ tm) hc hP ht hfn hl hp hds
-    fun hR hb hpc hx hcs => SState.exitTo_sound hR hb hpc
-      (by rw [hR.fn, hR.label, hfn, hl]; exact hx) hcs hd
-
-/-- The frame at the end of block `l` that summary `S` describes from valuation `V`: `V`'s
-function, the registers and `fmul contract` operands of `Valuation.after`, position 0, no
-`alloca` blocks and no caller's register (`enter` reads none of these three). -/
-def Valuation.frameAt (V : Valuation) (l : Nat) (S : Summary) : Frame :=
-  { fn := V.fn, label := l, pc := 0, regs := (V.after S).regs, prods := (V.after S).prods,
-    allocas := [], dest := none }
-
-/-- The valuation at the entry of the block that the exit of summary `S` of block `l` goes to,
-from valuation `V` at its entry: `Valuation.after`, whose registers and `fmul contract`
-operands are, for a branch into blocks with `phi`s (`Exit.phi`), those of the frame `enter`
-gives from `Valuation.frameAt`, with the target's `phi`s set. -/
-def Valuation.into (V : Valuation) (l : Nat) (S : Summary) : Valuation :=
-  match S.exit, S.exit.dest V (vals V S.nodes) with
-  | .phi .., some d =>
-    match enter (V.ctx.scope (V.after S).mem (V.frameAt l S) (V.k + S.len)) (V.frameAt l S) d with
-    | .ok f => { V.after S with regs := f.regs, prods := f.prods }
-    | .error _ => V.after S
-  | _, _ => V.after S
-
-/-- The `fmul contract` operands of the frame at the end of the block that summary `S`
-describes from valuation `V`: with `contract`, the table's (`regProdIn`, as `EndsC` gives them),
-else `regProd`'s (as `Ends` gives them). -/
-def prodsWith (contract : Bool) (V : Valuation) (S : Summary) : Nat → Option (Val × Val) :=
-  cond contract (regProdIn V (vals V S.nodes) S.nodes S.regs) (regProd V S.regs)
-
-/-- `Valuation.after` with the `fmul contract` operands `prodsWith contract`: without
-`contract` it is `Valuation.after`, with it `Valuation.afterC`. -/
-def Valuation.afterWith (contract : Bool) (V : Valuation) (S : Summary) : Valuation :=
-  { V.after S with prods := prodsWith contract V S }
-
-/-- **The valuation after a block with `fmul contract`**: `Valuation.after`, with the
-`fmul contract` operands the table gives (`regProdIn`), as at the end of a block that `coversC`
-accepts (`EndsC`, `Block.soundC`). For every valuation and summary. -/
-def Valuation.afterC (V : Valuation) (S : Summary) : Valuation := V.afterWith true S
-
-/-- `Valuation.frameAt` with the registers and `fmul contract` operands of
-`Valuation.afterWith contract`. -/
-def Valuation.frameAtWith (contract : Bool) (V : Valuation) (l : Nat) (S : Summary) : Frame :=
-  { fn := V.fn, label := l, pc := 0, regs := (V.afterWith contract S).regs,
-    prods := (V.afterWith contract S).prods, allocas := [], dest := none }
-
-/-- `Valuation.into` from `Valuation.afterWith contract` and `Valuation.frameAtWith contract`:
-without `contract` it is `Valuation.into`, with it `Valuation.intoC`. -/
-def Valuation.intoWith (contract : Bool) (V : Valuation) (l : Nat) (S : Summary) : Valuation :=
-  match S.exit, S.exit.dest V (vals V S.nodes) with
-  | .phi .., some d =>
-    match enter (V.ctx.scope (V.afterWith contract S).mem (V.frameAtWith contract l S)
-        (V.k + S.len)) (V.frameAtWith contract l S) d with
-    | .ok f => { V.afterWith contract S with regs := f.regs, prods := f.prods }
-    | .error _ => V.afterWith contract S
-  | _, _ => V.afterWith contract S
-
-/-- **The valuation at the entry of the block that a block with `fmul contract` exits to**:
-`Valuation.into` from `Valuation.afterC`, whose `fmul contract` operands are the table's
-(`regProdIn`); for a branch into blocks with `phi`s (`Exit.phi`), the registers and
-`fmul contract` operands of the frame `enter` gives, with the target's `phi`s set. For every
-valuation, block and summary; `Ends.edgeC` enters it. -/
-def Valuation.intoC (V : Valuation) (l : Nat) (S : Summary) : Valuation := V.intoWith true l S
-
-/-- An exit with a target (`Exit.target`, so not `Exit.phi`): `Exit.dest` gives it, its step
-enters at position 0, and `Valuation.intoWith contract` is `Valuation.afterWith contract`, with
-or without `contract`. -/
-theorem Exit.of_targetWith {V : Valuation} {l d : Nat} {S : Summary} (contract : Bool)
-    (h : S.exit.target V (vals V S.nodes) = some d) :
-    S.exit.dest V (vals V S.nodes) = some d ∧ (∀ fn d', S.exit.pc fn d' = 0) ∧
-      V.intoWith contract l S = V.afterWith contract S := by
-  unfold Valuation.intoWith
-  cases hx : S.exit with
-  | phi => rw [hx] at h; cases h
-  | ret => rw [hx] at h; cases h
-  | br => rw [hx] at h; exact ⟨h, fun _ _ => rfl, rfl⟩
-  | cond => rw [hx] at h; exact ⟨h, fun _ _ => rfl, rfl⟩
-
-/-- An exit with a target (`Exit.target`, so not `Exit.phi`): `Exit.dest` gives it, its step
-enters at position 0, and `Valuation.into` is `Valuation.after` (`Exit.of_targetWith` without
-`contract`). -/
-theorem Exit.of_target {V : Valuation} {l d : Nat} {S : Summary}
-    (h : S.exit.target V (vals V S.nodes) = some d) :
-    S.exit.dest V (vals V S.nodes) = some d ∧ (∀ fn d', S.exit.pc fn d' = 0) ∧
-      V.into l S = V.after S :=
-  Exit.of_targetWith (l := l) false h
-
-/-- `Valuation.intoWith contract` keeps the context and the function, and its step count is
-`Valuation.after`'s, with or without `contract`. -/
-theorem Valuation.intoWith_k (contract : Bool) (V : Valuation) (l : Nat) (S : Summary) :
-    (V.intoWith contract l S).ctx = V.ctx ∧ (V.intoWith contract l S).fn = V.fn ∧
-      (V.intoWith contract l S).k = V.k + S.len + 1 := by
-  unfold Valuation.intoWith
-  split
-  · split <;> exact ⟨rfl, rfl, rfl⟩
-  · exact ⟨rfl, rfl, rfl⟩
-
-/-- `Valuation.into` keeps the context and the function, and its step count is
-`Valuation.after`'s (`Valuation.intoWith_k` without `contract`). -/
-theorem Valuation.into_k (V : Valuation) (l : Nat) (S : Summary) :
-    (V.into l S).ctx = V.ctx ∧ (V.into l S).fn = V.fn ∧ (V.into l S).k = V.k + S.len + 1 :=
-  Valuation.intoWith_k false V l S
-
-/-- An exit with target `d`: its step enters block `d` at position 0 (`Exit.br` and
-`Exit.cond` go to blocks without `phi`s), with the frame's other fields and the memory
-unchanged. -/
-theorem Exit.next_target {V : Valuation} {vs : List (Except Fault Val)} {rest : List Frame}
-    {k : Nat} {fe : Frame} {me : Mem} {x : Exit} {d : Nat} {r : Step}
-    (h : x.target V vs = some d) (hn : x.next V vs rest k fe me = .ok r) :
-    r = .next ⟨{ fe with label := d, pc := 0 } :: rest, k + 1⟩ me := by
-  cases x with
-  | br d' =>
-    simp only [Exit.target, Option.some.injEq] at h
-    subst h
-    simp only [Exit.next, pure, Except.pure, Except.ok.injEq] at hn
-    exact hn.symm
-  | cond y d' e' =>
-    simp only [Exit.target] at h
-    split at h
-    · rename_i w b hy
-      simp only [Option.some.injEq] at h
-      subst h
-      simp only [Exit.next, hy, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at hn
-      exact hn.symm
-    · cases h
-  | ret => cases h
-  | phi => cases h
-
-/-- `Ends` with the `fmul contract` operands `prodsWith contract` of the frame at the block's
-end: without `contract` it is `Ends`, with it `EndsC`. -/
-def EndsWith (contract : Bool) (c : Ctx) (t : Thread) (m : Mem) (f : Frame) (rest : List Frame) :
-    Valuation × Nat × Summary → Prop
-  | (V, lbl, S) => ∃ fe me, Steps c t m ⟨fe :: rest, V.k + S.len⟩ me ∧ fe.fn = V.fn ∧
-      fe.label = lbl ∧ fe.allocas = f.allocas ∧ fe.dest = f.dest ∧
-      (∀ r, fe.regs r = regVal V (vals V S.nodes) S.regs r) ∧
-      (∀ r, fe.prods r = prodsWith contract V S r) ∧
-      SEff.run V (vals V S.nodes) S.effs = .ok me ∧
-      ∃ r, S.exit.next V (vals V S.nodes) rest (V.k + S.len) fe me = .ok r ∧
-        step c ⟨fe :: rest, V.k + S.len⟩ me = .ok r
-
-/-- Steps, a step that continues the thread, then the end of a block from the thread after it
-(`EndsWith contract`), whose frame keeps the `alloca` blocks and caller's register of `f`: the
-block ends from the first thread too, with or without `contract`. -/
-theorem EndsWith.pre {contract : Bool} {c : Ctx} {t t₁ t₂ : Thread} {m m₁ m₂ : Mem}
-    {f f₂ : Frame} {rest : List Frame} {q : Valuation × Nat × Summary} (h₁ : Steps c t m t₁ m₁)
-    (h : step c t₁ m₁ = .ok (.next t₂ m₂)) (hq : EndsWith contract c t₂ m₂ f₂ rest q)
-    (hal : f₂.allocas = f.allocas) (hde : f₂.dest = f.dest) :
-    EndsWith contract c t m f rest q := by
-  obtain ⟨V, lbl, S⟩ := q
-  obtain ⟨fe, me, hS, hfn, hl, hal', hde', hr, hpr, hm, r, hn, hst⟩ := hq
-  exact ⟨fe, me, Steps.trans_step h₁ h hS, hfn, hl, hal'.trans hal, hde'.trans hde, hr, hpr, hm, r,
-    hn, hst⟩
-
-/-- Steps, a step that continues the thread, then the end of a block from the thread after it,
-whose frame keeps the `alloca` blocks and caller's register of `f`: the block ends from the
-first thread too (`EndsWith.pre` without `contract`). -/
-theorem Ends.pre {c : Ctx} {t t₁ t₂ : Thread} {m m₁ m₂ : Mem} {f f₂ : Frame} {rest : List Frame}
-    {q : Valuation × Nat × Summary} (h₁ : Steps c t m t₁ m₁) (h : step c t₁ m₁ = .ok (.next t₂ m₂))
-    (hq : Ends c t₂ m₂ f₂ rest q) (hal : f₂.allocas = f.allocas) (hde : f₂.dest = f.dest) :
-    Ends c t m f rest q := by
-  obtain ⟨V, lbl, S⟩ := q
-  exact EndsWith.pre (contract := false) (q := (V, lbl, S)) h₁ h hq hal hde
-
-/-- **An edge, with or without `fmul contract`**: block `l` with summary `S` ends with the
-`fmul contract` operands `prodsWith contract` (`EndsWith`) and its exit goes to block `d`
-(`Exit.dest`): the branch's step enters block `d` at position `S.exit.pc V.fn d` (after its
-`phi`s for `Exit.phi`), on the same memory, with a frame of `V`'s function whose `alloca`
-blocks and caller's register are those of `f` and whose entry valuation is
-`V.intoWith contract l S`. `Ends.edge` and `Ends.edgeC` are its instances. -/
-theorem Ends.edgeWith {contract : Bool} {c : Ctx} {t : Thread} {m : Mem} {f : Frame}
-    {rest : List Frame} {V : Valuation} {l d : Nat} {S : Summary} (hc : V.ctx = c)
-    (h : EndsWith contract c t m f rest (V, l, S))
-    (hd : S.exit.dest V (vals V S.nodes) = some d) :
-    ∃ t₁ m₁ f', Steps c t m t₁ m₁ ∧
-      step c t₁ m₁ = .ok (.next ⟨f' :: rest, V.k + S.len + 1⟩ m₁) ∧ f'.fn = V.fn ∧
-      f'.label = d ∧ f'.pc = S.exit.pc V.fn d ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
-      Valuation.entry c (V.k + S.len + 1) m₁ f' = V.intoWith contract l S := by
-  subst hc
-  obtain ⟨fe, me, hS, hfn, hl, hal, hde, hr, hpr, hm, r, hn, hst⟩ := h
-  have e1 : fe.regs = regVal V (vals V S.nodes) S.regs := funext hr
-  have e2 : fe.prods = prodsWith contract V S := funext hpr
-  have nophi (ht : S.exit.target V (vals V S.nodes) = some d) :
-      ∃ t₁ m₁ f', Steps V.ctx t m t₁ m₁ ∧
-        step V.ctx t₁ m₁ = .ok (.next ⟨f' :: rest, V.k + S.len + 1⟩ m₁) ∧ f'.fn = V.fn ∧
-        f'.label = d ∧ f'.pc = 0 ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
-        Valuation.entry V.ctx (V.k + S.len + 1) m₁ f' = V.intoWith contract l S := by
-    obtain rfl := Exit.next_target ht hn
-    refine ⟨_, me, { fe with label := d, pc := 0 }, hS, hst, hfn, rfl, rfl, hal, hde, ?_⟩
-    rw [(Exit.of_targetWith contract ht).2.2, Valuation.afterWith, Valuation.after, hm]
-    simp only [Valuation.entry, Except.toOption, Option.getD, e1, e2, hfn]
-  cases hx : S.exit
-  case phi y d₁ e₁ =>
-    rw [hx] at hd hn
-    simp only [Exit.dest] at hd
-    split at hd
-    · rename_i w b hy
-      simp only [Option.some.injEq] at hd
-      subst hd
-      simp only [Exit.next, hy, bind, Except.bind] at hn
-      generalize he : enter _ _ _ = q at hn
-      cases q with
-      | error => cases hn
-      | ok f' =>
-        simp only [pure, Except.pure, Except.ok.injEq] at hn
-        subst hn
-        obtain ⟨hf1, hf2, hf3, hf4, hf5⟩ := enter_fields he
-        have hg := enter_congr he (g := V.frameAtWith contract l S) hfn.symm hl.symm e1.symm
-          e2.symm
-        have hs : V.ctx.scope (V.afterWith contract S).mem (V.frameAtWith contract l S)
-            (V.k + S.len) = V.ctx.scope me fe (V.k + S.len) := by
-          simp only [Ctx.scope, Valuation.afterWith, Valuation.after, Valuation.frameAtWith, hm,
-            Except.toOption, Option.getD, e1]
-        have hi : V.intoWith contract l S =
-            { V.afterWith contract S with regs := f'.regs, prods := f'.prods } := by
-          unfold Valuation.intoWith
-          rw [hx]
-          simp only [Exit.dest, hy, hs, hg]
-        refine ⟨_, me, f', hS, hst, hf1.trans hfn, hf2, by rw [hf3, hfn]; rfl, hf4.trans hal,
-          hf5.trans hde, ?_⟩
-        rw [hi]
-        simp only [Valuation.entry, Valuation.afterWith, Valuation.after, hf1, hfn, hm,
-          Except.toOption, Option.getD]
-    · cases hd
-  all_goals
-    obtain ⟨t₁, m₁, f', h1, h2, h3, h4, h5, h6, h7, h8⟩ := nophi (by rw [hx] at hd ⊢; exact hd)
-    exact ⟨t₁, m₁, f', h1, h2, h3, h4, h5, h6, h7, h8⟩
-
-/-- **An edge**: block `l` with summary `S` ends (`Ends`) and its exit goes to block `d`
-(`Exit.dest`): the branch's step enters block `d` at position `S.exit.pc V.fn d` (after its
-`phi`s for `Exit.phi`), on the same memory, with a frame of `V`'s function whose `alloca`
-blocks and caller's register are those of `f` and whose entry valuation is `V.into l S`
-(`Ends.edgeWith` without `contract`). -/
-theorem Ends.edge {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Frame}
-    {V : Valuation} {l d : Nat} {S : Summary} (hc : V.ctx = c) (h : Ends c t m f rest (V, l, S))
-    (hd : S.exit.dest V (vals V S.nodes) = some d) :
-    ∃ t₁ m₁ f', Steps c t m t₁ m₁ ∧
-      step c t₁ m₁ = .ok (.next ⟨f' :: rest, V.k + S.len + 1⟩ m₁) ∧ f'.fn = V.fn ∧
-      f'.label = d ∧ f'.pc = S.exit.pc V.fn d ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
-      Valuation.entry c (V.k + S.len + 1) m₁ f' = V.into l S :=
-  Ends.edgeWith (contract := false) (V := V) (l := l) (S := S) hc h hd
-
-/-- **An edge with `fmul contract`**: block `l` with summary `S` ends with the table's
-`fmul contract` operands (`EndsC`, as `Block.soundC` gives for a block that `coversC` accepts)
-and its exit goes to block `d` (`Exit.dest`): the branch's step enters block `d` at position
-`S.exit.pc V.fn d` (after its `phi`s for `Exit.phi`), on the same memory, with a frame of `V`'s
-function whose `alloca` blocks and caller's register are those of `f` and whose entry valuation
-is `V.intoC l S`. For every context, thread, block and summary (`Ends.edgeWith` with
-`contract`). -/
-theorem Ends.edgeC {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Frame}
-    {V : Valuation} {l d : Nat} {S : Summary} (hc : V.ctx = c) (h : EndsC c t m f rest (V, l, S))
-    (hd : S.exit.dest V (vals V S.nodes) = some d) :
-    ∃ t₁ m₁ f', Steps c t m t₁ m₁ ∧
-      step c t₁ m₁ = .ok (.next ⟨f' :: rest, V.k + S.len + 1⟩ m₁) ∧ f'.fn = V.fn ∧
-      f'.label = d ∧ f'.pc = S.exit.pc V.fn d ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
-      Valuation.entry c (V.k + S.len + 1) m₁ f' = V.intoC l S :=
-  Ends.edgeWith (contract := true) (V := V) (l := l) (S := S) hc h hd
-
-/-- **The path checker**: the blocks `(label, conditions, summary)` of a path, the first from
-position `p0` and each one after from its entry, are each accepted by `covers`. -/
-def coversPath (P : Program) (fn : Func) : Nat → List (Nat × List Cond × Summary) → Bool
-  | _, [] => true
-  | p0, (l, ds, S) :: ps => covers P fn l p0 ds S && coversPath P fn 0 ps
-
-/-- The premises of a path from valuation `V` at its first block's entry: each block's conditions
-hold at its entry valuation (`Valuation.after` of the block before), and each block's exit but
-the last goes to the next block's label (`Exit.target`). -/
-def Walk (V : Valuation) : List (Nat × List Cond × Summary) → Prop
-  | [] => True
-  | [(_, ds, S)] => ∀ d ∈ ds, d.Holds V (vals V S.nodes)
-  | (_, ds, S) :: (l, ds', S') :: ps => (∀ d ∈ ds, d.Holds V (vals V S.nodes)) ∧
-      S.exit.target V (vals V S.nodes) = some l ∧ Walk (V.after S) ((l, ds', S') :: ps)
-
-/-- Whether a path's premises hold, decided by evaluating them (the kernel reduces it on a
-concrete valuation). -/
-instance Walk.dec (V : Valuation) : (ps : List (Nat × List Cond × Summary)) → Decidable (Walk V ps)
-  | [] => isTrue trivial
-  | [(_, ds, S)] => inferInstanceAs (Decidable (∀ d ∈ ds, d.Holds V (vals V S.nodes)))
-  | (_, ds, S) :: (l, ds', S') :: ps =>
-    have := Walk.dec (V.after S) ((l, ds', S') :: ps)
-    inferInstanceAs (Decidable ((∀ d ∈ ds, d.Holds V (vals V S.nodes)) ∧
-      S.exit.target V (vals V S.nodes) = some l ∧ Walk (V.after S) ((l, ds', S') :: ps)))
-
-/-- The last block of the path `(l, ds, S) :: ps` entered with valuation `V` at its first block:
-its entry valuation (`Valuation.after` of each block before it), label and summary. -/
-def Valuation.last (V : Valuation) (l : Nat) (S : Summary) :
-    List (Nat × List Cond × Summary) → Valuation × Nat × Summary
-  | [] => (V, l, S)
-  | (l', _, S') :: ps => (V.after S).last l' S' ps
-
-/-- The number of steps of the path `S :: ps` to its last terminator: each block's statements,
-and one step for each branch between them. -/
-def pathLen (S : Summary) : List (Nat × List Cond × Summary) → Nat
-  | [] => S.len
-  | (_, _, S') :: ps => S.len + 1 + pathLen S' ps
-
-/-- **The path checker with `phi`s**: `coversPath`, where each block after the first is
-covered from the position its edge enters it at (`Exit.pc`: after its `phi`s for `Exit.phi`),
-and each block but the last is accepted by `covers` or, with the obligations of its edge into the
-next block only, by `coversTo`. -/
-def coversPathI (P : Program) (fn : Func) : Nat → List (Nat × List Cond × Summary) → Bool
-  | _, [] => true
-  | p0, [(l, ds, S)] => covers P fn l p0 ds S
-  | p0, (l, ds, S) :: (l', ds', S') :: ps =>
-    (covers P fn l p0 ds S || coversTo P fn l p0 l' ds S) &&
-      coversPathI P fn (S.exit.pc fn l') ((l', ds', S') :: ps)
-
-/-- The premises of a path with `phi`s from valuation `V` at its first block's entry: each
-block's conditions hold at its entry valuation (`Valuation.into` of the block before), and each
-block's exit but the last goes to the next block's label (`Exit.dest`). -/
-def WalkI (V : Valuation) : List (Nat × List Cond × Summary) → Prop
-  | [] => True
-  | [(_, ds, S)] => ∀ d ∈ ds, d.Holds V (vals V S.nodes)
-  | (l, ds, S) :: (l', ds', S') :: ps => (∀ d ∈ ds, d.Holds V (vals V S.nodes)) ∧
-      S.exit.dest V (vals V S.nodes) = some l' ∧ WalkI (V.into l S) ((l', ds', S') :: ps)
-
-/-- Whether a path's premises hold, decided by evaluating them (the kernel reduces it on a
-concrete valuation). -/
-instance WalkI.dec (V : Valuation) :
-    (ps : List (Nat × List Cond × Summary)) → Decidable (WalkI V ps)
-  | [] => isTrue trivial
-  | [(_, ds, S)] => inferInstanceAs (Decidable (∀ d ∈ ds, d.Holds V (vals V S.nodes)))
-  | (l, ds, S) :: (l', ds', S') :: ps =>
-    have := WalkI.dec (V.into l S) ((l', ds', S') :: ps)
-    inferInstanceAs (Decidable ((∀ d ∈ ds, d.Holds V (vals V S.nodes)) ∧
-      S.exit.dest V (vals V S.nodes) = some l' ∧ WalkI (V.into l S) ((l', ds', S') :: ps)))
-
-/-- The last block of the path `(l, ds, S) :: ps` with `phi`s entered with valuation `V` at its
-first block: its entry valuation (`Valuation.into` of each block before it), label and
-summary. -/
-def Valuation.lastI (V : Valuation) (l : Nat) (S : Summary) :
-    List (Nat × List Cond × Summary) → Valuation × Nat × Summary
-  | [] => (V, l, S)
-  | (l', _, S') :: ps => (V.into l S).lastI l' S' ps
-
-/-- The blocks of the path `(l, ds, S) :: ps` with `phi`s entered with valuation `V` at its first
-block, in order, each with its entry valuation (`Valuation.into` of each block before it), label
-and summary; `Valuation.lastI` is the last. -/
-def Valuation.blocksI (V : Valuation) (l : Nat) (S : Summary) :
-    List (Nat × List Cond × Summary) → List (Valuation × Nat × Summary)
-  | [] => [(V, l, S)]
-  | (l', _, S') :: ps => (V, l, S) :: (V.into l S).blocksI l' S' ps
-
-/-- The last block's entry valuation keeps the context and the function, and the step count at
-its end is the entry's plus the path's length. -/
-theorem Valuation.lastI_k (V : Valuation) (l : Nat) (S : Summary) :
-    ∀ ps, (V.lastI l S ps).1.ctx = V.ctx ∧ (V.lastI l S ps).1.fn = V.fn ∧
-      (V.lastI l S ps).1.k + (V.lastI l S ps).2.2.len = V.k + pathLen S ps
-  | [] => ⟨rfl, rfl, rfl⟩
-  | (l', _, S') :: ps => by
-    obtain ⟨h1, h2, h3⟩ := Valuation.lastI_k (V.into l S) l' S' ps
-    obtain ⟨e1, e2, e3⟩ := V.into_k l S
-    rw [Valuation.lastI]
-    refine ⟨h1.trans e1, h2.trans e2, ?_⟩
-    rw [h3, pathLen, e3]
-    omega
-
-/-- A path that `coversPath` accepts with premises `Walk` is one that `coversPathI` accepts
-with premises `WalkI`, with the same last block: its exits have targets (`Exit.of_target`). -/
-theorem Walk.toI {P : Program} {fn : Func} : ∀ (ps : List (Nat × List Cond × Summary))
-    {V : Valuation} {l p0 : Nat} {ds : List Cond} {S : Summary},
-    Walk V ((l, ds, S) :: ps) → coversPath P fn p0 ((l, ds, S) :: ps) = true →
-    WalkI V ((l, ds, S) :: ps) ∧ coversPathI P fn p0 ((l, ds, S) :: ps) = true ∧
-      V.lastI l S ps = V.last l S ps
-  | [], _, _, _, _, _, hW, hc =>
-    ⟨hW, by simpa only [coversPath, coversPathI, Bool.and_true] using hc, rfl⟩
-  | (l', ds', S') :: ps, V, l, p0, ds, S, hW, hc => by
-    obtain ⟨hds, ht, hW'⟩ := hW
-    rw [coversPath, Bool.and_eq_true] at hc
-    obtain ⟨hd, hpc, hi⟩ := Exit.of_target (l := l) ht
-    obtain ⟨hW'', hc', he⟩ := Walk.toI ps hW' hc.2
-    refine ⟨⟨hds, hd, by rw [hi]; exact hW''⟩, ?_, by rw [Valuation.lastI, Valuation.last, hi, he]⟩
-    rw [coversPathI, Bool.and_eq_true, hpc]
-    exact ⟨by rw [hc.1, Bool.true_or], hc'⟩
-
-/-- **Soundness along a path with `phi`s, with its pointer facts**: for every program, function
-and path `(l, ds, S) :: ps` that the path checker with `phi`s accepts (`coversPathI`, the first
-block from position `p0`), every context of the program and thread whose innermost frame `f` is
-at block `l`'s position `p0`, with memory `m`: if the path's premises hold from the entry
-valuation (`WalkI`: each block's conditions at its entry, each exit to the next block), the
-thread's steps run every block of the path, each edge setting its target's `phi`s
-(`Ends.edge`), and the last one ends (`Ends`) from its entry valuation (`Valuation.lastI`), at
-step count `t.k + pathLen S ps` (`Valuation.lastI_k`); and the pointer facts (`Ptrs`) of every
-block of the path hold from the thread, each from its entry valuation (`Valuation.blocksI`). -/
-theorem Block.sound_pathI_ptrs {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {rest : List Frame} : ∀ (ps : List (Nat × List Cond × Summary)) {l p0 : Nat} {ds : List Cond}
-    {S : Summary} {t : Thread} {m : Mem} {f : Frame},
-    coversPathI P fn p0 ((l, ds, S) :: ps) = true → t.frames = f :: rest → f.fn = fn →
-    f.label = l → f.pc = p0 → WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps) →
-    Ends c t m f rest ((Valuation.entry c t.k m f).lastI l S ps) ∧
-      ∀ q ∈ (Valuation.entry c t.k m f).blocksI l S ps, Ptrs c t m rest q
-  | [], _, _, _, _, _, _, _, hc, ht, hfn, hl, hp, hW => by
-    obtain ⟨hE, hQ⟩ := Block.sound_ptrs hc hP ht hfn hl hp hW
-    refine ⟨hE, fun q hq => ?_⟩
-    rw [Valuation.blocksI, List.mem_singleton] at hq
-    subst hq
-    exact hQ
-  | (l₂, ds₂, S₂) :: ps, l, p0, ds, S, t, m, f, hc, ht, hfn, hl, hp, hW => by
-    rw [coversPathI, Bool.and_eq_true] at hc
-    obtain ⟨hds, hd, hW'⟩ := hW
-    have hE : Ends c t m f rest (Valuation.entry c t.k m f, l, S) ∧
-        Ptrs c t m rest (Valuation.entry c t.k m f, l, S) := by
-      have h := hc.1
-      simp only [Bool.or_eq_true] at h
-      rcases h with h | h
-      · exact Block.sound_ptrs h hP ht hfn hl hp hds
-      · exact Block.sound_to h hP ht hfn hl hp hds hd
-    obtain ⟨t₁, m₁, f', hS₁, hst₁, hfn', hl', hp', hal', hde', hV⟩ := Ends.edge rfl hE.1 hd
-    have hV' : Valuation.entry c (t.k + S.len + 1) m₁ f' =
-        (Valuation.entry c t.k m f).into l S := hV
-    have hq := Block.sound_pathI_ptrs hP ps (t := ⟨f' :: rest, t.k + S.len + 1⟩) (m := m₁)
-      (f := f') hc.2 rfl (hfn'.trans hfn) hl' (by rw [hp', ← hfn]; rfl) (by rw [hV']; exact hW')
-    rw [hV'] at hq
-    refine ⟨Ends.pre hS₁ hst₁ hq.1 hal' hde', fun q hmem => ?_⟩
-    rw [Valuation.blocksI, List.mem_cons] at hmem
-    rcases hmem with rfl | hmem
-    · exact hE.2
-    · exact Ptrs.pre (Steps.trans_step hS₁ hst₁ (.refl _ _)) (hq.2 q hmem)
-
-/-- **Soundness along a path with `phi`s**: for every program, function and path
-`(l, ds, S) :: ps` that the path checker with `phi`s accepts (`coversPathI`, the first block
-from position `p0`), every context of the program and thread whose innermost frame `f` is at
-block `l`'s position `p0`, with memory `m`: if the path's premises hold from the entry
-valuation (`WalkI`: each block's conditions at its entry, each exit to the next block), the
-thread's steps run every block of the path, each edge setting its target's `phi`s
-(`Ends.edge`), and the last one ends (`Ends`) from its entry valuation (`Valuation.lastI`), at
-step count `t.k + pathLen S ps` (`Valuation.lastI_k`) (`Block.sound_pathI_ptrs`). -/
-theorem Block.sound_pathI {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {rest : List Frame} (ps : List (Nat × List Cond × Summary)) {l p0 : Nat} {ds : List Cond}
-    {S : Summary} {t : Thread} {m : Mem} {f : Frame}
-    (hc : coversPathI P fn p0 ((l, ds, S) :: ps) = true) (ht : t.frames = f :: rest)
-    (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps)) :
-    Ends c t m f rest ((Valuation.entry c t.k m f).lastI l S ps) :=
-  (Block.sound_pathI_ptrs hP ps hc ht hfn hl hp hW).1
-
-/-- **A path, then a block with `fmul contract`**: for every program, function and path
-`(l, ds, S) :: ps` that the path checker with `phi`s accepts (`coversPathI`, the first block from
-position `p0`), whose last block, entered with valuation `W` at label `l'` with summary `S'`
-(`Valuation.lastI`), exits to block `lc` (`Exit.dest`), and every conditions `dc` and summary `Sc`
-that the checker with `fmul contract` accepts for `lc` from the position that exit enters it at
-(`coversC`, `Exit.pc`), every context of the program and thread whose innermost frame `f` is at
-block `l`'s position `p0`, with memory `m`: if the path's premises hold from the entry valuation
-(`WalkI`) and `dc` holds at `lc`'s entry valuation `W.into l' S'`, the thread's steps run the
-path, its last edge and block `lc`, which ends with the table's `fmul contract` operands
-(`EndsC`) from that valuation (`Block.sound_pathI`, `Ends.edge`, `Block.soundC`). -/
-theorem Block.sound_pathC {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {rest : List Frame} (ps : List (Nat × List Cond × Summary)) {l p0 lc : Nat}
-    {ds dc : List Cond} {S Sc : Summary} {t : Thread} {m : Mem} {f : Frame}
-    (hc : coversPathI P fn p0 ((l, ds, S) :: ps) = true) (ht : t.frames = f :: rest)
-    (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps)) {W : Valuation} {l' : Nat}
-    {S' : Summary} (hq : (Valuation.entry c t.k m f).lastI l S ps = (W, l', S'))
-    (hd : S'.exit.dest W (vals W S'.nodes) = some lc)
-    (hcc : coversC P fn lc (S'.exit.pc fn lc) dc Sc = true)
-    (hdc : ∀ d ∈ dc, d.Holds (W.into l' S') (vals (W.into l' S') Sc.nodes)) :
-    EndsC c t m f rest (W.into l' S', lc, Sc) := by
-  have hE := Block.sound_pathI hP ps hc ht hfn hl hp hW
-  have hk := Valuation.lastI_k (Valuation.entry c t.k m f) l S ps
-  rw [hq] at hE hk
-  obtain ⟨hk1, hk2, -⟩ := hk
-  have hc' : W.ctx = c := hk1
-  have hf' : W.fn = fn := hk2.trans hfn
-  obtain ⟨t₁, m₁, f', hS₁, hst₁, hfn', hl', hp', hal', hde', hV⟩ := Ends.edge hc' hE hd
-  have h := Block.soundC hcc hP (t := ⟨f' :: rest, W.k + S'.len + 1⟩) (m := m₁) (f := f') rfl
-    (hfn'.trans hf') hl' (by rw [hp', hf']) (by rw [hV]; exact hdc)
-  rw [hV] at h
-  exact EndsWith.pre (contract := true) (q := (W.into l' S', lc, Sc)) hS₁ hst₁ h hal' hde'
-
-/-- **A path with `phi`s that returns, under any caller frames**: `Block.sound_pathI` for a path
-whose last block's exit is `ret void`, from a thread whose innermost frame `f` is above frames
-`rest`: the thread's steps reach the last block's end at step count `t.k + pathLen S ps`, on the
-memory `me` the last block's effects make from its entry valuation, and its next step is the
-`ret`'s, with `f`'s `alloca` blocks dead: `.done` when `rest` is empty, else back to the caller
-`g` at the position after its call (`g.set f.dest none none`: `ret void` sets no register). For
-every program, function and path the checker accepts, and every list of caller frames. -/
-theorem Block.sound_retR {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {ps : List (Nat × List Cond × Summary)} {l p0 : Nat} {ds : List Cond} {S : Summary}
-    {t : Thread} {m : Mem} {f : Frame} {rest : List Frame}
-    (hc : coversPathI P fn p0 ((l, ds, S) :: ps) = true)
-    (ht : t.frames = f :: rest) (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps))
-    (hret : ((Valuation.entry c t.k m f).lastI l S ps).2.2.exit = .ret) :
-    ∃ fe me, Steps c t m ⟨fe :: rest, t.k + pathLen S ps⟩ me ∧
-      SEff.run ((Valuation.entry c t.k m f).lastI l S ps).1
-        (vals ((Valuation.entry c t.k m f).lastI l S ps).1
-          ((Valuation.entry c t.k m f).lastI l S ps).2.2.nodes)
-        ((Valuation.entry c t.k m f).lastI l S ps).2.2.effs = .ok me ∧
-      step c ⟨fe :: rest, t.k + pathLen S ps⟩ me = .ok (match (generalizing := false) rest with
-        | [] => .done (f.allocas.foldl (fun m b => m.setLive b false) me)
-        | g :: gs => .next ⟨{ g.set f.dest none none with pc := g.pc + 1 } :: gs,
-            t.k + pathLen S ps + 1⟩ (f.allocas.foldl (fun m b => m.setLive b false) me)) := by
-  have h := Block.sound_pathI hP ps hc ht hfn hl hp hW
-  have hk := (Valuation.lastI_k (Valuation.entry c t.k m f) l S ps).2.2
-  revert h hret hk
-  generalize (Valuation.entry c t.k m f).lastI l S ps = q
-  obtain ⟨W, l', S'⟩ := q
-  rintro hret ⟨fe, me, hS, -, -, hal, hde, -, -, hm, r, hn, hst⟩ hk
-  simp only at hret
-  simp only [Valuation.entry] at hk
-  rw [hret] at hn
-  simp only [Exit.next, pure, Except.pure, Except.ok.injEq] at hn
-  subst hn
-  rw [← hal, ← hde, ← hk]
-  cases rest <;> exact ⟨fe, me, hS, hm, hst⟩
-
-/-- **A path with `phi`s that returns**: `Block.sound_retR` for a thread with one frame `f` (a
-kernel's): the next step returns, `.done` with `f`'s `alloca` blocks dead. For every program,
-function and path the checker accepts. -/
-theorem Block.sound_retI {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {ps : List (Nat × List Cond × Summary)} {l p0 : Nat} {ds : List Cond} {S : Summary}
-    {t : Thread} {m : Mem} {f : Frame} (hc : coversPathI P fn p0 ((l, ds, S) :: ps) = true)
-    (ht : t.frames = [f]) (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps))
-    (hret : ((Valuation.entry c t.k m f).lastI l S ps).2.2.exit = .ret) :
-    ∃ fe me, Steps c t m ⟨[fe], t.k + pathLen S ps⟩ me ∧
-      SEff.run ((Valuation.entry c t.k m f).lastI l S ps).1
-        (vals ((Valuation.entry c t.k m f).lastI l S ps).1
-          ((Valuation.entry c t.k m f).lastI l S ps).2.2.nodes)
-        ((Valuation.entry c t.k m f).lastI l S ps).2.2.effs = .ok me ∧
-      step c ⟨[fe], t.k + pathLen S ps⟩ me =
-        .ok (.done (f.allocas.foldl (fun m b => m.setLive b false) me)) :=
-  Block.sound_retR hP hc ht hfn hl hp hW hret
-
-/-- A path from valuation `V` at its first block's entry to `ret`, leaving a memory of `Q`: its
-premises with `phi`s hold (`WalkI`: each block's conditions at its entry valuation, each exit but
-the last to the next block, an edge into a block with `phi`s setting them), its last block's exit
-is `ret`, and the last block's effects succeed (`SEff.run` at the last block's entry valuation,
-`Valuation.lastI`) with a memory of `Q`. False on the empty path. -/
-def Ret (V : Valuation) (Q : Mem → Prop) : List (Nat × List Cond × Summary) → Prop
-  | [] => False
-  | (l, ds, S) :: ps => WalkI V ((l, ds, S) :: ps) ∧ (V.lastI l S ps).2.2.exit = .ret ∧
-      ∃ me, SEff.run (V.lastI l S ps).1 (vals (V.lastI l S ps).1 (V.lastI l S ps).2.2.nodes)
-        (V.lastI l S ps).2.2.effs = .ok me ∧ Q me
-
-/-- A frame with no value set (`ret void`'s return to a caller) is the frame itself. -/
-theorem Frame.set_none (g : Frame) (r : Option Nat) (p : Option (Val × Val)) :
-    g.set r none p = g := by
-  cases r <;> rfl
-
-/-- **Return to a caller**: for every program, function and path that `coversPathI` accepts and
-whose last block returns (`ret void`), every context of the program and thread whose innermost
-frame `f`, at the path's first block and position, has a caller frame `g` above frames `rest`,
-and every condition list `dg` and summary `Sg` that `covers` accepts for `g`'s block from the
-position after the call (`g.pc + 1`): if the path's premises hold and, for the memory `me` the
-last block's effects make, `dg` holds at the entry valuation of `{ g with pc := g.pc + 1 }` on
-`me` with `f`'s `alloca` blocks dead (at step count `t.k + pathLen S ps + 1`), then the thread's
-steps run the path, return to `g` and run `g`'s block from `g.pc + 1` to its end: it ends
-(`Ends`) from that valuation. -/
-theorem Block.sound_back {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {ps : List (Nat × List Cond × Summary)} {l p0 : Nat} {ds : List Cond} {S : Summary}
-    {t : Thread} {m : Mem} {f g : Frame} {rest : List Frame}
-    (hc : coversPathI P fn p0 ((l, ds, S) :: ps) = true)
-    (ht : t.frames = f :: g :: rest) (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps))
-    (hret : ((Valuation.entry c t.k m f).lastI l S ps).2.2.exit = .ret)
-    {dg : List Cond} {Sg : Summary} (hcg : covers P g.fn g.label (g.pc + 1) dg Sg = true)
-    (hg : ∀ me, SEff.run ((Valuation.entry c t.k m f).lastI l S ps).1
-        (vals ((Valuation.entry c t.k m f).lastI l S ps).1
-          ((Valuation.entry c t.k m f).lastI l S ps).2.2.nodes)
-        ((Valuation.entry c t.k m f).lastI l S ps).2.2.effs = .ok me →
-      ∀ d ∈ dg, d.Holds (Valuation.entry c (t.k + pathLen S ps + 1)
-          (f.allocas.foldl (fun m b => m.setLive b false) me) { g with pc := g.pc + 1 })
-        (vals (Valuation.entry c (t.k + pathLen S ps + 1)
-          (f.allocas.foldl (fun m b => m.setLive b false) me) { g with pc := g.pc + 1 })
-          Sg.nodes)) :
-    ∃ me, SEff.run ((Valuation.entry c t.k m f).lastI l S ps).1
-        (vals ((Valuation.entry c t.k m f).lastI l S ps).1
-          ((Valuation.entry c t.k m f).lastI l S ps).2.2.nodes)
-        ((Valuation.entry c t.k m f).lastI l S ps).2.2.effs = .ok me ∧
-      Ends c t m { g with pc := g.pc + 1 } rest
-        (Valuation.entry c (t.k + pathLen S ps + 1)
-          (f.allocas.foldl (fun m b => m.setLive b false) me) { g with pc := g.pc + 1 }, g.label,
-          Sg) := by
-  obtain ⟨fe, me, hS, hm, hst⟩ := Block.sound_retR hP hc ht hfn hl hp hW hret
-  simp only [Frame.set_none] at hst
-  exact ⟨me, hm, Ends.pre hS hst
-    (Block.sound hcg hP (t := ⟨{ g with pc := g.pc + 1 } :: rest, t.k + pathLen S ps + 1⟩) rfl
-      rfl rfl rfl (hg me hm)) rfl rfl⟩
-
-/-- **Soundness along a path, with its pointer facts**: for every program, function and path
-`(l, ds, S) :: ps` the path checker accepts (`coversPath`), every context of the program and
-thread whose innermost frame `f` is at block `l`'s position `p0`, with memory `m`, whose premises
-`Walk` hold from the entry valuation: the last block ends (`Ends`) from its entry valuation
-(`Valuation.last`), and the pointer facts (`Ptrs`) of every block of the path hold from the
-thread, each from its entry valuation (`Valuation.blocksI`, whose `Valuation.into` is
-`Valuation.after` on such a path, `Exit.of_target`). The corollary of `Block.sound_pathI_ptrs`
-(`Walk.toI`). -/
-theorem Block.sound_path_ptrs {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {rest : List Frame} (ps : List (Nat × List Cond × Summary)) {l p0 : Nat} {ds : List Cond}
-    {S : Summary} {t : Thread} {m : Mem} {f : Frame}
-    (hc : coversPath P fn p0 ((l, ds, S) :: ps) = true) (ht : t.frames = f :: rest)
-    (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : Walk (Valuation.entry c t.k m f) ((l, ds, S) :: ps)) :
-    Ends c t m f rest ((Valuation.entry c t.k m f).last l S ps) ∧
-      ∀ q ∈ (Valuation.entry c t.k m f).blocksI l S ps, Ptrs c t m rest q := by
-  obtain ⟨hW', hc', he⟩ := Walk.toI ps hW hc
-  rw [← he]
-  exact Block.sound_pathI_ptrs hP ps hc' ht hfn hl hp hW'
-
-/-- **Soundness along a path**: for every program, function and path `(l, ds, S) :: ps` the path
-checker accepts (`coversPath`, the first block from position `p0`), every context of the
-program and thread whose innermost frame `f` is at block `l`'s position `p0`, with memory `m`:
-if the path's premises hold from the entry valuation (`Walk`: each block's conditions at its
-entry, each exit to the next block), the thread's steps run every block of the path and the
-last one ends (`Ends`) from its entry valuation (`Valuation.last`), at step count
-`t.k + pathLen S ps`. The corollary of `Block.sound_path_ptrs` (`Walk.toI`): the exits of such
-a path have targets, so its edges resolve no `phi` (`Exit.next_target`). -/
-theorem Block.sound_path {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {rest : List Frame} : ∀ (ps : List (Nat × List Cond × Summary)) {l p0 : Nat} {ds : List Cond}
-    {S : Summary} {t : Thread} {m : Mem} {f : Frame},
-    coversPath P fn p0 ((l, ds, S) :: ps) = true → t.frames = f :: rest → f.fn = fn →
-    f.label = l → f.pc = p0 → Walk (Valuation.entry c t.k m f) ((l, ds, S) :: ps) →
-    Ends c t m f rest ((Valuation.entry c t.k m f).last l S ps) :=
-  fun ps _ _ _ _ _ _ _ hc ht hfn hl hp hW => (Block.sound_path_ptrs hP ps hc ht hfn hl hp hW).1
-
-/-- **A path that returns**: `Block.sound_path` for a path whose last block's exit is `ret void`,
-from a thread with one frame `f` (a kernel's): the thread's steps reach the last block's end at
-step count `t.k + pathLen S ps`, on the memory `me` the last block's effects make from its entry
-valuation, and its next step returns, `.done` with `f`'s `alloca` blocks dead. For every program,
-function and path the checker accepts; the corollary of `Block.sound_retI` (`Walk.toI`). -/
-theorem Block.sound_ret {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P)
-    {ps : List (Nat × List Cond × Summary)} {l p0 : Nat} {ds : List Cond} {S : Summary}
-    {t : Thread} {m : Mem} {f : Frame} (hc : coversPath P fn p0 ((l, ds, S) :: ps) = true)
-    (ht : t.frames = [f]) (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : Walk (Valuation.entry c t.k m f) ((l, ds, S) :: ps))
-    (hret : ((Valuation.entry c t.k m f).last l S ps).2.2.exit = .ret) :
-    ∃ fe me, Steps c t m ⟨[fe], t.k + pathLen S ps⟩ me ∧
-      SEff.run ((Valuation.entry c t.k m f).last l S ps).1
-        (vals ((Valuation.entry c t.k m f).last l S ps).1
-          ((Valuation.entry c t.k m f).last l S ps).2.2.nodes)
-        ((Valuation.entry c t.k m f).last l S ps).2.2.effs = .ok me ∧
-      step c ⟨[fe], t.k + pathLen S ps⟩ me =
-        .ok (.done (f.allocas.foldl (fun m b => m.setLive b false) me)) := by
-  obtain ⟨hW', hc', he⟩ := Walk.toI ps hW hc
-  rw [← he] at hret ⊢
-  exact Block.sound_retI hP hc' ht hfn hl hp hW' hret
+  (Block.sound_atWith (contract := true) hc hP ht hfn hl hp hds).1
 
 end MojoProof.Sym

@@ -21,7 +21,8 @@ import Lean
   `_unsafe_rec` counts for the `partial def`), except instances, `main`, and the audit
   targets listed in `scripts/targets.txt`;
 * `equivalences`: theorems `∀ xs, f as ↔ g bs` or `∀ xs, f as = g bs` whose sides are headed by two
-  different definitions of the library (two definitions of one concept).
+  different definitions of the library (two definitions of one concept), except `@[csimp]`
+  theorems (a definition and the one compiled code runs for it).
 
 Auto-generated declarations (constructors, recursors, projections, matchers, equation lemmas,
 `injEq`, `sizeOf_spec`, helpers of derived instances, names with macro scopes or internal
@@ -274,7 +275,7 @@ unsafe def main (args : List String) : IO UInt32 := do
     | none => false
   -- equivalences
   let isDef (c : Name) := counted.contains c && (env.find? c matches some (.defnInfo _))
-  let equivs := counted.filter fun n =>
+  let equivs := counted.filter fun n => !Compiler.hasCSimpAttribute env n &&
     match env.find? n with
     | some (.thmInfo t) =>
       let body := t.type.getForallBody

@@ -9,8 +9,8 @@ corpus: tests/corpus/vmul
 tests: MojoProofTest.Kernel.vmul_real, MojoProofTest.Vmul
 upstream:
 depends: launch, binary-op-rounding, deliver
-level: L0
-evidence: L2: MojoProof.Kernels.vmul.correct; L3: MojoProofTest.Kernel.vmul_real; L4: MojoProofTest.Kernel.vmul_real
+level: L4
+evidence: L1: tests/gpu/vmul/record.txt; L2: MojoProof.Kernels.vmul.correct; L3: MojoProofTest.Kernel.vmul_real; L4: MojoProofTest.Kernel.vmul_real
 ---
 
 # vector_multiply
@@ -26,4 +26,8 @@ holding `MojoProof.Kernels.vmul.bytes`; `MojoProofTest.Kernel.vmul_real` gives T
 
 **Out of scope.** Other element types, launch shapes, and NaN payload bits.
 
-**Open.** L1: no tracked record of a GPU run.
+**The GPU run (L1).** tests/gpu/vmul/record.txt: on one A100 GPU, six launches of the corpus
+file on recorded finite inputs; every word of the output buffer is the same on the GPU and in
+the evaluator. This is a conformance test, not a proof: it covers those launches and inputs.
+
+**Open.** No level is missing. The cases under "Out of scope" are not covered.

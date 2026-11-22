@@ -34,7 +34,8 @@ Proved here, for every layout, type, codec, shape, offset map and tensor:
   tiles are apart and in the block (`Block.holds_puts`, from `Block.read_puts`: after such
   writes a tile holds its last bytes, or the block's own if it was not written);
 * stride arithmetic, proved once (`stride_lt`): offsets at stride `w` are `n ≤ w` apart
-  (`apart_stride`), and stay apart under an injective reindexing (`Apart.comp`); so row-major
+  (`apart_stride`; at base 0 and `n = w`, the cells `w i` of `w` bytes, `apart_mul`), and stay
+  apart under an injective reindexing (`Apart.comp`); so row-major
   offsets are `l.stored t` apart (`apart_rowMajor`) and lie in `Shape.size s` elements
   (`rowMajor_inb`);
 * frame (`Block.holds_put_apart`, `Mem.holds_set`): writing bytes outside every element, or
@@ -312,6 +313,11 @@ theorem apart_stride (base : Nat) {n w : Nat} (h : n ≤ w) :
   rcases Nat.lt_or_gt_of_ne hij with hl | hl
   · have := stride_lt w hl; omega
   · have := stride_lt w hl; omega
+
+/-- Cells `w i` of `w` bytes are apart (`Apart`), for every width `w` (`apart_stride`). -/
+theorem apart_mul (w : Nat) : Apart (fun i : Nat => w * i) w :=
+  fun i j hij => by
+    simpa only [Nat.zero_add, Nat.mul_comm] using apart_stride 0 (Nat.le_refl w) i j hij
 
 /-- Row-major offsets are `l.stored t` apart: `apart_stride` through `linearize`. -/
 theorem apart_rowMajor (l : Layout) (t : Ty) (base : Nat) :

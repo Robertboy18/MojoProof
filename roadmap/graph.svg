@@ -331,7 +331,7 @@
 <g id="node20" class="node">
 <title>kernels/naive&#45;matmul</title>
 <polygon fill="none" stroke="black" points="221.49,-340.8 128.49,-340.8 128.49,-304.8 221.49,-304.8 221.49,-340.8"/>
-<text text-anchor="middle" x="174.99" y="-320.3" font-family="Times-Roman" font-size="10.00">naive&#45;matmul L0</text>
+<text text-anchor="middle" x="174.99" y="-320.3" font-family="Times-Roman" font-size="10.00">naive&#45;matmul L4</text>
 </g>
 <!-- kernels/naive&#45;matmul&#45;&gt;floats/binary&#45;op&#45;rounding -->
 <g id="edge29" class="edge">
@@ -469,7 +469,7 @@
 <g id="node26" class="node">
 <title>kernels/vadd</title>
 <polygon fill="none" stroke="black" points="499.49,-443.8 445.49,-443.8 445.49,-407.8 499.49,-407.8 499.49,-443.8"/>
-<text text-anchor="middle" x="472.49" y="-423.3" font-family="Times-Roman" font-size="10.00">vadd L0</text>
+<text text-anchor="middle" x="472.49" y="-423.3" font-family="Times-Roman" font-size="10.00">vadd L4</text>
 </g>
 <!-- kernels/vadd&#45;&gt;floats/binary&#45;op&#45;rounding -->
 <g id="edge47" class="edge">
@@ -493,7 +493,7 @@
 <g id="node27" class="node">
 <title>kernels/vmul</title>
 <polygon fill="none" stroke="black" points="201.99,-286.8 147.99,-286.8 147.99,-250.8 201.99,-250.8 201.99,-286.8"/>
-<text text-anchor="middle" x="174.99" y="-266.3" font-family="Times-Roman" font-size="10.00">vmul L0</text>
+<text text-anchor="middle" x="174.99" y="-266.3" font-family="Times-Roman" font-size="10.00">vmul L4</text>
 </g>
 <!-- kernels/vmul&#45;&gt;floats/binary&#45;op&#45;rounding -->
 <g id="edge50" class="edge">
@@ -517,7 +517,7 @@
 <g id="node28" class="node">
 <title>kernels/vsub</title>
 <polygon fill="none" stroke="black" points="201.99,-448.8 147.99,-448.8 147.99,-412.8 201.99,-412.8 201.99,-448.8"/>
-<text text-anchor="middle" x="174.99" y="-428.3" font-family="Times-Roman" font-size="10.00">vsub L0</text>
+<text text-anchor="middle" x="174.99" y="-428.3" font-family="Times-Roman" font-size="10.00">vsub L4</text>
 </g>
 <!-- kernels/vsub&#45;&gt;kernels/vadd -->
 <g id="edge53" class="edge">
@@ -685,7 +685,7 @@
 <g id="node44" class="node">
 <title>llvm&#45;ir/inst&#45;add</title>
 <polygon fill="none" stroke="black" points="505.99,-5071.8 438.99,-5071.8 438.99,-5035.8 505.99,-5035.8 505.99,-5071.8"/>
-<text text-anchor="middle" x="472.49" y="-5051.3" font-family="Times-Roman" font-size="10.00">inst&#45;add L1</text>
+<text text-anchor="middle" x="472.49" y="-5051.3" font-family="Times-Roman" font-size="10.00">inst&#45;add L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;addrspacecast -->
 <g id="node45" class="node">
@@ -727,7 +727,7 @@
 <g id="node51" class="node">
 <title>llvm&#45;ir/inst&#45;call</title>
 <polygon fill="none" stroke="black" points="504.49,-4693.8 440.49,-4693.8 440.49,-4657.8 504.49,-4657.8 504.49,-4693.8"/>
-<text text-anchor="middle" x="472.49" y="-4673.3" font-family="Times-Roman" font-size="10.00">inst&#45;call L1</text>
+<text text-anchor="middle" x="472.49" y="-4673.3" font-family="Times-Roman" font-size="10.00">inst&#45;call L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;extractelement -->
 <g id="node52" class="node">
@@ -739,13 +739,13 @@
 <g id="node53" class="node">
 <title>llvm&#45;ir/inst&#45;extractvalue</title>
 <polygon fill="none" stroke="black" points="525.49,-4585.8 419.49,-4585.8 419.49,-4549.8 525.49,-4549.8 525.49,-4585.8"/>
-<text text-anchor="middle" x="472.49" y="-4565.3" font-family="Times-Roman" font-size="10.00">inst&#45;extractvalue L1</text>
+<text text-anchor="middle" x="472.49" y="-4565.3" font-family="Times-Roman" font-size="10.00">inst&#45;extractvalue L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;fadd -->
 <g id="node54" class="node">
 <title>llvm&#45;ir/inst&#45;fadd</title>
 <polygon fill="none" stroke="black" points="507.99,-4531.8 436.99,-4531.8 436.99,-4495.8 507.99,-4495.8 507.99,-4531.8"/>
-<text text-anchor="middle" x="472.49" y="-4511.3" font-family="Times-Roman" font-size="10.00">inst&#45;fadd L1</text>
+<text text-anchor="middle" x="472.49" y="-4511.3" font-family="Times-Roman" font-size="10.00">inst&#45;fadd L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;fdiv -->
 <g id="node55" class="node">
@@ -757,7 +757,7 @@
 <g id="node56" class="node">
 <title>llvm&#45;ir/inst&#45;fmul</title>
 <polygon fill="none" stroke="black" points="507.99,-4423.8 436.99,-4423.8 436.99,-4387.8 507.99,-4387.8 507.99,-4423.8"/>
-<text text-anchor="middle" x="472.49" y="-4403.3" font-family="Times-Roman" font-size="10.00">inst&#45;fmul L1</text>
+<text text-anchor="middle" x="472.49" y="-4403.3" font-family="Times-Roman" font-size="10.00">inst&#45;fmul L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;fpext -->
 <g id="node57" class="node">
@@ -775,19 +775,19 @@
 <g id="node59" class="node">
 <title>llvm&#45;ir/inst&#45;fsub</title>
 <polygon fill="none" stroke="black" points="507.49,-4261.8 437.49,-4261.8 437.49,-4225.8 507.49,-4225.8 507.49,-4261.8"/>
-<text text-anchor="middle" x="472.49" y="-4241.3" font-family="Times-Roman" font-size="10.00">inst&#45;fsub L1</text>
+<text text-anchor="middle" x="472.49" y="-4241.3" font-family="Times-Roman" font-size="10.00">inst&#45;fsub L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;getelementptr -->
 <g id="node60" class="node">
 <title>llvm&#45;ir/inst&#45;getelementptr</title>
 <polygon fill="none" stroke="black" points="531.99,-4207.8 412.99,-4207.8 412.99,-4171.8 531.99,-4171.8 531.99,-4207.8"/>
-<text text-anchor="middle" x="472.49" y="-4187.3" font-family="Times-Roman" font-size="10.00">inst&#45;getelementptr L1</text>
+<text text-anchor="middle" x="472.49" y="-4187.3" font-family="Times-Roman" font-size="10.00">inst&#45;getelementptr L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;icmp -->
 <g id="node61" class="node">
 <title>llvm&#45;ir/inst&#45;icmp</title>
 <polygon fill="none" stroke="black" points="507.99,-4153.8 436.99,-4153.8 436.99,-4117.8 507.99,-4117.8 507.99,-4153.8"/>
-<text text-anchor="middle" x="472.49" y="-4133.3" font-family="Times-Roman" font-size="10.00">inst&#45;icmp L1</text>
+<text text-anchor="middle" x="472.49" y="-4133.3" font-family="Times-Roman" font-size="10.00">inst&#45;icmp L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;insertelement -->
 <g id="node62" class="node">
@@ -805,7 +805,7 @@
 <g id="node64" class="node">
 <title>llvm&#45;ir/inst&#45;load</title>
 <polygon fill="none" stroke="black" points="506.99,-3991.8 437.99,-3991.8 437.99,-3955.8 506.99,-3955.8 506.99,-3991.8"/>
-<text text-anchor="middle" x="472.49" y="-3971.3" font-family="Times-Roman" font-size="10.00">inst&#45;load L1</text>
+<text text-anchor="middle" x="472.49" y="-3971.3" font-family="Times-Roman" font-size="10.00">inst&#45;load L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;lshr -->
 <g id="node65" class="node">
@@ -817,7 +817,7 @@
 <g id="node66" class="node">
 <title>llvm&#45;ir/inst&#45;mul</title>
 <polygon fill="none" stroke="black" points="505.99,-3883.8 438.99,-3883.8 438.99,-3847.8 505.99,-3847.8 505.99,-3883.8"/>
-<text text-anchor="middle" x="472.49" y="-3863.3" font-family="Times-Roman" font-size="10.00">inst&#45;mul L1</text>
+<text text-anchor="middle" x="472.49" y="-3863.3" font-family="Times-Roman" font-size="10.00">inst&#45;mul L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;or -->
 <g id="node67" class="node">
@@ -829,7 +829,7 @@
 <g id="node68" class="node">
 <title>llvm&#45;ir/inst&#45;phi</title>
 <polygon fill="none" stroke="black" points="504.49,-3775.8 440.49,-3775.8 440.49,-3739.8 504.49,-3739.8 504.49,-3775.8"/>
-<text text-anchor="middle" x="472.49" y="-3755.3" font-family="Times-Roman" font-size="10.00">inst&#45;phi L1</text>
+<text text-anchor="middle" x="472.49" y="-3755.3" font-family="Times-Roman" font-size="10.00">inst&#45;phi L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;ptrtoint -->
 <g id="node69" class="node">
@@ -847,13 +847,13 @@
 <g id="node71" class="node">
 <title>llvm&#45;ir/inst&#45;select</title>
 <polygon fill="none" stroke="black" points="510.99,-3613.8 433.99,-3613.8 433.99,-3577.8 510.99,-3577.8 510.99,-3613.8"/>
-<text text-anchor="middle" x="472.49" y="-3593.3" font-family="Times-Roman" font-size="10.00">inst&#45;select L1</text>
+<text text-anchor="middle" x="472.49" y="-3593.3" font-family="Times-Roman" font-size="10.00">inst&#45;select L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;sext -->
 <g id="node72" class="node">
 <title>llvm&#45;ir/inst&#45;sext</title>
 <polygon fill="none" stroke="black" points="506.49,-3559.8 438.49,-3559.8 438.49,-3523.8 506.49,-3523.8 506.49,-3559.8"/>
-<text text-anchor="middle" x="472.49" y="-3539.3" font-family="Times-Roman" font-size="10.00">inst&#45;sext L1</text>
+<text text-anchor="middle" x="472.49" y="-3539.3" font-family="Times-Roman" font-size="10.00">inst&#45;sext L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;shl -->
 <g id="node73" class="node">
@@ -877,7 +877,7 @@
 <g id="node76" class="node">
 <title>llvm&#45;ir/inst&#45;store</title>
 <polygon fill="none" stroke="black" points="509.49,-3343.8 435.49,-3343.8 435.49,-3307.8 509.49,-3307.8 509.49,-3343.8"/>
-<text text-anchor="middle" x="472.49" y="-3323.3" font-family="Times-Roman" font-size="10.00">inst&#45;store L1</text>
+<text text-anchor="middle" x="472.49" y="-3323.3" font-family="Times-Roman" font-size="10.00">inst&#45;store L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;sub -->
 <g id="node77" class="node">
@@ -889,7 +889,7 @@
 <g id="node78" class="node">
 <title>llvm&#45;ir/inst&#45;trunc</title>
 <polygon fill="none" stroke="black" points="509.49,-3235.8 435.49,-3235.8 435.49,-3199.8 509.49,-3199.8 509.49,-3235.8"/>
-<text text-anchor="middle" x="472.49" y="-3215.3" font-family="Times-Roman" font-size="10.00">inst&#45;trunc L1</text>
+<text text-anchor="middle" x="472.49" y="-3215.3" font-family="Times-Roman" font-size="10.00">inst&#45;trunc L2</text>
 </g>
 <!-- llvm&#45;ir/inst&#45;udiv -->
 <g id="node79" class="node">
@@ -913,7 +913,7 @@
 <g id="node82" class="node">
 <title>llvm&#45;ir/inst&#45;zext</title>
 <polygon fill="none" stroke="black" points="506.49,-3019.8 438.49,-3019.8 438.49,-2983.8 506.49,-2983.8 506.49,-3019.8"/>
-<text text-anchor="middle" x="472.49" y="-2999.3" font-family="Times-Roman" font-size="10.00">inst&#45;zext L1</text>
+<text text-anchor="middle" x="472.49" y="-2999.3" font-family="Times-Roman" font-size="10.00">inst&#45;zext L2</text>
 </g>
 <!-- llvm&#45;ir/intrinsic&#45;barrier -->
 <g id="node83" class="node">
@@ -967,7 +967,7 @@
 <g id="node91" class="node">
 <title>llvm&#45;ir/intrinsic&#45;ldmatrix</title>
 <polygon fill="none" stroke="black" points="525.99,-2533.8 418.99,-2533.8 418.99,-2497.8 525.99,-2497.8 525.99,-2533.8"/>
-<text text-anchor="middle" x="472.49" y="-2513.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;ldmatrix L1</text>
+<text text-anchor="middle" x="472.49" y="-2513.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;ldmatrix L0</text>
 </g>
 <!-- llvm&#45;ir/intrinsic&#45;lifetime -->
 <g id="node92" class="node">
@@ -979,13 +979,13 @@
 <g id="node93" class="node">
 <title>llvm&#45;ir/intrinsic&#45;minmax</title>
 <polygon fill="none" stroke="black" points="525.49,-2749.8 419.49,-2749.8 419.49,-2713.8 525.49,-2713.8 525.49,-2749.8"/>
-<text text-anchor="middle" x="472.49" y="-2729.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;minmax L1</text>
+<text text-anchor="middle" x="472.49" y="-2729.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;minmax L2</text>
 </g>
 <!-- llvm&#45;ir/intrinsic&#45;mma -->
 <g id="node94" class="node">
 <title>llvm&#45;ir/intrinsic&#45;mma</title>
 <polygon fill="none" stroke="black" points="518.49,-2371.8 426.49,-2371.8 426.49,-2335.8 518.49,-2335.8 518.49,-2371.8"/>
-<text text-anchor="middle" x="472.49" y="-2351.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;mma L1</text>
+<text text-anchor="middle" x="472.49" y="-2351.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;mma L0</text>
 </g>
 <!-- llvm&#45;ir/intrinsic&#45;reduceand -->
 <g id="node95" class="node">
@@ -1009,7 +1009,7 @@
 <g id="node98" class="node">
 <title>llvm&#45;ir/intrinsic&#45;sreg</title>
 <polygon fill="none" stroke="black" points="516.99,-2155.8 427.99,-2155.8 427.99,-2119.8 516.99,-2119.8 516.99,-2155.8"/>
-<text text-anchor="middle" x="472.49" y="-2135.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;sreg L1</text>
+<text text-anchor="middle" x="472.49" y="-2135.3" font-family="Times-Roman" font-size="10.00">intrinsic&#45;sreg L2</text>
 </g>
 <!-- llvm&#45;ir/intrinsic&#45;stepvector -->
 <g id="node99" class="node">
@@ -1057,13 +1057,13 @@
 <g id="node106" class="node">
 <title>llvm&#45;ir/term&#45;br</title>
 <polygon fill="none" stroke="black" points="505.99,-1723.8 438.99,-1723.8 438.99,-1687.8 505.99,-1687.8 505.99,-1723.8"/>
-<text text-anchor="middle" x="472.49" y="-1703.3" font-family="Times-Roman" font-size="10.00">term&#45;br L1</text>
+<text text-anchor="middle" x="472.49" y="-1703.3" font-family="Times-Roman" font-size="10.00">term&#45;br L2</text>
 </g>
 <!-- llvm&#45;ir/term&#45;ret -->
 <g id="node107" class="node">
 <title>llvm&#45;ir/term&#45;ret</title>
 <polygon fill="none" stroke="black" points="507.49,-1669.8 437.49,-1669.8 437.49,-1633.8 507.49,-1633.8 507.49,-1669.8"/>
-<text text-anchor="middle" x="472.49" y="-1649.3" font-family="Times-Roman" font-size="10.00">term&#45;ret L1</text>
+<text text-anchor="middle" x="472.49" y="-1649.3" font-family="Times-Roman" font-size="10.00">term&#45;ret L2</text>
 </g>
 <!-- std&#45;math/max -->
 <g id="node108" class="node">

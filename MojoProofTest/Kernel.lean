@@ -32,8 +32,7 @@ output at blocks 1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `c
 * `elem22`, `elem1`: instances of `Elem.zero`, `Elem.succ` and `Elem.safe`: the start's memory
   meets `Elem` with no thread done; a store of 4 bytes by thread 0 to its cell meets it after one.
 * `start_ctx_vadd`: for every launch, arguments, memory, address choice and oracle, the start's
-  context of each thread meets `Kernels.vadd.ret`'s premises on the context (`Grid.start_ctx`,
-  `Grid.start_env`).
+  context of each thread meets `Kernels.vadd.ret`'s premises on the context (`Grid.start_ctx`).
 * `phi_runs`: `Runs.of_ret` on a path with a join (an edge into a block with a `phi`), the
   naive matmul kernel's `%46 → %51 → %67 → %69` from `%46`'s position 2 for a thread whose loop
   runs no trip (MojoProofTest/SymPhi.lean): the kernel decides it is a `Ret` (`Ret.check`), so
@@ -54,6 +53,10 @@ output at blocks 1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `c
 * `g2_vadd` (the satisfiability witness): the run on `L23`, count 5 and `mem5` ends with
   every thread returned; by kernel evaluation its blocks agree with `correct23`'s `Elem.Out`
   (`Elem.outBelow`) and its output cells hold the sums `sums5`; `correct23` gives `Elem.Out`.
+* `mem5_none`, `bytes5_end`, `revB`, `out_rev`: `Elem.Out.of_outBelow` with every premise closed,
+  on blocks that put the six threads' bytes in the reverse order; `revB24`, `out_rev_twin`: its
+  twin with a byte changed beyond the checked offsets, which passes the check and is not
+  `Elem.Out`'s.
 * Negative twins, each refuting `Kernel.Sound` for every observation, relation and admission
   that admits `ch₀` and `ω₀`, by the trace-replay checker
   (`Kernel.replay_unsafe`, MojoProof/Sem/Replay.lean): (a) `pre4_5`, `run_len`, `twin_len`:
@@ -63,8 +66,10 @@ output at blocks 1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `c
   `mem5w` (that block writable) the run ends with no race and `kept` false, with the broken
   promise `broken?` names; (c) `run_tid`, `twin_tid`: `fnTid` (index `tid.x` alone, an edit of
   one instruction of `Kernels.vadd.prog`'s kernel, in `progTid`) on 2 blocks has a race, with the
-  two accesses `race?` names; (d) `twin_2d`: the two-dimensional block `L32` is valid but
-  rejected by `Kernels.vadd.correct`'s hypothesis, and the checker reports a race there.
+  two accesses `race?` names; (d) `rows2`, `twin_2d`: four valid launches, each with two rows in
+  one of the grid's and the block's `y` and `z` (the block `L32` is one), so each rejected by
+  one of `Kernels.vadd.correct`'s four hypotheses on the launch, and the checker reports a race
+  on each.
 * `canaries_vadd`, `canaries_vmul`, `canaries_vsub`: for every admission that admits `ch₀` and
   `ω₀`, the kernel is not sound for `Elem.Out` with any of `Elem.canaries`'s five wrong outputs
   of `correct23`'s bytes, of `correctV23`'s (`Kernels.vmul` on `memV`, inputs `x5`, `x5`) and of
@@ -215,8 +220,8 @@ theorem elem1 : Elem mem0 3 4 cell bs1 1 mem1 ∧ racy mem1.trace = false :=
       decide))
   ⟨h, (Elem.safe (fun i j hij => by simp only [cell]; omega) h).1⟩
 
-/-- **`Kernels.vadd.ret`'s premises on the context, from the start** (`Grid.start_ctx`,
-`Grid.start_env`): for every launch `L`, arguments, memory, address choice and oracle `ω`, the
+/-- **`Kernels.vadd.ret`'s premises on the context, from the start** (`Grid.start_ctx`):
+for every launch `L`, arguments, memory, address choice and oracle `ω`, the
 context of every thread `k` of `vector_addition`'s start is of `Kernels.vadd.prog`, with the
 special registers `L.env k`, identity `⟨k, k / volume L.block⟩` and oracle row `ω k`. -/
 theorem start_ctx_vadd {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
@@ -224,7 +229,8 @@ theorem start_ctx_vadd {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Na
     (h : Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L args m ch ω = .ok (g, c)) (k : Nat) :
     (c k).prog = Kernels.vadd.prog ∧ (c k).env = L.env k ∧
       (c k).who = ⟨k, k / volume L.block⟩ ∧ (c k).oracle = ω k :=
-  ⟨(Grid.start_ctx h k).1, (Grid.start_env h k).1, (Grid.start_ctx h k).2, (Grid.start_env h k).2⟩
+  ⟨(Grid.start_ctx h k).1, (Grid.start_ctx h k).2.2.1, (Grid.start_ctx h k).2.1,
+    (Grid.start_ctx h k).2.2.2⟩
 
 /-- The launch of grid `(2, 1, 1)` and block `(3, 1, 1)`: 2 blocks of 3 threads. -/
 def L23 : Launch := ⟨fun | .x => 2 | _ => 1, fun | .x => 3 | _ => 1, 0⟩
@@ -396,6 +402,77 @@ theorem g2_vadd : ∃ g c g', Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
   exact ⟨g, c, g', hs, hr, hp.1.1, hp.1.2, hp.2, hO⟩
 
+/-- `mem5` has no block from 4 on (`Map2.mem`'s three allocations are at 1, 2 and 3). -/
+theorem mem5_none : ∀ b, 4 ≤ b → mem5.blocks b = none := by
+  intro b hb
+  simp only [mem5, Map2.mem, Mem.alloc, Mem.set]
+  split_ifs <;> first | rfl | omega
+
+/-- The bytes of the six threads of `L23` at count 5 end by offset 24: thread `i < 5` puts the 4
+bytes of a float at cell `4 i`, thread 5 nothing (by kernel evaluation). -/
+theorem bytes5_end : ∀ i < 6, ∀ l ∈ Kernels.vadd.bytes ω₀ x5 y5 5 i, 4 * i + l.length ≤ 24 := by
+  have e : (List.range 6).all (fun i => ((Kernels.vadd.bytes ω₀ x5 y5 5 i).map List.length).all
+      fun n => decide (4 * i + n ≤ 24)) = true := by decide +kernel
+  intro i hi l hl
+  have := List.all_eq_true.1 e i (List.mem_range.2 hi)
+  simpa [Option.mem_def.1 hl] using this
+
+/-- `mem5`'s blocks with the bytes `Kernels.vadd.bytes ω₀ x5 y5 5` of the six threads of `L23`
+put at their cells `4 i` in the reverse order (thread 5 first: `Elem.put` at the cells
+`4 (5 - i)` with the bytes of thread `5 - i`), every other block unchanged. -/
+def revB (b : Nat) : Option Sem.Block :=
+  if b = 3 then (mem5.blocks 3).map
+    (Elem.put (fun i => 4 * (5 - i)) (fun i => Kernels.vadd.bytes ω₀ x5 y5 5 (5 - i)) 6)
+  else mem5.blocks b
+
+/-- **`Elem.Out` from its bounded check, on `vector_addition`'s memory**
+(`Elem.Out.of_outBelow`, every premise closed): `revB`, which puts the six threads' bytes in the
+reverse order, is `Elem.Out mem5 3 (4 ·) (Kernels.vadd.bytes ω₀ x5 y5 5) 6`, which puts them in
+the threads' order. The kernel evaluates that `revB` passes `Elem.outBelow` at 4 blocks and 24
+offsets; `mem5` has no block from 4 on (`mem5_none`), the bytes end by offset 24 (`bytes5_end`),
+and `revB`'s block 3 keeps `mem5`'s bytes from offset 24 on (`Elem.put_above`). It covers this
+one memory, oracle and order. -/
+theorem out_rev : Elem.Out mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω₀ x5 y5 5) 6 revB := by
+  refine Elem.Out.of_outBelow (nb := 4) (K := 24) (by decide +kernel) mem5_none bytes5_end ?_
+  intro b x y hx hy i hi
+  unfold revB at hy
+  split at hy
+  next hb =>
+    subst hb
+    rw [hx] at hy
+    obtain rfl := Option.some.inj hy
+    refine Elem.put_above (cell := fun i => 4 * (5 - i))
+      (bs := fun i => Kernels.vadd.bytes ω₀ x5 y5 5 (5 - i)) (K := 24) x ?_ i hi
+    intro j hj l hl
+    exact bytes5_end (5 - j) (by omega) l hl
+  next =>
+    rw [hx] at hy
+    cases hy
+    rfl
+
+/-- `revB` with a poison byte put at offset 24 of block 3, beyond the offsets `Elem.outBelow`
+checks at 24. -/
+def revB24 (b : Nat) : Option Sem.Block :=
+  if b = 3 then (revB 3).map fun y => y.put 24 [.poison] else revB b
+
+/-- **The twin of `out_rev` without the bytes beyond the bound**: `revB24` passes
+`Elem.outBelow` at 4 blocks and 24 offsets, as `revB` does, but it is not `Elem.Out`'s, whose
+block 3 has `mem5`'s byte at offset 24 (`.undef`, not `.poison`), so the premise of
+`Elem.Out.of_outBelow` that the blocks agree from the bound of offsets on is needed. -/
+theorem out_rev_twin :
+    Elem.outBelow mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω₀ x5 y5 5) 6 4 24 revB24 = true ∧
+      ¬ Elem.Out mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω₀ x5 y5 5) 6 revB24 := by
+  refine ⟨by decide +kernel, fun h => ?_⟩
+  have hne : (revB24 3).map (·.bytes 24) ≠ (mem5.blocks 3).map (·.bytes 24) := by
+    decide +kernel
+  apply hne
+  have h3 : (mem5.blocks 3).isSome = true := by decide +kernel
+  cases hx : mem5.blocks 3 with
+  | none => rw [hx] at h3; cases h3
+  | some x =>
+    rw [h.1 x hx]
+    exact congrArg some (Elem.put_above x bytes5_end 24 (Nat.le_refl 24))
+
 /-- `mem5` with an output of 4 floats instead of 5: `Map2.mem` for `x5`, `y5` and an
 output block of 16 bytes. -/
 def mem4 : Mem :=
@@ -549,22 +626,32 @@ theorem twin_tid {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} (hadm 
 threads. -/
 def L32 : Launch := ⟨fun _ => 1, fun | .x => 3 | .y => 2 | _ => 1, 0⟩
 
-/-- **Negative twin (d), a two-dimensional launch**: `L32` is valid and its grid is
-one-dimensional, but `Kernels.vadd.correct`'s hypothesis on the block (`block y = 1`) rejects it;
-and the kernel is not sound there with count 5 and `mem5`, for any observation and relation and
-every admission that admits `ch₀` and `ω₀`: the index ignores `tid.y`, so threads `(x, 0)` and
-`(x, 1)` write one cell, and the trace-replay checker (fuel 64, one phase) reports a race
-(`Kernel.replay_unsafe`). -/
-theorem twin_2d : L32.Valid ∧ (L32.grid .y = 1 ∧ L32.grid .z = 1) ∧
-    ¬ (L32.block .y = 1 ∧ L32.block .z = 1) ∧
+/-- The four launches of 6 threads with two rows in one dimension other than `x` and 3 threads
+in `x`: the grid `(1, 2, 1)` and the grid `(1, 1, 2)` of blocks `(3, 1, 1)`, the block `(3, 2, 1)`
+(`L32`) and the block `(3, 1, 2)` in a grid `(1, 1, 1)`. -/
+def rows2 : List Launch :=
+  [⟨fun | .y => 2 | _ => 1, fun | .x => 3 | _ => 1, 0⟩,
+    ⟨fun | .z => 2 | _ => 1, fun | .x => 3 | _ => 1, 0⟩, L32,
+    ⟨fun _ => 1, fun | .x => 3 | .z => 2 | _ => 1, 0⟩]
+
+/-- **Negative twin (d), launches with two rows**: each launch of `rows2` is valid, and of the
+sides of its grid and block in `y` and `z`, all of which `Kernels.vadd.correct` requires to be 1,
+exactly one is 2 (their product is 2); and the kernel is not sound there with count 5 and `mem5`,
+for any observation and relation and every admission that admits `ch₀` and `ω₀`: the index
+`ctaid.x * ntid.x + tid.x` ignores `y` and `z`, so two threads that differ only in the row write
+one cell, and the trace-replay checker (fuel 64, one phase) reports a race
+(`Kernel.replay_unsafe`). So each of the four premises on the launch is needed, at these
+launches. -/
+theorem twin_2d : ∀ L ∈ rows2, L.Valid ∧ L.grid .y * L.grid .z * L.block .y * L.block .z = 2 ∧
     ∀ {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop}, adm ch₀ ω₀ →
       ∀ {β : Type} (obs : Mem → Option β) (R : β → Prop),
-        ¬ Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 L32
-          (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 adm obs R :=
-  ⟨⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
-    fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩,
-    ⟨rfl, rfl⟩, by decide,
-    fun hadm _ _ _ => Kernel.replay_unsafe (fuel := 64) (phases := 1) (by decide +kernel) hadm⟩
+        ¬ Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 L
+          (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 adm obs R := by
+  simp only [rows2, List.mem_cons, List.not_mem_nil, or_false]
+  rintro L (rfl | rfl | rfl | rfl) <;>
+    exact ⟨⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
+      fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩, by decide,
+      fun hadm _ _ _ => Kernel.replay_unsafe (fuel := 64) (phases := 1) (by decide +kernel) hadm⟩
 
 /-- **The canaries of `vector_addition`'s theorem** (probes of the observation), certified
 by the trace-replay checker: on `L23` with count 5 and `mem5`, for every admission that admits

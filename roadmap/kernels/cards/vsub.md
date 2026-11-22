@@ -9,8 +9,8 @@ corpus: tests/corpus/vsub
 tests: MojoProofTest.Kernel.vsub_real, MojoProofTest.Kernel.vsub_finEq, MojoProofTest.Kernel.vsub_stable
 upstream:
 depends: vadd
-level: L0
-evidence: L2: MojoProof.Kernels.vsub.correct; L3: MojoProofTest.Kernel.vsub_real; L4: MojoProofTest.Kernel.vsub_real
+level: L4
+evidence: L1: tests/gpu/vsub/record.txt; L2: MojoProof.Kernels.vsub.correct; L3: MojoProofTest.Kernel.vsub_real; L4: MojoProofTest.Kernel.vsub_real
 ---
 
 # vector_subtraction
@@ -31,4 +31,8 @@ difference rounded to binary32. This is the L3 and the L4 evidence, as for vadd.
 **Out of scope.** Other element types and widths, other launch shapes than one dimension, and
 the bits of a NaN output.
 
-**Open.** L1: no tracked record of a GPU run of this kernel.
+**The GPU run (L1).** tests/gpu/vsub/record.txt: on one A100 GPU, six launches of the corpus
+file on recorded finite inputs; every word of the output buffer is the same on the GPU and in
+the evaluator. This is a conformance test, not a proof: it covers those launches and inputs.
+
+**Open.** No level is missing. The cases under "Out of scope" are not covered.

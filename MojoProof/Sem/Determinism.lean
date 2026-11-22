@@ -83,7 +83,7 @@ theorem Grid.confluent {prog : Program} {fn : Func} {L : Launch} {args : List Va
       obtain ⟨tk, -, -, htk, -⟩ := Grid.advance_set hk
       have hcl := Grid.start_reach_closed h hm hg
       have hw : (c n).who.thread ≠ (c k).who.thread := by
-        rw [(Grid.start_ctx h n).2, (Grid.start_ctx h k).2]
+        rw [(Grid.start_ctx h n).2.1, (Grid.start_ctx h k).2.1]
         exact hnk
       exact .inr (.inl ⟨.inr (.inr (.inr (Grid.advance_raceEnabled hcl hw.symm htk hn ha' ha
         ((Access.conflict_comm _ _).trans hc)))),
