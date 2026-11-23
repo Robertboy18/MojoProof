@@ -13,3 +13,7 @@ Each issue's GitHub page shows its current status.
 | [#7737](https://github.com/modular/modular/issues/7737) | 2026-11-22 | CPU matmul | With K = 0, C is left unwritten instead of becoming the zero matrix. |
 | [#7738](https://github.com/modular/modular/issues/7738) | 2026-11-22 | Layout algebra | `composition` gives a wrong layout when B's stride doesn't divide A's first mode. |
 | [#7739](https://github.com/modular/modular/issues/7739) | 2026-11-22 | `std.math` | `gcd(Int.MIN, n)` never returns. |
+| [#7740](https://github.com/modular/modular/issues/7740) | 2026-11-23 | CPU flash attention | A row comes out all NaN when an additive `-inf` mask covers its first 128 keys. |
+| [#7741](https://github.com/modular/modular/issues/7741) | 2026-11-23 | GPU log-softmax | `softmax_inline[logsoftmax=True]` returns `-inf` on GPU where the CPU path is finite. |
+| [#7742](https://github.com/modular/modular/issues/7742) | 2026-11-23 | `std.math` | `acos` returns 0 or pi instead of NaN outside [-1, 1] for Float32, Float16 and BFloat16. |
+| [#7743](https://github.com/modular/modular/issues/7743) | 2026-11-23 | `std.math` | `tanh` on Float16 and BFloat16 is far off on CPU (`tanh(Float16(9))` is 0.866). |
