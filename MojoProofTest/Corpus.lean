@@ -7,13 +7,14 @@ import MojoProof.Kernels
 recorded digest, every file `tests/corpus/REFUSALS.tsv` does not list imports with `mojo_import`'s
 checks, and every listed one is refused with exactly its reason. mojo_corpus on the directory
 `reduction` adds its one file under the name its path gives (and its function unfolds with `rw` in
-this module), and the names MojoProof/Kernels.lean gives with `as` are kept (`Kernels.vadd.*` and
-`Kernels.matmul.*`; MojoProofTest/Import.lean tests their terms). The failures: `corpusPlan` on an
-argument that names no row, `as` on a directory of two rows or on a refused row (named by its path
-or by its directory), a row named twice, and a refusal with no row; `corpusRow` on a changed file, a
-refusal with another reason, a listed file that imports and an unlisted one that is refused; and the
-commands on a missing row and on the changed file `tests/stale/k.ll` (its directory has no
-`REFUSALS.tsv`).
+this module), the programs the commands add are recorded with their files (`progFiles`, which
+`#mojo_corpus` leaves unchanged), and the names MojoProof/Kernels.lean gives with `as` are kept
+(`Kernels.vadd.*` and `Kernels.matmul.*`; MojoProofTest/Import.lean tests their terms). The
+failures: `corpusPlan` on an argument that names no row, `as` on a directory of two rows or on a
+refused row (named by its path or by its directory), a row named twice, and a refusal with no row;
+`corpusRow` on a changed file, a refusal with another reason, a listed file that imports and an
+unlisted one that is refused; and the commands on a missing row and on the changed file
+`tests/stale/k.ll` (its directory has no `REFUSALS.tsv`).
 -/
 
 namespace MojoProofTest.Corpus
@@ -22,7 +23,7 @@ open Lean (Name)
 open MojoProof MojoProof.LLVM
 
 -- Every row of the corpus.
-/-- info: mojo_corpus: 114 rows, 85 imported, 29 refused as REFUSALS.tsv lists -/
+/-- info: mojo_corpus: 114 rows, 107 imported, 7 refused as REFUSALS.tsv lists -/
 #guard_msgs in
 #mojo_corpus
 
@@ -38,6 +39,26 @@ example :
 example : reduction.reduction_reduction_sum_kernel_SIMD_DTy6A6AcB6A6AcB_950d42eb4d93545d.fn_0 =
     reduction.reduction_reduction_sum_kernel_SIMD_DTy6A6AcB6A6AcB_950d42eb4d93545d.fn_0 := by
   rw [reduction.reduction_reduction_sum_kernel_SIMD_DTy6A6AcB6A6AcB_950d42eb4d93545d.fn_0]
+
+-- The programs the commands added are recorded with their files (`progFiles`), this module's and
+-- an imported module's; a module is not, and `#mojo_corpus` recorded none of the multistage
+-- programs it imported (it discards its definitions).
+/--
+info: tests/corpus/reduction/reduction_reduction_sum_kernel_SIMD_DTy6A6AcB6A6AcB_950d42eb4d93545d.nvptx.ll
+tests/corpus/vadd/vadd_vector_addition_vector_addition6A6A_793e5fe36a195e73.nvptx.ll
+none
+0
+-/
+#guard_msgs in
+#eval show Lean.Elab.Command.CommandElabM Unit from do
+  let files := progFiles.getState (← Lean.getEnv)
+  let get (n : Name) := (files.find? n).getD "none"
+  let multistage := files.toList.filter fun (_, f) => (f.splitOn "multistage").length > 1
+  let red := ``reduction.reduction_reduction_sum_kernel_SIMD_DTy6A6AcB6A6AcB_950d42eb4d93545d.prog
+  Lean.logInfo m!"{get red}
+{get ``Kernels.vadd.prog}
+{get ``Kernels.vadd.module}
+{multistage.length}"
 
 #guard corpusName "mgemm/k.nvptx.ll" == `mgemm.k
 

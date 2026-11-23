@@ -1,5 +1,4 @@
-import MojoProofTest.NaiveSpec
-import MojoProofTest.OblMatmul
+import MojoProofTest.NaiveSound
 import MojoProof.Sym.Ops
 
 /-!
@@ -12,14 +11,12 @@ for every oracle `ω`, launch `L`, sizes `m`, `n`, `K`, blocks `bC`, `bA`, `bB` 
 `k` threads whose accesses to `bC` are all by threads in bounds (`Elem.Only`), to a memory of
 `Elem` after `k + 1` threads with the same property.
 
-The proof: the thread's row is at least `m` (`OblMatmul.naive_skip_row`) or its row is below `m`
-and its column at least `n` (`OblMatmul.naive_skip_col`), so the premises of `skipN`'s three
-blocks hold (`WalkWith true`); `NaiveThread.thread_skip` takes from them the entry block's
-premises and its branch to `%44`, and the memory the entry block's effects (its three loads, of
-the buffer structs at `%0`, `%1`, `%2`, blocks other than `bC`) give meets `Elem` after `k + 1`
-threads (the thread puts no bytes, `Elem.skip`) and `Elem.Only` (mojo_ret, goals 1 and 3). This
-is one program, `naive`, for every launch, size, block, tensor, memory, frame and thread out of
-bounds.
+The proof is `naive.out`, the run of a thread out of bounds that the `mat` clause of
+`mojo_kernel` generates (MojoProofTest/NaiveSound.lean), at `At`'s facts (`NaiveSpec.At.entry`),
+the sizes below `2 ^ 31` (`NaiveSpec.dims_lt`) and no bytes of a thread out of bounds
+(`NaiveSpec.bytes_out`). This is one program, `naive`, for every launch, size, block, tensor,
+memory, frame and thread out of bounds. An `example` after it tests mojo_ret's goals 1 and 3
+(`Elem` and `Elem.Only` after the entry block's effects) on the same threads.
 
 A concrete instance: `runsZ`, at the start `startZ` of `naive` on `launch2 1 1 2 2` with
 `m = n = 0`, `K = 2` and the memory `memZ` (three empty global buffers, `A` and `B` read-only),
@@ -40,25 +37,29 @@ open FloatLib.Floats.Formats.BinaryInterchange
 entry facts `At` (struct pointers `p0`, `p1`, `p2`, context `c`, memory `m'`, frame `f`), a
 memory of `Elem m₀ bC 4 (cell L) (bytes ω L K A B)` after `k` threads and every access to `bC`
 by a thread in bounds runs `skipN` to `ret` with a memory of `Elem` after `k + 1` threads whose
-accesses to `bC` are by threads in bounds. -/
+accesses to `bC` are by threads in bounds. It is `naive.out` at `At`'s facts. -/
 theorem runOut (ω : Nat → Nat → Nat) (L : Launch) {m n : Nat} (K bC bA bB : Nat)
     (A : TorchLean.Tensor (Model FloatTy.float.fmt) [m, 768])
     (B : TorchLean.Tensor (Model FloatTy.float.fmt) [n, 768]) :
-    RunOut ω L K bC bA bB A B := by
-  intro k p0 p1 p2 c m₀ m' f hS hA hE hO
-  obtain ⟨hL, -, ⟨hn, hK, hm, -, -⟩, hk, ⟨hcp, hce, -⟩, hf, ⟨hr0, hr1, hr2, h0, h1, h2⟩,
-    ⟨hv0, hv1, hv2⟩, ⟨hr3, hr4, hr5⟩, -, -, -, ⟨hbC, -⟩⟩ := hA
-  have hW : WalkWith true (Valuation.entry c 0 m' f) skipN := by
-    by_cases hx : L.index k .x < m
-    · exact OblMatmul.naive_skip_col L hL k c hcp hce 0 m' f hf K m n p0 p1 p2 bA bB bC hK hm hn
-        hr0 hr1 hr2 hr3 hr4 hr5 hv0 hv1 hv2 hbC hx
-        (Nat.le_of_not_lt fun hy => hS ⟨hk, hx, hy⟩)
-    · exact OblMatmul.naive_skip_row L hL k c hcp hce 0 m' f hf K m n p0 p1 p2 bA bB bC hK hm hn
-        hr0 hr1 hr2 hr3 hr4 hr5 hv0 hv1 hv2 hbC (Nat.le_of_not_lt hx)
-  refine ⟨skipN, List.mem_singleton_self _, thread_skip ⟨hW.1, hW.2.1⟩ fun me hme => ⟨?_, ?_⟩⟩
-  · refine Elem.skip ?_ (by rw [bytes, dite_eq_right hS])
-    mojo_ret
-  · mojo_ret
+    RunOut ω L K bC bA bB A B := fun _ _ _ _ _ _ _ _ hS hA =>
+  NaiveSound.naive.out hA.valid (dims_lt hA.dims) (bytes_out ω L K A B) hA.thread hS hA.entry
+
+/-- **mojo_ret's goals 1 and 3 on naive's entry block** (a test of the tactic,
+MojoProof/Sym/Ops.lean): for every thread `k` out of bounds with the entry facts `At`, a memory
+of `Elem` after `k` threads with `Elem.Only`, and every memory `me` that the entry block `%6`'s
+effects give (three loads of the struct arguments, none from `bC`), `me` meets `Elem` after
+`k + 1` threads (`Elem.skip`, `bytes_out`) and `Elem.Only`. `naive.out` proves these by
+`RetWith.of_first` instead. -/
+example {ω : Nat → Nat → Nat} {L : Launch} {m n K bC bA bB p0 p1 p2 k : Nat}
+    {A : TorchLean.Tensor (Model FloatTy.float.fmt) [m, 768]}
+    {B : TorchLean.Tensor (Model FloatTy.float.fmt) [n, 768]} {c : Ctx} {m₀ m' me : Mem}
+    {f : Frame} (hS : ¬ S L m n k) (hA : At L K bC bA bB p0 p1 p2 A B k c m' f)
+    (hE : Elem m₀ bC 4 (cell L) (bytes ω L K A B) k m') (hO : Elem.Only bC (S L m n) m')
+    (hme : SEff.run (Valuation.entry c 0 m' f) (vals (Valuation.entry c 0 m' f)
+      SymSelect.entry.nodes) SymSelect.entry.effs = .ok me) :
+    Elem m₀ bC 4 (cell L) (bytes ω L K A B) (k + 1) me ∧ Elem.Only bC (S L m n) me := by
+  obtain ⟨-, -, -, -, -, -, ⟨_, _, _, _, _, _⟩, -, -, -, -, -, -⟩ := hA
+  exact ⟨Elem.skip (by mojo_ret) (bytes_out ω L K A B k hS), by mojo_ret⟩
 
 /-- The caller's memory of a launch of `naive` with `m = n = 0`: block 1 (`C`, writable), block 2
 (`A`) and block 3 (`B`, both read-only), each of 0 bytes, global, live and admitting every thread,
@@ -100,10 +101,10 @@ theorem startZ :
 def frZ (k : Nat) : Frame :=
   ((Grid.thread gZ k).frames.head?).getD ⟨naive.fn_0, 0, 0, fun _ => none, fun _ => none, [], none⟩
 
-/-- `launch2 1 1 2 2` is valid: every side is 1 or 2, and a block has 4 threads. -/
+/-- `launch2 1 1 2 2` is valid (`launch2_valid`): every side is 1 or 2, and a block has 4
+threads. For this one launch. -/
 theorem validZ : (launch2 1 1 2 2).Valid :=
-  ⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
-    fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩
+  launch2_valid (by decide)
 
 /-- **`At` holds at the start `startZ`** (a concrete instance of `runOut`'s premise): for every
 pair of tensors `A`, `B` with no rows and each of the four threads `k` of `launch2 1 1 2 2`,
@@ -139,7 +140,7 @@ theorem runsZ (ω : Nat → Nat → Nat) (A B : TorchLean.Tensor (Model FloatTy.
     intro j
     induction j with
     | zero => exact Elem.zero rfl
-    | succ j ih => exact Elem.skip ih (by rw [bytes, dite_eq_right (hS j)])
+    | succ j ih => exact Elem.skip ih (bytes_out _ _ _ _ _ _ (hS j))
   obtain ⟨ps, hps, h⟩ := runOut ω (launch2 1 1 2 2) 2 1 2 3 A B k _ _ _ (cZ k) gZ.mem gZ.mem
     (frZ k) (hS k) (atZ A B k hk) (hE k) fun a ha => by
       rw [show gZ.mem.trace = [] from rfl] at ha

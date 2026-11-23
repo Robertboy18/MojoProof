@@ -32,9 +32,12 @@ ones of `MojoProof.Sem.Op` lane by lane; lane `i` gets the oracle number `ch i` 
   decimal literal's digits are read by `digits`, a structural parse of the characters `0`-`9`
   (no `_`) that the kernel reduces, so `decide +kernel` can evaluate a decimal literal.
 
-The module defines functions; it proves only that `digits` reads every string of the characters
+The module defines functions; it proves that `digits` reads every string of the characters
 `0`-`9` as core's `String.toNat?` does (`digits_toList`), so `floatLit`'s decimal case on such
-digits has the value of its `String.toNat?` reading (`floatLit_dec`).
+digits has the value of its `String.toNat?` reading (`floatLit_dec`); and, for every layout,
+lane count `n`, lane width `w` and `n * w`-bit word, that `bitcast` to `<n x iw>` gives the
+word's slices, low first (`castV_split`), and `bitcast` of them back gives the word
+(`castV_join`; at `<2 x i32>` and `i64`, `castV_halves`).
 -/
 
 namespace MojoProof.Sem
@@ -253,6 +256,87 @@ def castV (l : Layout) (m : Mem) (op : CastOp) (s : Ty) (x : Val) (t : Ty) (ch :
       | .undef => throw (.unsupported "use of undef")
       | _ => throw (.unsupported "addrspacecast of a non-pointer")) x
   | _, _, _ => throw (.unsupported "cast (fptoui, fptosi, inttoptr, or ill-typed)")
+
+/-- **`bitcast` of a word to a vector gives its slices, low first**: for every layout `l`, memory
+`m`, oracle numbers `ch`, lane count `n`, lane width `w` and `n * w`-bit word `x`, the `bitcast`
+from `i(n * w)` to `<n x iw>` gives the vector whose lane `i` is bits `i * w` to `i * w + w - 1`
+of `x` (`x.extractLsb' (i * w) w`). At `n = 2` and `w = 32`: `bitcast i64` to `<2 x i32>` gives
+the low half, then the high half. -/
+theorem castV_split (l : Layout) (m : Mem) (ch : Nat → Nat) {n w : Nat} (x : BitVec (n * w)) :
+    castV l m .bitcast (.int (n * w)) (.bits (n * w) x) (.vec n (.int w)) ch =
+      .ok (.vec ((List.range n).map fun i => .bits w (x.extractLsb' (i * w) w))) := by
+  have hb : toBitList l (.int (n * w)) (.bits (n * w) x) =
+      .ok ((List.range (n * w)).map fun i => some (x.getLsbD i)) := by
+    show toBitList.scalarBitList (n * w) (.bits (n * w) x) = _
+    simp [toBitList.scalarBitList]
+    rfl
+  show bitcast l (.int (n * w)) (.vec n (.int w)) (.bits (n * w) x) = _
+  simp only [bitcast, hb, bind, Except.bind, List.length_map, List.length_range, Layout.scalarBits,
+    ite_true, ofBitList]
+  congr 2
+  refine List.map_congr_left fun i hi => ?_
+  rw [List.mem_range] at hi
+  have hle : i * w + w ≤ n * w := by rw [← Nat.succ_mul]; exact Nat.mul_le_mul_right _ hi
+  rw [← ofBitList.scalar_slice]
+  congr 1
+  refine List.ext_getElem (by simp; omega) fun j h1 h2 => ?_
+  simp
+
+/-- **`bitcast` of a word's slices back to a word gives the word**: for every layout `l`, memory
+`m`, oracle numbers `ch`, lane count `n`, lane width `w` and `n * w`-bit word `x`, the `bitcast`
+from `<n x iw>` to `i(n * w)` of the vector of `x`'s slices (`castV_split`'s value) is `x`; so
+the round trip through the vector is the identity on every word. Every vector of `n` words of `w`
+bits is the vector of slices of one word, so this is the `bitcast`'s value on every such
+vector. -/
+theorem castV_join (l : Layout) (m : Mem) (ch : Nat → Nat) {n w : Nat} (x : BitVec (n * w)) :
+    castV l m .bitcast (.vec n (.int w))
+      (.vec ((List.range n).map fun i => .bits w (x.extractLsb' (i * w) w))) (.int (n * w)) ch =
+      .ok (.bits (n * w) x) := by
+  have hf : ∀ k, ((List.range k).map fun i => (List.range w).map fun j =>
+      some (x.getLsbD (i * w + j))).flatten =
+      (List.range (k * w)).map fun i => some (x.getLsbD i) := by
+    intro k
+    induction k with
+    | zero => simp
+    | succ k ih =>
+      rw [List.range_succ, List.map_append, List.flatten_append, ih, Nat.succ_mul, List.range_add,
+        List.map_append]
+      simp
+  have hb : toBitList l (.vec n (.int w))
+      (.vec ((List.range n).map fun i => .bits w (x.extractLsb' (i * w) w))) =
+      .ok ((List.range (n * w)).map fun i => some (x.getLsbD i)) := by
+    show (do
+      let parts ← ((List.range n).map fun i => Val.bits w (x.extractLsb' (i * w) w)).mapM
+        fun v => toBitList.scalarBitList w v
+      return parts.flatten) = _
+    rw [List.mapM_map]
+    have hp : ∀ i, toBitList.scalarBitList w (.bits w (x.extractLsb' (i * w) w)) =
+        pure ((List.range w).map fun j => some (x.getLsbD (i * w + j))) := fun i => by
+      simp only [toBitList.scalarBitList, ite_true]
+      congr 1
+      refine List.map_congr_left fun j hj => ?_
+      rw [List.mem_range] at hj
+      simp [hj]
+    simp only [Function.comp_def, hp, List.mapM_pure, pure_bind, hf]
+    rfl
+  have hs := ofBitList.scalar_slice (n * w) x 0
+  simp only [Nat.zero_add, BitVec.extractLsb'_eq_self] at hs
+  show bitcast l (.vec n (.int w)) (.int (n * w)) _ = _
+  simp only [bitcast, hb, bind, Except.bind, List.length_map, List.length_range, Layout.scalarBits,
+    ite_true]
+  exact congrArg Except.ok hs
+
+/-- **`bitcast <2 x i32>` to `i64` puts lane 0 low**: for every layout, memory, oracle numbers
+and 32-bit words `a` and `b`, the `bitcast` of the vector `[a, b]` to `i64` is `b ++ a`, the word
+with low half `a` and high half `b` (`castV_join` at `n = 2`, `w = 32`). -/
+theorem castV_halves (l : Layout) (m : Mem) (ch : Nat → Nat) (a b : BitVec 32) :
+    castV l m .bitcast (.vec 2 (.int 32)) (.vec [.bits 32 a, .bits 32 b]) (.int 64) ch =
+      .ok (.bits 64 (b ++ a)) := by
+  have e0 : (b ++ a).extractLsb' (0 * 32) 32 = a := BitVec.extractLsb'_append_eq_right
+  have e1 : (b ++ a).extractLsb' (1 * 32) 32 = b := BitVec.extractLsb'_append_eq_left
+  have := castV_join l m ch (n := 2) (w := 32) (b ++ a)
+  rwa [show List.range 2 = [0, 1] from rfl, List.map_cons, List.map_cons, List.map_nil, e0,
+    e1] at this
 
 /-- `icmp p` on operands of type `t` (integers, or pointers compared by address). -/
 def icmpV (l : Layout) (m : Mem) (p : ICmp) (t : Ty) : Val → Val → Except Fault Val :=

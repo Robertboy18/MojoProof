@@ -1,4 +1,4 @@
-import MojoProof.Sym.Obl
+import MojoProof.Sym.OblHave
 import MojoProof.Kernels.Vadd
 import MojoProofTest.SymLoop
 
@@ -19,7 +19,10 @@ it.
 `hand_walk` and the last `example` run mojo_obl on two hand-written summaries and on the empty
 path: an unsigned comparison of two registers, a register the first block does not set (read after
 it), a branch condition that is a word but not a comparison, and a walk of no blocks (the
-statement of the library's `Walk.nil'`, so an `example`, not a copy of it).
+statement of the library's `Walk.nil'`, so an `example`, not a copy of it). `hand_prods` names
+`fmul contract` operands with `obl_have` on the hand-written block `handP`: those of a product,
+of a copy, of a block without `fmul contract`, and of a register a block does not set; the
+`example` after it fails on a register whose operands no hypothesis gives.
 
 `cnt_paths` runs mojo_obl on the counting loop `cnt` of MojoProofTest/SymLoop.lean, whose edges
 go into blocks with `phi`s (`Exit.phi`): for every trip count `n < 4` on `outC` (the runs of
@@ -38,8 +41,10 @@ logged (the `getelementptr` is some value, a pointer or poison, with no bound).
 `cnt_rounds_struct` is `cnt_rounds` with the invariant a hypothesis of the context, a structure
 of propositions (`InvS`) whose fields and conjuncts mojo_obl reads (`Obl.parts`);
 `cnt_rounds_struct_open` is its twin, the field on the block's address behind `Room`, its store
-left open, as logged. `cnt_have` names two registers after a round in one `obl_have`; the last
-`example` is `obl_have`'s refusal of a term that is no register, memory or node value.
+left open, as logged. `cnt_have` names two registers after a round in one `obl_have`, and
+`cnt_prods` the `fmul contract` operands of two (one a `phi`'s); the last `example` is
+`obl_have`'s refusal of a term that is no register, `fmul contract` operands, memory or node
+value.
 -/
 
 namespace MojoProofTest.Obl
@@ -145,6 +150,54 @@ theorem hand_walk (c : Ctx) (m : Mem) (f : Frame) (x y : Nat) (b : BitVec 1)
     (h1 : f.regs 1 = some (.bits 32 (BitVec.ofNat 32 y))) (h2 : f.regs 2 = some (.bits 1 b)) :
     Walk (Valuation.entry c 0 m f) [(0, hand0.obls, hand0), (1, hand1.obls, hand1)] := by
   mojo_obl
+
+/-- A block whose node `0` is an `fmul contract` of registers `1` and `2` at type `float`, setting
+register `3` to it and register `4` to register `1`, with no effect and no obligation, and
+branching to `1`. -/
+def handP : Summary :=
+  { nodes := [.fbin .fmul { contract := true } .float 0 (.reg 1) (.reg 2)],
+    regs := [(3, .node 0), (4, .reg 1)], effs := [], obls := [], exit := .br 1, len := 1 }
+
+/-- **The `fmul contract` operands of registers by `obl_have`**, for every context, memory and
+frame whose registers `1` and `2` hold `x` and `y` and whose register `5` has the operands `p`:
+after `handP` with `fmul contract`, register `3` (the product) has the operands `(x, y)`
+(`Valuation.afterWith_prods_factors`) and register `4` (a copy of a register) none
+(`Valuation.afterWith_prods_unfactored`); after it without `fmul contract`, register `3` has
+none (`Valuation.afterWith_prods_off`); after its branch, register `5`, which it does not set,
+keeps `p` (`Valuation.intoWith_prods_br`, `Valuation.afterWith_prods_none`). -/
+theorem hand_prods (c : Ctx) (m : Mem) (f : Frame) (x y : Val) (p : Option (Val × Val))
+    (h1 : f.regs 1 = some x) (h2 : f.regs 2 = some y) (h5 : f.prods 5 = p) :
+    ((Valuation.entry c 0 m f).afterWith true handP).prods 3 = some (x, y) ∧
+      ((Valuation.entry c 0 m f).afterWith true handP).prods 4 = none ∧
+      ((Valuation.entry c 0 m f).after handP).prods 3 = none ∧
+      ((Valuation.entry c 0 m f).into 0 handP).prods 5 = p := by
+  obl_have e3 : ((Valuation.entry c 0 m f).afterWith true handP).prods 3,
+    e4 : ((Valuation.entry c 0 m f).afterWith true handP).prods 4,
+    e3' : ((Valuation.entry c 0 m f).after handP).prods 3,
+    e5 : ((Valuation.entry c 0 m f).into 0 handP).prods 5
+  exact ⟨e3, e4, e3', e5⟩
+
+/-- **A node's value from a hypothesis with premises, by `obl_have`**, for every context, memory
+and frame whose register `1` holds `x`, and every hypothesis `h` that gives node `0` of `handP`
+the value of register `1` when register `1` has one and register `5` has the operands `p`:
+register `3` after `handP` is `x`, the value `h` gives once `obl_have` proves its premises (the
+register by the frame's, the operands by `h5`; `Obl.nodeHyp`). -/
+theorem hand_node (c : Ctx) (m : Mem) (f : Frame) (x : Val) (p : Option (Val × Val))
+    (h1 : f.regs 1 = some x) (h5 : f.prods 5 = p)
+    (h : ∀ {y}, (Valuation.entry c 0 m f).regs 1 = some y →
+      (Valuation.entry c 0 m f).prods 5 = p →
+      (vals (Valuation.entry c 0 m f) handP.nodes)[0]? = some (.ok y)) :
+    ((Valuation.entry c 0 m f).afterWith true handP).regs 3 = some x := by
+  obl_have e3 : ((Valuation.entry c 0 m f).afterWith true handP).regs 3
+  exact e3
+
+/-- error: mojo_obl: register 5 has no known fmul contract operands -/
+#guard_msgs in
+/-- **The twin of `hand_prods`**: with no hypothesis on the operands of register `5` of the
+frame, `obl_have` finds none for it after `handP`, and fails. -/
+example (c : Ctx) (m : Mem) (f : Frame) : True := by
+  obl_have e5 : ((Valuation.entry c 0 m f).afterWith true handP).prods 5
+  trivial
 
 /-- The empty path walks from every valuation (the statement of `Walk.nil'`). -/
 example (V : Valuation) : Walk V [] := by
@@ -317,9 +370,23 @@ theorem cnt_have (n b i : Nat) (hn : n ≤ 2 ^ 60) (hi : i < n) (W : Valuation)
     h7 : (Valuation.round 1 cntH bodyC W).regs 7
   exact ⟨_, _, h4, h7⟩
 
+/-- **The `fmul contract` operands after a round by `obl_have`**: for every bound `n ≤ 2 ^ 60`,
+block `b`, round `i < n`, valuation `W` with `h : InvS n b i W` and operands `p` of `%n` at `W`,
+after the round `1 → 2` the counter `%i`, which the back edge's `phi` sets, has none
+(`Valuation.intoWith_prods_phi`, with the value of its operand `%inext`), and `%n` keeps `p`
+(`Valuation.intoWith_prods_phi_ne`, then `Valuation.intoWith_prods_cond` through the
+header). -/
+theorem cnt_prods (n b i : Nat) (hn : n ≤ 2 ^ 60) (hi : i < n) (W : Valuation)
+    (h : InvS n b i W) (p : Option (Val × Val)) (hp : W.prods 7 = p) :
+    (Valuation.round 1 cntH bodyC W).prods 4 = none ∧
+      (Valuation.round 1 cntH bodyC W).prods 7 = p := by
+  obl_have h4 : (Valuation.round 1 cntH bodyC W).prods 4,
+    h7 : (Valuation.round 1 cntH bodyC W).prods 7
+  exact ⟨h4, h7⟩
+
 end Loop
 
-/-- error: obl_have: not a register, memory or node value
+/-- error: obl_have: not a register, its fmul contract operands, a memory or a node value
   V.k -/
 #guard_msgs in
 example (V : Valuation) : V.k = V.k := by

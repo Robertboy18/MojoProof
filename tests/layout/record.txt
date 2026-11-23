@@ -1,0 +1,36 @@
+Layout conformance record: a test of the model, not a proof, and not a GPU run.
+what: the values of Mojo's layout functions on static layouts, as the compiler folds them into a
+  kernel's LLVM IR, against the model of MojoProof/Layout (MojoProofTest.LayoutConformance).
+seed: 1729
+mojo: 1.3.0.dev2026111705 (nightly), target sm_80
+source: modular/modular bbc13a71 (the layout library the model transcribes)
+generate: python3 tests/layout/gen.py --seed 1729 --out tests/layout
+compile: mojo build --emit llvm --target-accelerator sm_80 -o conformance.ll conformance.mojo
+  (the kernel's device IR, the one *.nvptx.ll file it writes, is tests/layout/conformance.nvptx.ll)
+extract: python3 tests/layout/extract.py tests/layout/cases.json tests/layout/conformance.nvptx.ll
+  MojoProofTest/LayoutConformance.lean --mojo 1.3.0.dev2026111705
+check: lake build MojoProofTest.LayoutConformance
+run: none; the program is compiled, never run, so this says nothing about the GPU.
+cases: 37 cases, 323 values (tests/layout/cases.json has each case's parameters and slots)
+  call: offsets of every scalar below the size, then cosize: 6 flat layouts of rank 1 to 3 and 3
+    nested layouts of shape (a, (b, c)), with column-major, permuted and random strides (0 included)
+  exact: offsets of 4 in-bounds coordinates in 2 flat layouts
+  idx2crd: 3 flat layouts with positive strides, 9 offsets, among them the offset 3 in
+    (2, 2):(3, 1), where idx2crd does not invert the coordinate map
+  rowmajor: row_major[1, 3] and row_major[2, 2, 3], every scalar
+  coalesce: 4 layouts, among them extent-1 modes and the mergeable (2, 1, 3):(1, 7, 2)
+  upcast: 3 layouts, among them a stride the factor does not divide and the stride 0
+  zdiv: zipped_divide with tiles that divide the extents, do not, and exceed them; (5):(1) by 2
+  bprod: 3 blocked products, among them block (2):(2) and tiler (2):(1), whose block has a gap
+  swizzle: 5 swizzles with positive and negative shifts, among them Swizzle(2, 2, -1) and
+    Swizzle(2, 0, 1), whose bits exceed the shift's absolute value
+  compose: 3 compositions whose inner cosize is at most the outer size, among them
+    A = (6, 2):(1, 6), B = (3):(4)
+result: agree. The model's values equal the compiler's on all 37 cases and 323 values; every
+  example of MojoProofTest/LayoutConformance.lean holds by decide (lake build, 2026-11-23).
+  Among them, the compiler computes what the counterexamples of MojoProofTest/LayoutLaws.lean
+  say of the model: composition((6, 2):(1, 6), (3):(4)) has offsets 0, 6, 12 (case 36);
+  blocked_product((2):(2), (2):(1)) has offsets 0, 2, 2, 4 (case 28); idx2crd(3) in
+  (2, 2):(3, 1) is (1, 1) (case 13); zipped_divide[2]((5):(1)) has size 4 (case 25);
+  Swizzle(2, 0, 1) maps 6 to 5 and 5 to 7, so it is not its own inverse (case 33); and
+  upcast[2]((4):(0)) has the mode (0, 0), the model's division by 0 (case 22).

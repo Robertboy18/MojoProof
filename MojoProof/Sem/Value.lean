@@ -15,7 +15,9 @@ as bytes, and loads, stores and allocation.
   A block has an address space, a size, a liveness flag, an owner, bytes, and two addresses (in
   its own address space and in the generic space) that a skeleton choice gives at allocation as
   multiples of the block's alignment (`Grid.start`, `Ctx.addr`); `ptrtoint` and pointer
-  comparisons read them.
+  comparisons read them. An allocated block's initial bytes are kept as a tree (`ByteTree`):
+  a read of one of `n` bytes walks one path of about `log₂ n` nodes, where `List.getD` walks the
+  list up to the byte. Compiled code reads the list (`ByteTree.bytesOf_csimp`).
 * A byte holds data, byte `i` of a pointer, `undef` or `poison` (LangRef, "Memory Model").
   Values are stored little-endian at their store size (LangRef, "Data Layout"); aggregates
   with their padding (undefined bytes). A load of a scalar with a poison byte is poison, with an
@@ -33,7 +35,10 @@ as bytes, and loads, stores and allocation.
   that the semantics only extends (`Mem.log`) and never reads, so that race freedom can be
   stated (MojoProof/Sem/Spec.lean). A store records the bytes it writes (`Mem.store`).
 
-This module defines data and functions; it proves nothing.
+This module defines data and functions. Its only theorems are about `ByteTree`: the tree of a
+list reads the list (`ByteTree.get_ofList`, from `ByteTree.halves_getD` and
+`ByteTree.halves_length`), so `ByteTree.bytesOf init` is `fun i => init.getD i .undef`
+(`ByteTree.bytesOf_eq`), and compiled code runs the latter (`ByteTree.bytesOf_csimp`).
 -/
 
 namespace MojoProof.Sem
@@ -315,6 +320,106 @@ def Block.put (b : Block) (o : Nat) (bs : List MemByte) : Block :=
   { b with
     bytes := fun i => if o ≤ i ∧ i < o + bs.length then bs.getD (i - o) .poison else b.bytes i }
 
+/-- The bytes of a list by position, as a binary tree (a Braun tree): the root holds position
+0, and position `j + 1` is at position `j / 2` of the left subtree if `j` is even and of the
+right one if `j` is odd. A read walks one path, of about `log₂` of the list's length nodes,
+where `List.getD` walks the list up to the position. -/
+inductive ByteTree where
+  /-- No bytes: every position reads `undef`. -/
+  | nil
+  /-- Byte `x` at position 0, and the trees of the positions `j + 1` above it with `j` even
+  (`l`) and odd (`r`). -/
+  | node (x : MemByte) (l r : ByteTree)
+
+/-- The byte at position `i` of a tree, `undef` past its bytes. -/
+def ByteTree.get : ByteTree → Nat → MemByte
+  | .nil, _ => .undef
+  | .node x l r, i => match i with
+    | 0 => x
+    | j + 1 => if j % 2 = 0 then l.get (j / 2) else r.get (j / 2)
+
+/-- The elements of `xs` at even positions and at odd positions, in order. -/
+def ByteTree.halves : List MemByte → List MemByte × List MemByte
+  | [] => ([], [])
+  | x :: xs => (x :: (halves xs).2, (halves xs).1)
+
+/-- The tree of the bytes `xs`, to depth `n` (`xs.length` is enough, `ByteTree.get_ofList`). -/
+def ByteTree.ofList : Nat → List MemByte → ByteTree
+  | 0, _ => .nil
+  | _ + 1, [] => .nil
+  | n + 1, x :: xs => .node x (ofList n (halves xs).1) (ofList n (halves xs).2)
+
+/-- The bytes of a block whose first bytes are `init` and the others undefined: position `i`
+of the tree of `init`, which is `init.getD i .undef` (`ByteTree.bytesOf_eq`). The kernel reads
+a byte along one path of the tree; compiled code reads the list (`ByteTree.bytesOf_csimp`). -/
+def ByteTree.bytesOf (init : List MemByte) : Nat → MemByte :=
+  fun i => (ofList init.length init).get i
+
+/-- `init.getD i .undef`, the bytes `ByteTree.bytesOf init` stands for, which compiled code runs
+for it; it is private, as only `ByteTree.bytesOf_csimp` names it. -/
+private def ByteTree.bytesOfList (init : List MemByte) : Nat → MemByte :=
+  fun i => init.getD i .undef
+
+/-- **Splitting a list by the parity of positions**, for every list `xs`, position `k` and
+default `d`: element `k` of the even positions is element `2 * k` of `xs`, and of the odd ones
+element `2 * k + 1`. -/
+theorem ByteTree.halves_getD : ∀ (xs : List MemByte) (k : Nat) (d : MemByte),
+    (halves xs).1.getD k d = xs.getD (2 * k) d ∧ (halves xs).2.getD k d = xs.getD (2 * k + 1) d
+  | [], _, _ => by simp [halves]
+  | x :: xs, k, d => by
+    refine ⟨?_, ?_⟩
+    · cases k with
+      | zero => rfl
+      | succ k =>
+        rw [show 2 * (k + 1) = (2 * k + 1) + 1 by omega, List.getD_cons_succ]
+        exact (halves_getD xs k d).2
+    · rw [List.getD_cons_succ]
+      exact (halves_getD xs k d).1
+
+/-- **The lengths of the two halves**, for every list `xs`: the even positions are
+`(xs.length + 1) / 2`, the odd ones `xs.length / 2`. -/
+theorem ByteTree.halves_length : ∀ xs : List MemByte,
+    (halves xs).1.length = (xs.length + 1) / 2 ∧ (halves xs).2.length = xs.length / 2
+  | [] => by simp [halves]
+  | x :: xs => by
+    obtain ⟨h1, h2⟩ := halves_length xs
+    refine ⟨?_, ?_⟩
+    · show (halves xs).2.length + 1 = (xs.length + 1 + 1) / 2
+      omega
+    · exact h1
+
+/-- **A tree reads its list**, for every depth `n` at least the list's length, list `xs` and
+position `i`: position `i` of `ByteTree.ofList n xs` is `xs.getD i .undef`. -/
+theorem ByteTree.get_ofList : ∀ {n : Nat} {xs : List MemByte}, xs.length ≤ n →
+    ∀ i, (ofList n xs).get i = xs.getD i .undef
+  | 0, xs, h, i => by
+    rw [List.eq_nil_of_length_eq_zero (by omega : xs.length = 0)]
+    rfl
+  | _ + 1, [], _, _ => rfl
+  | n + 1, x :: xs, h, i => by
+    obtain ⟨h1, h2⟩ := halves_length xs
+    have hl : xs.length ≤ n := by simp only [List.length_cons] at h; omega
+    cases i with
+    | zero => rfl
+    | succ j =>
+      simp only [ofList, get, List.getD_cons_succ]
+      split
+      · rw [get_ofList (by omega), (halves_getD xs (j / 2) .undef).1]
+        congr 1; omega
+      · rw [get_ofList (by omega), (halves_getD xs (j / 2) .undef).2]
+        congr 1; omega
+
+/-- **The bytes of a block from `init`**, for every list `init`: `ByteTree.bytesOf init` reads
+position `i` as `init.getD i .undef`, the first bytes `init` and the others undefined. -/
+@[simp] theorem ByteTree.bytesOf_eq (init : List MemByte) :
+    bytesOf init = fun i => init.getD i .undef :=
+  funext fun i => get_ofList (Nat.le_refl _) i
+
+/-- `ByteTree.bytesOf` equals the private `fun init i => init.getD i .undef`
+(`ByteTree.bytesOf_eq`), so compiled code runs the latter for it. -/
+@[csimp] theorem ByteTree.bytesOf_csimp : @ByteTree.bytesOf = @ByteTree.bytesOfList :=
+  funext fun init => bytesOf_eq init
+
 namespace Mem
 
 /-- The block a pointer points into, if it exists. -/
@@ -325,12 +430,14 @@ def set (m : Mem) (b : Nat) (blk : Block) : Mem :=
   { m with blocks := fun c => if c = b then some blk else m.blocks c }
 
 /-- Allocate a block of `size` bytes owned by `owner`, the first ones `init` and the others
-undefined, live or not, with addresses `addr * align` and `gaddr * align` (wrapped to the pointer
-widths of its space and of the generic space), at number `num`, or at the next fresh number
-(which then increases) if `num` is `none`. Returns the memory and the block number. -/
+undefined (`ByteTree.bytesOf init`, which is `fun i => init.getD i .undef` by
+`ByteTree.bytesOf_eq`), live or not, with addresses `addr * align` and `gaddr * align` (wrapped
+to the pointer widths of its space and of the generic space), at number `num`, or at the next
+fresh number (which then increases) if `num` is `none`. Returns the memory and the block
+number. -/
 def alloc (l : Layout) (m : Mem) (space size align : Nat) (live readOnly : Bool) (owner : Owner)
     (addr gaddr : Nat) (init : List MemByte := []) (num : Option Nat := none) : Mem × Nat :=
-  let blk : Block := { space, size, live, readOnly, owner, bytes := fun i => init.getD i .undef,
+  let blk : Block := { space, size, live, readOnly, owner, bytes := ByteTree.bytesOf init,
                        addr := addr * align % 2 ^ (l.ptr space).1,
                        gaddr := gaddr * align % 2 ^ (l.ptr 0).1 }
   match num with

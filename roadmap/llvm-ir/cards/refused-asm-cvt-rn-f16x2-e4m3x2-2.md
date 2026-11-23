@@ -14,7 +14,7 @@ level: L0
 
 ## Rule
 
-The importer refuses a call of inline assembly: `Parser.inst` reads no `asm` callee, and the corpus check records the files it refuses in tests/corpus/REFUSALS.tsv with the reason `unsupported inline asm "cvt.rn.f16x2.e4m3x2 $0, $1;", "=r,h"`. The quote is the first sentence of PTX ISA's section on `cvt`, the instruction the string holds.
+The importer refuses a call of inline assembly whose template and constraints are not of a form it accepts (`AsmCall.ofText?` in `Module.check`), and the corpus check records the files it refuses in tests/corpus/REFUSALS.tsv with the reason `unsupported inline asm "cvt.rn.f16x2.e4m3x2 $0, $1;", "=r,h"`. The quote is the first sentence of PTX ISA's section on `cvt`, the instruction the string holds.
 
 ## Corpus
 

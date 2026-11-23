@@ -53,8 +53,13 @@ array. On the launch `L23` (two blocks of three threads) with `%n = 3`, every th
   checked left open, with the thread's oracle.
 * `kg`, `kgP`: a loop-free kernel with `fmul contract` and `fadd contract`. `kgK`: `mojo_kernel`
   on it with the flag `contract` and no loop clause (`kgK.sound_of`,
-  `Kernel.sound_of_chainsWith (contract := true)` at `kgK.covers` and no sequence of loops). The
-  twins: without the flag the command refuses its block, and the flag with `map2` is refused.
+  `Kernel.sound_of_chainsWith (contract := true)` at `kgK.covers` and no sequence of loops).
+  Without `mojo_kernel.share` its arguments are the module's `kfK.args`, and `kgK.args` is not
+  added. The twin: without the flag the command refuses its block.
+* `contractProg` (vadd's program under another hash) and `map2_contract`: `mojo_kernel` on it
+  with the `map2` clause and the flag `contract` (`map2_contract.covers`, `coversEntryWith true`
+  on vadd's paths; `map2_contract.ret`, a `RetWith true` by `RetWith.exists_true_of_ret`;
+  `map2_contract.correct`, `Kernel.sound_map2With (contract := true)`).
 -/
 
 namespace MojoProofTest.KernelContract
@@ -68,23 +73,25 @@ open MojoProofTest.KernelCells (ctaidName sreg mem_eta ret_storeWith)
 (their positions, as `Kernel.sound_mapNWith` takes them): thread `(b, t)` (`%ctaid.x`,
 `%tid.x`) runs `%n` rounds of `%a = %a * 2.0 + 1.0` from `%a = 0.0` (`fmul contract`, then
 `fadd contract` on its result), counting `%i` from 0 to `%n`, then stores `%a` to cell
-`b * n + t` of the `float` array at `%p`. Blocks: the entry `0`; the header `1`
+`b * n + t` of the `float` array at `%p`. Its locals are numbered as the parser numbers them,
+one index space for parameters, block labels and results: `%n` and `%p` are locals 0 and 1, the
+blocks' labels 2 to 5 and the results 6 to 16. Blocks: the entry `2`; the header `3`
 (`%i = phi i32 [0, entry], [%i1, body]`, `%a = phi float [0.0, entry], [%a1, body]`,
-`icmp slt %i, %n`); the body `2` (`%m = fmul contract %a, 2.0`, `%a1 = fadd contract %m, 1.0`,
-`%i1 = add nsw %i, 1`, the back edge); the store `3`. -/
+`icmp slt %i, %n`); the body `4` (`%m = fmul contract %a, 2.0`, `%a1 = fadd contract %m, 1.0`,
+`%i1 = add nsw %i, 1`, the back edge); the store `5`. -/
 def kf : Func :=
   { linkage := [], cconv := none, retAttrs := [], ret := .void, name := "kf",
     params := [⟨.int 32, [], some 0⟩, ⟨.ptr 1, [], some 1⟩], group := none,
-    names := #["entry", "hdr", "body", "st", "n", "p", "b", "t", "i", "a", "c", "m", "a1", "i1",
+    names := #["n", "p", "entry", "hdr", "body", "st", "b", "t", "i", "a", "c", "m", "a1", "i1",
       "r", "x", "q"],
     blocks := #[
-      ⟨0, #[{ res := some 6, inst := .call {} (.int 32) (.fn ctaidName) [] },
-        { res := some 7, inst := .call {} (.int 32) (.fn tidName) [] }], .br 1⟩,
-      ⟨1, #[{ res := some 8, inst := .phi (.int 32) [(.int 0, 0), (.loc 13, 2)] },
-        { res := some 9, inst := .phi (.fp .float) [(.float (.hex "" 0), 0), (.loc 12, 2)] },
+      ⟨2, #[{ res := some 6, inst := .call {} (.int 32) (.fn ctaidName) [] },
+        { res := some 7, inst := .call {} (.int 32) (.fn tidName) [] }], .br 3⟩,
+      ⟨3, #[{ res := some 8, inst := .phi (.int 32) [(.int 0, 2), (.loc 13, 4)] },
+        { res := some 9, inst := .phi (.fp .float) [(.float (.hex "" 0), 2), (.loc 12, 4)] },
         { res := some 10, inst := .icmp .slt (.int 32) (.loc 8) (.loc 0) }],
-        .condBr (.loc 10) 2 3⟩,
-      ⟨2, #[
+        .condBr (.loc 10) 4 5⟩,
+      ⟨4, #[
         { res := some 11,
           inst := .fbin .fmul { contract := true } (.fp .float) (.loc 9)
             (.float (.hex "" 0x4000000000000000)) },
@@ -92,8 +99,8 @@ def kf : Func :=
           inst := .fbin .fadd { contract := true } (.fp .float) (.loc 11)
             (.float (.hex "" 0x3FF0000000000000)) },
         { res := some 13, inst := .bin .add { nsw := true } (.int 32) (.loc 8) (.int 1) }],
-        .br 1⟩,
-      ⟨3, #[{ res := some 14, inst := .bin .mul {} (.int 32) (.loc 6) (.loc 0) },
+        .br 3⟩,
+      ⟨5, #[{ res := some 14, inst := .bin .mul {} (.int 32) (.loc 6) (.loc 0) },
         { res := some 15, inst := .bin .add {} (.int 32) (.loc 14) (.loc 7) },
         { res := some 16,
           inst := .gep {} (.fp .float) (.mk (.ptr 1) (.loc 1)) [.mk (.int 32) (.loc 15)] },
@@ -110,24 +117,24 @@ def kfP : Program :=
     kernels := ["kf"] }
 
 /-- The entry block: the two special registers, then `br` to the header. -/
-sym_summary kfE := kfP kf 0 0
+sym_summary kfE := kfP kf 2 0
 
 /-- The header from position 2, after its two `phi`s. -/
-sym_summary kfH := kfP kf 1 2
+sym_summary kfH := kfP kf 3 2
 
 /-- The body with `fmul contract` in the fragment (`summarizeC`; the default summary if it
 refuses, which `chainF_covers` excludes). -/
-def kfB : Summary := (summarizeC kfP kf 2 0).getD default
+def kfB : Summary := (summarizeC kfP kf 4 0).getD default
 
 /-- The store and `ret`. -/
-sym_summary kfS := kfP kf 3 0
+sym_summary kfS := kfP kf 5 0
 
-/-- The loop: header `1` at position 2, loop path `1 → 2`, path out `1 → 3`. -/
+/-- The loop: header `3` at position 2, loop path `3 → 4`, path out `3 → 5`. -/
 def loopF : LoopSeg :=
-  ⟨1, 2, kfH.obls, kfH, [(2, kfB.obls, kfB)], [(3, kfS.obls, kfS)], []⟩
+  ⟨3, 2, kfH.obls, kfH, [(4, kfB.obls, kfB)], [(5, kfS.obls, kfS)], []⟩
 
 /-- The sequence of loops from the entry block to the store: the loop `loopF`. -/
-def chainF : LoopChain := ⟨0, kfE.obls, kfE, [], [loopF]⟩
+def chainF : LoopChain := ⟨2, kfE.obls, kfE, [], [loopF]⟩
 
 /-- **The checker with `fmul contract` accepts the loop**: `chainF` starts at `kf`'s first block,
 and the path checker with `phi`s and `fmul contract` accepts the entry block, the loop path and
@@ -136,7 +143,7 @@ theorem chainF_covers : coversChainsWith true kfP kf [chainF] = true := by
   decide +kernel
 
 /-- **The twin: the checker without `fmul contract` refuses the loop**, at the body's
-`fmul contract` (`summarize` gives no summary of block 2). -/
+`fmul contract` (`summarize` gives no summary of block 4). -/
 theorem chainF_refused : coversChainsWith false kfP kf [chainF] = false := by
   decide +kernel
 
@@ -318,7 +325,7 @@ local macro "kernelF_proof" b:term : tactic => `(tactic| (
   rw [mem_eta hc] at hE hO ⊢
   refine .inr ⟨chainF, List.mem_singleton.2 rfl, ?_⟩
   refine chainF_of k ?_ (roundsF _ _ _) fun W => ChainWith.last (ret_storeWith
-    (lbl := 3) (pc := 3) (v := .reg 9) (p := .node 2) (x := accF 3) (r := none) (vol := false)
+    (lbl := 5) (pc := 3) (v := .reg 9) (p := .node 2) (x := accF 3) (r := none) (vol := false)
     (t := .fp .float) (tv := .loc 9) (a := 1) (pv := .loc 16) (al := some 4) (md := []) hE hO ?_)
   all_goals interval_cases k <;> kernel_check))
 
@@ -405,22 +412,24 @@ def VF : Valuation :=
     outF.1, fun r => if r = 0 then some (.bits 32 (BitVec.ofNat 32 3))
       else if r = 1 then some (.ptr ⟨outF.2, 0⟩) else none, fun _ => none⟩
 
--- `kfK`: `kf` with the flag `contract` and the loop clause at header 1 from every valuation of
--- `preF`, with the invariant `invF` of the valuation's thread, trip count 3 and the
--- postcondition `memF` after one more thread. The tactic puts the valuation in its normal form
--- (`entryF`), then evaluates in the kernel, for each of the six threads, the path into the loop
--- and the invariant at round 0, each round once for every thread (`roundsF`, from the
--- invariant's normal form `normF_eq`), and the path out with its store on a memory symbolic but
--- for its output block (`mem_eta`, `ret_storeWith`). With `mojo_kernel.share`, its summaries of
--- blocks 0, 1 and 3 are `kfE`, `kfH` and `kfS`, and its paths (none) are `cntk`'s
+-- `kfK`: `kf` with the flag `contract` and the loop clause at the header, block 1 (the clause
+-- numbers blocks by position; its label is 3), from every valuation of `preF`, with the
+-- invariant `invF` of the valuation's thread, trip count 3 and the postcondition `memF` after one
+-- more thread; the terms' binders have no type, since the clause elaborates each term at its
+-- type. The tactic puts the valuation in its normal form (`entryF`), then evaluates in the
+-- kernel, for each of the six threads, the path into the loop and the invariant at round 0, each
+-- round once for every thread (`roundsF`, from the invariant's normal form `normF_eq`), and the
+-- path out with its store on a memory symbolic but for its output block (`mem_eta`,
+-- `ret_storeWith`). With `mojo_kernel.share`, its summaries of blocks 0, 1 and 3 (labels 2, 3
+-- and 5) are `kfE`, `kfH` and `kfS`, and its paths (none) are `cntk`'s
 -- (MojoProofTest/KernelCmd.lean).
 set_option mojo_kernel.share true in
 mojo_kernel kfK := kfP kf
   scalars n := a0
   pointers p := a1
   contract
-  loop 1 := preF (fun (V : Valuation) i W => invF V.ctx V.mem V.ctx.who.thread i W) (fun _ => 3)
-      (fun (V : Valuation) => memF (V.ctx.who.thread + 1)) by
+  loop 1 := preF (fun V i W => invF V.ctx V.mem V.ctx.who.thread i W) (fun _ => 3)
+      (fun V => memF (V.ctx.who.thread + 1)) by
     rintro V ⟨k, hk, hP, hW, hE, hω, hf, h0, h1, m₀, hb, hM, hO⟩
     have hk' : k < 6 := hk
     rw [entryF hP hE hW hω hf h0 h1]
@@ -430,7 +439,7 @@ mojo_kernel kfK := kfP kf
          rw [normF_eq hW]
          have hc := hM.cells.trans (congrArg (Option.map _) (hb _ _ rfl))
          rw [mem_eta hc] at hM hO ⊢
-         refine RetWith.mono (fun me h => ⟨m₀, hb, h⟩) (ret_storeWith (lbl := 3) (pc := 3)
+         refine RetWith.mono (fun me h => ⟨m₀, hb, h⟩) (ret_storeWith (lbl := 5) (pc := 3)
            (v := .reg 9) (p := .node 2) (x := accF 3) (r := none) (vol := false) (t := .fp .float)
            (tv := .loc 9) (a := 1) (pv := .loc 16) (al := some 4) (md := []) hM hO ?_)
          interval_cases k <;> kernel_check)
@@ -493,14 +502,15 @@ mojo_kernel kf_noloop := kfP kf
 
 /-- The loop-free kernel `@kg(i32 %n, ptr addrspace(1) %p)`, its parameters in registers `%0`
 and `%1`: thread `(b, t)` (`%ctaid.x`, `%tid.x`) computes `%a = fadd contract (fmul contract 3.0,
-2.0), 1.0` and stores it to cell `b * n + t` of the `float` array at `%p`. One block, the entry
-`0`, ending in `ret`. -/
+2.0), 1.0` and stores it to cell `b * n + t` of the `float` array at `%p`. One block, the entry,
+ending in `ret`; its label is local 9, after the parameters (0, 1) and the results (2 to 8), as
+the three share one index space. -/
 def kg : Func :=
   { linkage := [], cconv := none, retAttrs := [], ret := .void, name := "kg",
     params := [⟨.int 32, [], some 0⟩, ⟨.ptr 1, [], some 1⟩], group := none,
-    names := #["entry", "p", "b", "t", "m", "a", "r", "x", "q"],
+    names := #["n", "p", "b", "t", "m", "a", "r", "x", "q", "entry"],
     blocks := #[
-      ⟨0, #[{ res := some 2, inst := .call {} (.int 32) (.fn ctaidName) [] },
+      ⟨9, #[{ res := some 2, inst := .call {} (.int 32) (.fn ctaidName) [] },
         { res := some 3, inst := .call {} (.int 32) (.fn tidName) [] },
         { res := some 4,
           inst := .fbin .fmul { contract := true } (.fp .float)
@@ -527,13 +537,16 @@ def kgP : Program :=
 -- `kgK`: `mojo_kernel` on the loop-free `kg` with the flag `contract` and no loop clause: its
 -- block is in the fragment with the flag (`summarizeC`), its paths are checked by
 -- `coversEntryWith true`, and `kgK.sound_of` is `Kernel.sound_of_chainsWith (contract := true)`
--- at `kgK.covers` and no sequence of loops. With `mojo_kernel.share`, its arguments are
--- `kfK.args`.
-set_option mojo_kernel.share true in
+-- at `kgK.covers` and no sequence of loops. Without `mojo_kernel.share` the command shares with
+-- the module's own earlier definitions: its arguments are `kfK.args`.
 mojo_kernel kgK := kgP kg
   scalars n := a0
   pointers p := a1
   contract
+
+/-- error: Unknown identifier `kgK.args` -/
+#guard_msgs in
+#check kgK.args
 
 /-- error: mojo_kernel: block %entry (block 0 of kg) is outside the checker's fragment -/
 #guard_msgs in
@@ -541,14 +554,29 @@ mojo_kernel kg_twin := kgP kg
   scalars n := a0
   pointers p := a1
 
-/-- error: mojo_kernel: contract is not combined with map2 (Kernels.vadd.fn_0) -/
-#guard_msgs in
-mojo_kernel map2_contract := Kernels.vadd.prog Kernels.vadd.fn_0
+/-- `vector_addition`'s program under another hash, so that the theorems `mojo_kernel
+map2_contract` generates are not the library's `Kernels.vadd.*` (nor MojoProofTest/KernelCmd.lean's
+`paren.*`): with or without the flag, the kernel theorem's statement is the same. -/
+def contractProg : Program := { Kernels.vadd.prog with sha256 := "map2_contract" }
+
+-- `map2_contract`: `mojo_kernel` on vadd's kernel with the `map2` clause and the flag
+-- `contract`: its blocks are summarized by `summarizeC` and its paths checked by
+-- `coversEntryWith true`; its `map2_contract.ret` is a `RetWith true` (the `mojo_ret` proof of a
+-- `Ret`, moved by `RetWith.exists_true_of_ret`, since no summary records an `fmul contract`
+-- product), and `map2_contract.correct` is `Kernel.sound_map2With (contract := true)`. With
+-- `mojo_kernel.share`, its definitions are vadd's where they are equal.
+set_option mojo_kernel.share true in
+mojo_kernel map2_contract := contractProg Kernels.vadd.fn_0
   reads a := a0, b := a1
   writes out := a2
   scalars n := a3
   map2 (.fp .float) (Val.ofFloat .float) Kernels.vadd.bytes
   contract
+
+/-- `map2_contract.covers` is the path checker with the flag on the library's paths
+`Kernels.vadd.paths`: `summarizeC` gives vadd's summaries, which the command shares. -/
+example : coversEntryWith true contractProg Kernels.vadd.fn_0 Kernels.vadd.paths = true :=
+  map2_contract.covers
 
 /--
 error: mojo_kernel: the loop clause's tactic does not close kf_open.step (a round), kf_open.exit (the path out) for the loop at block %hdr (block 1 of kf); the command adds nothing

@@ -125,11 +125,26 @@ MojoProof.Sem.dotLoop_of_floatBin
 MojoProof.Sem.cell_of_floatBin
 MojoProof.Sem.Grid.start_reach_above
 MojoProof.Sem.Launch.cell_onto
-MojoProof.Sem.bfly_warp_add
+MojoProof.Sem.bfly_add_error
 MojoProof.Sem.shflSource_bfly
 MojoProof.Sem.matmul_take_error
 MojoProof.Sem.Kernel.Sound.contractOff
-# kernel theorem (Sym/Sched, Sym/Start, Sym/Kernel, Sym/KernelMat, Sym/KernelCmd, Kernels/)
+MojoProof.Sem.Kernel.Sound.contractOff_iff
+MojoProof.Sem.cols_pairs
+MojoProof.Sem.matmul_cols_nanEq
+MojoProof.Sem.matmul_cols_error
+MojoProof.Sem.take_pairs
+MojoProof.Sem.bfly_matVec
+MojoProof.Sem.bfly_vecMat
+MojoProof.Sem.warpDot_matVec
+MojoProof.Sem.bfly_warp_error
+MojoProof.Sem.racy_tpose
+MojoProof.Sem.warpDot_tpose
+MojoProof.Sem.racy_eq_false_of_writers
+MojoProof.Sem.Grid.sound_cells
+MojoProof.Sem.Grid.sound_halving
+MojoProof.Sem.rmw_add_perm
+# kernel theorem (Sym/Sched, Sym/Start, Sym/Kernel, Sym/KernelMat, Sym/KernelIter, Sym/KernelCmd, Kernels/)
 MojoProof.Sym.Grid.start_ok
 MojoProof.Sym.Kernel.sound_of_paths
 MojoProof.Kernels.vadd.sound
@@ -150,6 +165,14 @@ MojoProof.Sym.Kernel.sound_cells
 MojoProof.Sym.Kernel.sound_entry
 MojoProof.Sym.Kernel.sound_elem
 MojoProof.Sym.Kernel.sound_mat
+MojoProof.Sym.RetLsWith.of_inv
+MojoProof.Sym.RetLsWith.of_iter
+MojoProof.Sym.Mat.Head.iterate
+MojoProof.Sym.Seg.Through.toWait
+MojoProof.Sym.Grid.fire_barrier
+MojoProof.Sym.Grid.fire_barriers
+MojoProof.Sym.Grid.fire_shfl
+MojoProof.Sym.Seq.start_sound_bar
 # block checker (Sym/Block, Sym/Term, Sym/Loop, Sym/PtrMem)
 MojoProof.Sym.Block.sound
 MojoProof.Sym.Block.sound_pathI
@@ -166,6 +189,16 @@ MojoProof.Sym.Runs.of_retWith
 MojoProof.Sym.Block.sound_to
 MojoProof.Sym.Chain.reach
 MojoProof.Sem.Mem.compact_csimp
+MojoProof.Sem.allBelow_csimp
+MojoProof.Sem.ByteTree
+MojoProof.Sem.ByteTree.bytesOf_csimp
+MojoProof.Sym.vals_fold
+MojoProof.Sym.castOk_iff
+MojoProof.Sym.Seg.sound
+MojoProof.Sym.SNode.eval_globalAt
+MojoProof.Sym.Seg.through
+MojoProof.Sym.SNode.eval_loadAfter_nil
+MojoProof.Sym.Seg.lifetime
 # commands and tactics (LLVM, Util, Cert, Kernels, the other Sym modules)
 MojoProof.LLVM.importFile
 MojoProof.LLVM.mojoImport
@@ -177,7 +210,6 @@ MojoProof.Sym.mojoObl
 MojoProof.Sym.evalMojoObl
 MojoProof.Sym.Obl.regOf
 MojoProof.Sym.Obl.blocksOf
-MojoProof.Sym.Obl.nodeVals
 MojoProof.Sym.Obl.nodeEval
 MojoProof.Sym.Obl.foldExact
 MojoProof.Sym.mojoRace
@@ -215,3 +247,55 @@ MojoProof.Sym.mojoInv
 MojoProof.Sym.evalMojoInv
 MojoProof.Sym.oblHave
 MojoProof.Sym.evalOblHave
+MojoProof.LLVM.progFiles
+# layout laws (Layout/)
+MojoProof.Layout.Lay.compose
+MojoProof.Layout.Lay.call_add
+MojoProof.Layout.Lay.call_lt_cosize
+MojoProof.Layout.Lay.reverse_reverse
+MojoProof.Layout.Lay.size_reverse
+MojoProof.Layout.Lay.call_reverse
+MojoProof.Layout.rowMajor_inj
+MojoProof.Layout.Lay.coalesce_call
+MojoProof.Layout.Lay.zippedDivide_call
+MojoProof.Layout.Lay.zippedDivide_size
+MojoProof.Layout.Lay.blockedProduct_call
+MojoProof.Layout.Lay.upcast_call
+MojoProof.Layout.Lay.call_flat_toNat
+MojoProof.Layout.Swizzle.call_call
+MojoProof.Layout.Swizzle.call_xor
+MojoProof.Layout.idx2crd_call
+MojoProof.Layout.rowMajor_call_lt
+MojoProof.Layout.rowMajor_onto
+MojoProof.Layout.Lay.upcast_modes
+MojoProof.Layout.Swizzle
+MojoProof.Layout.splitIdx_eq
+MojoProof.Layout.Lay.compose_call
+MojoProof.Layout.composeDiv
+# tensor cores and async copies (Sem/TensorCore*, Sem/Async*)
+MojoProof.Sem.Frag.bijOn
+MojoProof.Sem.fragA_inv
+MojoProof.Sem.fragB_inv
+MojoProof.Sem.fragC_inv
+MojoProof.Sem.ldm_inv
+MojoProof.Sem.mmaFrags_inv
+MojoProof.Sem.ldmatrix_fragA
+MojoProof.Sem.ldmatrix_fragB
+MojoProof.Sem.ldmatrix_fragBt
+MojoProof.Sem.mma_exact
+MojoProof.Sem.mma_contract
+MojoProof.Sem.castDot_ok
+MojoProof.Sem.Async.wait_run
+MojoProof.Sem.Async.visible
+MojoProof.Sem.Async.visible_bytes
+MojoProof.Sem.ldmatrix_fragB_cols
+# float bounds (Float/)
+MojoProof.Float.sum_error
+MojoProof.Float.sum_mixedError
+MojoProof.Float.halve_error
+MojoProof.Float.block_error
+MojoProof.Float.mean_error
+MojoProof.Float.var_error
+MojoProof.Float.max_exact
+MojoProof.Float.expSum_error
+MojoProof.Float.softmax_error

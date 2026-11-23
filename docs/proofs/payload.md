@@ -674,9 +674,12 @@ The checks above on a block summary's node table
   role (`SVal.pay`). A node is payload if an operand is (a `select`'s condition among them); a
   `call`, `getelementptr` or `load` also if its statement's result register (`resReg`) is
   labelled payload (payload enters through loads); a float operation always ((O2): its NaN
-  results read the oracle). Nodes of the other
-  kinds carry no statement position, so their labels are not read: their roles come from their
-  operands.
+  results read the oracle); a `load` after a `store` (`SNode.loadAfter`) always; a global's
+  pointer (`SNode.globalAt`) never, since the theorems below take the two valuations with one
+  table of globals (`hg`). So a `getelementptr`, `load` or `store` on a global can be oblivious
+  under `Summary.oblivious` below (layernorm's `%448`, `ln_store_oblivious`,
+  MojoProofTest/SymSeg.lean). Nodes of the other kinds carry no statement position, so their
+  labels are not read: their roles come from their operands.
 - `Summary.oblivious` is (O1) on terms: the exit condition, each effect's pointer, the
   operands of each `getelementptr` and `load` node, and the condition of each `select` node are
   payload-free.
@@ -703,10 +706,10 @@ The checks above on a block summary's node table
   `Labels.Ok` refuses `phiFn` as well: the `phi` has a skeleton result and a payload
   operand, (O2) (`phi_payload_labels`). `agreesI` is the check on the summaries, which `Labels.Ok`
   does not read.
-- `roles` is the fold `scanSnoc` at `SNode.pay`, and its lemmas are `scanSnoc`'s
-  (`scanSnoc_length`, `scanSnoc_snoc`, `scanSnoc_getElem?`, for every function and list).
-  `vals` (MojoProof/Sym/Term.lean) is the same fold at `SNode.eval`, unfolded, so
-  `vals_length`, `vals_snoc` and `vals_getElem?` could become corollaries of these.
+- `roles` is the fold `scanSnoc` (MojoProof/Sym/Term.lean) at `SNode.pay`, and its lemmas are
+  `scanSnoc`'s (`scanSnoc_length`, `scanSnoc_snoc`, `scanSnoc_getElem?`, for every function and
+  list). `vals` is the same fold at `SNode.eval`, written out, and `vals_fold`, `vals_length`,
+  `vals_snoc`, `vals_append` and `vals_getElem?` are these lemmas there.
 
 Instances (MojoProofTest/Payload.lean, one program): under `vaddLab ["25", "27", "28"]`, the roles
 of `vector_addition`'s block `%21` are its two loads and the `fadd` (`vadd21_roles`), and the
@@ -730,22 +733,25 @@ The second is a load fed to a `phi` whose result decides a branch, written as an
 `pay`, table and pair of valuations).
 - `Valuation.Skel lab pay V₁ V₂`: one program, environment, thread and function, memories related
   by `Mem.SkelEq pay`, and equal registers where `lab` labels skeleton. The step counts, the
-  `fmul contract` operands, the globals, the address choices and the oracles are free: no
-  skeleton node reads them (a float operation is payload, and `getelementptr` and `call` read
-  only the program, the environment and the memory's shape).
+  `fmul contract` operands, the globals, the address choices and the oracles are free. The
+  theorems below take one table of globals besides (`hg : V₁.ctx.globals = V₂.ctx.globals`),
+  which a global's pointer reads; no other skeleton node reads them (a float operation is
+  payload, and `getelementptr` and `call` read only the program, the environment and the
+  memory's shape). `Valuation.Rel` below has one table of globals, so it meets them.
 - `Valuation.LoadsOk lab pay V ns`: under `V`, the pointer of each `load` node whose statement's
   result register is skeleton points outside `pay`, `Labels.MemAt` at a `load` on terms. When
   every `load` node has a payload result register it holds for every `pay`
   (`Valuation.loadsOk_of_pay`; `vector_addition`'s case).
-- `vals_skel`: under valuations related by `Valuation.Skel` meeting `LoadsOk` under the first,
-  every node whose role is skeleton has one value under both: the same fault or the same value.
+- `vals_skel`: under valuations related by `Valuation.Skel` with one table of globals meeting
+  `LoadsOk` under the first, every node whose role is skeleton has one value under both: the same
+  fault or the same value.
   Proof: induction on the table by `vals_snoc` and `roles_snoc`. A skeleton node's operands are
   skeleton (`SNode.pay`), so they have one value (`SVal.eval_skel`: a skeleton register by
   `Valuation.Skel.regs`, a node by induction). `bin`, `cast` and `extract` are functions of
   their operands. `icmp`, `getelementptr` and `call` read the memory only through its shape
   (`icmpV_shape`, `gep_shape`, `withAttrs_shape`, with `Mem.SkelEq.sameShape` and
   `Val.namesIn_top`). A `load` reads one pointer, outside `pay` by `LoadsOk`, so `Mem.load_skel`
-  gives one value. A float operation is never skeleton.
+  gives one value. A global's pointer is the table's. A float operation is never skeleton.
 - `Summary.oblivious_skel`: an oblivious summary, under such valuations, exits to one block (or
   to none) under both, and each effect's pointer (`SEff.ptr`) has one value under both: its exit
   condition and pointers are payload-free, so `vals_skel` applies. The exit is `Exit.dest`, so
@@ -783,8 +789,10 @@ block `l` of a function, and pair of valuations.
     statement), so the bytes of a payload block decode to related values (`Mem.load_skel`);
   - a `select` has a skeleton condition (`selectV_skel` relates the results of one condition;
     `oblivious` requires it too);
-  - `icmp`, the integer casts, `extractvalue`, `call` and the integer maxima and minima
-    (`intMinMax_skel`) always.
+  - `icmp`, the integer casts, `extractvalue`, `call`, the integer maxima and minima
+    (`intMinMax_skel`) always (a global's pointer is never payload);
+  - a `load` after a `store` (`SNode.loadAfter`) never: its memory is the effects' on the
+    entry memory, which the relation does not follow.
   `Summary.payOk lab fn S`: every node of `S` whose role is payload passes, on the roles of the
   nodes before it (a skeleton node is not checked: `SNode.eval_skel` covers it).
 - `Valuation.StoresOk lab pay V S`: under `V`, each `store` effect of `S` whose value operand is

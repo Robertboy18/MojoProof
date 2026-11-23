@@ -68,7 +68,8 @@ evidence: <optional: L<k>: item, item; L<m>: item>
 
 Declarations are looked up in the index of scripts/cited.py (MojoProof/ and MojoProofTest/),
 plus the names the `mojo_kernel` command adds (`MojoProof.Kernels.vadd.correct`,
-`.covers`, `.sound_of` and the others, MojoProof/Sym/KernelCmd.lean), plus FloatLib's and
+`.covers`, `.sound_of` and the others; with `mat`, `.sound_mat` and the others,
+MojoProof/Sym/KernelCmd.lean), plus FloatLib's and
 TorchLean's sources under .lake/packages for names starting with `FloatLib.` or `TorchLean.`.
 No Lean runs, so the script checks that a name exists, not what it states: that the theorem
 cited at a level states what the level means is for the card's reviewer.
@@ -98,9 +99,11 @@ So L3 is not equality over the reals: a binary32 sum is rounded (`1 + 2⁻²⁴`
 theorem may assume a finite output. STATUS.md's column "Scope of the cited theorems" says, for
 each kernel card, what the premises of the theorems it cites restrict: the launches they admit
 (one-dimensional: grid and block of side 1 in `y` and `z`), and for L3 and L4 whether an output
-is assumed finite and whether its real value is the exact one rounded. The script reads these
-from the theorems' statements in their source (for a name `mojo_kernel` adds, from its
-statement template), not from the card.
+is assumed finite, whether its real value is the exact one rounded, and whether the thread's
+oracle is assumed to fuse no round (no oracle number 2 modulo 3); a premise only some of a
+level's theorems have follows their names. The script reads these from the theorems'
+statements in their source (for a name `mojo_kernel` adds, from its statement template), not
+from the card.
 
 Construct cards:
 
@@ -109,12 +112,16 @@ Construct cards:
 | L0 | card written | the card, with every check passing |
 | L1 | modelled in Lean | the card's `lean` names (not `not stated yet`); no `evidence` entry |
 | L2 | tested against the GPU: a conformance test of the model against the GPU on the recorded inputs, not a proof | `L2:` a file of this repository recording a run on a GPU of a test of the construct, as for kernel L1 |
-| L3 | used by a proved kernel | `L3:` kernel card ids, each with L2 evidence |
+| L3 | used by a proved kernel: a `Kernel.Sound` theorem of a kernel card with L2 evidence is about a program whose IR uses the construct | `L3:` kernel card ids, each with L2 evidence and a theorem about a program (the program of its elaborated statement and the corpus file whose manifest sha256 that program records: roadmap/llvm-ir/programs.tsv, which scripts/L3Programs.lean writes) whose IR uses the construct; the other corpus files a kernel card cites do not count (scripts/roadmap_llvm.py) |
 
 Kernel L1 and construct L2 are the only levels a theorem does not give: they compare the model
 with a GPU on the inputs a record lists, which tests the model on those inputs and proves
 nothing about the others. A kernel card with no record of a GPU run stays at L0, and a
-construct card with none at L1, whatever their higher evidence.
+construct card with none at L1, whatever their higher evidence. Of each file cited at these two
+levels the script checks that it is the record of a run that agrees: its first line starts
+with `GPU run record:`, its `kernel:` line names a file under tests/corpus/ (for a kernel card,
+one of the card's corpus files), and its `result:` line starts with `agree`. That the run's
+kernel uses a construct and that the record compares it is for the card's reviewer.
 
 ## The script
 

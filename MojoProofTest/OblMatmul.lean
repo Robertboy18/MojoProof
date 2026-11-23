@@ -24,10 +24,15 @@ accumulator `%48` (`fadd contract`).
 * `naive_exit`: the path out of the loop, `%46 → %51 → %67 → %69`, its store into cell
   `50257 r + c` of `C`.
 * `naive_entry`: the path into the loop for every thread in range of every valid launch, with
-  `%16 = smax(K, 0) = max K 0`.
+  `%16 = smax(K, 0) = max K 0`. A test of mojo_obl only: no proof uses it, and the kernel
+  theorem's edge into the loop is discharged by the `mat … inv` clause of `mojo_kernel`
+  (`NaiveSound.naive.runInv`).
 * `naive_skip_row`, `naive_skip_col`: the path `%6 → %44 → %69` of every thread out of range of
   every valid launch, its index arithmetic modulo `2 ^ 32` and its `getelementptr inbounds` `%40`
-  some value (a pointer, or poison), the branch by the low bit of the `select`'s word.
+  some value (a pointer, or poison), the branch by the low bit of the `select`'s word. These two
+  are tests of mojo_obl only: no proof uses them, and the kernel theorem's run of a thread out of
+  bounds is `NaiveSound.naive.out`, which the `mat` clause of `mojo_kernel` proves by mojo_obl at
+  the 2-D index facts.
 -/
 
 namespace MojoProofTest.OblMatmul
@@ -147,7 +152,8 @@ column `ctaid.y * ntid.y + tid.y < n`: the premises of the
 path `%6 → %45` into the loop's header with `fmul contract` hold at `f`'s entry valuation, and
 its edge goes to `%46` after its `phi`s (`EdgeWith true`): the loads of the structs, the index
 arithmetic, `%16 = smax(K, 0)`, the address `%40` of cell `50257 r + c` of `bC`, the compares
-and the `select` (both false), and `%45`'s float constant. -/
+and the `select` (both false), and `%45`'s float constant. A test of mojo_obl: no proof uses
+it. -/
 theorem naive_entry (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx)
     (hcp : c.prog = naive.prog) (hce : c.env = L.env k) (s : Nat) (M : Mem) (f : Frame)
     (hf : f.fn = naive.fn_0) (K m n p0 p1 p2 bA bB bC : Nat)
@@ -181,7 +187,8 @@ with `fmul contract` hold at `f`'s entry valuation (`WalkWith true`): the loads 
 the index arithmetic (`mul` and `add` without `nuw` and `nsw`, modulo `2 ^ 32`), the `sext` of
 `%38` (its sign extension) and the `getelementptr inbounds` `%40` (some value, a pointer or
 poison: `gep_buffer_ok`), the compares, the `select` (true, so the word `1`), the branch to `%44`
-by its low bit, and `%44` and `%69`. -/
+by its low bit, and `%44` and `%69`. A test of mojo_obl on these lemmas: no proof uses it (the
+kernel theorem's skip path is `NaiveSound.naive.out`). -/
 theorem naive_skip_row (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx)
     (hcp : c.prog = naive.prog) (hce : c.env = L.env k) (s : Nat) (M : Mem) (f : Frame)
     (hf : f.fn = naive.fn_0) (K m n p0 p1 p2 bA bB bC : Nat)
@@ -211,7 +218,8 @@ theorem naive_skip_row (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx)
 every valid launch: with the premises of `naive_entry` but the column out of range,
 `n ≤ ctaid.y * ntid.y + tid.y`, and the row in range, `ctaid.x * ntid.x + tid.x < m`, the
 premises of the path `%6 → %44 → %69` with `fmul contract` hold at `f`'s entry valuation
-(`WalkWith true`), as in `naive_skip_row`, the `select` picking the column's compare (true). -/
+(`WalkWith true`), as in `naive_skip_row`, the `select` picking the column's compare (true). A
+test of mojo_obl, as `naive_skip_row` is: no proof uses it. -/
 theorem naive_skip_col (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx)
     (hcp : c.prog = naive.prog) (hce : c.env = L.env k) (s : Nat) (M : Mem) (f : Frame)
     (hf : f.fn = naive.fn_0) (K m n p0 p1 p2 bA bB bC : Nat)

@@ -13,8 +13,13 @@ Every result here is for every program, launch and contexts.
   grid with only thread `n`'s status (running the thread after the steps) and the memory changed.
 * `Runs`: a thread's run to its end, steps that continue it and then a step that returns
   (`.done`). `Runs.grid`: such a run by thread `n` is a run of grid steps to the grid with thread
-  `n` done and the memory the return leaves, every other thread unchanged. `Runs.trace`: the run
-  puts events in front of the trace.
+  `n` done and the memory the return leaves, every other thread unchanged. `Steps.trace` and
+  `Runs.trace`: the steps and the run put events in front of the trace.
+* `Turns R`: threads `ns` in turn, each by the relation `R n` from the memory the one before it
+  left, with the events each puts in front of the trace. `Turns.grid`: when each thread's turn is
+  a run of grid steps setting its status to `s n` (`foldl_set_getElem?`, `foldl_set_size`), the
+  turns are a run of grid steps to the grid with each of the distinct threads `ns` at `s n`.
+  `Turns.trace`, and `Turns.of_inv`: threads `0` to `N - 1` in turn by an invariant.
 * `Seq`: threads `ns` run in turn, each alone to its end from the memory the one before it left,
   with the events each puts in front of the trace. `Seq.grid`: from a grid in which each of the
   distinct threads `ns` runs its thread and whose memory is the first, the runs in turn are a run
@@ -35,8 +40,11 @@ Every result here is for every program, launch and contexts.
   On a launch whose grid and block have side 1 in `y` and `z`, thread `k` of `Seq.of_inv` is
   the thread of index `k` (`Launch.index_oneDim`, MojoProof/Sem/Index.lean).
 
-No collective call is involved: every grid step here is a thread's step (`Grid.advance`), and no
-thread waits, since `Steps` continues the thread and `Runs` ends in `.done`.
+`Seq` is `Turns` of `Runs`; `Seq.grid`, `Seq.trace` and `Seq.of_inv` are
+`Turns.grid`, `Turns.trace` and `Turns.of_inv` at it. No collective call is involved in `Seq`:
+every grid step is a thread's step (`Grid.advance`), and no thread waits, since `Steps` continues
+the thread and `Runs` ends in `.done`. `Turns` is not tied to `Runs`: MojoProof/Sym/SchedWait.lean
+uses it with runs to a wait.
 -/
 
 namespace MojoProof.Sym
@@ -54,11 +62,11 @@ theorem Array.set!_of_getElem? {α : Type} {xs : Array α} {n : Nat} {a : α} (h
     simp only [(Array.getElem?_eq_some_iff.1 h).1, ↓reduceIte, h]
   · rfl
 
-/-- Entry `j` of an array after setting the entries `ns` to `.done`: `.done` if `j` is one of
-`ns` and in range, as before otherwise. -/
-theorem foldl_done_getElem? (ns : List Nat) :
-    ∀ (ts : Array Status) (j : Nat), (ns.foldl (fun ts n => ts.set! n .done) ts)[j]? =
-      if j ∈ ns then ts[j]?.map fun _ => .done else ts[j]? := by
+/-- The statuses after `ns` are set, each `n` to `s n`: entry `j` is `s j` if `j` is one of `ns`
+and in range, as before otherwise. -/
+theorem foldl_set_getElem? (s : Nat → Status) (ns : List Nat) :
+    ∀ (ts : Array Status) (j : Nat), (ns.foldl (fun ts n => ts.set! n (s n)) ts)[j]? =
+      if j ∈ ns then ts[j]?.map fun _ => s j else ts[j]? := by
   induction ns with
   | nil => intro ts j; simp
   | cons n ns ih =>
@@ -70,6 +78,20 @@ theorem foldl_done_getElem? (ns : List Nat) :
       · simp [hl]
       · simp [hl]
     · simp [hj, Ne.symm hj]
+
+/-- Setting entries keeps the number of statuses. -/
+theorem foldl_set_size (s : Nat → Status) (ns : List Nat) :
+    ∀ ts : Array Status, (ns.foldl (fun ts n => ts.set! n (s n)) ts).size = ts.size := by
+  induction ns with
+  | nil => intro ts; rfl
+  | cons n ns ih => intro ts; rw [List.foldl_cons, ih, Array.size_set!]
+
+/-- Entry `j` of an array after setting the entries `ns` to `.done`: `.done` if `j` is one of
+`ns` and in range, as before otherwise (`foldl_set_getElem?`). -/
+theorem foldl_done_getElem? (ns : List Nat) :
+    ∀ (ts : Array Status) (j : Nat), (ns.foldl (fun ts n => ts.set! n .done) ts)[j]? =
+      if j ∈ ns then ts[j]?.map fun _ => .done else ts[j]? :=
+  foldl_set_getElem? (fun _ => .done) ns
 
 /-- **A thread's steps in a grid.** For every launch `L`, contexts `c` and grid `g` whose thread
 `n` runs `t` on `g`'s memory `m`: steps of `t` that continue it, to `t'` on `m'`, are a run of
@@ -122,54 +144,64 @@ theorem Runs.grid {L : Launch} {c : Nat → Ctx} {n : Nat} {t : Thread} {m m' : 
       Except.bind, hd, pure, Except.pure, Array.setIfInBounds_setIfInBounds]
   exact Path.exists_iff.2 ((Path.exists_iff.1 ⟨k, hp⟩).tail ⟨n, .inl ha⟩)
 
+/-- **The events of steps**: for every context, steps that continue a thread put events in front
+of the trace (each step its pending accesses, `step_pending`). -/
+theorem Steps.trace {c : Ctx} {t t' : Thread} {m m' : Mem} (h : Steps c t m t' m') :
+    ∃ E, m'.trace = E ++ m.trace := by
+  induction h with
+  | refl => exact ⟨[], rfl⟩
+  | cons h₁ _ ih =>
+    obtain ⟨E, e⟩ := ih
+    have e₁ := step_pending h₁
+    simp only at e₁
+    exact ⟨E ++ _, by rw [e, e₁, List.append_assoc]⟩
+
 /-- **The events of a run**: for every context, a thread's run to its end puts events in front of
-the trace (each step its pending accesses, `step_pending`). -/
+the trace (`Steps.trace`, then the return's pending accesses, `step_pending`). -/
 theorem Runs.trace {c : Ctx} {t : Thread} {m m' : Mem} (h : Runs c t m m') :
     ∃ E, m'.trace = E ++ m.trace := by
   obtain ⟨t', m₁, hs, hd⟩ := h
-  have hs' : ∃ E, m₁.trace = E ++ m.trace := by
-    clear hd
-    induction hs with
-    | refl => exact ⟨[], rfl⟩
-    | cons h₁ _ ih =>
-      obtain ⟨E, e⟩ := ih
-      have e₁ := step_pending h₁
-      simp only at e₁
-      exact ⟨E ++ _, by rw [e, e₁, List.append_assoc]⟩
-  obtain ⟨E, e⟩ := hs'
+  obtain ⟨E, e⟩ := hs.trace
   have e₁ := step_pending hd
   simp only at e₁
   exact ⟨_ ++ E, by rw [e₁, e, List.append_assoc]⟩
 
-/-- Threads `ns` in turn, each in its context `c n` from its thread `t n`, run alone to their
-ends: the first from memory `m`, each next one from the memory the one before left, the last
-leaving `m'`. `Es` lists the events each run puts in front of the trace (`Runs.trace`). -/
-inductive Seq (c : Nat → Ctx) (t : Nat → Thread) : List Nat → Mem → List (List Event) → Mem → Prop
+/-- Threads `ns` in turn by the runs `R`, where `R n m m'` is a run of thread `n` from memory `m`
+leaving `m'`: the first from memory `m`, each next one from the memory the one before left, the
+last leaving `m'`. `Es` lists the events each run puts in front of the trace. `Seq` is the case of
+runs to the end; `Seq.ToWait` (MojoProof/Sym/SchedWait.lean) the case of runs to
+a collective call. -/
+inductive Turns (R : Nat → Mem → Mem → Prop) : List Nat → Mem → List (List Event) → Mem → Prop
   /-- No thread. -/
-  | nil (m : Mem) : Seq c t [] m [] m
-  /-- Thread `n` runs to its end from `m`, putting `E` in front of the trace; then the others. -/
+  | nil (m : Mem) : Turns R [] m [] m
+  /-- Thread `n` runs from `m` to `m₁`, putting `E` in front of the trace; then the others. -/
   | cons {n : Nat} {ns : List Nat} {m m₁ m₂ : Mem} {E : List Event} {Es : List (List Event)} :
-      Runs (c n) (t n) m m₁ → m₁.trace = E ++ m.trace → Seq c t ns m₁ Es m₂ →
-      Seq c t (n :: ns) m (E :: Es) m₂
+      R n m m₁ → m₁.trace = E ++ m.trace → Turns R ns m₁ Es m₂ → Turns R (n :: ns) m (E :: Es) m₂
 
-/-- **The trace of threads run in turn**: for every contexts and threads, the last memory's trace
-is the threads' events, the last thread's in front, in front of the first memory's. -/
-theorem Seq.trace {c : Nat → Ctx} {t : Nat → Thread} {ns : List Nat} {m m' : Mem}
-    {Es : List (List Event)} (h : Seq c t ns m Es m') :
+/-- **The trace of threads in turn**: for every family of runs, the last memory's trace is the
+threads' events, the last thread's in front, in front of the first memory's. -/
+theorem Turns.trace {R : Nat → Mem → Mem → Prop} {ns : List Nat} {m m' : Mem}
+    {Es : List (List Event)} (h : Turns R ns m Es m') :
     m'.trace = Es.reverse.flatten ++ m.trace := by
   induction h with
   | nil => rfl
   | cons _ e _ ih => simp only [ih, e, List.reverse_cons, List.flatten_append, List.flatten_cons,
       List.flatten_nil, List.append_nil, List.append_assoc]
 
-/-- **Threads run in turn, in a grid.** For every launch `L`, contexts `c`, threads `t` and grid
-`g` in which each of the distinct threads `ns` runs its thread `t n` and whose memory is `m`:
-threads `ns` run in turn from `m` to `m'` (`Seq`) are a run of grid steps from `g` to the grid
-with threads `ns` done, every other thread unchanged, and memory `m'`. -/
-theorem Seq.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ns : List Nat} {m m' : Mem}
-    {Es : List (List Event)} (h : Seq c t ns m Es m') :
+/-- **Threads in turn, in a grid.** For every launch `L`, contexts `c`, threads `t`, statuses `s`
+and family of runs `R` each of which, by thread `n` from memory `m` to `m'`, is a run of grid steps
+from every grid whose thread `n` runs `t n` on memory `m` to that grid with thread `n`'s status
+set to `s n` and memory `m'`: from a grid `g` in which each of the distinct threads `ns` runs its
+thread `t n` and whose memory is `m`, threads `ns` in turn by `R` from `m` to `m'` (`Turns`) are a
+run of grid steps from `g` to the grid with each thread `n` of `ns` at `s n`, every other thread
+unchanged, and memory `m'`. -/
+theorem Turns.grid {L : Launch} {c : Nat → Ctx} {R : Nat → Mem → Mem → Prop} {t : Nat → Thread}
+    {s : Nat → Status}
+    (hR : ∀ {n : Nat} {m m' : Mem} {g : Grid}, R n m m' → g.threads[n]? = some (.run (t n)) →
+      g.mem = m → ∃ k, Path (Grid.Step L c) k g ⟨g.threads.set! n (s n), m'⟩)
+    {ns : List Nat} {m m' : Mem} {Es : List (List Event)} (h : Turns R ns m Es m') :
     ∀ {g : Grid}, ns.Nodup → (∀ n ∈ ns, g.threads[n]? = some (.run (t n))) → g.mem = m →
-      ∃ k, Path (Grid.Step L c) k g ⟨ns.foldl (fun ts n => ts.set! n .done) g.threads, m'⟩ := by
+      ∃ k, Path (Grid.Step L c) k g ⟨ns.foldl (fun ts n => ts.set! n (s n)) g.threads, m'⟩ := by
   induction h with
   | nil m =>
     intro g _ _ hm
@@ -178,15 +210,69 @@ theorem Seq.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ns : List 
     exact ⟨0, .nil _⟩
   | @cons n ns m m₁ m₂ E Es hr _ _ ih =>
     intro g hd hg hm
-    obtain ⟨k₁, hp₁⟩ := Runs.grid (L := L) hr (hg n List.mem_cons_self) hm
+    obtain ⟨k₁, hp₁⟩ := hR hr (hg n List.mem_cons_self) hm
     have hd' := List.nodup_cons.1 hd
-    obtain ⟨k₂, hp₂⟩ := ih (g := ⟨g.threads.set! n .done, m₁⟩) hd'.2
+    obtain ⟨k₂, hp₂⟩ := ih (g := ⟨g.threads.set! n (s n), m₁⟩) hd'.2
       (fun j hj => by
         rw [Array.set!_eq_setIfInBounds,
           Array.getElem?_setIfInBounds_ne (fun e => hd'.1 (by subst e; exact hj))]
         exact hg j (List.mem_cons_of_mem n hj))
       rfl
     exact Path.exists_iff.2 ((Path.exists_iff.1 ⟨k₁, hp₁⟩).trans (Path.exists_iff.1 ⟨k₂, hp₂⟩))
+
+/-- **Threads in turn by an invariant.** For every family of runs `R` each of which puts events
+in front of the trace, number `N` and family `P` of memory predicates indexed by the number of
+threads that have run: if each thread `k < N`, from every memory of `P k`, has a run by `R`
+leaving a memory of `P (k + 1)`, then threads `0` to `N - 1` run in turn (`Turns`) from every
+memory of `P 0` to a memory of `P N`. -/
+theorem Turns.of_inv {R : Nat → Mem → Mem → Prop} {P : Nat → Mem → Prop} {N : Nat}
+    (hE : ∀ {n : Nat} {m m' : Mem}, R n m m' → ∃ E, m'.trace = E ++ m.trace)
+    (h : ∀ k < N, ∀ m, P k m → ∃ m', R k m m' ∧ P (k + 1) m') {m : Mem}
+    (h0 : P 0 m) : ∃ Es m', Turns R (List.range N) m Es m' ∧ P N m' := by
+  have go : ∀ r k m, k + r = N → P k m →
+      ∃ Es m', Turns R (List.range' k r) m Es m' ∧ P N m' := by
+    intro r
+    induction r with
+    | zero =>
+      intro k m hk hm
+      obtain rfl : k = N := by omega
+      exact ⟨[], m, .nil m, hm⟩
+    | succ r ih =>
+      intro k m hk hm
+      obtain ⟨m₁, hr, hm₁⟩ := h k (by omega) m hm
+      obtain ⟨E, e⟩ := hE hr
+      obtain ⟨Es, m', hs, hm'⟩ := ih (k + 1) m₁ (by omega) hm₁
+      rw [List.range'_succ]
+      exact ⟨E :: Es, m', .cons hr e hs, hm'⟩
+  rw [List.range_eq_range']
+  exact go N 0 m (Nat.zero_add N) h0
+
+/-- Threads `ns` in turn, each in its context `c n` from its thread `t n`, run alone to their
+ends: the first from memory `m`, each next one from the memory the one before left, the last
+leaving `m'`. `Es` lists the events each run puts in front of the trace (`Runs.trace`). `Turns`
+of `Runs`. -/
+abbrev Seq (c : Nat → Ctx) (t : Nat → Thread) :
+    List Nat → Mem → List (List Event) → Mem → Prop :=
+  Turns fun n => Runs (c n) (t n)
+
+/-- **The trace of threads run in turn**: for every contexts and threads, the last memory's trace
+is the threads' events, the last thread's in front, in front of the first memory's
+(`Turns.trace`). -/
+theorem Seq.trace {c : Nat → Ctx} {t : Nat → Thread} {ns : List Nat} {m m' : Mem}
+    {Es : List (List Event)} (h : Seq c t ns m Es m') :
+    m'.trace = Es.reverse.flatten ++ m.trace :=
+  Turns.trace h
+
+/-- **Threads run in turn, in a grid.** For every launch `L`, contexts `c`, threads `t` and grid
+`g` in which each of the distinct threads `ns` runs its thread `t n` and whose memory is `m`:
+threads `ns` run in turn from `m` to `m'` (`Seq`) are a run of grid steps from `g` to the grid
+with threads `ns` done, every other thread unchanged, and memory `m'` (`Turns.grid` with
+`Runs.grid`). -/
+theorem Seq.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ns : List Nat} {m m' : Mem}
+    {Es : List (List Event)} (h : Seq c t ns m Es m') :
+    ∀ {g : Grid}, ns.Nodup → (∀ n ∈ ns, g.threads[n]? = some (.run (t n))) → g.mem = m →
+      ∃ k, Path (Grid.Step L c) k g ⟨ns.foldl (fun ts n => ts.set! n .done) g.threads, m'⟩ :=
+  Turns.grid (s := fun _ => .done) (fun hr hg hm => Runs.grid hr hg hm) h
 
 /-- For every array of statuses and memory: setting the entries `ns` to `.done`, when every index
 of the array is one of `ns`, leaves a done grid. -/
@@ -249,27 +335,12 @@ def Grid.thread (g : Grid) (n : Nat) : Thread :=
 /-- **Threads in turn by an invariant.** For every contexts `c`, threads `t`, number `N` and
 family `P` of memory predicates indexed by the number of threads done: if each thread `k < N`,
 from every memory of `P k`, runs to its end (`Runs`) leaving a memory of `P (k + 1)`, then threads
-`0` to `N - 1` run in turn (`Seq`) from every memory of `P 0` to a memory of `P N`. -/
+`0` to `N - 1` run in turn (`Seq`) from every memory of `P 0` to a memory of `P N`
+(`Turns.of_inv`). -/
 theorem Seq.of_inv {c : Nat → Ctx} {t : Nat → Thread} {P : Nat → Mem → Prop} {N : Nat}
     (h : ∀ k < N, ∀ m, P k m → ∃ m', Runs (c k) (t k) m m' ∧ P (k + 1) m') {m : Mem}
-    (h0 : P 0 m) : ∃ Es m', Seq c t (List.range N) m Es m' ∧ P N m' := by
-  have go : ∀ r k m, k + r = N → P k m →
-      ∃ Es m', Seq c t (List.range' k r) m Es m' ∧ P N m' := by
-    intro r
-    induction r with
-    | zero =>
-      intro k m hk hm
-      obtain rfl : k = N := by omega
-      exact ⟨[], m, .nil m, hm⟩
-    | succ r ih =>
-      intro k m hk hm
-      obtain ⟨m₁, hr, hm₁⟩ := h k (by omega) m hm
-      obtain ⟨E, e⟩ := hr.trace
-      obtain ⟨Es, m', hs, hm'⟩ := ih (k + 1) m₁ (by omega) hm₁
-      rw [List.range'_succ]
-      exact ⟨E :: Es, m', .cons hr e hs, hm'⟩
-  rw [List.range_eq_range']
-  exact go N 0 m (Nat.zero_add N) h0
+    (h0 : P 0 m) : ∃ Es m', Seq c t (List.range N) m Es m' ∧ P N m' :=
+  Turns.of_inv (fun hr => hr.trace) h h0
 
 /-- **A start sound by an invariant.** For every program, kernel `fn`, launch `L`, arguments,
 address choice and oracle whose start (`Grid.start`) gives grid `g₀`, with `N` threads, and

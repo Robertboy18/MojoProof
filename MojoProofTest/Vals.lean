@@ -14,6 +14,10 @@ The first `example` is the open-goal twin of `vadd_vals0`: with the load of `%1`
 an irreducible definition, mojo_vals cannot evaluate node 2 and leaves its equation open, as
 logged, while the later nodes read its entry; unfolding the definition closes it.
 
+`Vals.decStep` takes the first subterm `decide p` that `omega` decides, past those it decides
+neither way: in `(decide P, decide (i < n))`, `P` a proposition about which nothing is known, it
+rewrites `decide (i < n)` to `true` from `i < n` and leaves `decide P`.
+
 The last test: a summary that `sym_summary` defines unfolds by `simp only` in the module that
 runs the command (`b21`, block `%21` from position 1, after its `trunc`: a summary no library
 definition holds, so the test adds no copy of one), and its exit and length are those of
@@ -133,6 +137,20 @@ example {L : Launch} (hL : L.Valid) {k n a b out p0 p1 p2 : Nat} (h31 : n < 2 ^ 
   mojo_vals
   unfold Loads at hv1
   mojo_vals
+
+/-- **`decStep` past a `decide` it cannot settle**: for every decidable proposition `P` and
+naturals `i < n`, `Vals.decStep` on `(decide P, decide (i < n))` skips `decide P`, which `omega`
+proves neither true nor false, and rewrites `decide (i < n)` to `true`; its proof closes the
+goal. -/
+example (P : Prop) [Decidable P] (i n : Nat) (h : i < n) :
+    (decide P, decide (i < n)) = (decide P, true) := by
+  run_tac Lean.Elab.Tactic.withMainContext do
+    let g ← Lean.Elab.Tactic.getMainGoal
+    let some (_, a, b) := (← g.getType).eq? | Lean.throwError "the goal is not an equation"
+    let some (a', e) ← (Vals.decStep a).run' {} | Lean.throwError "decStep rewrote nothing"
+    unless a' == b do Lean.throwError "decStep gives {a'}"
+    g.assign e
+    Lean.Elab.Tactic.replaceMainGoal []
 
 /-- The summary of `vector_addition`'s block `%21` from position 1 (after its `trunc`), by
 `sym_summary`. -/

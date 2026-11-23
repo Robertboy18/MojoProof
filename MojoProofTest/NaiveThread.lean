@@ -1,6 +1,8 @@
 import MojoProofTest.SymNaive
 import MojoProofTest.SymSelect
 import MojoProofTest.NaiveRun
+import MojoProof.Sym.KernelMat
+import MojoProof.Sym.LoopFacts
 
 /-!
 # The naive matmul kernel's thread: every thread from premises, and one launch
@@ -16,7 +18,7 @@ which stores the accumulator `%48` to its cell of `C` and returns.
   checker with `fmul contract` (`coversChainsWith true`).
 * `head`, `round`, `latchAt`, `steps`: the entry valuations of `%46` after the path, of `%46`
   after a round and of the latch in a round; for every valuation the path adds 39 steps, a round
-  18, and the latch is entered 3 steps after the head (`Valuation.roundWith_k`).
+  18, and the latch is entered 3 steps after the head (`LoopSeg.steps_k`).
 * `oN`, `Inv`: the oracle numbers of round `j`'s `fmul` and `fadd`, those of steps
   `k0 + 54 + 18 j` and `k0 + 55 + 18 j` (lane 0) for a thread whose entry valuation has step
   count `k0`; and the loop's invariant at the head of round `j`: `%47 = j` and `%48` holds
@@ -26,8 +28,12 @@ which stores the accumulator `%48` to its cell of `C` and returns.
   the thread runs `chainN` to `ret` (`RetLsWith true`, the per-thread premise of the kernel
   theorem with `fmul contract`), from premises: the entry block's obligations and branch into
   `%45`, the invariant at round 0, each round's premises and register updates, and the path
-  out's premises. The loop is by induction on the rounds (`Round.of_inv`), the edge
+  out's premises. The proof is `RetLsWith.of_inv` (MojoProof/Sym/KernelMat.lean), the edge
   `%45 → %46` is `SymNaive.pre_edge`.
+* `round_inv`: a round keeps `Inv` when the counter and the accumulator after it are those the
+  round's premises give (`floatBin_dotStep`); from the round's premises, a predicate after it and
+  those registers (`NaiveIn.round_in`'s conclusion) it gives the premises, `Inv` and the predicate
+  after it, a round of `LoopInvWith` at the invariant `Inv ∧ G`.
 * `skipN`, `skipN_covers`, `thread_skip`: a thread out of bounds runs `%6 → %44 → %69`, accepted
   by the path checker with `fmul contract`; for every valuation and predicate on the memory at
   the return, it runs that path to `ret` (`RetWith true`) from the entry block's obligations and
@@ -92,28 +98,13 @@ abbrev latchAt (W : Valuation) : Valuation :=
 /-- **The step counts of the thread's paths**, for all valuations `V`, `W` and every `j`: the
 path `%6 → %45` keeps the context and the function and adds 39 steps (its 38 statements and
 branches, then the branch into `%46`); `j` rounds keep them and add `18 * j`; the latch is
-entered 3 steps after the head (`Valuation.roundWith_k`, `Valuation.lastWith_k`). -/
+entered 3 steps after the head (`LoopSeg.steps_k` at `naiveL`). -/
 theorem steps (V W : Valuation) (j : Nat) :
     (head V).ctx = V.ctx ∧ (head V).fn = V.fn ∧ (head V).k = V.k + 39 ∧
       (round^[j] W).ctx = W.ctx ∧ (round^[j] W).fn = W.fn ∧ (round^[j] W).k = W.k + 18 * j ∧
-      (latchAt W).ctx = W.ctx ∧ (latchAt W).k = W.k + 3 := by
-  obtain ⟨h1, h2, h3⟩ := Valuation.roundWith_k true naive.fn_0.b_0.label SymSelect.entry
-    [(naive.fn_0.b_2.label, pre.obls, pre)] 1 V
-  obtain ⟨r1, r2, r3⟩ := Valuation.roundWith_k true naiveL.h naiveL.H naiveL.B j W
-  obtain ⟨l1, -, l3⟩ := Valuation.lastWith_k true W naiveL.h naiveL.H naiveL.B
-  have e1 : pathLen SymSelect.entry [(naive.fn_0.b_2.label, pre.obls, pre)] = 38 := by
-    decide +kernel
-  have e2 : pathLen naiveL.H naiveL.B = 17 := by decide +kernel
-  have e3 : (W.lastWith true naiveL.h naiveL.H naiveL.B).2.2.len = 14 :=
-    SymContract.latch_nodes.2.2.2.2.2.2.1
-  rw [e1] at h3
-  rw [e2] at r3 l3
-  rw [e3] at l3
-  refine ⟨h1, h2, by simpa using h3, r1, r2, ?_, l1, ?_⟩
-  · show ((Valuation.roundWith true naiveL.h naiveL.H naiveL.B)^[j] W).k = _
-    omega
-  · show (W.lastWith true naiveL.h naiveL.H naiveL.B).1.k = _
-    omega
+      (latchAt W).ctx = W.ctx ∧ (latchAt W).k = W.k + 3 :=
+  LoopSeg.steps_k true _ _ _ naiveL (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) V W j
 
 /-- The oracle numbers of round `j`'s `fmul` (`%65`, the latch's statement 12) and `fadd`
 (`%66`, statement 13), lane 0, for a thread whose entry valuation has context `c` and step count
@@ -129,6 +120,63 @@ def Inv (o : Nat → Nat × Nat) (ps : List (Model FloatFormat.binary32 × Model
     (j : Nat) (W : Valuation) : Prop :=
   W.regs (idx "47") = some (.bits 64 (BitVec.ofNat 64 j)) ∧
     W.regs (idx "48") = some (.ofFloat .float (dotLoop true o (Model.zero _ false) (ps.take j)))
+
+/-- **A round keeps the loop's invariant.** For every valuation `V`, list `ps` of factor pairs,
+round `j < ps.length`, head valuation `W` of round `j` (context `V`'s, step count
+`(head V).k + j * (pathLen naiveL.H naiveL.B + 1)`, which is `V.k + 39 + 18 * j` by `steps`) where
+`Inv` holds under the oracle numbers `oN V.ctx V.k`, and predicate `G` on valuations: if the
+round's premises hold (`RoundWith true`), `G` holds after it, the counter `%47` is `j + 1` after
+it and the accumulator `%48` after it is the `fadd` (with `fmul contract`'s factors) of the
+accumulator before it and the `fmul` of pair `j` of `ps`, under the oracle numbers of the latch's
+statements 12 and 13 (`NaiveIn.round_in`'s conclusion), then the round's premises hold, `Inv`
+holds at round `j + 1` after the round (`round W`), and `G` holds after it. Those oracle numbers
+are `oN V.ctx V.k j` (`steps`); `floatBin_dotStep` gives the accumulator. -/
+theorem round_inv {V : Valuation}
+    {ps : List (Model FloatFormat.binary32 × Model FloatFormat.binary32)} {j : Nat}
+    {W : Valuation} {G : Valuation → Prop} (hc : W.ctx = V.ctx)
+    (hI : Inv (oN V.ctx V.k) ps j W) (hj : j < ps.length)
+    (hk : W.k = (head V).k + j * (pathLen naiveL.H naiveL.B + 1))
+    (hR : RoundWith true naiveL.h naiveL.p naiveL.dh naiveL.H naiveL.B W ∧ G (round W) ∧
+      (round W).regs (idx "47") = some (.bits 64 (BitVec.ofNat 64 (j + 1))) ∧
+      ∃ x v, W.regs (idx "48") = some x ∧ (round W).regs (idx "48") = some v ∧
+        (floatBin .float .fmul { contract := true } (.ofFloat .float ps[j].1)
+            (.ofFloat .float ps[j].2) none none
+            (W.ctx.oracle (Nat.pair ((latchAt W).k + 12) 0)) >>= fun p =>
+          floatBin .float .fadd { contract := true } x p none
+            (some (.ofFloat .float ps[j].1, .ofFloat .float ps[j].2))
+            (W.ctx.oracle (Nat.pair ((latchAt W).k + 13) 0))) = .ok v) :
+    RoundWith true naiveL.h naiveL.p naiveL.dh naiveL.H naiveL.B W ∧
+      Inv (oN V.ctx V.k) ps (j + 1) (round W) ∧ G (round W) := by
+  have app : ∀ (o : Nat → Nat × Nat) (a : Model FloatFormat.binary32)
+      (qs : List (Model FloatFormat.binary32 × Model FloatFormat.binary32)) ab,
+      dotLoop true o a (qs ++ [ab]) = dotStep true (dotLoop true o a qs) ab (o qs.length) := by
+    intro o a qs ab
+    induction qs generalizing o a with
+    | nil => rfl
+    | cons x qs ih => exact ih _ _
+  obtain ⟨hr, hG, h47', x, v, hx, hv, hfb⟩ := hR
+  obtain ⟨-, -, hk1, -, -, -, -, l3⟩ := steps V W 1
+  rw [show pathLen naiveL.H naiveL.B + 1 = 18 by decide +kernel] at hk
+  have n1 : W.ctx.oracle (Nat.pair ((latchAt W).k + 12) 0) = (oN V.ctx V.k j).1 := by
+    rw [show (latchAt W).k + 12 = V.k + 54 + 18 * j by omega, hc]
+    rfl
+  have n2 : W.ctx.oracle (Nat.pair ((latchAt W).k + 13) 0) = (oN V.ctx V.k j).2 := by
+    rw [show (latchAt W).k + 13 = V.k + 55 + 18 * j by omega, hc]
+    rfl
+  rw [hI.2] at hx
+  cases hx
+  rw [n1, n2] at hfb
+  have e := floatBin_dotStep (t := .float) (fm := { contract := true }) rfl rfl rfl
+    (dotLoop true (oN V.ctx V.k) (Model.zero _ false) (ps.take j)) ps[j].1 ps[j].2
+    (oN V.ctx V.k j).1 (oN V.ctx V.k j).2
+  have hd : dotLoop true (oN V.ctx V.k) (Model.zero _ false) (ps.take (j + 1)) =
+      dotStep true (dotLoop true (oN V.ctx V.k) (Model.zero _ false) (ps.take j)) ps[j]
+        (oN V.ctx V.k j) := by
+    rw [List.take_succ_eq_append_getElem hj, app, List.length_take,
+      Nat.min_eq_left (Nat.le_of_lt hj)]
+  refine ⟨hr, ⟨h47', ?_⟩, hG⟩
+  rw [hv, Except.ok.inj (hfb.symm.trans e)]
+  exact congrArg (fun x => some (Val.ofFloat .float x)) hd.symm
 
 /-- **The naive thread's run, for every thread of every launch, from premises.** For every
 valuation `V` of `naive`'s function (a thread's entry valuation at the first block, position 0),
@@ -151,10 +199,11 @@ valuations and predicate `Q` on memories: suppose
 
 Then the thread's sequence of loops `chainN` runs from `V` to `ret` with a memory of `Q`
 (`RetLsWith true`), the per-thread premise of `Kernel.sound_cellsWith`
-(MojoProof/Sym/Kernel.lean) for `chains = [chainN]`. The loop is by induction on the rounds
-(`Round.of_inv`) with the invariant `Inv` under the oracle numbers `oN V.ctx V.k`, derived from
-the step counts (`steps`); `floatBin_dotStep` gives each round's accumulator. It holds for every
-valuation, trip count and predicates; the premises are what the checker does not decide. -/
+(MojoProof/Sym/Kernel.lean) for `chains = [chainN]`. The proof is `RetLsWith.of_inv`
+(MojoProof/Sym/KernelMat.lean) with the invariant `Inv ∧ G` under the oracle numbers
+`oN V.ctx V.k`, the edge `%45 → %46` from `SymNaive.pre_edge` and each round's `Inv` from
+`round_inv`; the step counts are `steps`. It holds for every valuation, trip count and
+predicates; the premises are what the checker does not decide. -/
 theorem thread_run {V : Valuation} (hfn : V.fn = naive.fn_0)
     (ps : List (Model FloatFormat.binary32 × Model FloatFormat.binary32))
     {G : Valuation → Prop} {Q : Mem → Prop}
@@ -176,53 +225,18 @@ theorem thread_run {V : Valuation} (hfn : V.fn = naive.fn_0)
       Inv (oN V.ctx V.k) ps ps.length W → G W →
       RetWith true W Q ((naiveL.h, naiveL.dh, naiveL.H) :: naiveL.X)) :
     ∃ C ∈ [chainN], RetLsWith true Q C.loops V C.l C.ds C.S C.E := by
-  have app : ∀ (o : Nat → Nat × Nat) (a : Model FloatFormat.binary32)
-      (qs : List (Model FloatFormat.binary32 × Model FloatFormat.binary32)) ab,
-      dotLoop true o a (qs ++ [ab]) = dotStep true (dotLoop true o a qs) ab (o qs.length) := by
-    intro o a qs ab
-    induction qs generalizing o a with
-    | nil => rfl
-    | cons x qs ih => exact ih _ _
-  obtain ⟨hc1, -, hk1, -⟩ := steps V V 0
-  let I : Nat → Valuation → Prop := fun j W =>
-    W.ctx = V.ctx ∧ W.k = V.k + 39 + 18 * j ∧ Inv (oN V.ctx V.k) ps j W ∧ G W
-  have hstep : ∀ j < ps.length, ∀ W, I j W →
-      RoundWith true naiveL.h naiveL.p naiveL.dh naiveL.H naiveL.B W ∧ I (j + 1) (round W) := by
-    intro j hj W ⟨hc, hk, ⟨h47, h48⟩, hG⟩
-    obtain ⟨hr, hG', h47', x, v, hx, hv, hfb⟩ := hR j hj W hc hk ⟨h47, h48⟩ hG
-    obtain ⟨-, -, -, s1, -, s3, l1, l3⟩ := steps V W 1
-    have n1 : W.ctx.oracle (Nat.pair ((latchAt W).k + 12) 0) = (oN V.ctx V.k j).1 := by
-      rw [show (latchAt W).k + 12 = V.k + 54 + 18 * j by omega, hc]
-      rfl
-    have n2 : W.ctx.oracle (Nat.pair ((latchAt W).k + 13) 0) = (oN V.ctx V.k j).2 := by
-      rw [show (latchAt W).k + 13 = V.k + 55 + 18 * j by omega, hc]
-      rfl
-    rw [h48] at hx
-    cases hx
-    rw [n1, n2] at hfb
-    have e := floatBin_dotStep (t := .float) (fm := { contract := true }) rfl rfl rfl
-      (dotLoop true (oN V.ctx V.k) (Model.zero _ false) (ps.take j)) ps[j].1 ps[j].2
-      (oN V.ctx V.k j).1 (oN V.ctx V.k j).2
-    have hd : dotLoop true (oN V.ctx V.k) (Model.zero _ false) (ps.take (j + 1)) =
-        dotStep true (dotLoop true (oN V.ctx V.k) (Model.zero _ false) (ps.take j)) ps[j]
-          (oN V.ctx V.k j) := by
-      rw [List.take_succ_eq_append_getElem hj, app, List.length_take,
-        Nat.min_eq_left (Nat.le_of_lt hj)]
-    refine ⟨hr, s1.trans hc, ?_, ⟨h47', ?_⟩, hG'⟩
-    · rw [Function.iterate_one] at s3
-      omega
-    · rw [hv, Except.ok.inj (hfb.symm.trans e)]
-      exact congrArg (fun x => some (Val.ofFloat .float x)) hd.symm
-  obtain ⟨hrs, hIn⟩ := Round.of_inv (contract := true) (h := naiveL.h) (p := naiveL.p)
-    (ds := naiveL.dh) (S := naiveL.H) (B := naiveL.B) I ⟨hc1, by omega, h0.1, h0.2⟩ hstep
   have hf' : (V.intoWith true naive.fn_0.b_0.label SymSelect.entry).fn = naive.fn_0 :=
     (Valuation.intoWith_k true V _ _).2.1.trans hfn
   obtain ⟨p1, p2, p3⟩ := pre_edge true _ hf'
-  refine ⟨chainN, List.mem_singleton_self _, ChainWith.of_rounds rfl ps.length
-    ⟨⟨⟨hE.1, hE.2, p1⟩, p2, ?_⟩, hrs⟩ (.last (hX _ hIn.1 hIn.2.1 hIn.2.2.1 hIn.2.2.2))⟩
-  rw [hfn]
+  have hk : ∀ j (W : Valuation), W.k = (head V).k + j * (pathLen naiveL.H naiveL.B + 1) →
+      W.k = V.k + 39 + 18 * j := fun j W h => by
+    rw [h, (steps V V 0).2.2.1, show pathLen naiveL.H naiveL.B + 1 = 18 by decide +kernel]
+    omega
   rw [hf'] at p3
-  exact p3
+  refine ⟨chainN, List.mem_singleton_self _, RetLsWith.of_inv rfl ps.length
+    (fun j W => Inv (oN V.ctx V.k) ps j W ∧ G W) ⟨⟨hE.1, hE.2, p1⟩, p2, by rw [hfn]; exact p3⟩
+    h0 (fun j hj W hc hk' ⟨hI, hG⟩ => round_inv hc hI hj hk' (hR j hj W hc (hk j W hk') hI hG))
+    fun W hc hk' ⟨hI, hG⟩ => hX W hc (hk _ W hk') hI hG⟩
 
 /-- The path of a thread out of bounds: the entry block `%6` (`SymSelect.entry`), whose branch
 goes to `%44`, then `%44` (`skip`: `br label %69`) and `%69` (`ret void`, `Kernels.vadd.b3`). -/
@@ -243,53 +257,23 @@ row or column is out of bounds), and `Q` holds of the memory that the entry bloc
 (its three loads of the arguments' structs, which add trace entries), then the path `skipN` runs
 from `V` to `ret` with a memory of `Q` (`RetWith true`): no store runs. With `thread_run`, each
 thread of a launch has one of the two forms of the kernel theorem's per-thread premise with
-`fmul contract`, for `paths = [skipN]` and `chains = [chainN]`. -/
+`fmul contract`, for `paths = [skipN]` and `chains = [chainN]`. The proof is `RetWith.of_first`
+(MojoProof/Sym/KernelMat.lean): `%44` and `%69` have no effects, so the memory at the return is
+the entry block's. -/
 theorem thread_skip {V : Valuation} {Q : Mem → Prop}
     (hE : (∀ d ∈ SymSelect.entry.obls, d.Holds V (vals V SymSelect.entry.nodes)) ∧
       SymSelect.entry.exit.dest V (vals V SymSelect.entry.nodes) = some naive.fn_0.b_1.label)
     (hQ : ∀ me, SEff.run V (vals V SymSelect.entry.nodes) SymSelect.entry.effs = .ok me → Q me) :
     RetWith true V Q skipN := by
-  have hf : skip.effs = [] ∧ Kernels.vadd.b3.effs = [] ∧ skip.obls = [.mem []] ∧
-      Kernels.vadd.b3.obls = [.mem []] ∧ Kernels.vadd.b3.exit = .ret ∧
-      .mem SymSelect.entry.effs ∈ SymSelect.entry.obls := by
-    decide +kernel
-  obtain ⟨e1, e2, o1, o2, x2, hm0⟩ := hf
-  obtain ⟨me, hme⟩ := hE.1 _ hm0
-  have hm : ∀ (W : Valuation) l (S : Summary), (W.intoWith true l S).mem = (W.after S).mem := by
-    intro W l S
-    unfold Valuation.intoWith
-    split
-    · split <;> rfl
-    · rfl
-  have ha : ∀ (W : Valuation) (S : Summary), S.effs = [] → (W.after S).mem = W.mem := by
-    intro W S h
-    unfold Valuation.after
-    rw [h]
-    rfl
-  have hb : (V.after SymSelect.entry).mem = me := by
-    unfold Valuation.after
-    rw [hme]
-    rfl
-  refine ⟨⟨hE.1, hE.2, ?_, ?_, ?_⟩, x2, ?_⟩
-  · rw [o1]
-    intro d hd
+  have ho : skip.obls = [.mem []] ∧ Kernels.vadd.b3.obls = [.mem []] := by decide +kernel
+  have hm : ∀ (W : Valuation) (S : Summary) (ds : List Cond), ds = [.mem []] →
+      ∀ d ∈ ds, d.Holds W (vals W S.nodes) := by
+    rintro W S _ rfl d hd
     rw [List.mem_singleton] at hd
     subst hd
     exact ⟨_, rfl⟩
-  · rw [skip_body_covers.2.1]
-    rfl
-  · rw [o2]
-    intro d hd
-    rw [List.mem_singleton] at hd
-    subst hd
-    exact ⟨_, rfl⟩
-  · show ∃ me, SEff.run _ _ Kernels.vadd.b3.effs = .ok me ∧ Q me
-    rw [e2]
-    refine ⟨_, rfl, ?_⟩
-    show Q ((V.intoWith true naive.fn_0.b_0.label SymSelect.entry).intoWith true
-      naive.fn_0.b_1.label skip).mem
-    rw [hm, ha _ _ e1, hm, hb]
-    exact hQ me hme
+  exact RetWith.of_first (by decide +kernel)
+    ⟨hE.1, hE.2, hm _ _ _ ho.1, by rw [skip_body_covers.2.1]; rfl, hm _ _ _ ho.2⟩ hQ
 
 /-! ## One launch -/
 

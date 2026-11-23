@@ -9,11 +9,11 @@ block's effects and exit take: the `Elem` steps (`Elem.Steps`, MojoProof/Sym/Ops
 mojo_vals proves a goal `vals V S.nodes = [r₀, …, rₙ₋₁]` for a concrete summary `S`, entry by entry,
 with mojo_obl's node evaluation (MojoProof/Sym/Obl.lean), so with no hand step.
 
-The list lemma, for every list:
+The lemmas:
 
-* `drop_of_getElem?`: a list from entry `i` on is entry `i` followed by the list from `i + 1` on;
-  from core's List.drop_eq_nil_of_le at the length and List.drop_zero, the values of a table are the
-  list of their entries.
+* `drop_of_getElem?`, for every list: a list from entry `i` on is entry `i` followed by the list
+  from `i + 1` on; from core's List.drop_eq_nil_of_le at the length and List.drop_zero, the values
+  of a table are the list of their entries;
 
 ## The tactic
 
@@ -38,13 +38,14 @@ and concrete summary `S`. For node `j` and entry `rⱼ`:
 
 `Vals.conv` proves two values equal by syntactic equality, by congruence argument by argument (a
 value followed by proofs about it, as `Fin.mk`, by `Vals.congrDep`), by an `if` on either side whose
-condition `omega` decides (`Vals.ifStep`, so `vadd.bytes`), by kernel defeq, by a subterm `decide p`
-that `omega` decides (`Vals.decStep`, so a comparison's `Val.ofBool (decide (i < n))`), by the local
-equations on the subterms of either side (`Vals.norm`), and on `Nat` and `Int` by `omega` from the
-local context and the launch facts (so `k * 4 = 4 * k`, `V.k + 6 = 23` from `V.k = 17`). With
-`set_option mojo_obl.debug true` it logs why a node stays open. Tests: MojoProofTest/Vals.lean
-(`vadd_vals0` and `vadd_vals1`, the node values of `vector_addition`'s blocks `%4` and `%21`, for
-every valid launch and thread, and an open-goal twin).
+condition `omega` decides (`Vals.ifStep`, so `vadd.bytes`), by kernel defeq, by the first subterm
+`decide p` that `omega` decides, past those it decides neither way (`Vals.decStep`, so a
+comparison's `Val.ofBool (decide (i < n))`), by the local equations on the subterms of either side
+(`Vals.norm`), and on `Nat` and `Int` by `omega` from the local context and the launch facts (so
+`k * 4 = 4 * k`, `V.k + 6 = 23` from `V.k = 17`). With `set_option mojo_obl.debug true` it logs why
+a node stays open. Tests: MojoProofTest/Vals.lean (`vadd_vals0` and `vadd_vals1`, the node values
+of `vector_addition`'s blocks `%4` and `%21`, for every valid launch and thread, an open-goal twin,
+and `decStep` past a `decide` that `omega` does not decide).
 -/
 
 namespace MojoProof.Sym
@@ -103,24 +104,34 @@ def ifStep (e : Expr) : M (Option (Expr × Expr)) := do
   | (``ite, #[α, c, inst, t, f]) => take ``if_pos ``if_neg c inst α t f false
   | _ => return none
 
-/-- **A comparison decided**: the first subterm `decide p` of `e` (with no bound variables) whose
-`p` or `¬ p` `omega` proves, as `(e', e = e')`, `e'` with it `true` or `false` (so the
-`Val.ofBool (decide (x < y))` of an `icmp slt` or `ult` of the words of naturals is `.bits 1 1`
-when `x < y`); `none` when there is none or `omega` decides it neither way. -/
+/-- The distinct subterms `decide p` of `e` with no bound variables, in the order `Expr.find?`
+visits them (a term before its subterms, a function before its argument). -/
+def decides (e : Expr) : MetaM (Array Expr) := do
+  let r ← IO.mkRef (#[] : Array Expr)
+  e.forEachWhere (fun x => x.isAppOfArity ``Decidable.decide 2 && !x.hasLooseBVars)
+    fun d => r.modify (·.push d)
+  r.get
+
+/-- **A comparison decided**: the first subterm `decide p` of `e` (with no bound variables, in
+the order of `decides`) whose `p` or `¬ p` `omega` proves, as `(e', e = e')`, `e'` with it `true`
+or `false` (so the `Val.ofBool (decide (x < y))` of an `icmp slt` or `ult` of the words of
+naturals is `.bits 1 1` when `x < y`); a `decide p` that `omega` decides neither way is skipped
+for the next; `none` when `omega` decides none of them. -/
 def decStep (e : Expr) : M (Option (Expr × Expr)) := do
-  let some d := e.find? fun x => x.isAppOfArity ``Decidable.decide 2 && !x.hasLooseBVars
-    | return none
-  let (p, inst) := (d.appFn!.appArg!, d.appArg!)
-  let r ← try some <$> do
-      pure (mkConst ``Bool.true, mkApp3 (mkConst ``decide_eq_true) p inst (← arith p))
-    catch _ => try some <$> do
-        pure (mkConst ``Bool.false, mkApp3 (mkConst ``decide_eq_false) p inst (← arith (mkNot p)))
-      catch _ => pure none
-  let some (b, h) := r | return none
-  let body ← kabstract e d
-  let e' := body.instantiate1 b
-  let h ← mkCongrArg (.lam `x (mkConst ``Bool) body .default) h
-  return some (e', hint h (← mkEq e e'))
+  for d in ← decides e do
+    let (p, inst) := (d.appFn!.appArg!, d.appArg!)
+    let r ← try some <$> do
+        pure (mkConst ``Bool.true, mkApp3 (mkConst ``decide_eq_true) p inst (← arith p))
+      catch _ => try some <$> do
+          pure (mkConst ``Bool.false, mkApp3 (mkConst ``decide_eq_false) p inst
+            (← arith (mkNot p)))
+        catch _ => pure none
+    let some (b, h) := r | continue
+    let body ← kabstract e d
+    let e' := body.instantiate1 b
+    let h ← mkCongrArg (.lam `x (mkConst ``Bool) body .default) h
+    return some (e', hint h (← mkEq e e'))
+  return none
 
 /-- `f xs x ps = f xs y qs` from `h : x = y`, for proofs `ps` and `qs` whose types name `x` and `y`
 (a value with proofs about it, as `Fin.mk`), by `Eq.ndrec` on `h`. -/

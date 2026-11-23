@@ -27,7 +27,7 @@ The laws of the layout library in Modular's kernels (`max/kernels/src/layout/` a
 - The legacy layout types the library no longer has.
 - The tensor-core fragment layouts, which belong with the kernels that use them.
 - Performance claims, such as coalesced access.
-- Every claim that needs a run. The cards read the source and do not compile or run it; where a body works an example, the arithmetic is by hand from the cited lines and is marked as such.
+- Every claim that needs a run. The conformance test compiles a program and reads its IR; nothing is run. Where a card's body works an example by hand from the cited lines, it says so.
 
 ## Depends on
 
@@ -35,10 +35,12 @@ The Modular source at bbc13a71. Within the area, most laws build on `crd2idx` (t
 
 ## Coverage in MojoProof
 
-None. MojoProof states no layout law, so every card is L0. A kernel proof today works on the compiled IR, where a layout has already become integer arithmetic, so the laws are not needed for the kernels proved so far.
+MojoProof/Layout/ transcribes the layout functions over a model of nested integer tuples (docs/proofs/layout-laws.md gives the transcription and the laws) and proves laws of 13 cards for every shape that meets their premises: `crd2idx`, `idx2crd`, `cosize`, `reverse-transpose`, `zipped-divide`, `blocked-product`, `coalesce`, `upcast`, `swizzle`, the swizzle half of `bit-layout`, `is-affine` for flat layouts, `row-major-views` and `index-width`; `composition` is transcribed with no law. These 14 cards are L1. Where a law needs a precondition, MojoProofTest.LayoutLaws has a counterexample without it, by `decide` on the model: composition, blocked product, idx2crd, zipped divide and the swizzle. MojoProofTest.LayoutConformance compares the model with the values that Mojo's compiler folds into a kernel's LLVM IR for random static layouts and the counterexamples' inputs; they agree on all 37 cases, 323 values (tests/layout/record.txt). That is a test of the transcription on those cases, not a proof, and not a GPU run, so no card is past L1. `two-level-swizzle` is L0. No proved kernel uses the laws yet: the kernel proofs work on the compiled IR, where a layout has already become integer arithmetic.
 
 ## Next steps
 
-- A Lean model of `Layout` over integer tuples with `crd2idx`, then the laws in order of the depends lines: `cosize`, `reverse-transpose`, `coalesce`, `is-affine`, `row-major-views`, then `swizzle` and `bit-layout`.
-- The cards with a precondition (`idx2crd`, `zipped-divide`, `blocked-product`, `composition`, `swizzle`): the precondition in Lean, and the law under it.
-- `index-width` as a per-kernel obligation where a proved kernel uses a narrow index type.
+- The composition law under CuTe's divisibility conditions, stated and proved on the model.
+- `two-level-swizzle`: the equation `L(x) = L_out(x) + Swizzle(L_in(x))`, from `Swizzle.call_call`.
+- `bit-layout` for strided modes with power-of-two extents.
+- Layouts with runtime leaves in the conformance test, and a GPU run of the conformance program (construct L2).
+- `index-width` as a per-kernel obligation where a proved kernel uses a narrow index type, from `Lay.call_flat_toNat`.

@@ -4,12 +4,12 @@ title: A layout whose extents are powers of two is linear over F2
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/bit_layout.mojo:15
 quote: "A layout whose extents are powers of two is linear over F2"
-lean: not stated yet
+lean: MojoProof.Layout.Swizzle.call_xor
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws
 upstream:
 depends: swizzle
-level: L0
+level: L1
 ---
 # A layout whose extents are powers of two is linear over F2
 
@@ -25,6 +25,10 @@ Power-of-two extents, strided modes and swizzles.
 
 Extents that are not powers of two.
 
+## In MojoProof
+
+`Swizzle.call_xor`: every swizzle is linear over F2, `S(x ^ y) = S(x) ^ S(y)`, for every value and every bits, base and shift. The strided half of the card is not stated.
+
 ## Open
 
-A Lean statement for strided power-of-two layouts and for swizzles. MojoProof states no layout law yet.
+A Lean statement for strided layouts with power-of-two extents.

@@ -4,12 +4,12 @@ title: With a narrow index type the caller must ensure products and sums fit
 kind: construct
 ref: modular/modular@bbc13a71:Mojo/stdlib/std/utils/coord.mojo:867
 quote: "a narrow `out_type` (e.g. `uint32`) are responsible for ensuring the"
-lean: not stated yet
+lean: MojoProof.Layout.Lay.call_flat_ofNat, MojoProof.Layout.Lay.call_flat_toNat
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws
 upstream:
 depends: crd2idx
-level: L0
+level: L1
 ---
 # With a narrow index type the caller must ensure products and sums fit
 
@@ -25,6 +25,10 @@ A per-kernel obligation: at each call with a narrow `out_type`, the products and
 
 A library-wide statement, since the obligation depends on the launch.
 
+## In MojoProof
+
+For every flat layout and width `w`: `Lay.call_flat_ofNat`, the offset computed in `w`-bit arithmetic is the exact offset modulo `2^w`; `Lay.call_flat_toNat`, it is the exact offset when that is below `2^w`. These are the facts a kernel's obligation needs; at 8 bits the offset 300 of (100, 2):(3, 0) wraps to 44 (MojoProofTest.LayoutLaws).
+
 ## Open
 
-The obligation stated per kernel, where a proved kernel uses a narrow index type. MojoProof states no layout law yet.
+The obligation stated per kernel, where a proved kernel uses a narrow index type.

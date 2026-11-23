@@ -60,18 +60,18 @@ theorem kernel_sum_inst :
 
 /-- **The twin of `Kernel.skel_sound`'s premise `Mem.SkelEq`**: with block 1 payload, the
 read-only `memF w1 true` is not related to `memF w1` (`run_twin`), and the kernel `kF` on it is
-not sound at address choice 0 for the blocks and the trivial relation: a sound grid reaches a grid
-in which every thread has returned (`Grid.Sound.result`), and no grid reachable from the start's
-grid at oracle 0 is one (`reachF`, `running_every`), as the store to block 1 faults. -/
+not sound at address choice 0 for the blocks and the trivial relation: a sound kernel reaches a
+grid in which every thread has returned (`Kernel.Sound.exists_obs`), and no grid reachable from
+the start's grid at oracle 0 is one (`reachF`, `running_every`), as the store to block 1
+faults. -/
 theorem kernel_six_twin :
     ¬ (memF w1).SkelEq (· = 1) (memF w1 true) ∧
       ¬ Kernel.Sound progF kF .one [.ptr ⟨1, 0⟩] (memF w1 true) (fun ch _ => ch = fun _ => 0)
         (fun m => some m.blocks) (fun _ => True) := by
   refine ⟨run_twin.1, fun hk => ?_⟩
-  obtain ⟨g, c, e, hs⟩ := hk (fun _ => 0) (fun _ _ => 0) rfl
+  obtain ⟨_, ⟨g, c, z, e, hz, hd, -⟩, -⟩ := hk.exists_obs (ω := fun _ _ => 0) rfl
   rw [startF_eq] at e
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj e).symm
-  obtain ⟨_, -, ⟨z, hz, hd⟩, -⟩ := hs.result
   have h : running z = true := by
     rcases reachF true hz with rfl | hz'
     · decide +kernel

@@ -550,7 +550,7 @@ theorem Mem.holds_alloc (hc : l.Codec t enc) (x : Tensor α s) (m : Mem)
   have hle := rowMajor_inb l t 0 i
   simp only [rowMajor, Nat.zero_add, List.length_ofFn] at hol hk hle ⊢
   refine ⟨hle, ?_⟩
-  simp only [Block.read, hbytes]
+  simp only [Block.read, hbytes, ByteTree.bytesOf_eq]
   rw [read_alloc out (by rw [hol]; exact hle)]
   simpa [Tensor.Rep.get] using hk _ hi
 

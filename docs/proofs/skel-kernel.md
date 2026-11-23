@@ -1,9 +1,9 @@
 # The kernel theorem from one run per address choice (`Kernel.skel_sound`, `Kernel.Sound.of_blocks`)
 
 Lean: MojoProof/Sem/SkelStep.lean, section "The kernel theorem". Instances and twins:
-MojoProofTest/SkelKernel.lean and MojoProofTest/SkelVadd.lean. The statements hold for every
-program, kernel, launch, arguments, labelling, payload blocks, memories and set of address choices
-that meet their premises.
+MojoProofTest/SkelKernel.lean, MojoProofTest/SkelVadd.lean and MojoProofTest/SkelVadd23.lean. The
+statements hold for every program, kernel, launch, arguments, labelling, payload blocks, memories
+and set of address choices that meet their premises.
 
 ## Where it sits
 
@@ -82,7 +82,8 @@ which `Grid.Step` advances threads and fires collective calls. The two theorems 
   of every thread (`above_vadd`); `mem5`'s blocks are below 4 and of at most 20 bytes, and thread
   0's 4 bytes are put at offset 0 (`mem5_blocks`, and `out_of_outV` by `Elem.Out.of_outBelow`).
   `every` explores every interleaving, so this route closes `Labels.MemOk` by evaluation only for
-  a launch of one thread (the counts in the last section); `Kernels.vadd.correct` covers every valid one-dimensional
+  a launch of one thread (the counts in the last section; at six threads, `skel_vadd23` takes the
+  thread-modular route of that section); `Kernels.vadd.correct` covers every valid one-dimensional
   launch and every address choice, on the memories of `Map2.Pre` (`correct_one` states it at the
   same launch).
 
@@ -144,5 +145,24 @@ the skeleton loads read, the `byval` argument structs, are as at the start, and 
 its start shape". The step premise is then `step_agree` (MojoProof/Sem/Frame.lean) from the
 memory of the solo run to the memory reached: they agree at the pending reads of `n`, so `n`'s
 step gives the next status of its solo run, and its store writes only the output buffer, which
-keeps `I`. Each of the six solo runs has at most 29 statuses, each evaluated once. None of the
-six runs, nor the `I` and `step_agree` part, is in Lean.
+keeps `I`. Each of the six solo runs has at most 29 statuses, each evaluated once.
+
+This is in Lean, MojoProofTest/SkelVadd23.lean, with a stronger `I`: `EqOff 3 · m₀`, the memory
+has the start memory `m₀`'s next block number and, at every number, no block or a block of the
+same shape, read-only flag, owner and liveness as `m₀`'s, with the same bytes below its size
+except in block 3, the output buffer. `R n s` (`RefStatus`) is: returned, or running a thread that
+passes `walk` on `m₀`, the Boolean check of thread `n`'s run alone with every step from `m₀`
+itself. At each step the check asks that the pending reads miss block 3 and stay below their
+blocks' sizes (`readsOk`), that `Labels.MemNext` holds (`memNextB` of MojoProofTest/SkelVadd.lean),
+and that the step changes nothing but block 3's bytes and adds no block at its fresh number
+(`stepOk`); the run never waits. The kernel evaluates the six checks at the start (`check23_ok`).
+The step premise is `Grid.advance_agree` (MojoProof/Sem/Confluence.lean): `EqOff` gives
+`Mem.Agree` at the pending reads (`EqOff.agree`, with `Thread.pending_shape` for the pending reads
+at the reached memory), so the step from the reached grid gives the status and the memory changes
+of the step on `m₀`, and the same changes keep `EqOff` (`EqOff.run`, `run_none` for the fresh
+numbers). `Labels.MemNext` moves from `m₀` to the reached memory by the blocks' shapes
+(`memAt_shape`). This gives `memOk23`; with the run to the end by `Grid.run` evaluated by the
+kernel (`runCheck23_ok`), `Kernel.skel_sound` gives `skel_vadd23`: for every memory related to
+`mem5` by `Mem.SkelEq`, `vector_addition` at `L23` is sound at address choice `ch₀` and every
+oracle, for the blocks and the trivial relation. The module builds in 5 to 10 s, at 4.2 GB peak
+resident memory.

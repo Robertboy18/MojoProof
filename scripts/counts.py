@@ -8,8 +8,9 @@
 prints (lines `width families N groups, ...` and `near-duplicate clusters N, ...`). For every row
 `key limit` of scripts/counts.tsv it prints `  key: N (limit L)`, or `  key: N > L  GREW` when the
 count exceeds its limit, or `  key: missing` when neither output has the count. Exit 1 if a count
-is missing or exceeds its limit, else 0. The audit itself exits with an error only for an axiom,
-so this script is what enforces the limits. Read-only; the standard library only."""
+is missing or exceeds its limit, else 0. The audit itself exits with an error only for an axiom
+or a failed probe (equivalences, duplicates, instances), so this script is what enforces the
+limits. Read-only; the standard library only."""
 import os, re, sys
 
 LIMITS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "counts.tsv")

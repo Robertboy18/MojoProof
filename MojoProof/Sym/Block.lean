@@ -1,5 +1,6 @@
 import MojoProof.Sym.Checker
 import MojoProof.Sem.Schedule
+import MojoProof.Sem.Writes
 
 /-!
 # Soundness of the block checker
@@ -331,6 +332,33 @@ theorem Rel.def {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {�
     Rel V vs f (σ.def res nd) { fi.set res (some x) none with pc := fi.pc + 1 } mi :=
   hR.defP res hv (fun _ _ h => by rw [hnd] at h; cases h) (by rw [hnd]; rfl) hnl
 
+/-- `Rel` holds of every frame with the function, block, `alloca` blocks, caller's register,
+registers and `fmul contract` operands of a frame it holds of (it does not read the position). -/
+theorem Rel.frame {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
+    {mi : Mem} (hR : Rel V vs f σ fi mi) {fi' : Frame} (hfn : fi'.fn = fi.fn)
+    (hl : fi'.label = fi.label) (ha : fi'.allocas = fi.allocas) (hd : fi'.dest = fi.dest)
+    (hr : fi'.regs = fi.regs) (hp : fi'.prods = fi.prods) : Rel V vs f σ fi' mi :=
+  ⟨hfn.trans hR.fn, hl.trans hR.label, ha.trans hR.allocas, hd.trans hR.dest,
+    fun r => (congrFun hr r).trans (hR.regs r), fun r => (congrFun hp r).trans (hR.prods r),
+    hR.wf, hR.fwf, hR.lits, hR.mem, hR.trace⟩
+
+/-- `Rel` after a statement that appends a node `nd₁` that sets no register, then a node `nd₂`
+that sets register `res` (if any) to its value `x`, neither with `fmul contract` operand terms nor
+a float constant node, with the memory unchanged: the frame is the statement's single
+definition of `res` (`Rel.def` twice, `Rel.frame`). -/
+theorem Rel.def₂ {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
+    {mi : Mem} (hR : Rel V vs f σ fi mi) (res : Option Nat) {nd₁ nd₂ : SNode} {x₁ x : Val}
+    (hv₁ : (SVal.node σ.nodes.length).eval V vs = .ok x₁)
+    (hv : (SVal.node (σ.def none nd₁).nodes.length).eval V vs = .ok x)
+    (hnd₁ : nd₁.factors = none := by rfl)
+    (hnl₁ : ∀ ft lit, nd₁ ≠ .flit ft lit := by intro _ _ h; cases h)
+    (hnd₂ : nd₂.factors = none := by rfl)
+    (hnl₂ : ∀ ft lit, nd₂ ≠ .flit ft lit := by intro _ _ h; cases h) :
+    Rel V vs f ((σ.def none nd₁).def res nd₂) { fi.set res (some x) none with pc := fi.pc + 1 }
+      mi := by
+  refine ((hR.def none hv₁ hnd₁ hnl₁).def res hv hnd₂ hnl₂).frame ?_ ?_ ?_ ?_ ?_ ?_ <;>
+    (cases res <;> rfl)
+
 /-- `Rel` after an effect `e` that applies to the memory. -/
 theorem Rel.push {V : Valuation} {vs : List (Except Fault Val)} {f fi : Frame} {σ : SState}
     {mi mi' : Mem} {e : SEff} (hR : Rel V vs f σ fi mi) (he : e.apply V vs mi = .ok mi')
@@ -374,6 +402,20 @@ theorem SState.stmt_mono {P : Program} {lbl pc n : Nat} {σ σ' : SState} {st : 
        cases st.res
        · exact ⟨[], rfl⟩
        · exact ⟨[_], rfl⟩)
+    -- a `getelementptr` on a global: two nodes
+    | (cases h
+       exact ⟨fun d hd => List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hd),
+         ⟨[], (List.append_nil _).symm⟩, ⟨_, List.append_assoc _ _ _⟩, SState.def_regs _ _ _⟩)
+    -- a `load` on a global: two nodes and an effect
+    | (cases h
+       refine ⟨fun d hd => List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hd), ⟨_, rfl⟩,
+         ⟨_, List.append_assoc _ _ _⟩, ?_⟩
+       cases st.res
+       · exact ⟨[], rfl⟩
+       · exact ⟨[_], rfl⟩)
+    -- a `store` on a global: a node and an effect
+    | (cases h
+       exact ⟨fun d hd => List.mem_cons_of_mem _ hd, ⟨_, rfl⟩, ⟨_, rfl⟩, ⟨[], rfl⟩⟩)
 
 /-- A run of statements keeps the obligations, extends the effects and the table, and puts
 entries in front of the register entries. -/
@@ -428,6 +470,13 @@ theorem SState.stmt_factors {P : Program} {lbl pc n : Nat} {σ σ' : SState} {st
             · first
                 | rfl
                 | simp_all [SNode.fbinOf, SNode.factors]))
+    -- a `getelementptr` on a global: two nodes
+    | (cases h
+       intro nd hnd
+       simp only [SState.def, List.mem_append, List.mem_singleton] at hnd
+       rcases hnd with (hnd | rfl) | rfl
+       · exact hf nd hnd
+       all_goals rfl)
 
 /-- A run of statements without `fmul contract` keeps the table free of `fmul contract`
 nodes. -/
@@ -499,6 +548,38 @@ theorem exec_cast {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {op t 
     exec c s k f st = .ok (.next { f.set st.res (some r) none with pc := f.pc + 1 } s.mem) := by
   simp only [exec, hmd, hi, ha, hr, bind, Except.bind, pure, Except.pure]
 
+/-- **`castOk` is `castV`'s cases**: for every layout `l`, memory `m`, cast operator `op`, source
+type `s`, target type `t` and choices `ch`, `castOk op s t` is `false` if and only if `castV`
+faults with its unsupported-cast message (`fptoui`, `fptosi`, `inttoptr` or ill-typed) on every
+operand. When it is `true`, `castV` takes the operand `poison` to `poison`, or (a `bitcast`
+between types of different sizes) to another fault. So the checker's cast case
+(`SState.stmt`), which requires `castOk`, refuses exactly the operators and types of `castV`'s
+last case (and `ptrtoint` after a store). -/
+theorem castOk_iff {l : Layout} {m : Mem} {op : CastOp} {s t : Ty} {ch : Nat → Nat} :
+    castOk op s t = false ↔ ∀ x, castV l m op s x t ch =
+      .error (.unsupported "cast (fptoui, fptosi, inttoptr, or ill-typed)") := by
+  refine ⟨fun h x => ?_, fun h => ?_⟩
+  · unfold castV
+    split <;> first | rfl | simp_all [castOk]
+  · cases hc : castOk op s t
+    · rfl
+    · have hb : toBitList l s .poison = .ok (List.replicate (l.scalarBits s) none) := by
+        cases s <;> rfl
+      have h := h .poison
+      revert h
+      unfold castV
+      split <;> simp_all [castOk, lanes, intCast, floatCast, intToFloat, bitcast, pure,
+        Except.pure]
+      split
+      · simp
+      · simp only [bind, Except.bind]
+        split_ifs
+        · simp
+        · intro h
+          injection h with h
+          injection h with h
+          exact absurd h (by decide)
+
 /-- `exec` of an `extractvalue`. -/
 theorem exec_extract {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {t a is x r}
     (hmd : st.checkMd = .ok ()) (hi : st.inst = .extractvalue (.mk t a) is)
@@ -568,8 +649,28 @@ theorem exec_fbin {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {op fm
   rw [exec_fbinC hmd hi he ha hb hr, hc]
   rfl
 
+/-- **`exec` of a call of an intrinsic with no arguments**: for every context, scope, step count
+and frame, a statement whose metadata `checkMd` accepts that calls, with no arguments and no
+fast-math flags, a declaration that `P.intrinsics` names `i`, has no blocks and whose attributes
+`Func.check` accepts, where `intrinsic` gives the value `v` on the same memory, `v` is defined
+(`ownUndef` is false) and the return attributes keep `v` as `w`, sets its register to `w` and moves
+to the next statement, on the same memory. -/
+theorem exec_nullary {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {fm ty g fn i v w}
+    (hmd : st.checkMd = .ok ()) (hi : st.inst = .call fm ty (.fn g) [])
+    (hfn : c.prog.module.funcs.find? (·.name == g) = some fn)
+    (hg : c.prog.intrinsics.lookup g = some i) (hfm : (fm == {}) = true)
+    (hd : fn.blocks.isEmpty = true) (hc : fn.check c.prog.module (some i) = .ok ())
+    (hv : intrinsic c s fm i [] = .ok (some (some v, s.mem))) (hu : ownUndef c s i [] = false)
+    (hw : withAttrs c.prog.layout s.mem fn.ret fn.retAttrs v = .ok w) :
+    exec c s k f st = .ok (.next { f.set st.res (some w) none with pc := f.pc + 1 } s.mem) := by
+  simp only [exec, hmd, hi, hfn, hg, hfm, hd, hc, hv, hw, hu, List.mapM_nil,
+    List.zip_nil_right, List.all_nil, Bool.true_or, Bool.not_true, Bool.and_false,
+    Option.mapM_some, Functor.map, Except.map, bind, Except.bind, pure, Except.pure,
+    Bool.false_eq_true, ↓reduceIte]
+
 /-- `exec` of a call of a special register: a declaration that `P.intrinsics` names `sreg r d`,
-with no arguments and no fast-math flags, whose attributes `Func.check` accepts. -/
+with no arguments and no fast-math flags, whose attributes `Func.check` accepts
+(`exec_nullary`). -/
 theorem exec_sreg {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {fm ty g fn r d w}
     (hmd : st.checkMd = .ok ()) (hi : st.inst = .call fm ty (.fn g) [])
     (hfn : c.prog.module.funcs.find? (·.name == g) = some fn)
@@ -577,12 +678,23 @@ theorem exec_sreg {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {fm ty
     (hd : fn.blocks.isEmpty = true) (hc : fn.check c.prog.module (some (.sreg r d)) = .ok ())
     (hw : withAttrs c.prog.layout s.mem fn.ret fn.retAttrs
       (.bits 32 (BitVec.ofNat 32 (c.env.sreg r d))) = .ok w) :
-    exec c s k f st = .ok (.next { f.set st.res (some w) none with pc := f.pc + 1 } s.mem) := by
-  have hu : ownUndef c s (.sreg r d) [] = false := rfl
-  simp only [exec, hmd, hi, hfn, hg, hfm, hd, hc, hw, hu, intrinsic, List.mapM_nil,
-    List.zip_nil_right, List.all_nil, Bool.true_or, Bool.not_true, Bool.and_false,
-    Option.mapM_some, Functor.map, Except.map, bind, Except.bind, pure, Except.pure,
-    Bool.false_eq_true, ↓reduceIte]
+    exec c s k f st = .ok (.next { f.set st.res (some w) none with pc := f.pc + 1 } s.mem) :=
+  exec_nullary hmd hi hfn hg hfm hd hc rfl rfl hw
+
+/-- `exec` of a call of the lane number: for every context, scope, step count and frame, a
+statement whose metadata `checkMd` accepts that calls, with no arguments and no fast-math flags,
+a declaration that `P.intrinsics` names `laneid`, whose attributes `Func.check` accepts and whose
+return attributes keep the context's `%laneid` as `w`, sets its register to `w` and moves to the
+next statement, on the same memory (`exec_nullary`). -/
+theorem exec_laneid {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {fm ty g fn w}
+    (hmd : st.checkMd = .ok ()) (hi : st.inst = .call fm ty (.fn g) [])
+    (hfn : c.prog.module.funcs.find? (·.name == g) = some fn)
+    (hg : c.prog.intrinsics.lookup g = some .laneid) (hfm : (fm == {}) = true)
+    (hd : fn.blocks.isEmpty = true) (hc : fn.check c.prog.module (some .laneid) = .ok ())
+    (hw : withAttrs c.prog.layout s.mem fn.ret fn.retAttrs
+      (.bits 32 (BitVec.ofNat 32 c.env.laneid)) = .ok w) :
+    exec c s k f st = .ok (.next { f.set st.res (some w) none with pc := f.pc + 1 } s.mem) :=
+  exec_nullary hmd hi hfn hg hfm hd hc rfl rfl hw
 
 /-- `exec` of a `select`: for every context, scope, step count and frame, a statement whose
 metadata `checkMd` accepts, whose condition and operands evaluate, and on which `selectV` gives
@@ -733,11 +845,13 @@ theorem enter_congr {s : Scope} {f g f' : Frame} {d : Nat} (h : enter s f d = .o
         obtain ⟨st, v⟩ := z
         exact Frame.set_with _ _ _ h1 h2
 
-/-- `enter` keeps the frame's function, `alloca` blocks and caller's register, and gives block
-`d` at the position after its `phi`s (`phiCount`). -/
+/-- `enter` keeps the frame's function, `alloca` blocks (`enter_allocas`) and caller's register,
+and gives block `d` at the position after its `phi`s (`phiCount`). -/
 theorem enter_fields {s : Scope} {f f' : Frame} {d : Nat} (h : enter s f d = .ok f') :
     f'.fn = f.fn ∧ f'.label = d ∧ f'.pc = phiCount f.fn d ∧ f'.allocas = f.allocas ∧
       f'.dest = f.dest := by
+  suffices h' : f'.fn = f.fn ∧ f'.label = d ∧ f'.pc = phiCount f.fn d ∧ f'.dest = f.dest from
+    ⟨h'.1, h'.2.1, h'.2.2.1, enter_allocas h, h'.2.2.2⟩
   unfold enter at h
   cases hb : f.fn.blocks.find? (·.label == d) with
   | none => rw [hb] at h; cases h
@@ -751,7 +865,7 @@ theorem enter_fields {s : Scope} {f f' : Frame} {d : Nat} (h : enter s f d = .ok
       simp only [bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
       subst h
       rw [Frame.foldl_with _ ?_ _ f f rfl rfl]
-      · exact ⟨rfl, rfl, by simp only [phiCount, hb]; rfl, rfl, rfl⟩
+      · exact ⟨rfl, rfl, by simp only [phiCount, hb]; rfl, rfl⟩
       · intro f g z h1 h2
         obtain ⟨st, v⟩ := z
         exact Frame.set_with _ _ _ h1 h2
@@ -947,15 +1061,15 @@ theorem SState.op_storeVal {σ : SState} {t : Ty} {w : Value} {x : SVal}
   · cases h
 
 /-- The pointer facts of statement `st` at position `pc` of block `lbl`, which takes state `σ`
-to `σ'`, run in scope `s`, with the values `vs` of the final table: a `load` node it appends is
-node `σ.nodes.length`, at `lbl` and `pc`, and the statement's pointer operand evaluates in `s` to
-the node's pointer term on the values of the nodes before it; a `store` effect it appends is at
+to `σ'`, run in scope `s`, with the values `vs` of the final table: a `load` node `j` it appends
+is at `lbl` and `pc`, and the statement's pointer operand evaluates in `s` to the node's pointer
+term on the values of the nodes before it (the first `j` of `σ'`); a `store` effect it appends is at
 `lbl` and `pc`, the operand evaluates in `s` to the effect's pointer term on `vs`, and the stored
 term is the entry `σ.op` gives the stored operand. -/
 def StmtPtrs (V : Valuation) (vs : List (Except Fault Val)) (lbl pc : Nat) (σ σ' : SState)
     (st : Stmt) (s : Scope) : Prop :=
   (∀ j l pc' p, σ.nodes.length ≤ j → σ'.nodes[j]? = some (.load l pc' p) →
-    j = σ.nodes.length ∧ l = lbl ∧ pc' = pc ∧ PtrIs true st s (p.eval V (vals V σ.nodes))) ∧
+    l = lbl ∧ pc' = pc ∧ PtrIs true st s (p.eval V (vals V (σ'.nodes.take j)))) ∧
   ∀ l pc' v p, SEff.store l pc' v p ∈ σ'.effs.drop σ.effs.length →
     l = lbl ∧ pc' = pc ∧ PtrIs false st s (p.eval V vs) ∧
       ∃ vol t w ptr al, st.inst = .store vol (.mk t w) ptr al ∧ σ.op t w = some v
@@ -968,6 +1082,22 @@ theorem SState.def_ptrs {V : Valuation} {vs : List (Except Fault Val)} {lbl pc :
   refine ⟨fun j l pc' p hj h => absurd (getElem?_snoc_ge hj h).2 (hnd l pc' p),
     fun l pc' v p h => ?_⟩
   simp only [SState.def, List.drop_length, List.not_mem_nil] at h
+
+/-- A statement that appends two nodes, neither a `load`, and no effect has no pointer facts. -/
+theorem SState.def₂_ptrs {V : Valuation} {vs : List (Except Fault Val)} {lbl pc : Nat}
+    {σ : SState} {res : Option Nat} {nd₁ nd₂ : SNode} {st : Stmt} {s : Scope}
+    (hnd₁ : ∀ l pc p, nd₁ ≠ .load l pc p := by intro _ _ _ h; cases h)
+    (hnd₂ : ∀ l pc p, nd₂ ≠ .load l pc p := by intro _ _ _ h; cases h) :
+    StmtPtrs V vs lbl pc σ ((σ.def none nd₁).def res nd₂) st s := by
+  refine ⟨fun j l pc' p hj h => ?_, fun l pc' v p h => ?_⟩
+  · by_cases hj' : j < (σ.def none nd₁).nodes.length
+    · have h' : (σ.def none nd₁).nodes[j]? = some (.load l pc' p) := by
+        rw [← List.getElem?_append_left (l₂ := [nd₂]) hj']
+        exact h
+      exact absurd (getElem?_snoc_ge (l := σ.nodes) hj h').2 (hnd₁ l pc' p)
+    · exact absurd (getElem?_snoc_ge (l := (σ.def none nd₁).nodes) (Nat.le_of_not_lt hj') h).2
+        (hnd₂ l pc' p)
+  · simp only [SState.def, List.drop_length, List.not_mem_nil] at h
 
 /-- The node `SNode.fbinOf` makes has the value of the `SNode.fbinP` node of the same operator,
 operands and `fmul contract` operand terms. -/
@@ -1054,7 +1184,32 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
       obtain ⟨u, hu, hv'⟩ := Except.bind_eq_ok.1 hv'
       exact ⟨_, _, exec_cast hmd hi (SState.op_eval hR rfl hx (lift hx hus hu))
         (by rcases hop with rfl | rfl | rfl <;> exact hv'), hR.def st.res hv, rfl, SState.def_ptrs⟩
-    · cases h
+    · split at h
+      · cases h
+      · rename_i hns
+        obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
+        cases h
+        have hst' := stmt_inst hst hi
+        obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
+        obtain ⟨hv', hus⟩ := SState.node_ok hN hv
+        simp only [SNode.eval, hst'] at hv'
+        obtain ⟨u, hu, hv'⟩ := Except.bind_eq_ok.1 hv'
+        -- the cast at the thread's memory is the cast at the entry memory: before the block's
+        -- first store that memory is the entry memory with another trace, and only `ptrtoint`
+        -- reads memory
+        have hm : castV V.ctx.prog.layout mi op ts u t
+            (fun i => V.ctx.oracle (Nat.pair (V.k + n) i)) = castV V.ctx.prog.layout V.mem op ts
+              u t (fun i => V.ctx.oracle (Nat.pair (V.k + n) i)) := by
+          by_cases hs : σ.stored = true
+          · have hp : op ≠ .ptrtoint := fun hp => hns (Or.inl ⟨hs, hp⟩)
+            cases op <;> first
+              | exact absurd rfl hp
+              | (unfold castV; split <;> first | rfl | contradiction)
+          · obtain ⟨tr, htr⟩ := hR.trace (Bool.eq_false_of_ne_true hs)
+            subst htr
+            exact castV_retrace _ _ _ _ _ _ _ _
+        exact ⟨_, _, exec_cast hmd hi (SState.op_eval hR rfl hx (lift hx hus hu)) (hm.trans hv'),
+          hR.def st.res hv, rfl, SState.def_ptrs⟩
   · -- extractvalue
     rename_i t a is hi
     obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
@@ -1070,11 +1225,57 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
     split at h
     · cases h
     · rename_i hns
+      obtain ⟨tr, htr⟩ := hR.trace (Bool.eq_false_of_ne_true hns)
+      have hst' := stmt_inst hst hi
+      split at h
+      · -- on a global: the node of its pointer (the second obligation), then the
+        -- `getelementptr`'s (the first)
+        rename_i g
+        obtain ⟨xi, hxi, h⟩ := Option.bind_eq_some_iff.1 h
+        cases h
+        obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
+        obtain ⟨q, hq⟩ := hO (.ok _) (List.mem_cons_of_mem _ (List.Mem.head _))
+        obtain ⟨hv', hus⟩ := SState.node_ok (σ := σ.def none (.globalAt lbl fi.pc 0)) hN hv
+        obtain ⟨hq', -⟩ := SState.node_ok (σ := σ) hus hq
+        obtain ⟨p, hg, rfl⟩ : ∃ p, V.ctx.globals g = some p ∧ q = .ptr p := by
+          simp only [SNode.eval, hst', Inst.operands, List.getElem?_cons_zero] at hq'
+          split at hq'
+          · exact ⟨_, ‹_›, (Except.ok.inj hq').symm⟩
+          · cases hq'
+        simp only [SNode.eval, hst'] at hv'
+        obtain ⟨u, hu, hv'⟩ := Except.bind_eq_ok.1 hv'
+        obtain ⟨u', hu', hv'⟩ := Except.bind_eq_ok.1 hv'
+        -- the values on the table with the global's node are those of the final table
+        have hlen : (vals V (σ.def none (.globalAt lbl fi.pc 0)).nodes).length =
+            σ.nodes.length + 1 := by
+          rw [vals_length]
+          simp only [SState.def, List.length_append, List.length_singleton]
+        have hu2 : xi.eval V vs = .ok u := by
+          rw [hus]
+          exact SVal.eval_append (fun j hj => by
+            rw [hlen]; exact Nat.lt_succ_of_lt (SState.op_wf hR hxi j hj)) hu _
+        have hu2' : (SVal.node σ.nodes.length).eval V vs = .ok u' := by
+          rw [hus]
+          exact SVal.eval_append (fun j hj => by
+            obtain rfl := SVal.node.inj hj; rw [hlen]; exact Nat.lt_succ_self _) hu' _
+        obtain rfl : u' = .ptr p := Except.ok.inj (hu2'.symm.trans hq)
+        subst htr
+        have h1 := SState.op_eval hR (s := V.ctx.scope { V.mem with trace := tr } fi (V.k + n))
+          rfl hxi hu2
+        have hidx : evalTVs (V.ctx.scope { V.mem with trace := tr } fi (V.k + n)) [.mk ti i] =
+            .ok [u] := by
+          simp only [evalTVs, evalTV]
+          rw [h1]; rfl
+        have hb : evalV (V.ctx.scope { V.mem with trace := tr } fi (V.k + n)) (.ptr as) (.glob g) =
+            .ok (.ptr p) := by
+          simp only [evalV, Ctx.scope, hg]
+          rfl
+        exact ⟨_, _, exec_gep hmd hi hidx hb
+          ((gep_retrace V.ctx.prog.layout V.mem tr fl src as [u] (.ptr p)).trans hv'),
+          hR.def₂ st.res hq hv, rfl, SState.def₂_ptrs⟩
       obtain ⟨xi, hxi, h⟩ := Option.bind_eq_some_iff.1 h
       obtain ⟨xb, hxb, h⟩ := Option.bind_eq_some_iff.1 h
       cases h
-      obtain ⟨tr, htr⟩ := hR.trace (Bool.eq_false_of_ne_true hns)
-      have hst' := stmt_inst hst hi
       obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
       obtain ⟨hv', hus⟩ := SState.node_ok hN hv
       simp only [SNode.eval, hst'] at hv'
@@ -1093,12 +1294,165 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
   · -- load
     rename_i vol ty as p al hi
     split at h
-    · cases h
+    · -- after a store: the node of the `load` from the memory the effects before it make, which
+      -- run on its table as on the final one (`SEff.run_before`), to the frame's memory
+      rename_i hs
+      have hst' := stmt_inst hst hi
+      split at h
+      · rename_i hb
+        split at h
+        · -- on a global: the node of its pointer (the second obligation), then the `load`'s (the
+          -- first)
+          rename_i g
+          cases h
+          obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
+          obtain ⟨q, hq⟩ := hO (.ok _) (List.mem_cons_of_mem _ (List.Mem.head _))
+          obtain ⟨hv', hus⟩ := SState.node_ok (σ := σ.def none (.globalAt lbl fi.pc 0)) hN hv
+          obtain ⟨hq', hus₀⟩ := SState.node_ok (σ := σ) hus hq
+          obtain ⟨p, hg, rfl⟩ : ∃ p, V.ctx.globals g = some p ∧ q = .ptr p := by
+            simp only [SNode.eval, hst', Inst.operands, List.getElem?_cons_zero] at hq'
+            split at hq'
+            · exact ⟨_, ‹_›, (Except.ok.inj hq').symm⟩
+            · cases hq'
+          simp only [SNode.eval, hst'] at hv'
+          obtain ⟨pv, hpv, hv1⟩ := Except.bind_eq_ok.1 hv'
+          obtain ⟨a, ha, hv2⟩ := Except.bind_eq_ok.1 hv1
+          obtain ⟨m₀, hm₀, hv3⟩ := Except.bind_eq_ok.1 hv2
+          obtain ⟨v₀, hv₀, hv4⟩ := Except.bind_eq_ok.1 hv3
+          -- the pointer on the table with the global's node is the global's
+          have hlen : (vals V (σ.def none (.globalAt lbl fi.pc 0)).nodes).length =
+              σ.nodes.length + 1 := by
+            rw [vals_length]
+            simp only [SState.def, List.length_append, List.length_singleton]
+          have hpv2 : (SVal.node σ.nodes.length).eval V vs = .ok pv := by
+            rw [hus]
+            exact SVal.eval_append (fun j hj => by
+              obtain rfl := SVal.node.inj hj; rw [hlen]; exact Nat.lt_succ_self _) hpv _
+          obtain rfl : pv = .ptr p := Except.ok.inj (hpv2.symm.trans hq)
+          have hb' : evalV (V.ctx.scope mi fi (V.k + n)) (.ptr as) (.glob g) = .ok (.ptr p) := by
+            simp only [evalV, Ctx.scope, hg]
+            rfl
+          -- the effects run on the table with the global's node as on the final one
+          have h1 := hR.mem
+          rw [hus₀, SEff.run_before (vs := vals V σ.nodes) (by rw [vals_length]; exact hb)] at h1
+          simp only [SState.def] at hm₀
+          rw [vals_snoc, SEff.run_before (by rw [vals_length]; exact hb)] at hm₀
+          obtain rfl : m₀ = mi := Except.ok.inj (hm₀.symm.trans h1)
+          cases hu : (st.md.any (·.1 == "noundef") && !v₀.defined)
+          · rw [hu] at hv4
+            cases hv4
+            refine ⟨_, _, exec_load hmd hi hb' ha hv₀ hu, ?_, rfl,
+              fun j l pc' p' hj hn => ?_, fun l pc' v' p' hm => ?_⟩
+            · exact (hR.def₂ st.res hq hv).push
+                (by simp only [SEff.apply, hst', hq, ha, bind, Except.bind, pure, Except.pure,
+                  Ctx.scope])
+                (fun h' => absurd (hs.symm.trans h') (by decide))
+            · by_cases hj' : j < (σ.def none (.globalAt lbl fi.pc 0)).nodes.length
+              · have h' : (σ.def none (.globalAt lbl fi.pc 0)).nodes[j]? =
+                    some (.load l pc' p') := by
+                  rw [← List.getElem?_append_left
+                    (l₂ := [SNode.loadAfter lbl fi.pc (.node σ.nodes.length) σ.effs]) hj']
+                  exact hn
+                exact absurd (getElem?_snoc_ge (l := σ.nodes) hj h').2 (by intro h; cases h)
+              · obtain ⟨rfl, he⟩ := getElem?_snoc_ge
+                  (l := (σ.def none (.globalAt lbl fi.pc 0)).nodes) (Nat.le_of_not_lt hj') hn
+                cases he
+            · simp only [List.drop_left, List.mem_singleton, reduceCtorEq] at hm
+          · rw [hu] at hv4
+            cases hv4
+        obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
+        cases h
+        obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
+        obtain ⟨hv', hus⟩ := SState.node_ok hN hv
+        simp only [SNode.eval, hst'] at hv'
+        obtain ⟨pv, hpv, hv'⟩ := Except.bind_eq_ok.1 hv'
+        obtain ⟨q, hq, hv'⟩ := Except.bind_eq_ok.1 hv'
+        obtain ⟨m₀, hm₀, hv'⟩ := Except.bind_eq_ok.1 hv'
+        obtain ⟨v₀, hv₀, hv'⟩ := Except.bind_eq_ok.1 hv'
+        have hpv' := lift hx hus hpv
+        have h1 := hR.mem
+        rw [hus, SEff.run_before (vs := vals V σ.nodes) (by rw [vals_length]; exact hb)] at h1
+        obtain rfl : m₀ = mi := Except.ok.inj (hm₀.symm.trans h1)
+        cases hu : (st.md.any (·.1 == "noundef") && !v₀.defined)
+        · rw [hu] at hv'
+          cases hv'
+          refine ⟨_, _, exec_load hmd hi (SState.op_eval hR rfl hx hpv') hq hv₀ hu, ?_, rfl,
+            fun j l pc' p' hj hn => ?_, fun l pc' v' p' hm => ?_⟩
+          · exact (hR.def st.res hv).push
+              (by simp only [SEff.apply, hst', hpv', hq, bind, Except.bind, pure, Except.pure,
+                Ctx.scope])
+              (fun h' => absurd (hs.symm.trans h') (by decide))
+          · obtain ⟨rfl, he⟩ := getElem?_snoc_ge hj hn
+            cases he
+          · simp only [List.drop_left, List.mem_singleton, reduceCtorEq] at hm
+        · rw [hu] at hv'
+          cases hv'
+      · cases h
     · rename_i hns
-      obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
-      cases h
       obtain ⟨tr, htr⟩ := hR.trace (Bool.eq_false_of_ne_true hns)
       have hst' := stmt_inst hst hi
+      split at h
+      · -- on a global: the node of its pointer (the second obligation), then the `load`'s (the
+        -- first)
+        rename_i g
+        cases h
+        obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
+        obtain ⟨q, hq⟩ := hO (.ok _) (List.mem_cons_of_mem _ (List.Mem.head _))
+        obtain ⟨hv', hus⟩ := SState.node_ok (σ := σ.def none (.globalAt lbl fi.pc 0)) hN hv
+        obtain ⟨hq', -⟩ := SState.node_ok (σ := σ) hus hq
+        obtain ⟨p, hg, rfl⟩ : ∃ p, V.ctx.globals g = some p ∧ q = .ptr p := by
+          simp only [SNode.eval, hst', Inst.operands, List.getElem?_cons_zero] at hq'
+          split at hq'
+          · exact ⟨_, ‹_›, (Except.ok.inj hq').symm⟩
+          · cases hq'
+        simp only [SNode.eval, hst'] at hv'
+        obtain ⟨pv, hpv, hv1⟩ := Except.bind_eq_ok.1 hv'
+        obtain ⟨a, ha, hv2⟩ := Except.bind_eq_ok.1 hv1
+        obtain ⟨v₀, hv₀, hv3⟩ := Except.bind_eq_ok.1 hv2
+        -- the pointer on the table with the global's node is the global's
+        have hlen : (vals V (σ.def none (.globalAt lbl fi.pc 0)).nodes).length =
+            σ.nodes.length + 1 := by
+          rw [vals_length]
+          simp only [SState.def, List.length_append, List.length_singleton]
+        have hpv2 : (SVal.node σ.nodes.length).eval V vs = .ok pv := by
+          rw [hus]
+          exact SVal.eval_append (fun j hj => by
+            obtain rfl := SVal.node.inj hj; rw [hlen]; exact Nat.lt_succ_self _) hpv _
+        obtain rfl : pv = .ptr p := Except.ok.inj (hpv2.symm.trans hq)
+        have hb : evalV (V.ctx.scope mi fi (V.k + n)) (.ptr as) (.glob g) = .ok (.ptr p) := by
+          simp only [evalV, Ctx.scope, hg]
+          rfl
+        cases hu : (st.md.any (·.1 == "noundef") && !v₀.defined)
+        · rw [hu] at hv3
+          cases hv3
+          subst htr
+          refine ⟨_, _, exec_load hmd hi hb ha
+            ((Mem.load_retrace V.ctx.prog.layout V.mem tr V.ctx.who as ty a
+              (some (al.getD (V.ctx.prog.layout.align ty)))).trans hv₀) hu, ?_, rfl,
+            fun j l pc' p' hj hn => ?_, fun l pc' v' p' hm => ?_⟩
+          · exact (hR.def₂ st.res hq hv).push
+              (by simp only [SEff.apply, hst', hq, ha, bind, Except.bind, pure, Except.pure,
+                Ctx.scope])
+              (fun _ => ⟨_, rfl⟩)
+          · by_cases hj' : j < (σ.def none (.globalAt lbl fi.pc 0)).nodes.length
+            · have h' : (σ.def none (.globalAt lbl fi.pc 0)).nodes[j]? = some (.load l pc' p') := by
+                rw [← List.getElem?_append_left
+                  (l₂ := [SNode.load lbl fi.pc (.node σ.nodes.length)]) hj']
+                exact hn
+              exact absurd (getElem?_snoc_ge (l := σ.nodes) hj h').2 (by intro h; cases h)
+            · obtain ⟨rfl, he⟩ := getElem?_snoc_ge (l := (σ.def none (.globalAt lbl fi.pc 0)).nodes)
+                (Nat.le_of_not_lt hj') hn
+              cases he
+              refine ⟨rfl, rfl, as, .glob g, vol, ty, al, hi, ?_⟩
+              change _ = SVal.eval V (vals V (List.take _
+                ((σ.def none (.globalAt lbl fi.pc 0)).nodes ++ [_]))) _
+              rw [List.take_left]
+              exact hb.trans hpv.symm
+          · simp only [List.drop_left, List.mem_singleton, reduceCtorEq] at hm
+        · rw [hu] at hv3
+          cases hv3
+      obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
+      cases h
       obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
       obtain ⟨hv', hus⟩ := SState.node_ok hN hv
       simp only [SNode.eval, hst'] at hv'
@@ -1120,13 +1474,49 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
             (fun _ => ⟨_, rfl⟩)
         · obtain ⟨rfl, he⟩ := getElem?_snoc_ge hj hn
           cases he
-          exact ⟨rfl, rfl, rfl, as, p, vol, ty, al, hi,
-            (SState.op_eval hR rfl hx hpv').trans hpv.symm⟩
+          refine ⟨rfl, rfl, as, p, vol, ty, al, hi, ?_⟩
+          change _ = SVal.eval V (vals V (List.take σ.nodes.length (σ.nodes ++ [_]))) _
+          rw [List.take_left]
+          exact (SState.op_eval hR rfl hx hpv').trans hpv.symm
         · simp only [List.drop_left, List.mem_singleton, reduceCtorEq] at hm
       · rw [hu] at hv'
         cases hv'
   · -- store
     rename_i vol t v as p al hi
+    split at h
+    · -- on a global: the node of its pointer, then the `store`'s effect on it
+      rename_i g
+      obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
+      cases h
+      have hst' := stmt_inst hst hi
+      obtain ⟨q, hq⟩ := hO (.ok _) (List.Mem.head _)
+      obtain ⟨hq', -⟩ := SState.node_ok (σ := σ) hN hq
+      obtain ⟨p, hg, rfl⟩ : ∃ p, V.ctx.globals g = some p ∧ q = .ptr p := by
+        simp only [SNode.eval, hst', Inst.operands, List.getElem?_cons_succ,
+          List.getElem?_cons_zero] at hq'
+        split at hq'
+        · exact ⟨_, ‹_›, (Except.ok.inj hq').symm⟩
+        · cases hq'
+      obtain ⟨mf, hmf⟩ := hM
+      obtain ⟨m₀, h₀, he⟩ := SEff.run_snoc hmf
+      cases Except.ok.inj (h₀.symm.trans hR.mem)
+      have he' := he
+      simp only [SEff.apply, hst'] at he
+      obtain ⟨xv, hxv, he1⟩ := Except.bind_eq_ok.1 he
+      obtain ⟨pv, hpv, he2⟩ := Except.bind_eq_ok.1 he1
+      obtain ⟨a, ha, he3⟩ := Except.bind_eq_ok.1 he2
+      obtain rfl : pv = .ptr p := Except.ok.inj (hpv.symm.trans hq)
+      have hb : evalV (V.ctx.scope mi fi (V.k + n)) (.ptr as) (.glob g) = .ok (.ptr p) := by
+        simp only [evalV, Ctx.scope, hg]
+        rfl
+      refine ⟨_, _, exec_store hmd hi (SState.op_eval hR rfl hx hxv) hb ha he3,
+        ((hR.def none hq).frame (fi' := fi) rfl rfl rfl rfl rfl rfl).store he', rfl,
+        fun j l pc' p' hj hn => ?_, fun l pc' v' p' hm => ?_⟩
+      · exact absurd (getElem?_snoc_ge hj hn).2 (by intro h; cases h)
+      · simp only [List.drop_left, List.mem_singleton, SEff.store.injEq] at hm
+        obtain ⟨rfl, rfl, rfl, rfl⟩ := hm
+        exact ⟨rfl, rfl, ⟨as, .glob g, vol, _, al, hi, hb.trans hpv.symm⟩, vol, t, v, _, al, hi,
+          hx⟩
     obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.1 h
     obtain ⟨y, hy, h⟩ := Option.bind_eq_some_iff.1 h
     cases h
@@ -1225,7 +1615,7 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
             simp only [prodVal, hxu, hyu, Except.toOption]
             rfl
     · cases h
-  · -- a call of a special register
+  · -- a call of a special register or of the lane number
     rename_i fm ty g hi
     split at h
     · cases h
@@ -1246,6 +1636,23 @@ theorem SState.stmt_sound {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
             simp only [SNode.eval, hst', hfn, hg] at hv'
             subst htr
             exact ⟨_, _, exec_sreg hmd hi hfn hg hfm hd (isOk_unit hck)
+              ((congrFun (withAttrs_retrace _ _ tr _ _) _).trans hv'), hR.def st.res hv, rfl,
+              SState.def_ptrs⟩
+          · cases h
+        · -- a call of the lane number
+          rename_i hg
+          split at h
+          · rename_i hc
+            cases h
+            simp only [Bool.and_eq_true] at hc
+            obtain ⟨⟨hfm, hd⟩, hck⟩ := hc
+            obtain ⟨tr, htr⟩ := hR.trace (Bool.eq_false_of_ne_true hns)
+            have hst' := stmt_inst hst hi
+            obtain ⟨v, hv⟩ := hO (.ok _) (List.Mem.head _)
+            obtain ⟨hv', -⟩ := SState.node_ok hN hv
+            simp only [SNode.eval, hst', hfn, hg] at hv'
+            subst htr
+            exact ⟨_, _, exec_laneid hmd hi hfn hg hfm hd (isOk_unit hck)
               ((congrFun (withAttrs_retrace _ _ tr _ _) _).trans hv'), hR.def st.res hv, rfl,
               SState.def_ptrs⟩
           · cases h
@@ -1313,7 +1720,8 @@ theorem PtrAt.pre {c : Ctx} {t t₁ : Thread} {m m₁ : Mem} {rest : List Frame}
   exact ⟨f, k, m', b, st, h.trans hS, hq⟩
 
 /-- **A run of statements with its pointer facts**: a run of statements of block `b` from the
-`n`-th after the entry whose final state is good: the thread's steps run them, to a frame and
+`n`-th after the entry (a prefix of the statements from there, so a run that stops before the
+terminator too) whose final state is good: the thread's steps run them, to a frame and
 memory that the final state describes; and they reach each `load` node and each `store` effect
 the run appends to `σ`'s, whose statement's pointer operand evaluates in the thread's scope
 there to the term's pointer value (`PtrAt`): on the values of the nodes before it for a `load`,
@@ -1323,7 +1731,7 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
     {b : LLVM.Block} {lbl p0 : Nat} {rest : List Frame} {contract : Bool}
     (hb : V.fn.blocks.find? (·.label == lbl) = some b) (hfn : f.fn = V.fn) (hlbl : f.label = lbl) :
     ∀ (sts : List Stmt) (n : Nat) (σ σf : SState) (fi : Frame) (mi : Mem) (kk : Nat),
-      sts = b.stmts.toList.drop (p0 + n) → fi.pc = p0 + n → kk = V.k + n →
+      sts <+: b.stmts.toList.drop (p0 + n) → fi.pc = p0 + n → kk = V.k + n →
       Rel V vs f σ fi mi → SState.run contract V.ctx.prog lbl p0 sts n σ = some σf →
       Good V vs σf →
       (∃ fe me, Steps V.ctx ⟨fi :: rest, kk⟩ mi ⟨fe :: rest, kk + sts.length⟩ me ∧
@@ -1346,8 +1754,9 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
     simp only [SState.run] at h
     split at h
     · rename_i σ' hσ
+      obtain ⟨tl, htl⟩ := hsts
       have hst : b.stmts[p0 + n]? = some st := by
-        rw [← Array.getElem?_toList, ← Nat.add_zero (p0 + n), ← List.getElem?_drop, ← hsts]
+        rw [← Array.getElem?_toList, ← Nat.add_zero (p0 + n), ← List.getElem?_drop, ← htl]
         rfl
       have hst' : V.stmt lbl fi.pc = some st := by
         unfold Valuation.stmt
@@ -1367,7 +1776,7 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
         rw [hR.fn, hR.label, hfn, hlbl]; exact hb
       have hstep := step_stmt (rest := rest) hb' (by rw [hpc]; exact hst) he
       obtain ⟨⟨fe, me, hS, hRf, hpcf⟩, hL', hSt'⟩ := SState.run_ptrs hb hfn hlbl sts (n + 1) σ' σf
-        fi' mi' (kk + 1) (by rw [← Nat.add_assoc, ← List.tail_drop, ← hsts]; rfl) (by omega)
+        fi' mi' (kk + 1) ⟨tl, by rw [← Nat.add_assoc, ← List.tail_drop, ← htl]; rfl⟩ (by omega)
         (by omega) hR' h hG
       -- a pointer fact of this statement holds at the thread itself
       have here : ∀ {ld pv}, PtrIs ld st (V.ctx.scope mi fi kk) pv →
@@ -1386,8 +1795,8 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
       · by_cases hj' : σ'.nodes.length ≤ j
         · exact PtrAt.pre (.cons hstep (.refl _ _)) (hL' j l pc p hj' hn)
         · rw [hmo3, List.getElem?_append_left (by omega)] at hn
-          obtain ⟨rfl, rfl, rfl, hq⟩ := hL j l pc p hj hn
-          rw [hmo3, hn₁, List.append_assoc, List.take_left]
+          obtain ⟨rfl, rfl, hq⟩ := hL j l pc p hj hn
+          rw [hmo3, List.take_append_of_le_length (by omega)]
           exact here hq
       · rw [hmo2, List.drop_append_of_le_length (by rw [he₁, List.length_append]; omega),
           List.mem_append] at hm
@@ -1399,6 +1808,28 @@ theorem SState.run_ptrs {V : Valuation} {vs : List (Except Fault Val)} {f : Fram
         · obtain ⟨hq, hv⟩ := hSt' l pc v p (by rw [hmo2, List.drop_left]; exact hm)
           exact ⟨PtrAt.pre (.cons hstep (.refl _ _)) hq, hv⟩
     · cases h
+
+/-- **The start state describes the entry frame**: for every context `c`, step count `k`, memory
+`m`, frame `f`, block `b` and nodes `ns` after the block's float constants, the start state
+(`SState.start`) at `f`'s function, block and position describes frame `f` and memory `m` from
+`f`, under the entry valuation and the values of the table that `ns` extends: no register is set,
+no effect has run, and the float constant nodes have their literals' values. -/
+theorem Rel.start {c : Ctx} {k : Nat} {m : Mem} {f : Frame} {b : LLVM.Block} {ns : List SNode} :
+    Rel (Valuation.entry c k m f)
+      (vals (Valuation.entry c k m f) ((SState.start f.fn f.label f.pc b).nodes ++ ns)) f
+      (SState.start f.fn f.label f.pc b) f m := by
+  refine ⟨rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, (by intro r v h; cases h),
+    fun x pq j h => ?_, fun j ft lit hj => ?_, rfl, fun _ => ⟨m.trace, rfl⟩⟩
+  · cases x with
+    | node i =>
+      obtain ⟨nd, hnd, hf⟩ := Option.bind_eq_some_iff.1 h
+      obtain ⟨_, _, rfl⟩ := litNodes_flit (List.mem_of_getElem? hnd)
+      cases hf
+    | _ => cases h
+  · obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hj
+    simp only [SVal.eval]
+    rw [vals_flit _ (by rw [List.getElem?_append_left hlt]; exact hj)]
+    rfl
 
 /-- A run of statements of block `b` from the `n`-th after the entry whose final state is good:
 the thread's steps run them, to a frame and memory that the final state describes
@@ -1412,36 +1843,44 @@ theorem SState.run_sound {V : Valuation} {vs : List (Except Fault Val)} {f : Fra
     (hG : Good V vs σf) :
     ∃ fe me, Steps V.ctx ⟨fi :: rest, kk⟩ mi ⟨fe :: rest, kk + sts.length⟩ me ∧
       Rel V vs f σf fe me ∧ fe.pc = fi.pc + sts.length :=
-  (SState.run_ptrs hb hfn hlbl sts n σ σf fi mi kk h₁ h₂ h₃ hR h hG).1
+  (SState.run_ptrs hb hfn hlbl sts n σ σf fi mi kk ⟨[], by rw [List.append_nil, h₁]⟩ h₂ h₃ hR h
+    hG).1
+
+/-- The `fmul contract` operands of the frame at the end of the block that summary `S`
+describes from valuation `V`: with `contract`, the table's (`regProdIn`, as `EndsC` gives them),
+else `regProd`'s (as `Ends` gives them). -/
+def prodsWith (contract : Bool) (V : Valuation) (S : Summary) : Nat → Option (Val × Val) :=
+  cond contract (regProdIn V (vals V S.nodes) S.nodes S.regs) (regProd V S.regs)
+
+/-- `Ends` with the `fmul contract` operands `prodsWith contract` of the frame at the block's
+end: without `contract` it is `Ends`, with it `EndsC` (both are defined as its instances). -/
+def EndsWith (contract : Bool) (c : Ctx) (t : Thread) (m : Mem) (f : Frame) (rest : List Frame) :
+    Valuation × Nat × Summary → Prop
+  | (V, lbl, S) => ∃ fe me, Steps c t m ⟨fe :: rest, V.k + S.len⟩ me ∧ fe.fn = V.fn ∧
+      fe.label = lbl ∧ fe.allocas = f.allocas ∧ fe.dest = f.dest ∧
+      (∀ r, fe.regs r = regVal V (vals V S.nodes) S.regs r) ∧
+      (∀ r, fe.prods r = prodsWith contract V S r) ∧
+      SEff.run V (vals V S.nodes) S.effs = .ok me ∧
+      ∃ r, S.exit.next V (vals V S.nodes) rest (V.k + S.len) fe me = .ok r ∧
+        step c ⟨fe :: rest, V.k + S.len⟩ me = .ok r
 
 /-- Block `lbl` with summary `S`, entered with valuation `V`, ends: the thread's steps from `t`
 on `m` reach the block's end at step count `V.k + S.len`, with a frame `fe` (above frames `rest`)
 of function `V.fn` at block `lbl` whose `alloca` blocks and caller's register are those of frame
 `f`, whose registers and `fmul contract` operands are the summary's (`regVal`, `regProd`), on the
 memory `me` the summary's effects make (`SEff.run`); and the terminator's step there is the
-summary exit's (`Exit.next`), without a fault. -/
+summary exit's (`Exit.next`), without a fault. It is `EndsWith` without `contract`, whose
+`fmul contract` operands `prodsWith false` are `regProd`'s. -/
 def Ends (c : Ctx) (t : Thread) (m : Mem) (f : Frame) (rest : List Frame) :
-    Valuation × Nat × Summary → Prop
-  | (V, lbl, S) => ∃ fe me, Steps c t m ⟨fe :: rest, V.k + S.len⟩ me ∧ fe.fn = V.fn ∧
-      fe.label = lbl ∧ fe.allocas = f.allocas ∧ fe.dest = f.dest ∧
-      (∀ r, fe.regs r = regVal V (vals V S.nodes) S.regs r) ∧
-      (∀ r, fe.prods r = regProd V S.regs r) ∧
-      SEff.run V (vals V S.nodes) S.effs = .ok me ∧
-      ∃ r, S.exit.next V (vals V S.nodes) rest (V.k + S.len) fe me = .ok r ∧
-        step c ⟨fe :: rest, V.k + S.len⟩ me = .ok r
+    Valuation × Nat × Summary → Prop :=
+  EndsWith false c t m f rest
 
 /-- `Ends` with the `fmul contract` operands of the frame at the block's end given by the table
 (`regProdIn`): for a register the block sets, the values of its node's `fmul contract` operand
-terms. The conclusion of `Block.soundC`. -/
+terms. It is `EndsWith` with `contract`. The conclusion of `Block.soundC`. -/
 def EndsC (c : Ctx) (t : Thread) (m : Mem) (f : Frame) (rest : List Frame) :
-    Valuation × Nat × Summary → Prop
-  | (V, lbl, S) => ∃ fe me, Steps c t m ⟨fe :: rest, V.k + S.len⟩ me ∧ fe.fn = V.fn ∧
-      fe.label = lbl ∧ fe.allocas = f.allocas ∧ fe.dest = f.dest ∧
-      (∀ r, fe.regs r = regVal V (vals V S.nodes) S.regs r) ∧
-      (∀ r, fe.prods r = regProdIn V (vals V S.nodes) S.nodes S.regs r) ∧
-      SEff.run V (vals V S.nodes) S.effs = .ok me ∧
-      ∃ r, S.exit.next V (vals V S.nodes) rest (V.k + S.len) fe me = .ok r ∧
-        step c ⟨fe :: rest, V.k + S.len⟩ me = .ok r
+    Valuation × Nat × Summary → Prop :=
+  EndsWith true c t m f rest
 
 /-- `EndsC` of a summary with no `fmul contract` node is `Ends`: without such a node no register
 entry has `fmul contract` operand terms (`SVal.factors`), so `regProdIn` gives what `regProd`
@@ -1451,6 +1890,7 @@ theorem Ends.of_C {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Fram
     (hf : ∀ nd ∈ S.nodes, nd.factors = none) : Ends c t m f rest (V, lbl, S) := by
   obtain ⟨fe, me, hS, h1, h2, h3, h4, hr, hp, hm, hx⟩ := h
   refine ⟨fe, me, hS, h1, h2, h3, h4, hr, fun r => (hp r).trans ?_, hm, hx⟩
+  show regProdIn V (vals V S.nodes) S.nodes S.regs r = regProd V S.regs r
   unfold regProdIn regProd
   cases S.regs.lookup r with
   | none => rfl
@@ -1462,24 +1902,6 @@ theorem Ends.of_C {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Fram
       | none => rfl
       | some nd => rw [Option.bind_some, hf nd (List.mem_of_getElem? hj)]; rfl
     | _ => rfl
-
-/-- The `fmul contract` operands of the frame at the end of the block that summary `S`
-describes from valuation `V`: with `contract`, the table's (`regProdIn`, as `EndsC` gives them),
-else `regProd`'s (as `Ends` gives them). -/
-def prodsWith (contract : Bool) (V : Valuation) (S : Summary) : Nat → Option (Val × Val) :=
-  cond contract (regProdIn V (vals V S.nodes) S.nodes S.regs) (regProd V S.regs)
-
-/-- `Ends` with the `fmul contract` operands `prodsWith contract` of the frame at the block's
-end: without `contract` it is `Ends`, with it `EndsC` (both definitionally). -/
-def EndsWith (contract : Bool) (c : Ctx) (t : Thread) (m : Mem) (f : Frame) (rest : List Frame) :
-    Valuation × Nat × Summary → Prop
-  | (V, lbl, S) => ∃ fe me, Steps c t m ⟨fe :: rest, V.k + S.len⟩ me ∧ fe.fn = V.fn ∧
-      fe.label = lbl ∧ fe.allocas = f.allocas ∧ fe.dest = f.dest ∧
-      (∀ r, fe.regs r = regVal V (vals V S.nodes) S.regs r) ∧
-      (∀ r, fe.prods r = prodsWith contract V S r) ∧
-      SEff.run V (vals V S.nodes) S.effs = .ok me ∧
-      ∃ r, S.exit.next V (vals V S.nodes) rest (V.k + S.len) fe me = .ok r ∧
-        step c ⟨fe :: rest, V.k + S.len⟩ me = .ok r
 
 /-- **The pointer facts** of block `lbl` with summary `S`, entered with valuation `V`, from
 thread `t` on memory `m`, in frames above frames `rest`: the thread's steps reach the statement
@@ -1552,26 +1974,15 @@ theorem Block.sound_withC {P : Program} {fn : Func} {lbl p0 : Nat}
           obtain ⟨-, -, ⟨ns, hns⟩, -⟩ := SState.run_mono hσ
           have hR0 : Rel (Valuation.entry c k m f) (vals (Valuation.entry c k m f) σ.nodes) f
               (SState.start f.fn f.label f.pc b) f m := by
-            refine ⟨rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, (by intro r v h; cases h),
-              fun x pq j h => ?_, fun j ft lit hj => ?_, rfl, fun _ => ⟨m.trace, rfl⟩⟩
-            · cases x with
-              | node i =>
-                obtain ⟨nd, hnd, hf⟩ := Option.bind_eq_some_iff.1 h
-                obtain ⟨_, _, rfl⟩ := litNodes_flit (List.mem_of_getElem? hnd)
-                cases hf
-              | _ => cases h
-            · obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hj
-              simp only [SVal.eval]
-              rw [vals_flit _ (by rw [hns, List.getElem?_append_left hlt]; exact hj)]
-              rfl
+            rw [hns]; exact Rel.start
           have hG : Good (Valuation.entry c k m f) (vals (Valuation.entry c k m f) σ.nodes) σ :=
             ⟨fun d hd => hO d (List.mem_append.2 (Or.inr (List.mem_cons_of_mem _ hd))),
               hO (.mem σ.effs) (List.mem_append.2 (Or.inr (List.Mem.head _))),
               [], (List.append_nil _).symm⟩
           obtain ⟨⟨fe, me, hS, hR, hpc⟩, hL, hSt⟩ := SState.run_ptrs
             (V := Valuation.entry c k m f) (rest := rest) (p0 := f.pc) hb rfl rfl
-            (b.stmts.toList.drop f.pc) 0 (SState.start f.fn f.label f.pc b) σ f m k rfl rfl rfl hR0
-            hσ hG
+            (b.stmts.toList.drop f.pc) 0 (SState.start f.fn f.label f.pc b) σ f m k
+            (List.prefix_refl _) rfl rfl hR0 hσ hG
           have hpcn : ¬ fe.pc < b.stmts.size := by
             simp only [List.length_drop, Array.length_toList] at hpc
             omega

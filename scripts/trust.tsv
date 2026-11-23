@@ -17,3 +17,11 @@ T12	const	MojoProof.Sem.withAttrs
 T12	const	MojoProof.LLVM.Func.check
 T12	const	MojoProof.Sem.Grid.Kept
 T13	const	MojoProof.Sem.Grid.Step
+T14	const	MojoProof.Sem.AccOk
+T14	const	MojoProof.Sem.fragA
+T14	const	MojoProof.Sem.fragB
+T14	const	MojoProof.Sem.fragC
+T14	const	MojoProof.Sem.ldm
+T15	const	MojoProof.Sem.Async.step
+T16	module	MojoProof.Layout.Basic
+T16	module	MojoProof.Layout.Algebra

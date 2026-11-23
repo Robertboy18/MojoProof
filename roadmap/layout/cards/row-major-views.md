@@ -4,11 +4,11 @@ title: `TileTensor.as_span`, `reshape` and `coalesce` need row-major contiguous 
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/tile_tensor.mojo:2087
 quote: "TileTensor.as_span requires row-major (contiguous) strides"
-lean: not stated yet
+lean: MojoProof.Layout.rowMajor, MojoProof.Layout.rowMajor_call_lt, MojoProof.Layout.rowMajor_onto, MojoProof.Layout.rowMajor_inj
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
-level: L0
+level: L1
 ---
 # `TileTensor.as_span`, `reshape` and `coalesce` need row-major contiguous strides
 
@@ -24,6 +24,10 @@ The statement that, on row-major contiguous strides, storage order and layout or
 
 Non-contiguous tensors, which the assert refuses at compile time.
 
+## In MojoProof
+
+`rowMajor` transcribes `row_major` on flat shapes. For every flat shape with positive extents: `rowMajor_call_lt`, every in-bounds exact coordinate has an offset below the size; `rowMajor_onto`, every offset below the size is reached; `rowMajor_inj`, two in-bounds coordinates with one offset are equal. Together, a row-major layout is a bijection onto the interval [0, size).
+
 ## Open
 
-A Lean statement that a row-major contiguous layout is a bijection onto an interval. MojoProof states no layout law yet.
+The asserts of `as_span`, `reshape` and `coalesce` themselves, and nested shapes.

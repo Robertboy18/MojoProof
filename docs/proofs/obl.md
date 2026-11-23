@@ -124,13 +124,98 @@ are by `mojo_obl` alone.
   sign extension of a word that may be negative (`intCast_sext_bits`); `%40`, a
   `getelementptr inbounds` that may leave `C`, is some value, a pointer or poison
   (`gep_buffer_ok`), which the path does not use; the `select` `%43` is the word `1` when the row
-  is out of range, and the branch goes to `%44` by its low bit (`Exit.target_cond`).
+  is out of range, and the branch goes to `%44` by its low bit (`Exit.target_cond`). These two
+  are tests of mojo_obl only: no proof uses them, and the kernel theorem's run of a thread out of
+  bounds is `NaiveSound.naive.out`, which the `mat` clause proves by mojo_obl at the 2-D index
+  facts.
 
 What it does not discharge: nothing of these paths under these premises. The premises are
 the per-thread facts the kernel's theorem supplies: the registers at each round (the loop's
 invariant), the buffers and their contents. The twin `naive_rounds_open` hides `%48` behind an
 irreducible definition, and the latch's `fadd contract` obligation (node 13) is left open,
 checked by `#guard_msgs`.
+
+## gevm_kernel (`MojoProofTest/OblGevm.lean`)
+
+The same tactic on `gevm_kernel` (`gevm` of MojoProofTest/SymLane.lean, the corpus file
+gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll), which multiplies
+the vector `x` of `K` binary32 (`%1`) by the row-major `K × N` matrix `B` (`%2`) into `y`
+(`%0`). With `ntid.x = 1024`, thread `tid.x = 32 w + l` of block `β` runs the loop
+`%39 → %43 → %45` (`gevmL`) for `i < %38 = ⌈K / 32⌉`, each round adding `x (32 i + w) ·
+B (32 i + w, 32 β + l)` (`fmul contract`, `fadd contract`) to its accumulator `%41`. One
+program, every launch. After the loop, `%59` stores the sum to cell `32 l + w` of a shared array,
+waits at a barrier and sums cell `tid.x` across the warp by shuffles: only the statements before
+the barrier are proved.
+
+* `lane`: for every context `c` of `gevm`'s program with `c.env.laneid < 32`, register `%12`
+  after `%6` is the word of `c.env.laneid` (`SNode.eval_laneid_at`), by `obl_have`.
+* `entry_edge`: for every valid launch `L`, thread `k` with `ntid.x = 1024`, context `c` with
+  `c.prog = gevm.prog` and `c.env = L.env k`, memory `M` and frame `f` of `gevm.fn_0` whose
+  `%0` is the start of `p0` and whose `%4`, `%5` are the words of `N, K < 2 ^ 31`, with
+  `M.Buffer p0 (N * 4) 4 true`, `M.Fits gevm.prog.layout p0 (N * 4)` and
+  `32 ctaid.x + tid.x / 32 < N`: `EdgeWith true gevmL.h gevmL.p (Valuation.entry c s M f) …`,
+  every obligation of the 32 nodes of `%6` and the edge into `%39` at position 2, by mojo_obl.
+  The index arithmetic is LLVM's floor division by 32 and ceiling division by `-32`: `%22 =
+  sdiv %21, 32` with the correction `%25 = xor %21, 32`, `%26 = ashr %25, 63`, `%27 = select
+  %24, 0, %26` (two equal words, 0, so `eval_select_same`), and `%30 = sdiv %7, -32`, `%33 =
+  xor %7, -32`, `%34 = ashr %33, 63` (all ones, a negative `xor`), `%35 = select %32, 0, %34`
+  on an `icmp eq` of residues `omega` does not decide (`eval_icmp_eq_mod`, then
+  `eval_select_word`: an `if`), `%37 = sub 0, %36`, `%38 = smax(%37, 0)`, whose bound `omega`
+  proves after splitting the `if`.
+* `entry_regs`: with those premises but `%4`'s, by `obl_have` and `omega`: `%17` is the word of
+  `32 ctaid.x + laneid`, `%29` the pointer to element `32 ctaid.x + tid.x / 32` of `p0`, and
+  `%38` the word of `(K + 31) / 32`.
+* `rounds`: for every `K` with `K % 32 = 0` and `K < 2 ^ 31`, `N` with `K N < 2 ^ 29`, `w < 32`,
+  `col < N`, `i < (K + 31) / 32`, and a valuation `W` of `gevm`'s program and function with
+  `%40 = i`, `%38 = (K + 31) / 32`, `%41 = acc`, `%11 = w`, `%8 = N`, `%17 = col`, `%1`, `%2` at
+  offset 0 of `bA`, `bB`, buffers of `K` and `K N` binary32 that fit and hold `A` and `B`:
+  `RoundWith true gevmL.h gevmL.p gevmL.dh gevmL.H gevmL.B W`. The address of `B (32 i + w,
+  col)` is `gep_buffer2` (an index `r * S + k` with `r < R`, `k < S` into a buffer of `R S`
+  elements, `rowMajor_lt`), so `omega` never sees the product `(32 i + w) N`.
+* `to_barrier`: for every context `c` of `gevm`'s program, step count, memory `m` and frame `f`
+  of `gevm.fn_0` whose `%13`, `%11` are the 64-bit words of `l, w < 32` and `%60` a 32-bit word,
+  with `c.globals` giving the shared array (`sharedName`) the pointer to offset 0 of `b`,
+  `m.BufferIn 3 b 4096 4 (.cta g) true`, `(Owner.cta g).admits c.who = true` and `b`'s address in
+  space 3 plus 4096 at most `2 ^ 32`: every obligation of `toBarrier`, the segment of `%59` from
+  statement 1 to the barrier call at 6 (`summarizeTo`, MojoProof/Sym/Segment.lean, as a
+  `Summary`), by mojo_obl: `%61 = %13 * 32`, `%62 = %61 + %11`, the `trunc` `%63` of
+  `32 l + w < 2 ^ 32`, the array's pointer (`SNode.globalAt`, by `SNode.eval_globalAt_at` from
+  the `c.globals` hypothesis), `%64` by `gep_buffer` in space 3, the `store` by `store_buffer`.
+* `to_barrier_waits`: with those premises, for a thread whose top frame `f` is at statement 1 of
+  `%59`, `summarizeTo` gives a segment `S` and the thread reaches the barrier's wait
+  (`Waits`), by `Seg.sound` at `to_barrier`.
+* `to_shfl`: for every such context, memory and frame whose `%10` is the 64-bit word of
+  `x < 1024` (`tid.x`), with `m.Holds` of a vector `A` of 1024 binary32 in the shared buffer `b`:
+  every obligation of `toShfl`, the segment from statement 7 (after the barrier) to the first
+  shuffle at 11, by mojo_obl: the `trunc` `%65`, the array's pointer, `%66` by `gep_buffer` in
+  space 3, the load `%67` of `A x` by `load_buffer`, `%68 = bitcast %67 to i32` by
+  `SNode.eval_bitcast_at`, and the shuffle's arguments. `to_shfl_waits`: a thread at statement 7
+  reaches that shuffle's wait, by `Seg.sound`.
+* `shfl_round`: for every `j < 4` and frame whose `%(67 + 4 j)` and `%(69 + 4 j)` are binary32
+  `y`, `z` with `f.prods (67 + 4 j) = none`: every obligation of `shflRound j`, the segment from
+  statement `12 + 4 j` to the shuffle at `15 + 4 j`: the `bitcast` of `z`, the `fadd contract`
+  by `SNode.eval_fbin_ofFloat` (the factors of `%(67 + 4 j)` from the hypothesis) and the
+  `bitcast` of the sum. `shfl_round_waits`: a thread at statement `12 + 4 j` reaches the next
+  shuffle's wait. The statements after the fifth shuffle (from 28) are not covered.
+
+The twins, each checked by `#guard_msgs` and closed after `unfold`: `lane_open` (the lane bound
+behind `LaneBelow`: node 6 of `%6` open), `entry_open` (`K < 2 ^ 31` behind `Below31`: the `sdiv`
+`%30`, node 24, open), `rounds_open` (`K % 32 = 0` behind `Div32`: the load `%52` of
+`x (32 i + w)`, node 6 of the latch, open) and `matrix_open` (`K N < 2 ^ 29` behind `Small`:
+`gep_buffer2` does not apply to `%55`, so the load `%56` of `B`, node 10, has no address), and
+`shared_open` (the shared array's pointer behind `SharedAt`: node 3 of `toBarrier` open),
+`bitcast_open` (`%69` a word behind `Word32`: node 0 of `shflRound 0` open) and `factors_open`
+(`f.prods 67 = none` behind `Unfactored`: the `fadd`, node 1 of `shflRound 0`, open). For
+`K` not divisible by 32 the last round reads rows `32 i + w ≥ K`, out of `x` and `B`: the loop
+has no guard (docs/proofs/gemv.md, "The specifications' premises").
+
+The integer lemmas whose premises in `gevm_kernel` are literals or the launch's facts have their
+twins on hand-written blocks of one to three nodes (MojoProofTest/OblInt.lean), each with one
+premise behind an irreducible definition, a variable or another term, checked by `#guard_msgs`
+and closed once it is given: `udiv_open` (`0 < b`), `sub_open` (the flags, a variable equal to
+`{}`), `xor_open` (`b < 2 ^ w`), `ashr_pos_open` and `ashr_neg_open` (the sign of the `xor` an
+`ashr` by 31 shifts), `select_same_open` (operands of one value), `select_word_open` and
+`icmp_eq_mod_open` (a word of a number) and `int_negSucc_open` (`k < 2 ^ w` for `-(k + 1)`).
 
 ## The naive matrix product's threads out of bounds (`MojoProofTest/NaiveOut.lean`)
 
@@ -144,14 +229,14 @@ every access to `bC` by a thread in bounds (`Elem.Only bC (S L m n)`), runs `ski
 threads and `Elem.Only bC (S L m n)`. `NaiveSpec` is unchanged: `At` has every fact the proof
 uses.
 
-The proof. The thread's row is at least `m` (`naive_skip_row`) or below `m` with its column at
-least `n` (`naive_skip_col`), each applied to `At`'s fields, so the three blocks' premises hold
-(`WalkWith true`). `NaiveThread.thread_skip` turns them into `RetWith` once the memory after the
-entry block's effects meets the postcondition. Those effects are three loads of the buffer
-structs at `p0`, `p1`, `p2`, none of them `bC` (`At.ptrs`). `Elem` after `k + 1` threads follows
-from `Elem` after `k` threads by `Elem.skip` (`bytes` is `none` out of bounds) and mojo_ret's
-`Elem` steps (goal 1, docs/tactics.md); `Elem.Only` by mojo_ret's goal 3, each load by
-`Elem.Only.steps_load`.
+The proof. `runOut` is `NaiveSound.naive.out`, the run of a thread out of bounds that the `mat`
+clause of `mojo_kernel` generates (docs/kernel.md), at `At`'s facts (`NaiveSpec.At.entry`), the
+sizes below `2 ^ 31` (`NaiveSpec.dims_lt`) and no bytes of a thread out of bounds
+(`NaiveSpec.bytes_out`). The generated proof is `RetWith.of_first` (MojoProof/Sym/KernelMat.lean)
+at `skipN`: the three path facts by `decide +kernel`, the blocks' premises (`WalkWith true`) by
+`mojo_obl` at the thread's 2-D index facts, on each side of the row's bound, and the memory after
+the entry block's three loads, none from `bC`, by mojo_ret's goals 1 and 3 with `Elem.skip`. An
+`example` after `runOut` keeps those two goals on the same threads.
 
 Scope: one program, `naive`, and every launch, size, block, tensor, memory, frame and thread
 out of bounds. Concrete instance: `runsZ`, at the start `startZ` of `naive` on `launch2 1 1 2 2`
@@ -162,3 +247,64 @@ from the start's memory (`Runs`), with `Elem` and `Elem.Only` after it. The laun
 `NaiveThread.startN` (`memN`) does not meet `At`: its `C` has 4 bytes, not `m * 50257 * 4`, and
 its `A` and `B` have 8 bytes, not `768 * 4`, and are writable. So `NaiveThread.skip_threads`,
 which proves `Runs` at that launch, is not a corollary of `runOut`.
+
+## The memory half of a loop's invariant (`mojo_inv`, `MojoProofTest/NaiveIn.lean`)
+
+The plan. `NaiveIn.runIn` is `NaiveSound.naive.runInv` with three premises (`head_in`,
+`round_in`, `exit_in`); each premise's memory facts are the invariant's memory half: the buffers
+`bA`, `bB`, `bC` (`Mem.Buffer`, `Mem.Fits`, `Mem.Holds`), `Elem` after `k` threads and
+`Elem.Only` at the loop head (then a field of the invariant). Without the tactic each step is by
+hand: a lemma on two reads (`keep_log`), the blocks the round keeps (`hb`), and each buffer fact
+moved by `Mem.Buffer.of_block`, `Mem.Fits.of_block` or `Mem.Holds.of_block`. (Since then the
+`mat … inv` clause proves these facts at every head, `Mat.Head`, by mojo_inv at the loop head and
+`Mat.Head.iterate`; docs/proofs/kernel.md, "The heads of the rounds".)
+
+`mojo_inv` proves them for every program, from the facts at the memory where the path starts:
+
+1. The memory after the path, `V.mem = M`: a hypothesis with that left side (as `obl_have`
+   gives), else mojo_obl's evaluation (`Obl.memOf`, its effects run).
+2. A path that only reads has `M` the start's memory `M₀` under `Mem.log`s of accesses, with
+   `M₀`'s blocks (the kernel checks `M.blocks = M₀.blocks`). A buffer fact at `V.mem` is its
+   hypothesis at `M₀` moved by the block lemma (`Mem.blocks_keep`).
+3. `Elem` and `Elem.Only` at `V.mem` are their hypotheses at `M₀`, carried through each logged
+   access to a block other than the output block, read only (`Elem.log_read`,
+   `Elem.Only.log_other`): `omega` proves the access's block other than `out`, from the
+   hypotheses (for the naive kernel `At.ne`: `bA ≠ bC`, `bB ≠ bC`).
+4. A goal that is a structure of propositions, such as `Mat.Head`, is proved field by field: the
+   function (`Obl.fnOf`), registers (`Inv.reg`, a hypothesis with the same left side first), their
+   `fmul contract` operands (`Obl.prodOf`) and the memory facts above.
+
+Then `head_in` and `round_in` proved the invariant's memory facts and registers by `mojo_inv`,
+after the `obl_have` that names the registers and memory the rest of the proof uses, with no hand
+memory step; their statements stayed. Now the `mat … inv` clause proves `Mat.Head` at the loop
+head by `mojo_inv` and `naive.kept` gives the registers the loop keeps, so `head_in` and
+`round_in` use mojo_inv only for `%48`'s `fmul contract` operands.
+`exit_in`'s path stores the accumulator into the thread's cell; mojo_inv's store rule gives `Elem`
+after one more thread and `Elem.Only` on the memory of the store's run (`SEff.apply`, or a block's
+run of one effect by `SEff.run_one`): `Elem.apply_store` and `Elem.Only.apply`, the statement from
+the function, the operands as mojo_obl evaluates them, the thread from the context's hypotheses,
+and the value's encoding (`NaiveSpec.bytes`) by a hypothesis `exit_in` proves on `naive.prog`.
+Its test is MojoProofTest/Inv.lean's `naive_store`. Not covered: a block of several effects with
+a store, a write or an access to the output block other than the thread's store, and
+`Mem.BufferIn`.
+
+Done as planned (`Inv.memFact`, MojoProofTest/Inv.lean's `naive_mem` and `naive_mem_open`).
+`head_in`'s `obl_have` names only `%47` and `%48`, and mojo_inv evaluated the registers and
+operands of the facts at the loop head (then a structure in the invariant; now the clause's
+`Mat.Head` and `naive.kept`) itself. `round_in`'s `obl_have` names `%47`, `%48` (the latch's
+`fadd contract` on the symbolic accumulator, by mojo_obl's evaluator) and the memory after the
+round, and mojo_inv evaluated the other registers and the operands after the round. The counts
+below are of that `round_in`. Three things kept it well inside
+the default heartbeat limit (`#count_heartbeats`, of 200,000): mojo_inv builds the proof
+unchecked and has the kernel check it once (`Inv.run`; with each field's proof checked on its
+own, `Obl.attempt`, `round_in` took 234,057, and with the one check 190,845); mojo_obl's state
+keeps each edge's `phi` operands and their values for the whole run, so the registers no `phi`
+sets pass each edge by `Valuation.intoWith_regs_phi_ne` without evaluating an operand (161,860);
+and the memory after the round comes from the same `obl_have` run as `%48` and shares its
+evaluation of the latch's nodes, which mojo_inv's first memory field otherwise repeats (about
+50,000 heartbeats): 114,261. Since mojo_obl evaluates a node only when it is read, once
+(`Obl.nodeVal`), the memory after a block evaluates only the nodes its effects read, the
+addresses of the latch's loads and not its float nodes: without the memory in `obl_have`,
+`round_in` takes 119,566 (162,079 when every node of a block was evaluated), and with it 114,268.
+With the function and the memory facts out of the invariant (the clause proves `Mat.Head` at
+every head), `round_in` took 76,581 and `head_in` 5,992, before `naive.kept`.

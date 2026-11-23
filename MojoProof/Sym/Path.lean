@@ -167,25 +167,6 @@ theorem Block.sound_to {P : Program} {fn : Func} {lbl p0 d₀ : Nat} {ds : List 
       Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S) :=
   Block.sound_toWith (contract := false) hc hP ht hfn hl hp hds hd
 
-/-- The frame at the end of block `l` that summary `S` describes from valuation `V`: `V`'s
-function, the registers and `fmul contract` operands of `Valuation.after`, position 0, no
-`alloca` blocks and no caller's register (`enter` reads none of these three). -/
-def Valuation.frameAt (V : Valuation) (l : Nat) (S : Summary) : Frame :=
-  { fn := V.fn, label := l, pc := 0, regs := (V.after S).regs, prods := (V.after S).prods,
-    allocas := [], dest := none }
-
-/-- The valuation at the entry of the block that the exit of summary `S` of block `l` goes to,
-from valuation `V` at its entry: `Valuation.after`, whose registers and `fmul contract`
-operands are, for a branch into blocks with `phi`s (`Exit.phi`), those of the frame `enter`
-gives from `Valuation.frameAt`, with the target's `phi`s set. -/
-def Valuation.into (V : Valuation) (l : Nat) (S : Summary) : Valuation :=
-  match S.exit, S.exit.dest V (vals V S.nodes) with
-  | .phi .., some d =>
-    match enter (V.ctx.scope (V.after S).mem (V.frameAt l S) (V.k + S.len)) (V.frameAt l S) d with
-    | .ok f => { V.after S with regs := f.regs, prods := f.prods }
-    | .error _ => V.after S
-  | _, _ => V.after S
-
 /-- `Valuation.after` with the `fmul contract` operands `prodsWith contract`: without
 `contract` it is `Valuation.after`, with it `Valuation.afterC`. -/
 def Valuation.afterWith (contract : Bool) (V : Valuation) (S : Summary) : Valuation :=
@@ -202,6 +183,13 @@ def Valuation.frameAtWith (contract : Bool) (V : Valuation) (l : Nat) (S : Summa
   { fn := V.fn, label := l, pc := 0, regs := (V.afterWith contract S).regs,
     prods := (V.afterWith contract S).prods, allocas := [], dest := none }
 
+/-- The frame at the end of block `l` that summary `S` describes from valuation `V`: `V`'s
+function, the registers and `fmul contract` operands of `Valuation.after`, position 0, no
+`alloca` blocks and no caller's register (`enter` reads none of these three). It is
+`Valuation.frameAtWith` without `contract`. -/
+def Valuation.frameAt (V : Valuation) (l : Nat) (S : Summary) : Frame :=
+  V.frameAtWith false l S
+
 /-- `Valuation.into` from `Valuation.afterWith contract` and `Valuation.frameAtWith contract`:
 without `contract` it is `Valuation.into`, with it `Valuation.intoC`. -/
 def Valuation.intoWith (contract : Bool) (V : Valuation) (l : Nat) (S : Summary) : Valuation :=
@@ -212,6 +200,14 @@ def Valuation.intoWith (contract : Bool) (V : Valuation) (l : Nat) (S : Summary)
     | .ok f => { V.afterWith contract S with regs := f.regs, prods := f.prods }
     | .error _ => V.afterWith contract S
   | _, _ => V.afterWith contract S
+
+/-- The valuation at the entry of the block that the exit of summary `S` of block `l` goes to,
+from valuation `V` at its entry: `Valuation.after`, whose registers and `fmul contract`
+operands are, for a branch into blocks with `phi`s (`Exit.phi`), those of the frame `enter`
+gives from `Valuation.frameAt`, with the target's `phi`s set. It is `Valuation.intoWith`
+without `contract`. -/
+def Valuation.into (V : Valuation) (l : Nat) (S : Summary) : Valuation :=
+  V.intoWith false l S
 
 /-- **The valuation at the entry of the block that a block with `fmul contract` exits to**:
 `Valuation.into` from `Valuation.afterC`, whose `fmul contract` operands are the table's
@@ -303,9 +299,8 @@ first thread too (`EndsWith.pre` without `contract`). -/
 theorem Ends.pre {c : Ctx} {t t₁ t₂ : Thread} {m m₁ m₂ : Mem} {f f₂ : Frame} {rest : List Frame}
     {q : Valuation × Nat × Summary} (h₁ : Steps c t m t₁ m₁) (h : step c t₁ m₁ = .ok (.next t₂ m₂))
     (hq : Ends c t₂ m₂ f₂ rest q) (hal : f₂.allocas = f.allocas) (hde : f₂.dest = f.dest) :
-    Ends c t m f rest q := by
-  obtain ⟨V, lbl, S⟩ := q
-  exact EndsWith.pre (contract := false) (q := (V, lbl, S)) h₁ h hq hal hde
+    Ends c t m f rest q :=
+  EndsWith.pre (contract := false) h₁ h hq hal hde
 
 /-- **An edge, with or without `fmul contract`**: block `l` with summary `S` ends with the
 `fmul contract` operands `prodsWith contract` (`EndsWith`) and its exit goes to block `d`
@@ -383,7 +378,7 @@ theorem Ends.edge {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Fram
       step c t₁ m₁ = .ok (.next ⟨f' :: rest, V.k + S.len + 1⟩ m₁) ∧ f'.fn = V.fn ∧
       f'.label = d ∧ f'.pc = S.exit.pc V.fn d ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
       Valuation.entry c (V.k + S.len + 1) m₁ f' = V.into l S :=
-  Ends.edgeWith (contract := false) (V := V) (l := l) (S := S) hc h hd
+  Ends.edgeWith (contract := false) hc h hd
 
 /-- **An edge with `fmul contract`**: block `l` with summary `S` ends with the table's
 `fmul contract` operands (`EndsC`, as `Block.soundC` gives for a block that `coversC` accepts)
@@ -399,7 +394,7 @@ theorem Ends.edgeC {c : Ctx} {t : Thread} {m : Mem} {f : Frame} {rest : List Fra
       step c t₁ m₁ = .ok (.next ⟨f' :: rest, V.k + S.len + 1⟩ m₁) ∧ f'.fn = V.fn ∧
       f'.label = d ∧ f'.pc = S.exit.pc V.fn d ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
       Valuation.entry c (V.k + S.len + 1) m₁ f' = V.intoC l S :=
-  Ends.edgeWith (contract := true) (V := V) (l := l) (S := S) hc h hd
+  Ends.edgeWith (contract := true) hc h hd
 
 /-- **The path checker**: the blocks `(label, conditions, summary)` of a path, the first from
 position `p0` and each one after from its entry, are each accepted by `covers`. -/

@@ -178,7 +178,8 @@ theorem invB_step {c : Ctx} (hP : c.prog.layout = cntP.layout) {n b : Nat} {tr :
       (F := (W.after cntH).frameAt 2 cntB) hf1' (.inr ⟨rfl, rfl⟩)
       (x := .bits 64 (BitVec.ofNat 64 (i + 1)))
       (by
-        simp only [evalV, Ctx.scope, Valuation.frameAt, after_regs, hB]
+        simp only [evalV, Ctx.scope, Valuation.frameAt, Valuation.frameAtWith, Valuation.afterWith,
+          after_regs, hB]
         delta cntB
         simp [regVal, List.lookup, SVal.eval, pure, Except.pure, Except.toOption]))
   refine ⟨⟨⟨?_, ?_, ?_⟩, ?_, ?_⟩, ?_⟩
@@ -203,12 +204,14 @@ theorem invB_step {c : Ctx} (hP : c.prog.layout = cntP.layout) {n b : Nat} {tr :
     rfl
   · rw [cnt_round, hE]
     refine ⟨hc1.trans hc, hf1', by simp [Frame.set], ?_, ?_, ?_, ?_⟩
-    · simp only [Frame.set, Valuation.frameAt, after_regs]
+    · simp only [Frame.set, Valuation.frameAt, Valuation.frameAtWith, Valuation.afterWith,
+        after_regs]
       delta cntB
       simp [regVal, List.lookup]
       rw [hr1 7 (by decide)]
       exact h7
-    · simp only [Frame.set, Valuation.frameAt, after_regs]
+    · simp only [Frame.set, Valuation.frameAt, Valuation.frameAtWith, Valuation.afterWith,
+        after_regs]
       delta cntB
       simp [regVal, List.lookup]
       rw [hr1 8 (by decide)]
@@ -283,10 +286,12 @@ theorem invB_entry {c : Ctx} {n b k : Nat} {m : Mem} {f : Frame}
     rfl
   · rw [hR]
     delta cntE
-    simpa [Frame.set, Valuation.frameAt, Valuation.after, regVal, Valuation.entry] using h7
+    simpa [Frame.set, Valuation.frameAt, Valuation.frameAtWith, Valuation.afterWith,
+      Valuation.after, regVal, Valuation.entry] using h7
   · rw [hR]
     delta cntE
-    simpa [Frame.set, Valuation.frameAt, Valuation.after, regVal, Valuation.entry] using h8
+    simpa [Frame.set, Valuation.frameAt, Valuation.frameAtWith, Valuation.afterWith,
+      Valuation.after, regVal, Valuation.entry] using h8
   · rw [hR]
     exact hm
 

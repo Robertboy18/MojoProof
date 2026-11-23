@@ -4,11 +4,11 @@ title: `Swizzle` is `x ^ ((x & mask) >> shift)` and needs `abs(shift) >= bits`
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/swizzle.mojo:381
 quote: "return offset ^ shiftr(offset & self.yyy_mask, self.shift)"
-lean: not stated yet
+lean: MojoProof.Layout.Swizzle, MojoProof.Layout.Swizzle.call, MojoProof.Layout.Swizzle.mask, MojoProof.Layout.shiftr, MojoProof.Layout.Swizzle.shiftr_and_mask, MojoProof.Layout.Swizzle.call_call
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
-level: L0
+level: L1
 ---
 # `Swizzle` is `x ^ ((x & mask) >> shift)` and needs `abs(shift) >= bits`
 
@@ -24,6 +24,6 @@ Every bits, base and shift with `abs(shift) >= bits`: the swizzle is a bijection
 
 Swizzles with `abs(shift) < bits`.
 
-## Open
+## In MojoProof
 
-A Lean statement that the swizzle is an involution under the condition. MojoProof states no layout law yet.
+`Swizzle` and `Swizzle.call` transcribe the swizzle. `Swizzle.call_call`: when `bits ≤ |shift|`, the swizzle is its own inverse, hence a bijection, for every value, base and shift, positive or negative (`Swizzle.shiftr_and_mask` is the step). The condition is needed: `Swizzle(2, 0, 1)` applied twice to 6 gives 7 (MojoProofTest.LayoutLaws, by `decide`); the constructor's check of the condition does not run when the swizzle is evaluated at compile time, and the conformance test's compiled code gives the same values.

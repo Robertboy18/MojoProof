@@ -1,5 +1,5 @@
 import MojoProofTest.NaiveThread
-import MojoProof.Sym.Kernel
+import MojoProof.Sym.KernelMat
 import MojoProof.Sem.Matmul
 
 /-!
@@ -24,13 +24,16 @@ and the composition can be proved apart:
 * `At`: the facts at the entry of thread `k`: those `Kernel.sound_mapNWith`'s per-thread premise
   gives (the context, the frame's function, its struct pointers and their loads, its scalar
   registers) and the precondition's buffer facts, on the thread's memory.
+* `bytes_out`: a thread out of bounds puts no bytes.
+* `dims_lt`, `At.of_entry`, `At.entry`: `At`'s dimensions are below `2 ^ 31`, and `At` from
+  `Kernel.sound_mat`'s entry facts `Mat.Entry` (Sym/KernelMat.lean) and back, field by field.
 * `RunIn`, `RunOut`: a thread in bounds runs `NaiveThread.chainN` to `ret` (`RetLsWith true`)
   and a thread of the launch out of bounds runs `NaiveThread.skipN` to `ret` (`RetWith true`),
   from `At` and a memory of `Elem` after `k` threads whose accesses to `bC` are by threads in
   bounds (`Elem.Only`), to a memory of `Elem` after `k + 1` threads with the same property.
 
-Nothing is proved here: these definitions are the interface between the thread's runs (`RunIn`
-and `RunOut` for every launch, thread and memory) and the composition through
+Nothing about a run is proved here: these definitions are the interface between the thread's
+runs (`RunIn` and `RunOut` for every launch, thread and memory) and the composition through
 `Kernel.sound_mapNWith`.
 -/
 
@@ -81,6 +84,14 @@ def bytes (ω : Nat → Nat → Nat) (L : Launch) {m n : Nat} (K : Nat)
     naive.prog.layout.encode (.fp .float) (.ofFloat .float
       (dotLoop true (o (ω k)) (Model.zero _ false) (pairs A B ⟨_, h.2.1⟩ ⟨_, h.2.2⟩ K)))
   else none
+
+/-- A thread out of bounds puts no bytes: for every oracles `ω`, launch `L`, sizes, tensors and
+thread `k` with `¬ S L m n k`, `bytes ω L K A B k` is none. -/
+theorem bytes_out (ω : Nat → Nat → Nat) (L : Launch) {m n : Nat} (K : Nat)
+    (A : TorchLean.Tensor (Model FloatTy.float.fmt) [m, 768])
+    (B : TorchLean.Tensor (Model FloatTy.float.fmt) [n, 768]) (k : Nat) (h : ¬ S L m n k) :
+    bytes ω L K A B k = none := by
+  rw [bytes, dite_eq_right h]
 
 /-- **The facts at the entry of thread `k`** of launch `L` of the naive kernel on the buffers
 `bC`, `bA`, `bB` (whose structs' copies are at blocks `p0`, `p1`, `p2`), `m` rows, `n` columns
@@ -133,6 +144,43 @@ structure At (L : Launch) {m n : Nat} (K bC bA bB p0 p1 p2 : Nat)
   /-- On `m'`, `bC` is a writable buffer of `m * 50257` binary32 aligned to 4 whose generic
   addresses do not wrap. -/
   bufC : m'.Buffer bC (m * 50257 * 4) 4 true ∧ m'.Fits naive.prog.layout bC (m * 50257 * 4)
+
+/-- The dimensions of `At` are below `2 ^ 31`: from `n ≤ 50257`, `K ≤ 768`, `m * 50257 < 2 ^ 31`
+and `n * 768 < 2 ^ 31`, the sizes `m`, `n`, `K` are below `2 ^ 31`, for every `m`, `n`, `K`. -/
+theorem dims_lt {m n K : Nat}
+    (hd : n ≤ 50257 ∧ K ≤ 768 ∧ m * 50257 < 2 ^ 31 ∧ m * 768 < 2 ^ 31 ∧ n * 768 < 2 ^ 31) :
+    m < 2 ^ 31 ∧ n < 2 ^ 31 ∧ K < 2 ^ 31 := by
+  omega
+
+/-- **`At` from the entry facts of `Kernel.sound_mat`** (`Mat.Entry`, Sym/KernelMat.lean) at
+`naive`'s program and function, its struct type `T` and tail `z`, alignment 8, binary32 with its
+encoder, alignment 4, output block `bC`, inputs `bA`, `bB` and row stride 50257, with the launch
+valid with `z` sides 1, the dimensions of `At.dims`, `k` a thread of the launch and `bA`, `bB` not
+`bC`. `Mat.Entry`'s fields are `At`'s up to `idx "j" = j` and `naive.prog.layout.size` of binary32
+being 4, both by evaluation. For every launch, sizes, blocks, tensors, thread, context, memory and
+frame. -/
+theorem At.of_entry {L : Launch} {m n K bC bA bB p0 p1 p2 : Nat}
+    {A : TorchLean.Tensor (Model FloatTy.float.fmt) [m, 768]}
+    {B : TorchLean.Tensor (Model FloatTy.float.fmt) [n, 768]} {k : Nat} {c : Ctx} {m' : Mem}
+    {f : Frame} (hL : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1)
+    (hd : n ≤ 50257 ∧ K ≤ 768 ∧ m * 50257 < 2 ^ 31 ∧ m * 768 < 2 ^ 31 ∧ n * 768 < 2 ^ 31)
+    (hk : k < volume L.grid * volume L.block) (hne : bA ≠ bC ∧ bB ≠ bC)
+    (h : Mat.Entry naive.prog naive.fn_0 L T z 8 (.fp .float) (Val.ofFloat .float) 4 bC bA bB K
+      50257 A B k c p0 p1 p2 m' f) :
+    At L K bC bA bB p0 p1 p2 A B k c m' f :=
+  ⟨hL, hz, hd, hk, h.ctx, h.func, h.ptrs, h.loads, h.scalars, hne, h.bufA, h.bufB, h.bufC⟩
+
+/-- **`Mat.Entry` from `At`**: the entry facts of `Kernel.sound_mat` (Sym/KernelMat.lean) at
+`naive`'s program and function, as in `At.of_entry`, are `At`'s fields other than the launch's,
+the dimensions, the thread and `ne`. For every launch, sizes, blocks, tensors, thread, context,
+memory and frame. -/
+theorem At.entry {L : Launch} {m n K bC bA bB p0 p1 p2 : Nat}
+    {A : TorchLean.Tensor (Model FloatTy.float.fmt) [m, 768]}
+    {B : TorchLean.Tensor (Model FloatTy.float.fmt) [n, 768]} {k : Nat} {c : Ctx} {m' : Mem}
+    {f : Frame} (h : At L K bC bA bB p0 p1 p2 A B k c m' f) :
+    Mat.Entry naive.prog naive.fn_0 L T z 8 (.fp .float) (Val.ofFloat .float) 4 bC bA bB K 50257 A
+      B k c p0 p1 p2 m' f :=
+  ⟨h.ctx, h.fn, h.ptrs, h.loads, h.scalars, h.bufA, h.bufB, h.bufC⟩
 
 /-- **The per-thread premise for the threads in bounds**, under the oracles `ω`, of launch `L`
 of the naive kernel on the buffers `bC`, `bA`, `bB` holding `A` and `B`, `m` rows, `n` columns

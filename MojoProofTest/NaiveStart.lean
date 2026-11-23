@@ -1,4 +1,5 @@
 import MojoProofTest.NaiveKernel
+import MojoProofTest.NaiveOff
 
 /-!
 # The naive kernel's threads at an evaluated start with a row
@@ -10,16 +11,19 @@ the memory `NaiveKernel.mem12 A B` for every `A` (`1 × 768`) and `B` (`2 × 768
 row stride 50257, `50257 * 4` bytes, writable), blocks 2 and 3 holding `A` and `B` (`768 * 4`
 bytes a row, read-only), the address choice 0 and every oracle `ω`.
 
+* `start12`: the launch starts, for every `K` (no bound on it), evaluated by the kernel
+  (`kernel_rfl`) with `A`, `B`, `K` and `ω` variables and the start's check of the caller's
+  memory in place: the check reads each byte of `C` (201,028, undefined), `A` (3,072) and `B`
+  (6,144), those of `A` and `B` through the tree of their lists (`ByteTree`). The evaluation
+  goes through `Mem.compact` at the bytes of `C`.
 * `check12`: the memory meets `Mat.Pre` (`NaiveKernel.pre12`), so the start's check of it
-  passes (`Mem.checkClosed_of_closed`). The kernel does not evaluate that check here: it reads
-  each byte of the blocks of `A` and `B` through `List.getD` from the head of their lists, and
-  does not finish within 24 GB.
-* `start12`: the launch starts, evaluated by the kernel (`kernel_rfl`) with `A`, `B`, `K` and
-  `ω` variables, once the check is rewritten by `check12`. The evaluation goes through
-  `Mem.compact` at the 201,028 bytes of `C`.
-* `trace12`, `facts12`: at every start `g`, `c` of the launch, the memory's trace is empty, and
-  for each thread its one frame (`fr`), its registers `%0` to `%5`, the loads of its copies of
-  the three structs, and the frame's function, label, position and `alloca`s, by evaluation.
+  passes (`Mem.checkClosed_of_closed`), for every `K ≤ 768`. The other evaluations of the start
+  (`eval12`) rewrite the check by it, so that the kernel does not read the bytes again for each.
+* `trace12`: at every start `g`, `c` of the launch the memory's trace is empty, by
+  `Grid.start_trace`, which holds for every start.
+* `facts12`: at every start `g`, `c` of the launch, for each thread its one frame (`fr`), its
+  registers `%0` to `%5`, the loads of its copies of the three structs, and the frame's function,
+  label, position and `alloca`s, by evaluation.
 * `at12`: `NaiveSpec.At` at every thread, on every memory of `Elem` from the start's memory after
   the threads before it: the frames and loads from `facts12`, the context from `Grid.start_ctx`,
   and the buffers and tensors from `Mat.pre_mem`, `Grid.start_blocks` and `Elem.start_block`.
@@ -27,19 +31,30 @@ bytes a row, read-only), the address choice 0 and every oracle `ω`.
   one more thread: threads 0 and 2 (row 0, in bounds) by `NaiveIn.runIn` and
   `Runs.of_chainsWith`, threads 1 and 3 (row 1, out of bounds) by `NaiveOut.runOut` and
   `Runs.of_retWith`; `first12` is the start and thread 0 from the start's memory itself.
+* `obs12`: `Kernel.Sound.exists_obs` at `NaiveKernel.sound12`, at every address choice and
+  oracle: a complete run (`Kernel.Obs`) whose observation meets the relation. `cells12`:
+  `NaiveKernel.read12` at that observation, its premise discharged, so the cells of row 0 of `C`
+  are those of a run that exists.
+* `soundOff12`, `obsOff12`: `NaiveOff.correct` at this launch and memory with `K = 768`, its
+  `Mat.Pre` by `NaiveKernel.pre12`: the corpus kernel compiled with contraction off is sound for
+  `Elem.Out` of `naive`'s bytes at the rows `neverFuse (ω k)`, and has such an observation at
+  every address choice and oracle family (`Kernel.Sound.exists_obs`).
 
 The theorems about a start take its equation `hs` and evaluate the start itself, not the grid:
-`of_start` moves a fact about the start's value to `g` and `c`, so the kernel only reduces
-`Grid.start` after `eval12` has unfolded it and rewritten its check. Unfolding a name for the
-grid instead makes both the elaborator and the kernel reduce the start with the check in place.
-For this program, launch, memory (every `A` and `B`) and address choice only.
+`of_start` moves a fact about the start's value to `g` and `c`, so the kernel reduces
+`Grid.start` only after `eval12` has unfolded it and rewritten its check. Unfolding a name for
+the grid instead makes both the elaborator and the kernel reduce the start with the check in
+place.
+For this program, launch, memory (every `A` and `B`) and address choice only; `obs12`,
+`cells12`, `soundOff12` and `obsOff12` are for every address choice (`soundOff12` and `obsOff12`
+for the program compiled with contraction off).
 -/
 
 namespace MojoProofTest.NaiveStart
 
 open MojoProof MojoProof.LLVM MojoProof.Sem MojoProof.Sym MojoProofTest.SymPhi
   MojoProofTest.NaiveThread MojoProofTest.NaiveSpec MojoProofTest.NaiveIn MojoProofTest.NaiveOut
-  MojoProofTest.NaiveKernel
+  MojoProofTest.NaiveKernel MojoProofTest.SymInfo.mgemm_nocontract
 open FloatLib.Floats.Formats.BinaryInterchange TorchLean
 
 -- `Array.any` recurses by well-founded recursion, so the kernel cannot evaluate a start without
@@ -69,17 +84,16 @@ theorem of_start {α : Type} {P Q : Grid → (Nat → Ctx) → α} {e : Except F
   subst hs
   exact Option.some.inj h
 
-/-- **The launch starts**, for every `A`, `B`, `K ≤ 768` and oracle `ω`: the kernel evaluates the
-start to a grid and contexts (`eval12`). For this program, launch, memory and address choice
-only. -/
+/-- **The launch starts**, for every `A`, `B`, `K` and oracle `ω`: the start returns a grid and
+contexts (`.ok`). The kernel evaluates it with its check of the caller's memory in place. For this
+program, launch, memory and address choice only. -/
 theorem start12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
-    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) {K : Nat} (hK : K ≤ 768)
-    (ω : Nat → Nat → Nat) :
+    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (K : Nat) (ω : Nat → Nat → Nat) :
     ∃ g c, Grid.start naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 K) (mem12 A B)
       (fun _ => 0) ω = .ok (g, c) := by
   have hb : (Grid.start naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 K) (mem12 A B)
       (fun _ => 0) ω).toBool = true := by
-    eval12 hK
+    rewrite [Grid.start]; kernel_rfl
   revert hb
   cases Grid.start naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 K) (mem12 A B) (fun _ => 0) ω
     with
@@ -90,16 +104,15 @@ theorem start12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
 def fr (g : Grid) (k : Nat) : Frame :=
   ((Grid.thread g k).frames.head?).getD ⟨naive.fn_0, 0, 0, fun _ => none, fun _ => none, [], none⟩
 
-/-- **The start's memory has an empty trace**, for every `A`, `B`, `K ≤ 768`, oracle `ω` and start
-`g`, `c` of the launch (evaluated, `of_start`, `eval12`). For this program, launch, memory and
-address choice only. -/
+/-- **The start's memory has an empty trace**, for every `A`, `B`, `K`, oracle `ω` and start `g`,
+`c` of the launch: `Grid.start_trace`, which holds for every start, at this program, launch,
+memory and address choice. -/
 theorem trace12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
-    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) {K : Nat} (hK : K ≤ 768)
+    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) {K : Nat}
     (ω : Nat → Nat → Nat) {g : Grid} {c : Nat → Ctx}
     (hs : Grid.start naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 K) (mem12 A B) (fun _ => 0) ω =
-      .ok (g, c)) : g.mem.trace = [] := by
-  apply of_start (Q := fun _ _ => []) hs
-  eval12 hK
+      .ok (g, c)) : g.mem.trace = [] :=
+  Grid.start_trace hs
 
 /-- **Thread `k`'s entry, evaluated** (`of_start`, `eval12`), for every `A`, `B`, `K ≤ 768`,
 oracle, start `g`, `c` of the launch and thread `k < 4`: the thread has the one frame `fr g k` and
@@ -209,10 +222,67 @@ theorem first12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
     ∃ g c, Grid.start naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 K) (mem12 A B)
       (fun _ => 0) ω = .ok (g, c) ∧ ∃ m'', Runs (c 0) (Grid.thread g 0) g.mem m'' ∧
         Elem g.mem 1 4 (cell L12) (bytes ω L12 K A B) 1 m'' ∧ Elem.Only 1 (S L12 1 2) m'' := by
-  obtain ⟨g, c, hs⟩ := start12 A B hK ω
-  refine ⟨g, c, hs, runs12 A B hK ω hs (by decide) (Elem.zero (trace12 A B hK ω hs)) ?_⟩
+  obtain ⟨g, c, hs⟩ := start12 A B K ω
+  refine ⟨g, c, hs, runs12 A B hK ω hs (by decide) (Elem.zero (trace12 A B ω hs)) ?_⟩
   intro a ha
-  rw [trace12 A B hK ω hs] at ha
+  rw [trace12 A B ω hs] at ha
   cases ha
+
+/-- **`sound12` has an observation**, for every `A`, `B`, oracle `ω` and address choice `ch`: some
+complete run of `naive` on `L12` at `mem12 A B` under `ch` and `ω` (`Kernel.Obs`) observes blocks
+`Bk`, and `Bk` meets `Elem.Out` of the naive bytes (`Kernel.Sound.exists_obs` at `sound12`).
+For this program, launch and memory only. -/
+theorem obs12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
+    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) (ch : Nat → Nat) :
+    ∃ Bk, Kernel.Obs naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 768) (mem12 A B)
+      (fun m => some m.blocks) ch ω Bk ∧
+      Elem.Out (mem12 A B) 1 (cell L12) (bytes ω L12 768 A B) (volume L12.grid * volume L12.block)
+        Bk :=
+  (sound12 A B ω).exists_obs rfl
+
+/-- **`read12` at an observation that exists**, for every `A`, `B`, oracle `ω` and address choice
+`ch`: some complete run of `naive` on `L12` at `mem12 A B` observes blocks `Bk` (`obs12`) whose
+block 1 is some `y` with cells `c = 0, 1` (row 0) read by one thread `k` each, of row 0 and
+column `c`, whose 4 bytes at offset `c * 4` encode `dotLoop` with `fmul contract` under
+`o (ω k)` from `+0` over `pairs A B 0 c 768` (`read12`, its premise discharged). For this program,
+launch and memory only. -/
+theorem cells12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
+    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) (ch : Nat → Nat) :
+    ∃ Bk, Kernel.Obs naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 768) (mem12 A B)
+      (fun m => some m.blocks) ch ω Bk ∧
+      ∃ y, Bk 1 = some y ∧ ∀ c (hc : c < 2), ∃ k < 4, L12.index k .x = 0 ∧ L12.index k .y = c ∧
+        naive.prog.layout.encode (.fp .float) (.ofFloat .float
+          (dotLoop true (o (ω k)) (Model.zero _ false) (pairs A B 0 ⟨c, hc⟩ 768))) =
+          some (y.read (c * 4) 4) :=
+  let ⟨Bk, hB, _⟩ := obs12 A B ω ch
+  ⟨Bk, hB, read12 A B ω hB⟩
+
+/-- **`NaiveOff.correct` at a concrete memory with two threads in bounds**: for every `A`
+(`1 × 768`), `B` (`2 × 768`) and oracle family `ω`, the corpus kernel compiled with contraction
+off, on `L12` at `m = 1`, `n = 2`, `K = 768` and `mem12 A B` under `ω`, is sound for `Elem.Out` of
+`naive`'s bytes at the never-fusing rows `neverFuse (ω k)`; `Mat.Pre` is `pre12`. It is `sound12`
+for that program, and covers this one launch and memory. -/
+theorem soundOff12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
+    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) :
+    Kernel.Sound g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.prog
+      g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.fn_0 L12
+      (Mat.args z 1 2 3 1 2 768) (mem12 A B) (fun _ ω' => ω' = ω) (fun m => some m.blocks)
+      (Elem.Out (mem12 A B) 1 (cell L12) (bytes (fun k => neverFuse (ω k)) L12 768 A B)
+        (volume L12.grid * volume L12.block)) :=
+  NaiveOff.correct NaiveOut.validZ ⟨rfl, rfl⟩ (pre12 A B le_rfl)
+
+/-- **`soundOff12` has an observation**, for every `A`, `B`, oracle family `ω` and address choice
+`ch`: some complete run of the corpus kernel compiled with contraction off on `L12` at
+`mem12 A B` under `ch` and `ω` (`Kernel.Obs`) observes blocks `Bk`, and `Bk` meets `Elem.Out` of
+`naive`'s bytes at the rows `neverFuse (ω k)` (`Kernel.Sound.exists_obs` at `soundOff12`). For
+this program, launch and memory only. -/
+theorem obsOff12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
+    (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) (ch : Nat → Nat) :
+    ∃ Bk, Kernel.Obs g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.prog
+      g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.fn_0 L12
+      (Mat.args z 1 2 3 1 2 768) (mem12 A B) (fun m => some m.blocks) ch ω Bk ∧
+      Elem.Out (mem12 A B) 1 (cell L12) (bytes (fun k => neverFuse (ω k)) L12 768 A B)
+        (volume L12.grid * volume L12.block) Bk :=
+  (soundOff12 A B ω).exists_obs rfl
 
 end MojoProofTest.NaiveStart

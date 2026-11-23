@@ -26,9 +26,7 @@ open Lean Elab Command Meta
 
 namespace MojoProof.Sym
 
-deriving instance ToExpr for SVal
 deriving instance ToExpr for SNode
-deriving instance ToExpr for SEff
 deriving instance ToExpr for Cond
 deriving instance ToExpr for Exit
 deriving instance ToExpr for Summary

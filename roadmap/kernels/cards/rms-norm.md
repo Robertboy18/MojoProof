@@ -17,4 +17,8 @@ level: L0
 **The rule.** Each row is divided by the square root of the mean of its squares plus `eps`,
 then scaled by `gamma`.
 
+**Not proved.** No float bound: TorchLean's `TorchLean.Tensor.rmsNorm` is defined over the reals
+but has no closed form there, and the mean of squares with the `rsqrt.approx` contract is not
+stated (docs/proofs/float-reductions.md, "Not proved").
+
 **Open.** No corpus file yet, so every level above L0.

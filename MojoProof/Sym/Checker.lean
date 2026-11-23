@@ -23,26 +23,32 @@ linear in the block's (one node per float constant and per statement, operands b
 `covers` holds when `summarize` gives the summary `S` and the obligations of `S` are the first
 conditions of `ds` (`List.isPrefixOf`: a check by position, linear).
 
-The fragment: `bin`, scalar integer `icmp`, `trunc` / `zext` / `sext`, `extractvalue`,
-`getelementptr` with one index, `load`, `store`, `fbin` but `fmul contract` (in the fragment of
-`coversC`, whose float nodes carry their operands' products: `SNode.fbinOf`), `select` of
-integers (node `SNode.select`), calls of a special register (a declaration that `P.intrinsics`
-names `sreg r d`, with no arguments and no fast-math flags, whose attributes `Func.check`
-accepts: node `SNode.call`), and calls of an integer maximum or minimum (a declaration that
-`P.intrinsics` names `minmax signed max t`, with two arguments, no fast-math flags and no
-parameter, return or call-site attributes, whose attributes `Func.check` accepts: node
-`SNode.minmax`), with operands that are registers, integer constants or float constants;
-`load`, `getelementptr`, `icmp` and special-register calls only before the block's first `store`
-(they read the entry memory); terminators `br`, `br i1` and `ret void`. A branch to blocks that
-start with `phi`s is `Exit.phi`: for each target, each `phi`'s incoming operand from this block
-must be a register, an integer constant or a float constant, and its obligation is that the
-operand evaluates (`SState.phiConds`; a float constant's obligation is that its node evaluates,
-which `decide` checks only when the kernel reduces `floatLit` of the literal). Anything else
-(other calls among them) makes `summarize` fail. `summarize` and `covers` are `summarizeWith`
-and `coversWith` with the exit function `SState.exitAt`; `coversTo P fn lbl p0 d₀` is
-`coversWith` with `SState.exitTo`, whose `br i1` into blocks with `phi`s has the obligations of
-its edge into block `d₀` only, so a `phi` operand of the other edge that is outside the fragment
-or faults does not refuse the block.
+The fragment: `bin`, scalar integer `icmp`, `trunc` / `zext` / `sext`, the other casts that `castV`
+evaluates (`castOk`: not `fptoui`, `fptosi`, `inttoptr` or an ill-typed cast; node `SNode.castAt`,
+at the statement's operator and types; `ptrtoint`, which reads the addresses, only before the
+block's first store), `extractvalue`, `getelementptr` with one index (on a global, two nodes:
+`SNode.globalAt` for the global's pointer, then the `getelementptr` on it), `load`, `store` (on a
+global, the `SNode.globalAt` node of the pointer operand, then the `load` or `store` on it), `fbin`
+but `fmul contract` (in the fragment of `coversC`, whose float nodes carry their operands' products:
+`SNode.fbinOf`), `select` of integers (node `SNode.select`), calls of a special register or of the
+lane number (a declaration that `P.intrinsics` names `sreg r d` or `laneid`, with no arguments and
+no fast-math flags, whose attributes `Func.check` accepts: node `SNode.call`), and calls of an
+integer maximum or minimum (a declaration that `P.intrinsics` names `minmax signed max t`, with two
+arguments, no fast-math flags and no parameter, return or call-site attributes, whose attributes
+`Func.check` accepts: node `SNode.minmax`), with operands that are registers, integer constants or
+float constants; `getelementptr`, `icmp` and the calls of a special register or the lane number only
+before the block's first `store` (they read the entry memory), and a `load` after it as
+`SNode.loadAfter` (on a global, on the global's `SNode.globalAt` node), which carries the effects
+before it (the memory it reads; their operands are nodes of the table before it, `SEff.before`);
+terminators `br`, `br i1` and `ret void`. A branch to blocks that start with `phi`s is `Exit.phi`:
+for each target, each `phi`'s incoming operand from this block must be a register, an integer
+constant or a float constant, and its obligation is that the operand evaluates (`SState.phiConds`; a
+float constant's obligation is that its node evaluates, which `decide` checks only when the kernel
+reduces `floatLit` of the literal). Anything else (other calls among them) makes `summarize` fail.
+`summarize` and `covers` are `summarizeWith` and `coversWith` with the exit function
+`SState.exitAt`; `coversTo P fn lbl p0 d₀` is `coversWith` with `SState.exitTo`, whose `br i1` into
+blocks with `phi`s has the obligations of its edge into block `d₀` only, so a `phi` operand of the
+other edge that is outside the fragment or faults does not refuse the block.
 
 This module holds the checker's definitions, which the kernel evaluates; MojoProof/Sym/Block.lean
 proves them sound (`Block.sound`, `Block.sound_to`), and MojoProof/Sym/Path.lean along paths
@@ -128,6 +134,22 @@ def SNode.fbinOf (op : FBinOp) (fm : FastMath) (ft : FloatTy) (n : Nat) (a b : S
   | none, none => .fbin op fm ft n a b
   | pa, pb => .fbinP op fm ft n a b pa pb
 
+/-- The casts `castV` evaluates, by operator `op`, source type `s` and target type `t` (each a
+vector's element type when a vector): `trunc`, `zext`, `sext`, `bitcast` and `addrspacecast` at
+every type, `fptrunc` and `fpext` from a float type to a float type, `sitofp` and `uitofp` to a
+float type, and `ptrtoint` from a pointer type. Not `fptoui`, `fptosi`, `inttoptr`, nor another
+operator at other types: there `castV` faults (unsupported) on every operand, and nowhere else
+(`castOk_iff`, MojoProof/Sym/Block.lean, for every layout, memory and choice). -/
+def castOk (op : CastOp) (s t : Ty) : Bool :=
+  match op, s.elt, t.elt with
+  | .trunc, _, _ | .zext, _, _ | .sext, _, _ => true
+  | .fptrunc, .fp _, .fp _ | .fpext, .fp _, .fp _ => true
+  | .sitofp, _, .fp _ | .uitofp, _, .fp _ => true
+  | .bitcast, _, _ => true
+  | .ptrtoint, .ptr _, _ => true
+  | .addrspacecast, _, _ => true
+  | _, _, _ => false
+
 /-- Statement `st` at position `pc` of block `lbl`, `n` statements after the entry, from state
 `σ`; `none` outside the fragment. With `contract` (`coversC`), `fmul contract` is in the
 fragment too; a float operator's node is `SNode.fbinOf` of its operands' `fmul contract` operand
@@ -148,21 +170,53 @@ def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
     | .cast op (.mk s a) t => if op = .trunc ∨ op = .zext ∨ op = .sext then do
         let x ← σ.op s a
         pure (σ.def st.res (.cast op (P.layout.scalarBits t.elt) x))
-      else none
+      else if (σ.stored ∧ op = .ptrtoint) ∨ castOk op s t = false then none else do
+        let x ← σ.op s a
+        pure (σ.def st.res (.castAt lbl pc n x))
     | .extractvalue (.mk t a) is => do
       let x ← σ.op t a
       pure (σ.def st.res (.extract is x))
-    | .gep _ _ (.mk (.ptr as) b) [.mk ti i] => if σ.stored then none else do
-      let xi ← σ.op ti i
-      let xb ← σ.op (.ptr as) b
-      pure (σ.def st.res (.gep lbl pc xb xi))
-    | .load _ _ (.mk (.ptr as) p) _ => if σ.stored then none else do
-      let x ← σ.op (.ptr as) p
-      pure { σ.def st.res (.load lbl pc x) with effs := σ.effs ++ [.load lbl pc x] }
-    | .store _ (.mk t v) (.mk (.ptr as) p) _ => do
-      let x ← σ.op t v
-      let y ← σ.op (.ptr as) p
-      pure { σ with effs := σ.effs ++ [.store lbl pc x y], stored := true }
+    | .gep _ _ (.mk (.ptr as) b) [.mk ti i] => if σ.stored then none else
+      match b with
+      -- on a global: the node of its pointer, then the `getelementptr` on that node
+      | .glob _ => do
+        let xi ← σ.op ti i
+        pure ((σ.def none (.globalAt lbl pc 0)).def st.res
+          (.gep lbl pc (.node σ.nodes.length) xi))
+      | _ => do
+        let xi ← σ.op ti i
+        let xb ← σ.op (.ptr as) b
+        pure (σ.def st.res (.gep lbl pc xb xi))
+    | .load _ _ (.mk (.ptr as) p) _ => if σ.stored then
+        -- after a store: the `load` from the memory the effects before it make (on a global, on
+        -- the node of its pointer)
+        if σ.effs.all (·.before σ.nodes.length) then match p with
+          | .glob _ => pure { (σ.def none (.globalAt lbl pc 0)).def st.res
+              (.loadAfter lbl pc (.node σ.nodes.length) σ.effs) with
+                effs := σ.effs ++ [.load lbl pc (.node σ.nodes.length)] }
+          | _ => do
+            let x ← σ.op (.ptr as) p
+            pure { σ.def st.res (.loadAfter lbl pc x σ.effs) with
+              effs := σ.effs ++ [.load lbl pc x] }
+        else none
+      else match p with
+      -- on a global: the node of its pointer, then the `load` on that node
+      | .glob _ => pure { (σ.def none (.globalAt lbl pc 0)).def st.res
+          (.load lbl pc (.node σ.nodes.length)) with
+            effs := σ.effs ++ [.load lbl pc (.node σ.nodes.length)] }
+      | _ => do
+        let x ← σ.op (.ptr as) p
+        pure { σ.def st.res (.load lbl pc x) with effs := σ.effs ++ [.load lbl pc x] }
+    | .store _ (.mk t v) (.mk (.ptr as) p) _ => match p with
+      -- on a global: the node of its pointer, then the `store` on that node
+      | .glob _ => do
+        let x ← σ.op t v
+        pure { σ.def none (.globalAt lbl pc 1) with
+          effs := σ.effs ++ [.store lbl pc x (.node σ.nodes.length)], stored := true }
+      | _ => do
+        let x ← σ.op t v
+        let y ← σ.op (.ptr as) p
+        pure { σ with effs := σ.effs ++ [.store lbl pc x y], stored := true }
     | .fbin op fm t a b => match t.elt with
       | .fp ft => if !contract && op == .fmul && fm.contract then none else do
         let x ← σ.op t a
@@ -174,6 +228,10 @@ def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
       | some fn => match P.intrinsics.lookup g with
         | some (.sreg r d) =>
           if (fm == {}) && fn.blocks.isEmpty && (fn.check P.module (some (.sreg r d))).isOk then
+            some (σ.def st.res (.call lbl pc))
+          else none
+        | some .laneid =>
+          if (fm == {}) && fn.blocks.isEmpty && (fn.check P.module (some .laneid)).isOk then
             some (σ.def st.res (.call lbl pc))
           else none
         | _ => none

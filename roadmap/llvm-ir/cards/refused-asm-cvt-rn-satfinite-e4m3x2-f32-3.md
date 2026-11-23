@@ -5,7 +5,7 @@ kind: construct
 ref: PTX ISA 9.5 #data-movement-and-conversion-instructions-cvt
 quote: "Convert a value from one type to another."
 lean: not stated yet
-corpus: tests/corpus/mgemm/g_matmul_kernel_naive_float8_e4m3fn_bfloat16_bfloat16_True_16_c159_00c8af24fa246f7a.nvptx.ll
+corpus: tests/corpus/mgemm/g_matmul_kernel_naive_float8_e4m3fn_bfloat16_bfloat16_True_16_c159_00c8af24fa246f7a.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_float8_e4m3fn_bfloat16_bfloat16_True_2c1c_8e92f2bb57c3c342.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_split_k_kernel_float8_e4m3fn_bfloat16_bfloat16_T_c45dbbac780aa7c3.nvptx.ll
 tests: MojoProofTest.Corpus
 upstream:
 level: L0
@@ -14,11 +14,11 @@ level: L0
 
 ## Rule
 
-The importer refuses a call of inline assembly: `Parser.inst` reads no `asm` callee, and the corpus check records the files it refuses in tests/corpus/REFUSALS.tsv with the reason `unsupported inline asm "cvt.rn.satfinite.e4m3x2.f32 $0, $1, $2;", "=h,f,f"`. The quote is the first sentence of PTX ISA's section on `cvt`, the instruction the string holds.
+The importer refuses a call of inline assembly whose template and constraints are not of a form it accepts (`AsmCall.ofText?` in `Module.check`), and the corpus check records the files it refuses in tests/corpus/REFUSALS.tsv with the reason `unsupported inline asm "cvt.rn.satfinite.e4m3x2.f32 $0, $1, $2;", "=h,f,f"`. The quote is the first sentence of PTX ISA's section on `cvt`, the instruction the string holds.
 
 ## Corpus
 
-1 of the 114 corpus files use it (1 uses).
+3 of the 114 corpus files use it (3 uses).
 
 ## Out of scope
 

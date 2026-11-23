@@ -30,34 +30,59 @@ The node kinds, for every valuation and node values:
 * `SNode.eval_bin`, `SNode.eval_cast`, `SNode.eval_extract`: on words (an aggregate for
   `extractvalue`), the node is what the semantics' `intBin`, `intCast`, `extractV` give of them
   (the closed values follow from MojoProof/Sem/Index.lean's `intBin_add_ofNat` and the others
-  under their no-wrap conditions; `intBin_add_wrap`, `intBin_mul_wrap`: without `nuw` and `nsw`,
-  `add` and `mul` of two numbers' words are the word of their sum or product, modulo `2 ^ w`;
-  `intCast_sext_bits`: `sext` of any word is its sign extension).
+  under their no-wrap conditions; `intBin_add_wrap`, `intBin_mul_wrap`, `intBin_sub_wrap`:
+  without `nuw` and `nsw`, `add`, `mul` and `sub` of two numbers' words are the word of their
+  sum, product or difference, modulo `2 ^ w`; `intBin_udiv_ofNat`: without
+  `exact`, `udiv` by a positive number below `2 ^ w` is the quotient;
+  `intBin_sdiv_ofNat`, `intBin_sdiv_neg`: `sdiv` of a positive word (`2 a < 2 ^ w`) by a
+  positive one is the quotient, by a negative one `2 ^ w - b` the word of the negated quotient
+  by `2 ^ w - b` (with `msb_ofNat_lt`, `msb_ofNat_ge`: the sign bit of a number's word);
+  `xor_ofNat`, `intBin_xor_ofNat`: `xor` of two numbers' words is the word of their `^^^`;
+  `sshiftRight_top`, `intBin_ashr_top`, `intBin_ashr_xor_pos`, `intBin_ashr_xor_neg`: `ashr` by
+  `w - 1` is all ones or zero by the sign bit, so of the `xor` of a positive word with a
+  positive one 0 and with a negative one `2 ^ w - 1`; `intCast_sext_bits`: `sext` of any word is
+  its sign extension).
 * `SNode.eval_icmpV`: an integer comparison node is what `icmpV` gives of its operands' values;
   `SNode.eval_icmp`, `SNode.eval_icmp_slt_ofNat`, `SNode.eval_icmp_ult_ofNat`,
   `SNode.eval_icmp_eq_ofNat`, `SNode.eval_icmp_sge_ofNat`: of two words of its width,
   `Val.ofBool` of the predicate, and of two small natural numbers' words, of their order or
-  equality (`ICmp.slt_ofNat`, `ICmp.ult_ofNat`, `ICmp.eq_ofNat`, `ICmp.sge_ofNat`).
+  equality (`ICmp.slt_ofNat`, `ICmp.ult_ofNat`, `ICmp.eq_ofNat`, `ICmp.sge_ofNat`), and of
+  any two numbers' words, `icmp eq` of their residues modulo `2 ^ w` (`ICmp.eq_ofNat_mod`,
+  `SNode.eval_icmp_eq_mod`).
 * `SNode.eval_select_ofBool`, `SNode.eval_select_true`, `SNode.eval_select_false`: a `select`
-  on a boolean is the operand it picks; `SNode.eval_smax_ofNat`: `llvm.smax` of two small natural
-  numbers' words is the word of their maximum.
+  on a boolean is the operand it picks, `SNode.eval_select_word` on `decide q` and two numbers'
+  words the word of `if q then x else y`, `SNode.eval_select_same` on two operands of one value
+  that value; `SNode.eval_smax_ofNat`: `llvm.smax` of two small natural numbers' words is the
+  word of their maximum; `SNode.eval_word_eq`: a node that is the word of `x` is that of every
+  `y = x`.
 * `SNode.eval_load`, `SNode.eval_load_at`: a `load` node is the value `Mem.load` reads, when that
   read succeeds and the value is defined if the statement says `noundef`.
 * `SNode.eval_gep_at`: a `getelementptr` node with one index is what the semantics' `gep` gives
   of its operands' values.
+* `SNode.eval_globalAt_at`: a global's node is the pointer the context gives the global its
+  statement's operand names.
+* `SNode.eval_bitcast_at`: a `bitcast` node between scalar types of one width is its operand's
+  word.
 * `SNode.eval_fbin_ofFloat`: a float operator node on two floats of its type, with no
   `fmul contract` factors and without `nnan`, `ninf`, `nsz`, `reassoc`, `arcp` and `afn`, is the
   IEEE operation's result through `deliver` at the node's oracle number.
 * `SNode.eval_flit`: a float constant node is its literal's value (`floatLit`).
 * `SNode.eval_fbinP`: a float operator node with `fmul contract` factors is the semantics'
-  `floatBin` of its operands' values and factors, for the kernel to evaluate.
+  `floatBin` of its operands' values and factors, for the kernel to evaluate;
+  `SNode.eval_fbinP_ofFloat`: on two floats whose factors are float pairs (`laneOf_prodsWith_none`,
+  `laneOf_prodsWith_some`), it is what `floatBin` gives of them, which is `contract` through
+  `deliver` for an `fadd contract` or `fsub contract` (`floatBin_contract_ofFloat`) and the IEEE
+  operation through `deliver` otherwise (`floatBin_ofFloat_factors`), for symbolic floats too;
+  `lanes2` on two floats is the function at lane 0 (`lanes2_ofFloat`).
 * `withAttrs_ofNat`: return attributes that are each `noundef` or a `range` of the word's width
   containing `[lo, hi)`, of size below `2 ^ w` (`keepsWord`, a check the kernel evaluates), keep
   every word `k < 2 ^ w` with `lo ≤ k < hi`, for every layout and memory.
   `SNode.eval_sreg`, `SNode.eval_sreg_at`: so a special-register call node evaluates to the
   register's value as a 32-bit word, when the register is in `[r.lo, r.hi d)` (what
   `Launch.sreg_bound` gives on every thread of a valid launch) and the declaration's attributes
-  pass `keepsWord`.
+  pass `keepsWord`; `SNode.eval_laneid`, `SNode.eval_laneid_at`: a lane-number call node
+  evaluates to `%laneid` as a 32-bit word when it is below 32 (`Launch.laneid_lt`: on every
+  thread of every launch) and the attributes keep `[0, 32)`.
 
 The buffers, for every layout and memories with the same blocks:
 
@@ -69,13 +94,15 @@ The buffers, for every layout and memories with the same blocks:
   address in space 0, plus its size at most `2 ^ (l.ptr a).1`, 2 to the space's pointer width; in
   space 0 this is `Mem.Fits` unfolded), offset `o < size` has address `g + o`, and a
   `getelementptr` from `⟨c, 0⟩` by `K` elements of type `src` is `⟨c, K * l.size src⟩`;
-  `gep_buffer_ok`: by any word, it is some value (a pointer or poison), not a fault.
+  `gep_buffer2`: so is one by `r * S + k` into a buffer of an `R × S` matrix, `r < R`, `k < S`
+  (`rowMajor_lt`); `gep_buffer_ok`: by any word, it is some value (a pointer or poison), not a
+  fault.
 * `load_buffer_at`, `load_buffer`, `load_buffer2`, `store_buffer`: through a pointer of either
   space, by a thread the buffer's owner admits, a load at the row-major offset of a coordinate
   `i` of a buffer holding a tensor `x` (`Mem.Holds`) gives `x i`, so element `K` of a 1-D tensor
   (`rowMajor_one`) and element `(r, k)` of an `R × S` tensor at offset `r * S + k`
-  (`rowMajor_two0`); a store of an encodable value into element `K` of a writable buffer
-  succeeds.
+  (`rowMajor_two0`, within a buffer that holds the whole tensor by `rowMajor_lt`); a store of
+  an encodable value into element `K` of a writable buffer succeeds.
 
 The effects, the exits and the path, for every valuation:
 
@@ -93,8 +120,9 @@ The effects, the exits and the path, for every valuation:
 The edges into blocks with `phi`s (`Exit.phi`, `Valuation.into`), for every program, valuation,
 label and summary:
 
-* `SVal.eval_int_ofNat`, `evalV_int_ofNat`, `evalV_loc`, `evalV_float`: an integer constant of a
-  natural number is its word; a local operand is its register's value; a float constant at a
+* `SVal.eval_int_ofNat`, `SVal.eval_int_negSucc`, `evalV_int_ofNat`, `evalV_loc`, `evalV_float`:
+  an integer constant of a natural number is its word, of `-(k + 1)` the word of
+  `2 ^ w - (k + 1)`; a local operand is its register's value; a float constant at a
   float type is its literal's value (`floatLit`).
 * `Exit.dest_of_target`, `Exit.dest_phi_eval`, `Exit.dest_phi_true`, `Exit.dest_phi_false`,
   `Exit.dest_phi_ofBool_true`, `Exit.dest_phi_ofBool_false`: an exit with a target goes there,
@@ -111,6 +139,15 @@ label and summary:
   `Valuation.intoWith_regs_br`, `Valuation.intoWith_regs_cond`, `Valuation.intoWith_mem`: the
   same with or without `fmul contract` (`Valuation.intoWith`, `Valuation.afterWith`), the plain
   forms being these without it.
+* `Valuation.intoWith_phi_of`: a property of the valuation after an edge into blocks with
+  `phi`s from the property before it and after every setting of the `phi`s, with no operand
+  evaluated; by it, `Valuation.intoWith_regs_phi_ne`: a register no `phi` of the edge sets is
+  `Valuation.afterWith`'s after it.
+* `Valuation.afterWith_prods_none`, `_off`, `_unfactored`, `_factors`: the `fmul contract`
+  operands after a block; `Valuation.intoWith_prods_br`, `_cond`, `_phi`, `_phi_ne`: after an
+  edge (`_phi_ne` by `Valuation.intoWith_phi_of`); `Valuation.intoWith_prods_phi_none` (by
+  `Valuation.intoWith_phi_of` and `foldl_set_prods_of_none`): none stays none through an edge
+  into blocks with `phi`s, with no operand evaluated.
 * `WalkI.nil'`, `WalkI.one`, `WalkI.cons2`, `WalkWith.nil'`, `WalkWith.one`, `WalkWith.cons2`:
   a path with `phi`s, without or with `fmul contract`, from its blocks' obligations and exits;
   `forall_lt_zero'`, `forall_lt_succ'`: a statement for every number below a literal from each
@@ -199,6 +236,209 @@ theorem intBin_mul_wrap {w a b : Nat} {fl : IntFlags} (hu : fl.nuw = false)
     Bool.or_false, BitVec.ofNat_mul_ofNat]
   rfl
 
+/-- The word of `a` with `2 a < 2 ^ w` has its sign bit clear, for every width. -/
+theorem msb_ofNat_lt {w a : Nat} (ha : 2 * a < 2 ^ w) : (BitVec.ofNat w a).msb = false := by
+  have ha' : a < 2 ^ w := by omega
+  rw [BitVec.msb_eq_decide, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha']
+  rcases w with _ | w
+  · simpa using ha'
+  · simp only [Nat.add_sub_cancel, decide_eq_false_iff_not, not_le]
+    rw [Nat.pow_succ] at ha
+    omega
+
+/-- The word of `a < 2 ^ w` with `2 ^ w ≤ 2 a` has its sign bit set, for every width. -/
+theorem msb_ofNat_ge {w a : Nat} (ha : 2 ^ w ≤ 2 * a) (ha' : a < 2 ^ w) :
+    (BitVec.ofNat w a).msb = true := by
+  rw [BitVec.msb_eq_decide, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha']
+  rcases w with _ | w
+  · simp at ha'; omega
+  · simp only [Nat.add_sub_cancel, decide_eq_true_eq]
+    rw [Nat.pow_succ] at ha
+    omega
+
+/-- `udiv` without `exact` of the words of `a` and `b > 0`, both below `2 ^ w`, is the word of
+`a / b`, for every width. -/
+theorem intBin_udiv_ofNat {w a b : Nat} {fl : IntFlags} (he : fl.exact = false)
+    (ha : a < 2 ^ w) (hb : b < 2 ^ w) (h0 : 0 < b) :
+    intBin w .udiv fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w (a / b))) := by
+  have hne : BitVec.ofNat w b ≠ 0 := by
+    intro e
+    have := congrArg BitVec.toNat e
+    rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt hb] at this
+    simp at this
+    omega
+  have e : BitVec.ofNat w a / BitVec.ofNat w b = BitVec.ofNat w (a / b) := by
+    apply BitVec.eq_of_toNat_eq
+    rw [BitVec.toNat_udiv, BitVec.toNat_ofNat, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+      Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb,
+      Nat.mod_eq_of_lt (Nat.lt_of_le_of_lt (Nat.div_le_self a b) ha)]
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hne, he, e, Bool.false_and,
+    ↓reduceIte, Bool.false_eq_true]
+  rfl
+
+/-- `sdiv` without `exact` of the words of `a` and `b > 0`, with `2 a`, `2 b` below `2 ^ w`
+(both non-negative), is the word of `a / b`, for every width. -/
+theorem intBin_sdiv_ofNat {w a b : Nat} {fl : IntFlags} (he : fl.exact = false)
+    (ha : 2 * a < 2 ^ w) (hb : 2 * b < 2 ^ w) (h0 : 0 < b) :
+    intBin w .sdiv fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w (a / b))) := by
+  have hb' : b < 2 ^ w := by omega
+  have ha' : a < 2 ^ w := by omega
+  have hne : BitVec.ofNat w b ≠ 0 := by
+    intro e
+    have := congrArg BitVec.toNat e
+    rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt hb'] at this
+    simp at this
+    omega
+  have hmin : ¬ (BitVec.ofNat w a = BitVec.intMin w ∧ BitVec.ofNat w b = BitVec.allOnes w) := by
+    rintro ⟨_, e⟩
+    have hw : 0 < w := by
+      rcases w with _ | w
+      · simp at hb; omega
+      · omega
+    have := msb_ofNat_lt hb
+    rw [e, BitVec.msb_allOnes hw] at this
+    exact absurd this (by decide)
+  have e : (BitVec.ofNat w a).sdiv (BitVec.ofNat w b) = BitVec.ofNat w (a / b) := by
+    unfold BitVec.sdiv
+    rw [msb_ofNat_lt ha, msb_ofNat_lt hb]
+    dsimp only
+    rw [BitVec.udiv_eq]
+    apply BitVec.eq_of_toNat_eq
+    rw [BitVec.toNat_udiv, BitVec.toNat_ofNat, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+      Nat.mod_eq_of_lt ha', Nat.mod_eq_of_lt hb',
+      Nat.mod_eq_of_lt (Nat.lt_of_le_of_lt (Nat.div_le_self a b) ha')]
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hne, hmin, he, e,
+    Bool.false_and, ↓reduceIte, Bool.false_eq_true]
+  rfl
+
+/-- `sdiv` without `exact` of the word of `a` with `2 a < 2 ^ w` (non-negative) by the word of
+`b < 2 ^ w` with `2 ^ w ≤ 2 b` (the negative number `b - 2 ^ w`) is the word of
+`-(a / (2 ^ w - b))` modulo `2 ^ w`, for every width: the quotient rounds toward zero. -/
+theorem intBin_sdiv_neg {w a b : Nat} {fl : IntFlags} (he : fl.exact = false)
+    (ha : 2 * a < 2 ^ w) (hb : 2 ^ w ≤ 2 * b) (hb' : b < 2 ^ w) :
+    intBin w .sdiv fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w ((2 ^ w - a / (2 ^ w - b)) % 2 ^ w))) := by
+  have ha' : a < 2 ^ w := by omega
+  have hne : BitVec.ofNat w b ≠ 0 := by
+    intro e
+    have := congrArg BitVec.toNat e
+    rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt hb'] at this
+    simp at this
+    omega
+  have hmin : ¬ (BitVec.ofNat w a = BitVec.intMin w ∧ BitVec.ofNat w b = BitVec.allOnes w) := by
+    rintro ⟨e, _⟩
+    have := msb_ofNat_lt ha
+    rw [e, BitVec.msb_intMin] at this
+    have : 0 < w := by
+      rcases w with _ | w
+      · simp at hb'; omega
+      · omega
+    simp_all
+  have e : (BitVec.ofNat w a).sdiv (BitVec.ofNat w b) =
+      BitVec.ofNat w ((2 ^ w - a / (2 ^ w - b)) % 2 ^ w) := by
+    unfold BitVec.sdiv
+    rw [msb_ofNat_lt ha, msb_ofNat_ge hb hb']
+    dsimp only
+    rw [BitVec.udiv_eq, BitVec.neg_eq, BitVec.neg_eq]
+    apply BitVec.eq_of_toNat_eq
+    rw [BitVec.toNat_neg, BitVec.toNat_udiv, BitVec.toNat_neg, BitVec.toNat_ofNat,
+      BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha', Nat.mod_eq_of_lt hb',
+      Nat.mod_eq_of_lt (by omega : 2 ^ w - b < 2 ^ w)]
+    exact (Nat.mod_mod _ _).symm
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hne, hmin, he, e,
+    Bool.false_and, ↓reduceIte, Bool.false_eq_true]
+  rfl
+
+/-- `sub` without `nuw` and `nsw` of the words of `a` and `b` is the word of `a - b` modulo
+`2 ^ w`, written `(2 ^ w - b % 2 ^ w + a) % 2 ^ w`, for every width and all such flags. -/
+theorem intBin_sub_wrap {w a b : Nat} {fl : IntFlags} (hu : fl.nuw = false)
+    (hs : fl.nsw = false) :
+    intBin w .sub fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w ((2 ^ w - b % 2 ^ w + a) % 2 ^ w))) := by
+  have e : BitVec.ofNat w a - BitVec.ofNat w b =
+      BitVec.ofNat w ((2 ^ w - b % 2 ^ w + a) % 2 ^ w) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_sub, BitVec.toNat_ofNat, Nat.mod_mod, Nat.add_mod_mod]
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hu, hs, e, Bool.false_and,
+    Bool.or_false]
+  rfl
+
+/-- The `xor` of the words of `a` and `b` below `2 ^ w` is the word of `a ^^^ b`. -/
+theorem xor_ofNat {w a b : Nat} (ha : a < 2 ^ w) (hb : b < 2 ^ w) :
+    BitVec.ofNat w a ^^^ BitVec.ofNat w b = BitVec.ofNat w (a ^^^ b) := by
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_xor, BitVec.toNat_ofNat, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+    Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb, Nat.mod_eq_of_lt (Nat.xor_lt_two_pow ha hb)]
+
+/-- `xor` of the words of `a` and `b` below `2 ^ w` is the word of `a ^^^ b`, for every width
+and all flags. -/
+theorem intBin_xor_ofNat {w a b : Nat} {fl : IntFlags} (ha : a < 2 ^ w) (hb : b < 2 ^ w) :
+    intBin w .xor fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
+      .ok (.bits w (BitVec.ofNat w (a ^^^ b))) := by
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, xor_ofNat ha hb]
+  rfl
+
+/-- An arithmetic right shift by `w - 1` of a word of `w` bits is all ones if its sign bit is
+set, else zero. -/
+theorem sshiftRight_top {w : Nat} {x : BitVec w} {s : Nat} (hs : s + 1 = w) :
+    x.sshiftRight s = if x.msb then BitVec.allOnes w else 0 := by
+  apply BitVec.eq_of_getLsbD_eq
+  intro i hi
+  have hm : x.getLsbD s = x.msb := by
+    rw [BitVec.msb_eq_getLsbD_last]
+    congr 1
+    omega
+  rw [BitVec.getLsbD_sshiftRight]
+  by_cases h0 : i = 0
+  · subst h0
+    have hw : w ≠ 0 := by omega
+    cases hx : x.msb <;> simp [hx, hm, hw, hi]
+  · have h1 : ¬ s + i < w := by omega
+    cases hx : x.msb <;> simp [h1, hi, Nat.not_le.2 hi]
+
+/-- `ashr` without `exact` of the word of `x` by `w - 1` is all ones if its sign bit is set,
+else zero, for every width. -/
+theorem intBin_ashr_top {w x s : Nat} {m : Bool} {fl : IntFlags} (he : fl.exact = false)
+    (hs : s + 1 = w) (hm : (BitVec.ofNat w x).msb = m) :
+    intBin w .ashr fl (.bits w (BitVec.ofNat w x)) (.bits w (BitVec.ofNat w s)) =
+      .ok (.bits w (if m then BitVec.allOnes w else 0)) := by
+  have hs' : s < 2 ^ w := Nat.lt_of_lt_of_le (by omega) (Nat.le_of_lt (Nat.lt_two_pow_self))
+  have hk : (BitVec.ofNat w s).toNat = s := by rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt hs']
+  have hw : decide (s ≥ w) = false := by simp; omega
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, hk, he, hw, Bool.false_and,
+    Bool.or_false, ↓reduceIte, Bool.false_eq_true, sshiftRight_top hs, hm]
+  rfl
+
+/-- `ashr` without `exact` by `w - 1` of the `xor` of two non-negative words (`2 a`, `2 b`
+below `2 ^ w`) is zero: their signs agree. -/
+theorem intBin_ashr_xor_pos {w a b s : Nat} {fl : IntFlags} (he : fl.exact = false)
+    (ha : 2 * a < 2 ^ w) (hb : 2 * b < 2 ^ w) (hs : s + 1 = w) :
+    intBin w .ashr fl (.bits w (BitVec.ofNat w (a ^^^ b))) (.bits w (BitVec.ofNat w s)) =
+      .ok (.bits w (BitVec.ofNat w 0)) := by
+  have hm : (BitVec.ofNat w (a ^^^ b)).msb = false := by
+    rw [← xor_ofNat (by omega) (by omega), BitVec.msb_xor, msb_ofNat_lt ha, msb_ofNat_lt hb]
+    rfl
+  rw [intBin_ashr_top he hs hm]
+  rfl
+
+/-- `ashr` without `exact` by `w - 1` of the `xor` of a non-negative word (`2 a < 2 ^ w`) and
+a negative one (`2 ^ w ≤ 2 b`, `b < 2 ^ w`) is all ones, the word of `2 ^ w - 1`: their signs
+differ. -/
+theorem intBin_ashr_xor_neg {w a b s : Nat} {fl : IntFlags} (he : fl.exact = false)
+    (ha : 2 * a < 2 ^ w) (hb : 2 ^ w ≤ 2 * b) (hb' : b < 2 ^ w) (hs : s + 1 = w) :
+    intBin w .ashr fl (.bits w (BitVec.ofNat w (a ^^^ b))) (.bits w (BitVec.ofNat w s)) =
+      .ok (.bits w (BitVec.ofNat w (2 ^ w - 1))) := by
+  have hm : (BitVec.ofNat w (a ^^^ b)).msb = true := by
+    rw [← xor_ofNat (by omega) hb', BitVec.msb_xor, msb_ofNat_lt ha, msb_ofNat_ge hb hb']
+    rfl
+  rw [intBin_ashr_top he hs hm]
+  simp only [↓reduceIte]
+  congr 2
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_allOnes, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega)]
+
 /-- `sext` to width `w` of every word `b` is its sign extension `b.signExtend w`, for all
 widths. -/
 theorem intCast_sext_bits {w w' : Nat} (b : BitVec w') :
@@ -253,14 +493,6 @@ theorem SNode.eval_load {V : Valuation} {vs : List (Except Fault Val)} {lbl pc :
     Except.bind_eq_ok.2 ⟨v, hl, ?_⟩⟩⟩
   simp only [hu]
   rfl
-
-/-- A fold in `Except` whose step keeps `x` on every element returns `x`. -/
-theorem foldlM_fix {ε α β : Type} {f : β → α → Except ε β} {x : β} :
-    ∀ {as : List α}, (∀ a ∈ as, f x a = .ok x) → as.foldlM f x = .ok x
-  | [], _ => rfl
-  | a :: as, h => by
-    rw [List.foldlM_cons, h a (by simp)]
-    exact foldlM_fix fun b hb => h b (List.mem_cons_of_mem a hb)
 
 /-- Whether return attribute `a` keeps every word of width `w` in `[lo, hi)`: `noundef`, or a
 `range` of width `w` containing `[lo, hi)` of size below `2 ^ w`. -/
@@ -326,6 +558,22 @@ theorem SNode.eval_sreg {V : Valuation} (vs : List (Except Fault Val)) {lbl pc :
   subst hP
   simp only [SNode.eval, hs, hf, hl, hr]
   exact withAttrs_ofNat (by omega) hb hA
+
+/-- **The lane-number call node.** For every valuation and node values: if the statement at
+`(lbl, pc)` calls `g` with no arguments, the program `P` declares `g` as `fn` returning `i32`
+with attributes that pass `keepsWord 32 0 32`, its intrinsic table maps `g` to `laneid`, and the
+context's lane number is below 32, the node evaluates to the lane number as a 32-bit word. -/
+theorem SNode.eval_laneid {V : Valuation} (vs : List (Except Fault Val)) {lbl pc : Nat}
+    {P : Program} {dst : Option Nat} {fm : FastMath} {ty : Ty} {md : List (String × Nat)}
+    {g : String} {fn : Func} (hP : V.ctx.prog = P)
+    (hs : V.stmt lbl pc = some ⟨dst, .call fm ty (.fn g) [], md⟩)
+    (hf : P.module.funcs.find? (·.name == g) = some fn)
+    (hl : P.intrinsics.lookup g = some .laneid) (hr : fn.ret = .int 32)
+    (hA : ∀ a ∈ fn.retAttrs, keepsWord 32 0 32 a = true) (hb : V.ctx.env.laneid < 32) :
+    (SNode.call lbl pc).eval V vs = .ok (.bits 32 (BitVec.ofNat 32 V.ctx.env.laneid)) := by
+  subst hP
+  simp only [SNode.eval, hs, hf, hl, hr]
+  exact withAttrs_ofNat (Nat.lt_of_lt_of_le hb (by decide)) ⟨Nat.zero_le _, hb⟩ hA
 
 /-! ## Effects and exits -/
 
@@ -475,6 +723,36 @@ theorem gep_buffer {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty} {s a c si
     all_goals first | omega | (rw [hout] at h; cases h)
   · rfl
 
+/-- Cell `(r, k)` of a row-major `R × S` matrix of cells of `z > 0` bytes starts below `size`
+when the matrix fits in it: `(r S + k) z < size` from `r < R`, `k < S` and `R S z ≤ size`, for
+all numbers. -/
+theorem rowMajor_lt {r k R S z size : Nat} (hr : r < R) (hk : k < S) (hin : R * S * z ≤ size)
+    (hz : 0 < z) : (r * S + k) * z < size := by
+  have h1 : r * S + k < R * S := Nat.lt_of_lt_of_le (Nat.add_lt_add_left hk _)
+    (by rw [← Nat.succ_mul]; exact Nat.mul_le_mul_right _ hr)
+  exact Nat.lt_of_lt_of_le (Nat.mul_lt_mul_of_pos_right h1 hz) hin
+
+/-- **A `getelementptr` into a buffer holding a matrix.** `gep_buffer` at the index `r S + k` of
+cell `(r, k)` of a row-major `R × S` matrix, for every layout, memories with the same blocks,
+flags, element type `src` of `l.size src > 0` bytes, address space `a` (the generic space 0 or the
+buffer's space `s`), buffer `c` of space `s`, any owner and `R S` elements that fits in space `a`,
+width `w ≤ (l.ptr a).1` with `2 R S < 2 ^ w`, `2 R S l.size src < 2 ^ (l.ptr a).1`, and `r < R`,
+`k < S`: the bounds of `gep_buffer` on `r S + k` follow from these on `R S` (`rowMajor_lt`). -/
+theorem gep_buffer2 {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty}
+    {s a c al R S r k w : Nat} {ow : Owner} {wr : Bool} (hMb : M.blocks = m.blocks)
+    (hB : m.BufferIn s c (R * S * l.size src) al ow wr) (ha : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) +
+      R * S * l.size src ≤ 2 ^ (l.ptr a).1)
+    (hw : w ≤ (l.ptr a).1) (hr : r < R) (hk : k < S) (hz : 0 < l.size src)
+    (hK : 2 * (R * S) < 2 ^ w) (hs : 2 * (R * S * l.size src) < 2 ^ (l.ptr a).1) :
+    gep l M fl src a [.bits w (BitVec.ofNat w (r * S + k))] (.ptr ⟨c, 0⟩) =
+      .ok (.ptr ⟨c, (((r * S + k) * l.size src : Nat) : Int)⟩) := by
+  have h1 := rowMajor_lt (z := 1) hr hk (by rw [Nat.mul_one]) (by decide)
+  have h2 := rowMajor_lt hr hk (Nat.le_refl _) hz
+  rw [Nat.mul_one] at h1
+  exact gep_buffer hMb hB ha hF hw (by omega) (by omega) h2
+
+
 /-- **A `getelementptr` into a buffer by any word evaluates.** For every layout, memories with
 the same blocks, flags, element type `src`, address space `a` (the generic space 0 or the
 buffer's space `s`), buffer `c` of space `s` of any owner, size and alignment, width `w` and
@@ -566,7 +844,8 @@ theorem load_buffer {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
 every layout, memories with the same blocks, address space `a` (the generic space 0 or the
 buffer's space `s`), buffer `c` of space `s` and `size` bytes that fits in space `a`, whose owner
 `ow` admits thread `who`, and holds `x` row-major, alignment `A` dividing the buffer's and the
-element size, and element `(r, k)` with `r < R`, `k < S` within the buffer: the load at offset
+element size, an element of `l.size t > 0` bytes and the matrix within the buffer
+(`R S l.size t ≤ size`), and every element `(r, k)` with `r < R`, `k < S`: the load at offset
 `r * S + k` elements by `who` through a pointer of space `a` gives `x (r, k)`. -/
 theorem load_buffer2 {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
     {s a c size al A R S r k : Nat} {ow : Owner} {wr : Bool} {t : Ty} {enc : α → Val}
@@ -575,10 +854,11 @@ theorem load_buffer2 {α : Type} [TorchLean.Storage α] {l : Layout} {M m : Mem}
     (hF : ∃ blk, m.blocks c = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
       2 ^ (l.ptr a).1) (hw : ow.admits who = true)
     (hH : m.Holds l c t enc (rowMajor l t 0) x) (hA : A ∣ al)
-    (hAs : A ∣ l.size t) (hr : r < R) (hk : k < S) (hin : (r * S + k) * l.size t < size) :
+    (hAs : A ∣ l.size t) (hr : r < R) (hk : k < S) (hin : R * S * l.size t ≤ size)
+    (hz : 0 < l.size t) :
     M.load l who a t ⟨c, (((r * S + k) * l.size t : Nat) : Int)⟩ (some A) =
       .ok (enc (x (⟨r, hr⟩, ⟨k, hk⟩, ()))) :=
-  load_buffer_at hMb hB ha hF hw hH hA hAs _ (rowMajor_two0 hr hk) hin
+  load_buffer_at hMb hB ha hF hw hH hA hAs _ (rowMajor_two0 hr hk) (rowMajor_lt hr hk hin hz)
 
 /-- **A store into a writable buffer.** For every layout, memories with the same blocks, address
 space `a` (the generic space 0 or the buffer's space `s`), writable buffer `c` of space `s` and
@@ -762,6 +1042,33 @@ theorem SNode.eval_gep_at {V : Valuation} {vs : List (Except Fault Val)} {P : Pr
   simp only [SNode.eval, Valuation.stmt_of_fn hF hs, hi, hb]
   rfl
 
+/-- **A global's node**, at a valuation whose function is `F`: for every statement `st` at
+position `pc` of block `lbl` of `F` whose operand `i` (`Inst.operands`) is the global `g` at type
+`t`, to which the context gives the pointer `p` (`Ctx.globals`), the node `.globalAt lbl pc i` is
+`p` (`SNode.eval_globalAt`), for every node values `vs`. -/
+theorem SNode.eval_globalAt_at {V : Valuation} {vs : List (Except Fault Val)} {F : Func}
+    {lbl pc i : Nat} {st : Stmt} {t : Ty} {g : String} {p : Ptr} (hF : V.fn = F)
+    (hs : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) = some st)
+    (ho : st.inst.operands[i]? = some (.mk t (.glob g))) (hg : V.ctx.globals g = some p) :
+    (SNode.globalAt lbl pc i).eval V vs = .ok (.ptr p) :=
+  SNode.eval_globalAt (Valuation.stmt_of_fn hF hs) ho hg
+
+/-- **A same-width scalar `bitcast` node**, at a valuation whose function is `F` and program `P`:
+for every operand `a` whose value is a `w`-bit word `u` and statement at position `pc` of block
+`lbl` of `F` that is a `bitcast` from a type `s` to a scalar type `t`, both of width `w` under
+`P`'s layout, the node `.castAt lbl pc n a` is `u` (`SNode.eval_bitcast`), for every node values
+`vs` and step offset `n`. -/
+theorem SNode.eval_bitcast_at {V : Valuation} {vs : List (Except Fault Val)} {P : Program}
+    {F : Func} {lbl pc n : Nat} {a : SVal} {dst : Option Nat} {s t : Ty} {y : Value}
+    {md : List (String × Nat)} {w : Nat} {u : BitVec w} (hF : V.fn = F) (hP : V.ctx.prog = P)
+    (ha : a.eval V vs = .ok (.bits w u))
+    (hs : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
+      some ⟨dst, .cast .bitcast (.mk s y) t, md⟩)
+    (hsw : P.layout.scalarBits s = w) (ht : t.scalar = true) (htw : P.layout.scalarBits t = w) :
+    (SNode.castAt lbl pc n a).eval V vs = .ok (.bits w u) := by
+  subst hP
+  exact SNode.eval_bitcast (Valuation.stmt_of_fn hF hs) hsw ht htw ha
+
 /-- **A special-register call node**, at a valuation whose function is `F`, program `P` and
 environment `E`. -/
 theorem SNode.eval_sreg_at {V : Valuation} {vs : List (Except Fault Val)} {lbl pc : Nat}
@@ -777,6 +1084,31 @@ theorem SNode.eval_sreg_at {V : Valuation} {vs : List (Except Fault Val)} {lbl p
     (SNode.call lbl pc).eval V vs = .ok (.bits 32 (BitVec.ofNat 32 (E.sreg r d))) := by
   subst hE
   exact SNode.eval_sreg vs hP (Valuation.stmt_of_fn hF hs) hf hl hr hA hk hb
+
+/-- **The lane-number call node**, at a valuation whose function is `F`, program `P` and
+environment `E` (`SNode.eval_laneid`). -/
+theorem SNode.eval_laneid_at {V : Valuation} {vs : List (Except Fault Val)} {lbl pc : Nat}
+    {P : Program} {F : Func} {E : Env} {dst : Option Nat} {fm : FastMath} {ty : Ty}
+    {md : List (String × Nat)} {g : String} {fn : Func} (hF : V.fn = F) (hP : V.ctx.prog = P)
+    (hs : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
+      some ⟨dst, .call fm ty (.fn g) [], md⟩)
+    (hf : P.module.funcs.find? (·.name == g) = some fn)
+    (hl : P.intrinsics.lookup g = some .laneid) (hr : fn.ret = .int 32)
+    (hA : ∀ a ∈ fn.retAttrs, keepsWord 32 0 32 a = true) (hE : V.ctx.env = E)
+    (hb : E.laneid < 32) :
+    (SNode.call lbl pc).eval V vs = .ok (.bits 32 (BitVec.ofNat 32 E.laneid)) := by
+  subst hE
+  exact SNode.eval_laneid vs hP (Valuation.stmt_of_fn hF hs) hf hl hr hA hb
+
+/-- The lane number of every thread of every launch is below 32. -/
+theorem Launch.laneid_lt (L : Launch) (n : Nat) : (L.env n).laneid < 32 :=
+  Nat.mod_lt _ (by decide)
+
+/-- A node whose value is the word of `x` has the word of every `y = x` as its value. -/
+theorem SNode.eval_word_eq {nd : SNode} {V : Valuation} {vs : List (Except Fault Val)}
+    {w x y : Nat}
+    (h : nd.eval V vs = .ok (.bits w (BitVec.ofNat w x))) (e : x = y) :
+    nd.eval V vs = .ok (.bits w (BitVec.ofNat w y)) := e ▸ h
 
 /-- **A float operator node** on two floats of its type, with no `fmul contract` factors and
 flags without `nnan`, `ninf`, `nsz`, `reassoc`, `arcp` and `afn`: the IEEE operation through
@@ -887,6 +1219,22 @@ theorem SNode.eval_icmp_sge_ofNat {V : Valuation} {vs : List (Except Fault Val)}
     (SNode.icmp .sge w a b).eval V vs = .ok (.ofBool (decide (y ≤ x))) := by
   rw [SNode.eval_icmp ha hb, ICmp.sge_ofNat hx hy]
 
+/-- `icmp eq` of the words of `a` and `b` is `a = b` modulo `2 ^ w`, for all numbers. -/
+theorem ICmp.eq_ofNat_mod {w a b : Nat} :
+    ICmp.eq.holds (BitVec.ofNat w a) (BitVec.ofNat w b) = decide (a % 2 ^ w = b % 2 ^ w) := by
+  have e : (BitVec.ofNat w a = BitVec.ofNat w b) ↔ a % 2 ^ w = b % 2 ^ w := by
+    rw [BitVec.toNat_eq, BitVec.toNat_ofNat, BitVec.toNat_ofNat]
+  simp only [ICmp.holds]
+  exact Bool.eq_iff_iff.2 (by simp [e])
+
+/-- An `icmp eq` node on the words of `x` and `y` is the boolean `x ≡ y` modulo `2 ^ w`, for
+every valuation, node values and numbers. -/
+theorem SNode.eval_icmp_eq_mod {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {a b : SVal} {x y : Nat} (ha : a.eval V vs = .ok (.bits w (BitVec.ofNat w x)))
+    (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) :
+    (SNode.icmp .eq w a b).eval V vs = .ok (.ofBool (decide (x % 2 ^ w = y % 2 ^ w))) := by
+  rw [SNode.eval_icmp ha hb, ICmp.eq_ofNat_mod]
+
 /-! ## Selections, maxima and contracted sums -/
 
 /-- **A `select` node** on the boolean `p` with operands of values `x` and `y` is `x` if `p`,
@@ -912,6 +1260,26 @@ theorem SNode.eval_select_false {V : Valuation} {vs : List (Except Fault Val)} {
     (ha : a.eval V vs = .ok x) (hb : b.eval V vs = .ok y) :
     (SNode.select w c a b).eval V vs = .ok y := by
   rw [SNode.eval_select_ofBool hc ha hb, hp]; rfl
+
+/-- A `select` node on the boolean `decide q` between the words of `x` and `y` is the word of
+`if q then x else y`, for every valuation, node values and width. -/
+theorem SNode.eval_select_word {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {c a b : SVal} {q : Prop} [Decidable q] {x y : Nat}
+    (hc : c.eval V vs = .ok (.ofBool (decide q)))
+    (ha : a.eval V vs = .ok (.bits w (BitVec.ofNat w x)))
+    (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) :
+    (SNode.select w c a b).eval V vs = .ok (.bits w (BitVec.ofNat w (if q then x else y))) := by
+  rw [SNode.eval_select_ofBool hc ha hb]
+  by_cases h : q <;> simp [h]
+
+/-- A `select` node between two operands of the same value `x` is `x`, for every valuation,
+node values, width and boolean. -/
+theorem SNode.eval_select_same {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {c a b : SVal} {p : Bool} {x : Val} (hc : c.eval V vs = .ok (.ofBool p))
+    (ha : a.eval V vs = .ok x) (hb : b.eval V vs = .ok x) :
+    (SNode.select w c a b).eval V vs = .ok x := by
+  rw [SNode.eval_select_ofBool hc ha hb]
+  cases p <;> rfl
 
 /-- **An `smax` node** (`llvm.smax`: `SNode.minmax` signed, maximum) on the words of `x` and `y`,
 both with `2 x`, `2 y` below `2 ^ w`, is the word of `max x y`, for every valuation and node
@@ -941,6 +1309,104 @@ theorem SNode.eval_fbinP {V : Valuation} {vs : List (Except Fault Val)} {op : FB
     (SNode.fbinP op fm ft n a b pa pb).eval V vs = r := by
   subst h; simp only [SNode.eval, ha, hb]; rfl
 
+/-- **`fadd contract` and `fsub contract` on two floats**: for every float type `t`, operator
+`op` that is `fadd` or `fsub` (`sub` whether it is `fsub`), flags `fm` with `contract` and without
+`nnan`, `ninf`, `nsz`, `reassoc`, `arcp` and `afn`, floats `a`, `b`, `fmul contract` factors
+`pa`, `pb` (pairs of floats, or none) and oracle number `n`, `floatBin` is `contract` of the
+operands and factors through `deliver`: the separately rounded operation or a fused
+multiply-add, as `n % 3` picks. -/
+theorem floatBin_contract_ofFloat {t : FloatTy} {op : FBinOp} {fm : FastMath} {sub : Bool}
+    {a b : FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt}
+    {pa pb : Option (FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt ×
+      FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt)} {n : Nat}
+    (hop : (op == .fadd || op == .fsub) = true) (hs : (op == .fsub) = sub)
+    (hct : fm.contract = true) (hc : (fm.nsz || fm.reassoc || fm.arcp || fm.afn) = false)
+    (hn : fm.nnan = false) (hi : fm.ninf = false) :
+    floatBin t op fm (.ofFloat t a) (.ofFloat t b)
+      (pa.map fun q => (.ofFloat t q.1, .ofFloat t q.2))
+      (pb.map fun q => (.ofFloat t q.1, .ofFloat t q.2)) n =
+      .ok (.ofFloat t (deliver (contract sub a b pa pb n) (n / 3))) := by
+  subst hs
+  cases op
+  case fadd | fsub =>
+    rcases pa with _ | ⟨u, v⟩ <;> rcases pb with _ | ⟨u', v'⟩ <;>
+      simp [floatBin, FastMath.check, hc, hct, withFlags, FastMath.poisons, hn, hi, Val.ofFloat,
+        Val.float?, fbin, FloatLib.Floats.Formats.BinaryInterchange.Model.ofBits_toBits, bind,
+        Except.bind, pure, Except.pure]
+  all_goals exact absurd hop (by decide)
+
+/-- **A float operator with no contraction on two floats**: for every float type `t`, operator
+`op` with IEEE operation `f` (`fbin op = some f`), flags `fm` without `nnan`, `ninf`, `nsz`,
+`reassoc`, `arcp` and `afn`, where `op` is no `fadd` or `fsub` with `contract`, floats `a`, `b`,
+any operands' `fmul contract` factors `px`, `py` (which only a contraction reads) and oracle
+number `n`, `floatBin` is `f a b` through `deliver`. -/
+theorem floatBin_ofFloat_factors {t : FloatTy} {op : FBinOp} {fm : FastMath}
+    {f : FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt →
+      FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt →
+      FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt}
+    {a b : FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt} {px py : Option (Val × Val)}
+    {n : Nat} (hf : fbin op = some f) (hk : ((op == .fadd || op == .fsub) && fm.contract) = false)
+    (hc : (fm.nsz || fm.reassoc || fm.arcp || fm.afn) = false) (hn : fm.nnan = false)
+    (hi : fm.ninf = false) :
+    floatBin t op fm (.ofFloat t a) (.ofFloat t b) px py n =
+      .ok (.ofFloat t (deliver (f a b) (n / 3))) := by
+  cases op <;> simp only [fbin, Option.some.injEq, reduceCtorEq] at hf <;> subst hf <;>
+    simp_all [floatBin, FastMath.check, withFlags, FastMath.poisons, Val.ofFloat, Val.float?,
+      fbin, FloatLib.Floats.Formats.BinaryInterchange.Model.ofBits_toBits, bind, Except.bind, pure,
+      Except.pure]
+
+/-- **The `fmul contract` factors of an operand, as floats**: for every valuation `V`, node
+values `vs`, operand `x`, float type `t` and factor pair `q` of floats (or none), lane 0 of `x`'s
+factors with no terms (`SVal.prodsWith V vs x none`, those `x` carries as a register) is `q`'s
+values when `x.prods V` is. -/
+theorem laneOf_prodsWith_none {V : Valuation} {vs : List (Except Fault Val)} {x : SVal}
+    {t : FloatTy} {q : Option (FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt ×
+      FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt)}
+    (h : x.prods V = q.map fun q => (.ofFloat t q.1, .ofFloat t q.2)) :
+    laneOf (x.prodsWith V vs none) 0 = q.map fun q => (.ofFloat t q.1, .ofFloat t q.2) := by
+  rcases q with _ | ⟨a, b⟩ <;> simp only [SVal.prodsWith, h, laneOf, Option.map]
+  rfl
+
+/-- **The `fmul contract` factors of terms, as floats**: for every valuation `V`, node values
+`vs`, operand `x`, float type `t` and terms `s₁`, `s₂` of floats `a`, `b`, lane 0 of `x`'s factors
+with the terms (`prodVal`) is `(a, b)`'s values. -/
+theorem laneOf_prodsWith_some {V : Valuation} {vs : List (Except Fault Val)} {x s₁ s₂ : SVal}
+    {t : FloatTy} {a b : FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt}
+    (h₁ : s₁.eval V vs = .ok (.ofFloat t a)) (h₂ : s₂.eval V vs = .ok (.ofFloat t b)) :
+    laneOf (x.prodsWith V vs (some (s₁, s₂))) 0 =
+      (some (a, b)).map fun q => (.ofFloat t q.1, .ofFloat t q.2) := by
+  simp only [SVal.prodsWith, prodVal, h₁, h₂, laneOf, Option.map]
+  rfl
+
+/-- **`lanes2` on two floats**: for every float type `t`, function `F` and floats `x`, `y` of
+type `t`, `lanes2 F` on their values is `F` at lane 0 (a float's value is a scalar word). -/
+theorem lanes2_ofFloat {t : FloatTy} (F : Nat → Val → Val → Except Fault Val)
+    (x y : FloatLib.Floats.Formats.BinaryInterchange.Model t.fmt) :
+    lanes2 F (.ofFloat t x) (.ofFloat t y) = F 0 (.ofFloat t x) (.ofFloat t y) :=
+  rfl
+
+/-- **A float operator node with `fmul contract` factors on two floats** (`SNode.fbinP`): for
+every valuation `V`, node values `vs`, operands `a`, `b` of floats `u`, `u'` of the node's type,
+whose lane-0 factors are the float pairs `qa`, `qb` (or none), and float `r`: the node is
+`.ofFloat ft r` when `floatBin` of the floats and factors at the node's oracle number is
+(`floatBin_contract_ofFloat`, `floatBin_ofFloat_factors` give it on symbolic floats). -/
+theorem SNode.eval_fbinP_ofFloat {V : Valuation} {vs : List (Except Fault Val)} {op : FBinOp}
+    {fm : FastMath} {ft : FloatTy} {n : Nat} {a b : SVal} {pa pb : Option (SVal × SVal)}
+    {u u' r : FloatLib.Floats.Formats.BinaryInterchange.Model ft.fmt}
+    {qa qb : Option (FloatLib.Floats.Formats.BinaryInterchange.Model ft.fmt ×
+      FloatLib.Floats.Formats.BinaryInterchange.Model ft.fmt)}
+    (ha : a.eval V vs = .ok (.ofFloat ft u)) (hb : b.eval V vs = .ok (.ofFloat ft u'))
+    (hpa : laneOf (a.prodsWith V vs pa) 0 = qa.map fun q => (.ofFloat ft q.1, .ofFloat ft q.2))
+    (hpb : laneOf (b.prodsWith V vs pb) 0 = qb.map fun q => (.ofFloat ft q.1, .ofFloat ft q.2))
+    (h : floatBin ft op fm (.ofFloat ft u) (.ofFloat ft u')
+      (qa.map fun q => (.ofFloat ft q.1, .ofFloat ft q.2))
+      (qb.map fun q => (.ofFloat ft q.1, .ofFloat ft q.2))
+      (V.ctx.oracle (Nat.pair (V.k + n) 0)) = .ok (.ofFloat ft r)) :
+    (SNode.fbinP op fm ft n a b pa pb).eval V vs = .ok (.ofFloat ft r) := by
+  refine SNode.eval_fbinP ha hb ?_
+  rw [lanes2_ofFloat, hpa, hpb]
+  exact h
+
 /-! ## Edges into blocks with `phi`s -/
 
 /-- An integer constant operand `.int w k` of a natural number `k` is the word
@@ -949,6 +1415,22 @@ theorem SVal.eval_int_ofNat {V : Valuation} {vs : List (Except Fault Val)} (w k 
     (SVal.int w (Int.ofNat k)).eval V vs = .ok (.bits w (BitVec.ofNat w k)) := by
   simp only [SVal.eval, pure, Except.pure, Except.ok.injEq, Val.bits.injEq, heq_eq_eq, true_and]
   exact BitVec.ofInt_natCast w k
+
+
+/-- A negative integer constant `.int w (-(k + 1))` with `k < 2 ^ w` is the word of
+`2 ^ w - (k + 1)`, for every valuation and node values. -/
+theorem SVal.eval_int_negSucc {V : Valuation} {vs : List (Except Fault Val)} (w k : Nat)
+    (hk : k < 2 ^ w) :
+    (SVal.int w (Int.negSucc k)).eval V vs = .ok (.bits w (BitVec.ofNat w (2 ^ w - (k + 1)))) := by
+  simp only [SVal.eval, pure, Except.pure, Except.ok.injEq, Val.bits.injEq, heq_eq_eq, true_and]
+  have hn : Int.negSucc k = -((k + 1 : Nat) : Int) := by rw [Int.negSucc_eq]; omega
+  rw [hn, BitVec.ofInt_neg, BitVec.ofInt_natCast]
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_neg, BitVec.toNat_ofNat, BitVec.toNat_ofNat]
+  rcases Nat.lt_or_ge (k + 1) (2 ^ w) with h | h
+  · rw [Nat.mod_eq_of_lt h]
+  · have e : k + 1 = 2 ^ w := by omega
+    rw [e, Nat.mod_self, Nat.sub_self, Nat.sub_zero, Nat.mod_self, Nat.zero_mod]
 
 /-- An exit with a target (`Exit.target`) goes there (`Exit.dest`), for every valuation and node
 values. -/
@@ -1282,5 +1764,273 @@ theorem Valuation.into_regs_phi {V : Valuation} {l : Nat} {S : Summary} {x : SVa
     (hxs : evalOps (V.ctx.scope (V.after S).mem (V.frameAt l S) (V.k + S.len)) ops = .ok xs)
     (r : Nat) : (V.into l S).regs r = setRegs (ops.map (·.1)) xs (V.after S).regs r :=
   Valuation.intoWith_regs_phi (c := false) hx hd hF hops hxs r
+
+/-! ## `fmul contract` operands along a path -/
+
+/-- A block keeps the `fmul contract` operands of a register it does not set, with or without
+`fmul contract`, for every flag, valuation, summary and register. -/
+theorem Valuation.afterWith_prods_none {c : Bool} {V : Valuation} {S : Summary} {r : Nat}
+    {p : Option (Val × Val)} (hl : S.regs.lookup r = none) (h : V.prods r = p) :
+    (V.afterWith c S).prods r = p := by
+  cases c
+  · show regProd V S.regs r = p
+    simp only [regProd, hl, h]
+  · show regProdIn V (vals V S.nodes) S.nodes S.regs r = p
+    simp only [regProdIn, hl, h]
+
+/-- Without `fmul contract`, a register a block sets has no `fmul contract` operands after it,
+for every valuation and summary. -/
+theorem Valuation.afterWith_prods_off {V : Valuation} {S : Summary} {r : Nat} {x : SVal}
+    (hl : S.regs.lookup r = some x) : (V.afterWith false S).prods r = none := by
+  show regProd V S.regs r = none
+  simp only [regProd, hl]
+
+/-- A register a block sets to an entry with no `fmul contract` factors (`SVal.factors`) has no
+`fmul contract` operands after it, with or without `fmul contract`, for every flag, valuation
+and summary. -/
+theorem Valuation.afterWith_prods_unfactored {c : Bool} {V : Valuation} {S : Summary} {r : Nat}
+    {x : SVal} (hl : S.regs.lookup r = some x) (hf : x.factors S.nodes = none) :
+    (V.afterWith c S).prods r = none := by
+  cases c
+  · show regProd V S.regs r = none
+    simp only [regProd, hl]
+  · show regProdIn V (vals V S.nodes) S.nodes S.regs r = none
+    simp only [regProdIn, hl, hf, Option.bind_none]
+
+/-- **The `fmul contract` operands of a product**: with `fmul contract`, a register a block sets
+to an entry with factors `a` and `b` (`SVal.factors`, an `fmul contract` node) whose values are
+`u` and `v` has the operands `(u, v)` after the block (`regProdIn`, `prodVal`), for every
+valuation and summary. -/
+theorem Valuation.afterWith_prods_factors {V : Valuation} {S : Summary} {r : Nat} {x a b : SVal}
+    {u v : Val} (hl : S.regs.lookup r = some x) (hf : x.factors S.nodes = some (a, b))
+    (ha : a.eval V (vals V S.nodes) = .ok u) (hb : b.eval V (vals V S.nodes) = .ok v) :
+    (V.afterWith true S).prods r = some (u, v) := by
+  show regProdIn V (vals V S.nodes) S.nodes S.regs r = some (u, v)
+  simp only [regProdIn, hl, hf, Option.bind_some, prodVal, ha, hb]
+  rfl
+
+/-- The `fmul contract` operands at the entry of the block a `br` goes to are
+`Valuation.afterWith`'s, for every flag, valuation, label, summary and register. -/
+theorem Valuation.intoWith_prods_br {c : Bool} {V : Valuation} {l d r : Nat} {S : Summary}
+    {p : Option (Val × Val)} (hx : S.exit = .br d) (h : (V.afterWith c S).prods r = p) :
+    (V.intoWith c l S).prods r = p := by
+  rw [(Exit.of_targetWith (l := l) c (V := V) (by rw [hx]; rfl :
+    S.exit.target V (vals V S.nodes) = some d)).2.2]
+  exact h
+
+/-- The `fmul contract` operands at the entry of the block a conditional branch goes to are
+`Valuation.afterWith`'s, for every flag, valuation, label, summary and register. -/
+theorem Valuation.intoWith_prods_cond {c : Bool} {V : Valuation} {l d e r : Nat} {x : SVal}
+    {S : Summary} {p : Option (Val × Val)} (hx : S.exit = .cond x d e)
+    (h : (V.afterWith c S).prods r = p) : (V.intoWith c l S).prods r = p := by
+  unfold Valuation.intoWith
+  split
+  · rename_i hp _; rw [hx] at hp; cases hp
+  · exact h
+
+/-- Setting the results of `sts` to `xs` in order (as `enter` does, with no `fmul contract`
+operands) leaves none at a register that had none or that one of them sets, when there are as
+many values as statements, for every frame and register. -/
+theorem foldl_set_prods (r : Nat) : ∀ (sts : List Stmt) (xs : List Val) (f : Frame),
+    xs.length = sts.length → (f.prods r = none ∨ some r ∈ sts.map (·.res)) →
+    ((sts.zip xs).foldl (fun f (st, v) => f.set st.res (some v) none) f).prods r = none
+  | [], _, f, _, h => by simpa using h
+  | _ :: _, [], _, hl, _ => by simp at hl
+  | st :: sts, x :: xs, f, hl, h => by
+    rw [List.zip_cons_cons, List.foldl_cons]
+    refine foldl_set_prods r sts xs _ (by simpa using hl) ?_
+    show (f.set st.res (some x) none).prods r = none ∨ some r ∈ sts.map (·.res)
+    cases hs : st.res with
+    | none =>
+      simp only [List.map_cons, hs, List.mem_cons, reduceCtorEq, false_or] at h
+      exact h
+    | some s =>
+      simp only [List.map_cons, hs, List.mem_cons, Option.some.injEq] at h
+      by_cases e : r = s
+      · exact .inl (by simp [Frame.set, e])
+      · rcases h with h | h | h
+        · exact .inl (by simp [Frame.set, e, h])
+        · exact absurd h e
+        · exact .inr h
+
+/-- Setting the results of `sts` to `xs` in order (as `enter` does) keeps the `fmul contract`
+operands of a register none of them sets, for every frame and register. -/
+theorem foldl_set_prods_ne (r : Nat) : ∀ (sts : List Stmt) (xs : List Val) (f : Frame),
+    (∀ o ∈ sts.map (·.res), o ≠ some r) →
+    ((sts.zip xs).foldl (fun f (st, v) => f.set st.res (some v) none) f).prods r = f.prods r
+  | [], _, _, _ => rfl
+  | _ :: _, [], _, _ => rfl
+  | st :: sts, x :: xs, f, h => by
+    rw [List.zip_cons_cons, List.foldl_cons,
+      foldl_set_prods_ne r sts xs _ fun o ho => h o (List.mem_cons_of_mem _ ho)]
+    have hs : st.res ≠ some r := h _ List.mem_cons_self
+    show (f.set st.res (some x) none).prods r = f.prods r
+    cases e : st.res with
+    | none => rfl
+    | some s =>
+      have : r ≠ s := fun q => hs (by rw [e, q])
+      simp [Frame.set, this]
+
+/-- Operands with values have as many values as operands, for every scope. -/
+theorem evalOps_length {s : Scope} :
+    ∀ {ops : List (Option Nat × Ty × Value)} {xs : List Val}, evalOps s ops = .ok xs →
+      xs.length = ops.length
+  | [], xs, h => by
+    simp only [evalOps, Except.ok.injEq] at h
+    subst h
+    rfl
+  | (_, t, v) :: ops, xs, h => by
+    unfold evalOps at h
+    split at h
+    · rename_i x xs' _ hxs
+      simp only [Except.ok.injEq] at h
+      subst h
+      simp only [List.length_cons, evalOps_length hxs]
+    · cases h
+    · cases h
+
+/-- The `phi` operands `phiOpsL` gives have the `phi`s' registers, in order, for every block
+label and statements. -/
+theorem phiOpsL_res {l : Nat} : ∀ {sts : List Stmt} {ops : List (Option Nat × Ty × Value)},
+    phiOpsL l sts = some ops → ops.map (·.1) = sts.map (·.res)
+  | [], ops, h => by
+    simp only [phiOpsL, Option.some.injEq] at h
+    subst h
+    rfl
+  | st :: sts, ops, h => by
+    unfold phiOpsL at h
+    split at h
+    · split at h
+      · rename_i v w ops' hf hrest
+        simp only [Option.some.injEq] at h
+        subst h
+        simp only [List.map_cons, phiOpsL_res hrest]
+      · cases h
+    · cases h
+
+/-- **The `fmul contract` operands after an edge into blocks with `phi`s, at a `phi`**: for every
+flag `c`, valuation `V`, block `l` and summary `S` whose exit is a branch into blocks with `phi`s
+that goes to `d`, when the function is `F` and the `phi`s of block `d` of `F` have operands `ops`
+for the edge from `l` (`phiOps`) with values in the edge's scope, a register one of them sets
+has none (`enter` sets the `phi`s with none). -/
+theorem Valuation.intoWith_prods_phi {c : Bool} {V : Valuation} {l : Nat} {S : Summary}
+    {x : SVal} {a b d : Nat} {F : Func} {ops : List (Option Nat × Ty × Value)} {xs : List Val}
+    {r : Nat} (hx : S.exit = .phi x a b) (hd : S.exit.dest V (vals V S.nodes) = some d)
+    (hF : V.fn = F) (hops : phiOps F l d = some ops)
+    (hxs : evalOps (V.ctx.scope (V.afterWith c S).mem (V.frameAtWith c l S) (V.k + S.len)) ops =
+      .ok xs) (hr : some r ∈ ops.map (·.1)) : (V.intoWith c l S).prods r = none := by
+  have hops' : phiOps (V.frameAtWith c l S).fn (V.frameAtWith c l S).label d = some ops := by
+    simp only [Valuation.frameAtWith]; rw [hF]; exact hops
+  unfold phiOps at hops'
+  split at hops'
+  · rename_i blk hb
+    obtain ⟨hm, hres⟩ := mapM_phiVal hops' hxs
+    have hl : xs.length = (blk.stmts.toList.takeWhile isPhi).length := by
+      rw [evalOps_length hxs, ← List.length_map (f := (·.1)), hres, List.length_map]
+    have he := enter_of_find
+      (s := V.ctx.scope (V.afterWith c S).mem (V.frameAtWith c l S) (V.k + S.len)) hb
+    rw [hm] at he
+    have : V.intoWith c l S = { V.afterWith c S with
+        regs := (((blk.stmts.toList.takeWhile isPhi).zip xs).foldl
+          (fun f (st, v) => f.set st.res (some v) none) (V.frameAtWith c l S)).regs,
+        prods := (((blk.stmts.toList.takeWhile isPhi).zip xs).foldl
+          (fun f (st, v) => f.set st.res (some v) none) (V.frameAtWith c l S)).prods } := by
+      rw [Valuation.intoWith, hd]; simp only [hx, he]; rfl
+    rw [this]
+    exact foldl_set_prods r _ xs _ hl (.inr (hres ▸ hr))
+  · cases hops'
+
+/-- **A property of the valuation after an edge into blocks with `phi`s**: for every flag `c`,
+valuation `V`, block `l` and summary `S` whose exit is a branch into blocks with `phi`s that goes
+to `d`, when the function is `F` and the `phi`s of block `d` of `F` have operands `ops` for the
+edge from `l` (`phiOps`), and every predicate `P` on valuations: `P` holds of
+`Valuation.intoWith c` when it holds of `Valuation.afterWith c` (the edge's `enter` fails) and of
+`Valuation.afterWith c` with the registers and operands of the frame that setting the results of
+statements `sts`, those of `ops`, to values `xs` gives (as `enter` sets the `phi`s), for every
+`sts` and `xs`. No operand need have a value. -/
+theorem Valuation.intoWith_phi_of {c : Bool} {V : Valuation} {l : Nat} {S : Summary}
+    {x : SVal} {a b d : Nat} {F : Func} {ops : List (Option Nat × Ty × Value)}
+    (hx : S.exit = .phi x a b) (hd : S.exit.dest V (vals V S.nodes) = some d) (hF : V.fn = F)
+    (hops : phiOps F l d = some ops) (P : Valuation → Prop) (h0 : P (V.afterWith c S))
+    (h1 : ∀ (sts : List Stmt) (xs : List Val), ops.map (·.1) = sts.map (·.res) →
+      P { V.afterWith c S with
+        regs := ((sts.zip xs).foldl (fun f (st, v) => f.set st.res (some v) none)
+          (V.frameAtWith c l S)).regs,
+        prods := ((sts.zip xs).foldl (fun f (st, v) => f.set st.res (some v) none)
+          (V.frameAtWith c l S)).prods }) :
+    P (V.intoWith c l S) := by
+  have hops' : phiOps (V.frameAtWith c l S).fn (V.frameAtWith c l S).label d = some ops := by
+    simp only [Valuation.frameAtWith]; rw [hF]; exact hops
+  unfold phiOps at hops'
+  split at hops'
+  · rename_i blk hb
+    have hres := phiOpsL_res hops'
+    rw [Valuation.intoWith, hd]
+    simp only [hx]
+    split
+    · rename_i f he
+      rw [enter_of_find hb] at he
+      obtain ⟨xs, -, he⟩ := Except.bind_eq_ok.1 he
+      simp only [pure, Except.pure, Except.ok.injEq] at he
+      subst he
+      exact h1 _ xs hres
+    · exact h0
+  · cases hops'
+
+/-- **The `fmul contract` operands after an edge into blocks with `phi`s, elsewhere**: for every
+flag `c`, valuation `V`, block `l` and summary `S` whose exit is a branch into blocks with `phi`s
+that goes to `d`, when the function is `F` and the `phi`s of block `d` of `F` have operands `ops`
+for the edge from `l` (`phiOps`), a register none of them sets has `Valuation.afterWith c`'s
+(whether or not the operands have values). -/
+theorem Valuation.intoWith_prods_phi_ne {c : Bool} {V : Valuation} {l : Nat} {S : Summary}
+    {x : SVal} {a b d : Nat} {F : Func} {ops : List (Option Nat × Ty × Value)} {r : Nat}
+    {p : Option (Val × Val)} (hx : S.exit = .phi x a b)
+    (hd : S.exit.dest V (vals V S.nodes) = some d) (hF : V.fn = F)
+    (hops : phiOps F l d = some ops) (hr : ∀ o ∈ ops.map (·.1), o ≠ some r)
+    (h : (V.afterWith c S).prods r = p) : (V.intoWith c l S).prods r = p :=
+  Valuation.intoWith_phi_of hx hd hF hops (fun W => W.prods r = p) h fun _ xs hres =>
+    (foldl_set_prods_ne r _ xs _ (hres ▸ hr)).trans h
+
+/-- **The registers after an edge into blocks with `phi`s, elsewhere**: for every flag `c`,
+valuation `V`, block `l` and summary `S` whose exit is a branch into blocks with `phi`s that goes
+to `d`, when the function is `F` and the `phi`s of block `d` of `F` have operands `ops` for the
+edge from `l` (`phiOps`), a register none of them sets has `Valuation.afterWith c`'s (whether or
+not the operands have values, so with none of them evaluated). -/
+theorem Valuation.intoWith_regs_phi_ne {c : Bool} {V : Valuation} {l : Nat} {S : Summary}
+    {x : SVal} {a b d : Nat} {F : Func} {ops : List (Option Nat × Ty × Value)} {r : Nat}
+    {v : Option Val} (hx : S.exit = .phi x a b)
+    (hd : S.exit.dest V (vals V S.nodes) = some d) (hF : V.fn = F)
+    (hops : phiOps F l d = some ops) (hr : ∀ o ∈ ops.map (·.1), o ≠ some r)
+    (h : (V.afterWith c S).regs r = v) : (V.intoWith c l S).regs r = v :=
+  Valuation.intoWith_phi_of hx hd hF hops (fun W => W.regs r = v) h fun _ xs hres =>
+    (congrFun (foldl_set_regs _ xs _) r).trans ((setRegs_of_forall_ne (hres ▸ hr)).trans h)
+
+/-- Setting the results of `sts` to `xs` in order (as `enter` does, with no `fmul contract`
+operands) leaves none at a register that had none, for every frame, statements and values. -/
+theorem foldl_set_prods_of_none (r : Nat) : ∀ (sts : List Stmt) (xs : List Val) (f : Frame),
+    f.prods r = none →
+    ((sts.zip xs).foldl (fun f (st, v) => f.set st.res (some v) none) f).prods r = none
+  | [], _, _, h => h
+  | _ :: _, [], _, h => h
+  | st :: sts, x :: xs, f, h => by
+    rw [List.zip_cons_cons, List.foldl_cons]
+    refine foldl_set_prods_of_none r sts xs _ ?_
+    show (f.set st.res (some x) none).prods r = none
+    cases e : st.res with
+    | none => exact h
+    | some s => by_cases q : r = s <;> simp [Frame.set, q, h]
+
+/-- **No `fmul contract` operands stay none through an edge into blocks with `phi`s**: for every
+flag `c`, valuation `V`, block `l` and summary `S` whose exit is a branch into blocks with `phi`s
+that goes to `d`, when the function is `F` and block `d` of `F` has `phi` operands `ops` for the
+edge from `l` (`phiOps`), a register with none after the block has none after the edge, whether
+or not a `phi` sets it (`enter` sets the `phi`s with none), with none of the operands evaluated. -/
+theorem Valuation.intoWith_prods_phi_none {c : Bool} {V : Valuation} {l : Nat} {S : Summary}
+    {x : SVal} {a b d : Nat} {F : Func} {ops : List (Option Nat × Ty × Value)} {r : Nat}
+    (hx : S.exit = .phi x a b) (hd : S.exit.dest V (vals V S.nodes) = some d) (hF : V.fn = F)
+    (hops : phiOps F l d = some ops) (h : (V.afterWith c S).prods r = none) :
+    (V.intoWith c l S).prods r = none :=
+  Valuation.intoWith_phi_of hx hd hF hops (fun W => W.prods r = none) h fun _ xs _ =>
+    foldl_set_prods_of_none r _ xs _ h
 
 end MojoProof.Sym

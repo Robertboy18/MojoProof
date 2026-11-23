@@ -1261,6 +1261,85 @@ theorem Kernel.sound_mapN {prog : Program} {fn : Func} {L : Launch}
       exact (H k hk c hP hE hW hω m₀ m' f hf hb (hr 0 (by simp)) hq ho hE').imp
         fun _ ⟨hp, hR⟩ => ⟨hp, hR.mono fun _ h => ⟨h, fun _ _ _ => trivial⟩⟩
 
+/-- **The kernel theorem of a binary elementwise kernel from its threads' runs, with or without
+`fmul contract`.** For every flag `contract`, program `prog`, kernel `fn` whose parameters `p0` to
+`p3` are named `%0` to `%3`, the first three `byval` of a struct type `T` whose values
+`.agg [.ptr p, z]` have a codec (`Layout.Codec`) and the last passed by value as the `i32` `n`
+(`withAttrs`), alignment `al'` of `T` and of the generic space's addresses, launch `L`, paths
+from the entry (`coversEntryWith contract`), element type `t` with encoder `enc`, alignment `al`,
+block numbers `a`, `b`, `o`, count `n`, tensors `x`, `y`, caller's memory `m` of `Map2.Pre`,
+oracle `ω`, cells `cell` of `w` bytes apart (`Apart`) and bytes `bs`: if the start on
+`Map2.args z a b o n` succeeds on every address choice at `ω`, and `H` holds, then `fn` is sound
+at every address choice and `ω` (`Kernel.Sound`) for the observation of the blocks and
+`Elem.Out` (`Kernel.sound_mapNWith` at the structs of `a`, `b` and `o` and the `i32` count, with
+no loops, the set of all threads and the admission of `ω` alone; `Elem.buffer`, `Elem.fits` and
+the `of_block` lemmas move the buffers of `Map2.Pre` to `m'`). `H` is `Kernel.sound_map2`'s with
+a `RetWith contract` in place of the `Ret`. It covers the family of kernels with this parameter
+shape at one oracle `ω`, with or without the flag; `H`, the start on every choice and the codec
+are the caller's premises, which `mojo_kernel`'s `map2` clause discharges for one named kernel
+(`n.ret`, `n.starts`, `Layout.Codec.ptrArg`), with the flag through `RetWith.exists_true_of_ret`
+(Sym/RetFlag.lean). -/
+theorem Kernel.sound_map2With {contract : Bool} {prog : Program} {fn : Func} {L : Launch}
+    {paths : List (List (Nat × List Cond × Summary))}
+    (hc : coversEntryWith contract prog fn paths = true)
+    {p0 p1 p2 p3 : Param} (hps : fn.params = [p0, p1, p2, p3])
+    (hn : p0.name = some 0 ∧ p1.name = some 1 ∧ p2.name = some 2 ∧ p3.name = some 3) {T : Ty}
+    (hT : p0.byval? = some T ∧ p1.byval? = some T ∧ p2.byval? = some T ∧ p3.byval? = none)
+    {z : Val} (hcod : prog.layout.Codec T fun p => .agg [.ptr p, z]) {al' : Nat}
+    (hal' : al' ∣ prog.layout.align T ∧ al' ∣ 2 ^ (prog.layout.ptr 0).1)
+    {α : Type} [TorchLean.Storage α] {t : Ty} {enc : α → Val} {al a b o n N : Nat}
+    {x y : TorchLean.Tensor α [N]} {m : Mem} (hP : Map2.Pre prog.layout t enc al z m a b o n x y)
+    (hw : ∀ m', withAttrs prog.layout m' p3.ty p3.attrs (.bits 32 (BitVec.ofNat 32 n)) =
+      .ok (.bits 32 (BitVec.ofNat 32 n)))
+    {ω : Nat → Nat → Nat}
+    (hs : ∀ ch, ∃ g c, Grid.start prog fn L (Map2.args z a b o n) m ch ω = .ok (g, c))
+    {w : Nat} {cell : Nat → Nat} (hap : Apart cell w) {bs : Nat → Option (List MemByte)}
+    (H : ∀ k, k < volume L.grid * volume L.block → ∀ c : Ctx, c.prog = prog →
+      c.env = L.env k → c.who = ⟨k, k / volume L.block⟩ → c.oracle = ω k →
+      ∀ (m₀ m' : Mem) (f : Frame), f.fn = fn → ∀ q0 q1 q2 : Nat,
+      f.regs 0 = some (.ptr ⟨q0, 0⟩) → f.regs 1 = some (.ptr ⟨q1, 0⟩) →
+      f.regs 2 = some (.ptr ⟨q2, 0⟩) → f.regs 3 = some (.bits 32 (BitVec.ofNat 32 n)) →
+      m'.load prog.layout c.who 0 T ⟨q0, 0⟩ (some al') = .ok (.agg [.ptr ⟨a, 0⟩, z]) →
+      m'.load prog.layout c.who 0 T ⟨q1, 0⟩ (some al') = .ok (.agg [.ptr ⟨b, 0⟩, z]) →
+      m'.load prog.layout c.who 0 T ⟨q2, 0⟩ (some al') = .ok (.agg [.ptr ⟨o, 0⟩, z]) →
+      m'.Buffer a (n * prog.layout.size t) al false →
+      m'.Buffer b (n * prog.layout.size t) al false →
+      m'.Buffer o (n * prog.layout.size t) al true →
+      m'.Holds prog.layout a t enc (rowMajor prog.layout t 0) x →
+      m'.Holds prog.layout b t enc (rowMajor prog.layout t 0) y →
+      m'.Fits prog.layout a (n * prog.layout.size t) →
+      m'.Fits prog.layout b (n * prog.layout.size t) →
+      m'.Fits prog.layout o (n * prog.layout.size t) → q0 ≠ o ∧ q1 ≠ o ∧ q2 ≠ o →
+      Elem m₀ o w cell bs k m' →
+      ∃ ps ∈ paths, RetWith contract (Valuation.entry c 0 m' f) (Elem m₀ o w cell bs (k + 1)) ps) :
+    Kernel.Sound prog fn L (Map2.args z a b o n) m (fun _ ω' => ω' = ω) (fun m => some m.blocks)
+      (Elem.Out m o cell bs (volume L.grid * volume L.block)) := by
+  obtain ⟨hC, hne, ⟨hA, hB, hO⟩, hx, hy, -, -, hFa, hFb, hFo⟩ := hP
+  obtain ⟨h0, h1, h2, h3⟩ := hn
+  refine Kernel.sound_mapNWith (chains := []) (ps := [p0, p1, p2]) (bl := [a, b, o])
+    (sc := [(p3, .bits 32 (BitVec.ofNat 32 n), .bits 32 (BitVec.ofNat 32 n))])
+    (S := fun _ => True) hc rfl hps
+    (fun j p hp => by
+      rw [hps] at hp
+      rcases j with _ | _ | _ | _ | j <;> simp at hp <;> subst hp <;> assumption)
+    (by simp [hT.1, hT.2.1, hT.2.2.1])
+    (fun _ hs => by rw [List.mem_singleton.1 hs]; exact hT.2.2.2) hcod hal' rfl
+    (fun _ hs => by rw [List.mem_singleton.1 hs]; exact hw) hC.bytesIn
+    (by obtain ⟨xo, hxo, -, -, hown, -⟩ := hO; exact ⟨xo, hxo, hown⟩) (fun ch _ e => e ▸ hs ch)
+    (hap.comp Subtype.val_injective)
+    fun ch _ e k hk c hcp hce hcw hco m₀ m' f hf hq hr hrest hm₀ hE _ => .inl ?_
+  subst e
+  obtain ⟨q0, hr0, hp0, hv0⟩ := hq 0 (by simp)
+  obtain ⟨q1, hr1, hp1, hv1⟩ := hq 1 (by simp)
+  obtain ⟨q2, hr2, hp2, hv2⟩ := hq 2 (by simp)
+  have hqa := hrest a hne.2.1
+  have hqb := hrest b hne.2.2
+  exact (H k hk c hcp hce hcw hco m₀ m' f hf q0 q1 q2 hr0 hr1 hr2 (hr 0 (by simp)) hv0 hv1 hv2
+    (hA.of_block hqa) (hB.of_block hqb) (hE.buffer (hO.of_block hm₀)) (hx.of_block hqa)
+    (hy.of_block hqb) (hFa.of_block hqa) (hFb.of_block hqb) (hE.fits (hFo.of_block hm₀))
+    ⟨hp0, hp1, hp2⟩ hE).imp fun _ ⟨hp, hR⟩ => ⟨hp, hR.mono fun _ h => ⟨h, fun _ _ _ => trivial⟩⟩
+
+set_option smartUnfolding false in
 /-- **The kernel theorem of a binary elementwise kernel from its threads' `Ret`s.** For every
 program `prog`, kernel `fn` whose parameters `p0` to `p3` are named `%0` to `%3`, the first three
 `byval` of a struct type `T` whose values `.agg [.ptr p, z]` have a codec (`Layout.Codec`) and the
@@ -1270,17 +1349,17 @@ space's addresses, launch `L`, paths from the entry (`coversEntry`), element typ
 `m` of `Map2.Pre`, oracle `ω`, cells `cell` of `w` bytes apart (`Apart`) and bytes `bs`: if the
 start on `Map2.args z a b o n` succeeds on every address choice at `ω`, and `H` holds, then `fn`
 is sound at every address choice and `ω` (`Kernel.Sound`) for the observation of the blocks and
-`Elem.Out` (`Kernel.sound_mapN`). `H`: for every thread `k` of the launch, context of `prog` with
-thread `k`'s registers, identity and oracle `ω k`, memories `m₀` and `m'` of `Elem` after `k`
-threads, and frame of `fn` whose registers `%0` to `%2` point to blocks `q0` to `q2` other than `o`
-from which `T` loads at alignment `al'` as the structs of `a`, `b` and `o`, and whose `%3` is `n`,
-on which `a`, `b` and `o` are the buffers of `Map2.Pre` that fit and `a`, `b` hold `x`, `y`, some
-path of `paths` from the frame's entry is a `Ret` to `Elem` after `k + 1` threads. The start
-gives these facts (`Kernel.sound_mapN` at the structs of `a`, `b` and `o` and the `i32` count;
-`Elem.buffer`, `Elem.fits` and the `of_block` lemmas move the buffers of `Map2.Pre` to `m'`). It
-covers the family of kernels with this parameter shape at one oracle `ω`; `H`, the start on every
-choice and the codec are the caller's premises, which `mojo_kernel`'s `map2` clause discharges
-for one named kernel (`n.ret`, `n.starts`, `Layout.Codec.ptrArg`). -/
+`Elem.Out` (`Kernel.sound_map2With` without `fmul contract`; `RetWith false` and `Ret` agree
+definitionally with `smartUnfolding` off). `H`: for every thread `k` of the launch, context of
+`prog` with thread `k`'s registers, identity and oracle `ω k`, memories `m₀` and `m'` of `Elem`
+after `k` threads, and frame of `fn` whose registers `%0` to `%2` point to blocks `q0` to `q2`
+other than `o` from which `T` loads at alignment `al'` as the structs of `a`, `b` and `o`, and
+whose `%3` is `n`, on which `a`, `b` and `o` are the buffers of `Map2.Pre` that fit and `a`, `b`
+hold `x`, `y`, some path of `paths` from the frame's entry is a `Ret` to `Elem` after `k + 1`
+threads. The start gives these facts. It covers the family of kernels with this parameter shape
+at one oracle `ω`; `H`, the start on every choice and the codec are the caller's premises, which
+`mojo_kernel`'s `map2` clause discharges for one named kernel (`n.ret`, `n.starts`,
+`Layout.Codec.ptrArg`). -/
 theorem Kernel.sound_map2 {prog : Program} {fn : Func} {L : Launch}
     {paths : List (List (Nat × List Cond × Summary))} (hc : coversEntry prog fn paths = true)
     {p0 p1 p2 p3 : Param} (hps : fn.params = [p0, p1, p2, p3])
@@ -1314,25 +1393,8 @@ theorem Kernel.sound_map2 {prog : Program} {fn : Func} {L : Launch}
       Elem m₀ o w cell bs k m' →
       ∃ ps ∈ paths, Ret (Valuation.entry c 0 m' f) (Elem m₀ o w cell bs (k + 1)) ps) :
     Kernel.Sound prog fn L (Map2.args z a b o n) m (fun _ ω' => ω' = ω) (fun m => some m.blocks)
-      (Elem.Out m o cell bs (volume L.grid * volume L.block)) := by
-  obtain ⟨hC, hne, ⟨hA, hB, hO⟩, hx, hy, -, -, hFa, hFb, hFo⟩ := hP
-  obtain ⟨h0, h1, h2, h3⟩ := hn
-  refine Kernel.sound_mapN (ps := [p0, p1, p2]) (bl := [a, b, o]) hc hps
-    (fun j p hp => by
-      rw [hps] at hp
-      rcases j with _ | _ | _ | _ | j <;> simp at hp <;> subst hp <;> assumption)
-    (by simp [hT.1, hT.2.1, hT.2.2.1]) hT.2.2.2 hcod hal' rfl hw hC.bytesIn
-    (by obtain ⟨xo, hxo, -, -, hown, -⟩ := hO; exact ⟨xo, hxo, hown⟩) hs hap
-    fun k hk c hcp hce hcw hco m₀ m' f hf hq hr3 hrest hm₀ hE => ?_
-  obtain ⟨q0, hr0, hp0, hv0⟩ := hq 0 (by simp)
-  obtain ⟨q1, hr1, hp1, hv1⟩ := hq 1 (by simp)
-  obtain ⟨q2, hr2, hp2, hv2⟩ := hq 2 (by simp)
-  have hqa := hrest a hne.2.1
-  have hqb := hrest b hne.2.2
-  exact H k hk c hcp hce hcw hco m₀ m' f hf q0 q1 q2 hr0 hr1 hr2 hr3 hv0 hv1 hv2
-    (hA.of_block hqa) (hB.of_block hqb) (hE.buffer (hO.of_block hm₀)) (hx.of_block hqa)
-    (hy.of_block hqb) (hFa.of_block hqa) (hFb.of_block hqb) (hE.fits (hFo.of_block hm₀))
-    ⟨hp0, hp1, hp2⟩ hE
+      (Elem.Out m o cell bs (volume L.grid * volume L.block)) :=
+  Kernel.sound_map2With (contract := false) hc hps hn hT hcod hal' hP hw hs hap H
 
 /-- `Elem.put` after `k + 1` threads: thread `k`'s bytes, if any, put on the block after `k`. -/
 theorem Elem.put_succ (cell : Nat → Nat) (bs : Nat → Option (List MemByte)) (k : Nat)

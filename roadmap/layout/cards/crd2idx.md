@@ -4,11 +4,11 @@ title: `crd2idx` is the dot product of a coordinate with the strides
 kind: construct
 ref: modular/modular@bbc13a71:Mojo/stdlib/std/utils/coord.mojo:864
 quote: "The dot product is computed at `out_type` precision"
-lean: not stated yet
+lean: MojoProof.Layout.crd2idx, MojoProof.Layout.Lay.call, MojoProof.Layout.Lay.call_scalar, MojoProof.Layout.crd2idx_flat, MojoProof.Layout.Lay.call_leaves, MojoProof.Layout.Lay.call_flat, MojoProof.Layout.crd2idx_leaf_leaf
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
-level: L0
+level: L1
 ---
 # `crd2idx` is the dot product of a coordinate with the strides
 
@@ -24,6 +24,10 @@ Flat and nested coordinates, a coordinate whose nesting differs from the shape's
 
 The index type's width: that is the card `index-width`.
 
+## In MojoProof
+
+MojoProof/Layout/Basic.lean transcribes `crd2idx` with its four branches (`crd2idx`, and `Lay.call` for `Layout.__call__`); docs/proofs/layout-laws.md gives the transcription line by line. For every shape and stride: `Lay.call_scalar`, a scalar below the size has the offset of its colexicographic digits against the shape's leaves dotted with the stride's leaves, when shape and stride have the same nesting; `crd2idx_flat`, `Lay.call_leaves` and `Lay.call_flat`, a coordinate with one leaf per mode has the dot product as its offset, with no bound on the coordinate and whatever the extents; `crd2idx_leaf_leaf`, a leaf against a leaf stride is the product. MojoProofTest.LayoutConformance compares the model with the offsets that Mojo's compiler folds into a kernel for static flat and nested layouts, scalar and exact coordinates (one seed; a test, not a proof).
+
 ## Open
 
-A Lean statement for every shape and stride. MojoProof states no layout law yet.
+A general theorem for mixed coordinates (a tuple coordinate whose entries are scalars against tuple modes); the definition covers them, and the tests check instances. Layouts with runtime leaves in the conformance test.

@@ -32,11 +32,10 @@ reads the concrete summaries, statements and paths by kernel `whnf`, and proves:
    and of the goal, its conjuncts and the fields of a structure of propositions, so an invariant
    or a precondition may be one conjunction or one structure): the registers
    (`f.regs r = some v` of an entry frame, `V.regs r = some v` of another valuation), the
-   function and program (`f.fn = F` or
-   `V.fn = F`, `c.prog = P` or `V.ctx.prog = P`), struct loads (`m.load … = .ok v`), and
-   for the launch (`L.Valid`, `c.env = L.env k`, and the 1-D hypotheses of
-   `Launch.index_oneDim`) the register ranges of `Launch.sreg_lt`, `Launch.index_lt` and
-   `Launch.sreg_bound` and the index equation;
+   function and program (`f.fn = F` or `V.fn = F`, `c.prog = P` or `V.ctx.prog = P`), struct
+   loads (`m.load … = .ok v`), a global's pointer (`c.globals g = some p`), and for the launch
+   (`L.Valid`, `c.env = L.env k`, and the 1-D hypotheses of `Launch.index_oneDim`) the register
+   ranges of `Launch.sreg_lt`, `Launch.index_lt` and `Launch.sreg_bound` and the index equation;
 2. a pointer into a buffer and its loads and stores from `m.Buffer` (a global buffer) or
    `m.BufferIn s c size al o w` (a buffer of any address space `s`, so shared memory's 3, owned by
    `o`), a no-wrap fact for the pointer's address space (in the generic space 0 `Mem.Fits` of
@@ -49,8 +48,9 @@ reads the concrete summaries, statements and paths by kernel `whnf`, and proves:
    propositions by `decide`, and so an obligation on a closed valuation that the lemmas do not
    reach (a store to a block no `m.Buffer` describes);
 4. an edge into a block with `phi`s: where it goes from its condition, each `phi`'s value from
-   its operand for the edge (`Valuation.into_regs_phi`, `enter`'s lemma), and the position it
-   enters at (`Exit.pc`, from the function).
+   its operand for the edge (`Valuation.into_regs_phi`, `enter`'s lemma), another register's
+   with no operand evaluated (`Valuation.intoWith_regs_phi_ne`), and the position it enters at
+   (`Exit.pc`, from the function).
 
 Each obligation and exit it proves is checked by the kernel against its statement. One it does not
 prove stays a goal and is logged ("mojo_obl: open goal"); with `set_option mojo_obl.debug true` it
@@ -62,7 +62,11 @@ MojoProofTest/OblNaive.lean (the obligations of a block with a float constant, t
 product's `%45`); MojoProofTest/OblShared.lean (the counting loop's rounds on a buffer of shared
 memory, through pointers of address space 3); MojoProofTest/OblMatmul.lean (the naive matrix
 product's paths with `fmul contract`: its loop's rounds, the path out, and the paths of the
-threads in and out of range of every valid launch).
+threads in and out of range of every valid launch); MojoProofTest/OblGevm.lean (gevm_kernel's
+lane number, its entry block and edge into the loop at every thread of every valid launch with
+`ntid.x = 1024`, the entry's registers, its loop's rounds for every `K` divisible by 32, and the
+segment after the loop up to its barrier, through the shared array's pointer);
+MojoProofTest/OblInt.lean (the open-goal twins of the integer lemmas, on hand-written blocks).
 -/
 
 namespace MojoProof.Sym
@@ -97,13 +101,24 @@ structure St where
   mk ::
   /-- Launch facts for `omega`: register ranges and the 1-D index. -/
   facts : List Expr := []
-  /-- The node values of a valuation and summary: each
-  `(v, (vals V S.nodes)[j]? = some (.ok v))`. -/
+  /-- A table of the node values of a valuation and summary (mojo_vals' entries, a hypothesis
+  `vals V S.nodes = ws`): each `(v, (vals V S.nodes)[j]? = some (.ok v))`. -/
   nodes : Std.HashMap (Expr × Expr) (Array (Option (Expr × Expr))) := {}
+  /-- The value of one node of a valuation and summary, by valuation, summary and number, each
+  computed when it is first read (`nodeVal`): `(v, (vals V S.nodes)[j]? = some (.ok v))`, or
+  none. -/
+  node : Std.HashMap (Expr × Expr × Nat) (Option (Expr × Expr)) := {}
+  /-- The nodes of a summary (`klist` of `S.nodes`), by summary. -/
+  lists : Std.HashMap Expr (Array Expr) := {}
   /-- The register values of a valuation: `(v, V.regs r = some v)`. -/
   regs : Std.HashMap (Expr × Nat) (Expr × Expr) := {}
   /-- The memory of a valuation: `(M, V.mem = M, M.blocks = m.blocks)`, `m` the entry memory. -/
   mems : Std.HashMap Expr (Expr × Expr × Expr) := {}
+  /-- The `phi` operands of an edge (`phiEdge`), by valuation, block and summary. -/
+  edges : Std.HashMap (Expr × Expr × Expr) (Expr × Expr × Expr × Expr × List Expr) := {}
+  /-- The values of an edge's `phi` operands (`phiVals`), by valuation, summary, valuation after
+  the block and frame. -/
+  phis : Std.HashMap (Expr × Expr × Expr × Expr) (Array (Expr × Expr × Expr) × Expr) := {}
   /-- The goals left open. -/
   opens : Array MVarId := #[]
   /-- The debugging messages (kept across backtracking, logged at the end). -/
@@ -229,15 +244,47 @@ def krfl (a b : Expr) : MetaM Expr := do
   let eq ← mkEq a b
   return hint (← mkEqRefl a) eq
 
-/-- An `omega` proof of `t`, from the local context and the launch facts. -/
+/-- Whether the proposition `t` is a disequality `a ≠ b` or `¬ a = b`, or a conjunction with one
+among its conjuncts. -/
+partial def hasNe (t : Expr) : Bool :=
+  t.isAppOfArity ``Ne 3 || (t.isAppOfArity ``Not 1 && t.appArg!.isAppOfArity ``Eq 3) ||
+    (t.isAppOfArity ``And 2 && (hasNe t.appFn!.appArg! || hasNe t.appArg!))
+
+/-- An `omega` proof of `t`, from the local context and the launch facts, after splitting the
+`if`s of `t` (to depth 4, `splitIfTarget?`), each case with its condition in the context: a
+word an undecided `select` gives (`SNode.eval_select_word`) is an `if`. omega is first called
+without the context's disequalities (`hasNe`), since it splits each in two cases before the
+`max` and `min` a bound may need, then with them. -/
 def arith (t : Expr) : M Expr := do
   let t' ← litify (← instantiateMVars t)
   let g ← mkFreshExprMVar t'
   let facts := (← get).facts
-  let some g' ← g.mvarId!.falseOrByContra | return hint (← instantiateMVars g) t
-  g'.withContext do
-    let hyps ← getLocalHyps
-    Lean.Elab.Tactic.Omega.omega (hyps.toList ++ facts) g'
+  let rec /-- Closes `g` by `omega` from the local context and `facts`, after splitting the `if`s
+  of its target to the depth the second argument gives, each case with its condition in the
+  context. -/
+  go (g : MVarId) : Nat → MetaM Unit
+    | d + 1 => do
+      if let some (g1, g2) ← splitIfTarget? g then
+        go g1.mvarId d
+        go g2.mvarId d
+      else go g 0
+    | 0 => do
+      let before ← g.withContext do return (← getLocalHyps).map (·.fvarId!)
+      let some g' ← g.falseOrByContra | return
+      g'.withContext do
+        let hyps ← getLocalHyps
+        -- first without the context's disequalities, which omega splits in two each (the
+        -- negated goal stays)
+        let fewer ← hyps.filterM fun h => do
+          return !(before.contains h.fvarId! && hasNe (← instantiateMVars (← inferType h)))
+        if fewer.size < hyps.size then
+          let s ← saveState
+          try
+            Lean.Elab.Tactic.Omega.omega (fewer.toList ++ facts) g'
+            return
+          catch _ => s.restore
+        Lean.Elab.Tactic.Omega.omega (hyps.toList ++ facts) g'
+  go g.mvarId! 4
   return hint (← instantiateMVars g) t
 
 /-- A quick test that `a` and `b` do not unify, to skip a hypothesis before unifying: different
@@ -303,6 +350,13 @@ def closedDec (ty : Expr) : MetaM Expr := do
 `A ∣ al` of two literals). -/
 def hypOrDec (t : Expr) : MetaM Expr := do
   try findHyp t catch e => try closedDec t catch _ => throw e
+
+/-- A proof of the equation `t` by `krfl` (the kernel), else a local hypothesis (`findHyp`): an
+entry register's `fmul contract` factors `none` at the entry of a frame that is a variable. -/
+def rflOrHyp (t : Expr) : MetaM Expr := do
+  let t ← instantiateMVars t
+  let (``Eq, #[_, a, b]) := t.getAppFnArgs | findHyp t
+  try krfl a b catch e => try findHyp t catch _ => throw e
 
 /-- A proof of `t` (a buffer's owner admitting the thread, `o.admits w = true`) by `decide`, the
 kernel evaluating it with the local variables in it (so `Owner.all.admits w = true` for every
@@ -567,6 +621,7 @@ def launchFacts : MetaM (List Expr) := do
         mkProj ``And 1 (mkProj ``And 1 h) ::
         mkApp4 (mkConst ``Launch.index_lt) L hL k (mkConst dim) ::
         out
+    out := mkApp2 (mkConst ``Launch.laneid_lt) L k :: out
     try
       let t ← inferType (mkApp4 (mkConst ``Launch.index_oneDim) L (← mkFreshExprMVar none)
         (← mkFreshExprMVar none) k)
@@ -604,7 +659,77 @@ def flitOf (ft lit : Expr) : MetaM (Expr × Expr) := do
     return (v', ← krfl r (mkOk v'))
   catch _ => return (v, ← krfl r (mkOk v))
 
+/-- Whether one of the `phi` operands `ops` (of an edge, `phiEdge`) sets register `r`. -/
+def phiSets (ops : List Expr) (r : Nat) : MetaM Bool := do
+  for op in ops do
+    if let (``Option.some, #[_, o]) := (← kwhnf (← kpair op).1).getAppFnArgs then
+      if (← natOf o) == r then return true
+  return false
+
 mutual
+
+/-- **A hypothesis on a node's value**: `(v, (vals V S.nodes)[j]? = some (.ok v))` from a local
+hypothesis `h : ∀ xs, P₁ → … → Pₙ → (vals V' ns)[j]? = some (.ok v)` (a literal `j`; a plain
+equation when there are no binders) whose left side the kernel equates with `(vals V S.nodes)[j]?`
+(`V'` and `ns` closed under the variables `xs`). Each premise `Pᵢ` is an equation on a register,
+its `fmul contract` operands or a node at `V'` (`V'.regs r`, `V'.prods r`, `(vals V' T.nodes)[i]?`):
+its left side's value at `V` (`regOf`, `prodOf`, `nodeVal`, which reads the nodes of `S` before
+`j`) unified with its right side, which sets the variables `xs`. `none` when there is no such
+hypothesis. For every program. -/
+partial def nodeHyp (V S : Expr) (j : Nat) : M (Option (Expr × Expr)) := do
+  let a := mkApp2 (mkConst ``vals) V (mkApp (mkConst ``Summary.nodes) S)
+  let isNode (l : Expr) : Option (Array Expr) := do
+    let (``GetElem?.getElem?, args) := l.getAppFnArgs | none
+    guard (args.size == 7 && args[5]!.isAppOfArity ``vals 2)
+    return args
+  for d in ← getLCtx do
+    if d.isImplementationDetail then continue
+    let ty ← instantiateMVars d.type
+    -- the conclusion's form, before the binders are opened
+    let some (_, l, _) := ty.getForallBody.eq? | continue
+    let some args := isNode l | continue
+    unless (args[6]!.nat? <|> args[6]!.rawNatLit?) == some j do continue
+    let r ← try
+        let (xs, bis, c) ← forallMetaTelescope ty
+        let some (_, l, x) := c.eq? | failure
+        let some args := isNode l | failure
+        let V' ← instantiateMVars args[5]!.appFn!.appArg!
+        let ns ← instantiateMVars args[5]!.appArg!
+        if V'.hasMVar || ns.hasMVar then failure
+        unless ← kdefeq args[5]! a do failure
+        for xi in xs, bi in bis do
+          unless bi.isExplicit do continue
+          let some (_, pl, pr) := (← instantiateMVars (← inferType xi)).eq? | failure
+          let (v, p) ← match pl.getAppFnArgs with
+            | (``Valuation.regs, #[W, q]) =>
+              unless W == V' do failure
+              let (v, p) ← regOf V (← natOf q)
+              pure (← mkSome (mkConst ``Val) v, p)
+            | (``Valuation.prods, #[W, q]) =>
+              unless W == V' do failure
+              prodOf V (← natOf q)
+            | _ =>
+              let some qs := isNode pl | failure
+              let (``vals, #[W, ns']) := qs[5]!.getAppFnArgs | failure
+              let (``Summary.nodes, #[T]) := ns'.getAppFnArgs | failure
+              unless W == V' do failure
+              let i ← natOf qs[6]!
+              -- of `S`, only a node before `j`
+              if T == S && j ≤ i then failure
+              let some (v, p) ← nodeVal V T i | failure
+              pure (← mkAppOptM ``Option.some #[none, mkOk v], p)
+          unless ← isDefEq pr v do failure
+          xi.mvarId!.assign (hint p (← instantiateMVars (← inferType xi)))
+        let x ← instantiateMVars x
+        let (``Option.some, #[_, o]) := x.getAppFnArgs | failure
+        let (``Except.ok, #[_, _, v]) := o.getAppFnArgs | failure
+        let pf ← instantiateMVars (mkAppN d.toExpr xs)
+        if v.hasMVar || pf.hasMVar then failure
+        let lhs := mkAppN l.getAppFn (args.set! 5 a)
+        pure (some (v, hint pf (← mkEq lhs x)))
+      catch _ => pure none
+    if r.isSome then return r
+  return none
 
 /-- **The value of operand `x`** at valuation `V` on summary `S`'s nodes (the first `j` of them,
 or all): `(v, x.eval V vs = .ok v)`. -/
@@ -614,8 +739,9 @@ partial def opnd (V S : Expr) (j : Option Nat) (x : Expr) : M (Expr × Expr) := 
   match x.getAppFnArgs with
   | (``SVal.node, #[i]) =>
     let i ← natOf i
-    let ns ← nodeVals V S
-    let some (_, h) := ns[i]?.join | throwError "mojo_obl: node {i} has no value"
+    -- with `j`, only a node before it
+    if j.any (· ≤ i) then throwError "mojo_obl: node {i} has no value"
+    let some (_, h) ← nodeVal V S i | throwError "mojo_obl: node {i} has no value"
     let (p, t) ← match j with
       | some j => use ``SVal.eval_node_take [(`j, mkNatLit j)] [.arith, .pf h]
       | none => use ``SVal.eval_node [(`V, V), (`vs, vs)] [.pf h]
@@ -625,9 +751,12 @@ partial def opnd (V S : Expr) (j : Option Nat) (x : Expr) : M (Expr × Expr) := 
     let (p, t) ← use ``SVal.eval_reg [(`vs, vs)] [.pf h]
     return (← valOf t, p)
   | (``SVal.int, #[w, i]) =>
-    let (``Int.ofNat, #[k]) := i.getAppFnArgs
-      | throwError "mojo_obl: negative constant{indentExpr x}"
-    let (p, t) ← use ``SVal.eval_int_ofNat [(`V, V), (`vs, vs)] [.pf w, .pf k]
+    let (p, t) ← match i.getAppFnArgs with
+      | (``Int.ofNat, #[k]) => use ``SVal.eval_int_ofNat [(`V, V), (`vs, vs)] [.pf w, .pf k]
+      -- `-(k + 1)`, the word of `2 ^ w - (k + 1)`
+      | (``Int.negSucc, #[k]) =>
+        use ``SVal.eval_int_negSucc [(`V, V), (`vs, vs)] [.pf w, .pf k, .dec]
+      | _ => throwError "mojo_obl: integer constant{indentExpr x}"
     return (← valOf t, p)
   | _ => throwError "mojo_obl: operand{indentExpr x}"
 
@@ -677,7 +806,8 @@ partial def regOf (V : Expr) (r : Nat) : M (Expr × Expr) := do
   return res
 
 /-- **The memory of valuation `V`**: `(M, V.mem = M, M.blocks = m.blocks)`, `m` the memory of
-the valuation under `after`s and `into`s. -/
+the valuation under `after`s and `into`s. Each block's effects read only the nodes their operands
+name (`nodeVal`). -/
 partial def memOf (V : Expr) : M (Expr × Expr × Expr) := do
   if let some x := (← get).mems[V]? then return x
   let (_, m0, _) := baseOf V
@@ -709,17 +839,30 @@ partial def blocksOf (V : Expr) : M Expr := do
   let (_, hM, hMb) ← memOf V
   mkEqTrans (← mkCongrArg (mkConst ``Mem.blocks) hM) hMb
 
-/-- **The node values** of summary `S` at valuation `V`. -/
-partial def nodeVals (V S : Expr) : M (Array (Option (Expr × Expr))) := do
-  if let some x := (← get).nodes[(V, S)]? then return x
-  let ns ← klist (mkApp (mkConst ``Summary.nodes) S)
-  -- a placeholder, so that a node reads only the nodes before it
-  let mut acc : Array (Option (Expr × Expr)) := #[]
-  for j in [0:ns.length] do
-    modify fun s => { s with nodes := s.nodes.insert (V, S) acc }
-    let nd ← kdeep ns[j]! 3
-    let t0 ← IO.monoMsNow
-    let r ← try
+/-- **The value of node `j`** of summary `S` at valuation `V`:
+`(v, (vals V S.nodes)[j]? = some (.ok v))`, or none. From the table of `S`'s nodes at `V` when
+there is one (`St.nodes`), else the value a hypothesis gives (`nodeHyp`), else its evaluation
+(`nodeEval`), which reads only the nodes its operands name. Each node is computed once, when it is
+first read (`St.node`), so the memory, a register or an exit after a block evaluates only the
+nodes it uses. -/
+partial def nodeVal (V S : Expr) (j : Nat) : M (Option (Expr × Expr)) := do
+  if let some a := (← get).nodes[(V, S)]? then return a[j]?.join
+  if let some x := (← get).node[(V, S, j)]? then return x
+  -- none while it is computed
+  modify fun s => { s with node := s.node.insert (V, S, j) none }
+  let ns ← match (← get).lists[S]? with
+    | some ns => pure ns
+    | none =>
+      let ns := (← klist (mkApp (mkConst ``Summary.nodes) S)).toArray
+      modify fun s => { s with lists := s.lists.insert S ns }
+      pure ns
+  let r ← match ← nodeHyp V S j, ns[j]? with
+    | some r, _ => pure (some r)
+    | none, none => pure none
+    | none, some nd => do
+      let nd ← kdeep nd 3
+      let t0 ← IO.monoMsNow
+      try
         let (v, he) ← nodeEval V S j nd
         let (p, _) ← use ``vals_getElem?_eval [(`V, V), (`ns, mkApp (mkConst ``Summary.nodes) S),
           (`j, mkNatLit j), (`nd, nd), (`r, mkOk v)] [.rfl, .kd he]
@@ -728,11 +871,14 @@ partial def nodeVals (V S : Expr) : M (Array (Option (Expr × Expr))) := do
       catch e =>
         dbg m!"mojo_obl: node {j} ({(← IO.monoMsNow) - t0} ms): {e.toMessageData}"
         pure none
-    acc := acc.push r
-  modify fun s => { s with nodes := s.nodes.insert (V, S) acc }
-  return acc
+  modify fun s => { s with node := s.node.insert (V, S, j) r }
+  return r
 
-/-- **Node `nd`** (number `j` of `S`) at `V`: `(v, nd.eval V (vals V (S.nodes.take j)) = .ok v)`. -/
+/-- **Node `nd`** (number `j` of `S`) at `V`: `(v, nd.eval V (vals V (S.nodes.take j)) = .ok v)`.
+A float operator with `fmul contract` factors (`SNode.fbinP`) on operand values with local
+variables, floats `.ofFloat ft u` whose factors are float pairs or none, is `floatBin` of them by
+`SNode.eval_fbinP_ofFloat` (`floatBin_contract_ofFloat` for a contracted `fadd` or `fsub`,
+`floatBin_ofFloat_factors` for another operator), else by the kernel. -/
 partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
   let vs := vsOf V S (some j)
   let op (x : Expr) := opnd V S (some j) x
@@ -772,7 +918,7 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
           let (``HMul.hMul, #[_, _, _, _, r, S']) := rS.getAppFnArgs | throw e1
           try
             return (← (use ``load_buffer2 (at0 ++ [(`r, r), (`S, S'), (`k, k)])
-              (args ++ [.arith, .arith])).run' st).1
+              (args ++ [.arith, .arith, .dec])).run' st).1
           catch e2 => throwError "{e1.toMessageData}\n{e2.toMessageData}"
       fin (← use ``SNode.eval_load_at named [.kd hF, .kd hP, .rfl, .pf hp, .fn fun t => k t, .rfl])
     | _ => fin (← use ``SNode.eval_load_at named [.kd hF, .kd hP, .rfl, .pf hp, .hyp, .rfl])
@@ -811,6 +957,21 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
       | some ``BinOp.mul =>
         try use ``intBin_mul_wrap (named ++ [(`fl, fl)]) [.dec, .dec]
         catch _ => use ``intBin_mul_ofNat named [.pf fl, .arith, .arith, .arith]
+      | some ``BinOp.sub => use ``intBin_sub_wrap (named ++ [(`fl, fl)]) [.dec, .dec]
+      | some ``BinOp.udiv =>
+        use ``intBin_udiv_ofNat (named ++ [(`fl, fl)]) [.dec, .arith, .arith, .arith]
+      -- a positive divisor, else a negative one (`2 ^ w ≤ 2 b`)
+      | some ``BinOp.sdiv =>
+        try use ``intBin_sdiv_ofNat (named ++ [(`fl, fl)]) [.dec, .arith, .arith, .arith]
+        catch _ => use ``intBin_sdiv_neg (named ++ [(`fl, fl)]) [.dec, .arith, .arith, .arith]
+      | some ``BinOp.xor => use ``intBin_xor_ofNat (named ++ [(`fl, fl)]) [.arith, .arith]
+      -- the sign of an `xor` of a positive word with a positive or a negative one, all its bits
+      | some ``BinOp.ashr =>
+        let (``HXor.hXor, #[_, _, _, _, x, y]) := Ka.getAppFnArgs
+          | throwError "mojo_obl: ashr of no xor{indentExpr Ka}"
+        let at_ := [(`w, w), (`a, x), (`b, y), (`s, Kb), (`fl, fl)]
+        try use ``intBin_ashr_xor_pos at_ [.dec, .arith, .arith, .dec]
+        catch _ => use ``intBin_ashr_xor_neg at_ [.dec, .arith, .arith, .arith, .dec]
       | _ => throwError "mojo_obl: integer operator{indentExpr bop}"
     let (p1, _) ← use ``SNode.eval_bin [(`op, bop), (`fl, fl)] [.pf ha, .pf hb, .pf p2]
     return (← valOf t2, p1)
@@ -820,16 +981,24 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
     match (← kwhnf pr).constName? with
     | some ``ICmp.slt => fin (← use ``SNode.eval_icmp_slt_ofNat [] [.pf ha, .pf hb, .arith, .arith])
     | some ``ICmp.ult => fin (← use ``SNode.eval_icmp_ult_ofNat [] [.pf ha, .pf hb, .arith, .arith])
-    | some ``ICmp.eq => fin (← use ``SNode.eval_icmp_eq_ofNat [] [.pf ha, .pf hb, .arith, .arith])
+    | some ``ICmp.eq =>
+      -- words of numbers below `2 ^ w`, else their residues
+      try fin (← use ``SNode.eval_icmp_eq_ofNat [] [.pf ha, .pf hb, .arith, .arith])
+      catch _ => fin (← use ``SNode.eval_icmp_eq_mod [] [.pf ha, .pf hb])
     | some ``ICmp.sge => fin (← use ``SNode.eval_icmp_sge_ofNat [] [.pf ha, .pf hb, .arith, .arith])
     | _ => throwError "mojo_obl: comparison{indentExpr pr}"
   | (``SNode.select, #[w, c, a, b]) =>
     let (cv, hc) ← op c
-    let (_, ha) ← op a
-    let (_, hb) ← op b
+    let (av, ha) ← op a
+    let (bv, hb) ← op b
     let (``Val.ofBool, #[p]) := cv.getAppFnArgs | throwError "mojo_obl: select on no boolean"
+    -- an undecided condition: the one value of both operands, else the word of an `if` of two
+    -- words, else the `if` of the condition's boolean
     let both : M (Expr × Expr) := do
-      fin (← use ``SNode.eval_select_ofBool [(`w, w)] [.pf hc, .pf ha, .pf hb])
+      if ← isDefEq av bv then
+        return ← fin (← use ``SNode.eval_select_same [(`w, w)] [.pf hc, .pf ha, .pf hb])
+      try fin (← use ``SNode.eval_select_word [(`w, w)] [.pf hc, .pf ha, .pf hb])
+      catch _ => fin (← use ``SNode.eval_select_ofBool [(`w, w)] [.pf hc, .pf ha, .pf hb])
     -- the operand the condition picks, when `omega` decides it
     let (``Decidable.decide, #[q, _]) := p.getAppFnArgs | both
     try
@@ -849,8 +1018,34 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
   | (``SNode.call, #[lbl, pc]) =>
     let (at_, hF, hP) ← fnP
     let (E, hE) ← envOf V
-    fin (← use ``SNode.eval_sreg_at (at_ ++ [(`lbl, lbl), (`pc, pc), (`E, E)])
-      [.kd hF, .kd hP, .rfl, .rfl, .rfl, .rfl, .dec, .dec, .kd hE, .fn fun t => sregBound t])
+    let named := at_ ++ [(`lbl, lbl), (`pc, pc), (`E, E)]
+    -- a special register, else the lane number (below 32 by a hypothesis or `Launch.laneid_lt`)
+    let (p, t) ← try
+        use ``SNode.eval_sreg_at named
+          [.kd hF, .kd hP, .rfl, .rfl, .rfl, .rfl, .dec, .dec, .kd hE, .fn fun t => sregBound t]
+      catch e =>
+        let lane (t : Expr) : MetaM Expr := do
+          try findHyp t catch _ =>
+            let (``Launch.env, #[L, k]) := E.getAppFnArgs | throw e
+            return mkApp2 (mkConst ``Launch.laneid_lt) L k
+        use ``SNode.eval_laneid_at named
+          [.kd hF, .kd hP, .rfl, .rfl, .rfl, .rfl, .dec, .kd hE, .fn fun t => lane t]
+    -- the number a hypothesis gives the register (`ntid.x = 1024`)
+    let (_, K) ← wordOf (← valOf t)
+    let (K', hK) ← eqHyp K
+    if K'.equal K then return (← valOf t, p)
+    fin (← use ``SNode.eval_word_eq [] [.pf p, .pf hK])
+  -- a global's pointer, from a hypothesis `c.globals g = some p`
+  | (``SNode.globalAt, #[lbl, pc, i]) =>
+    let (at_, hF, _) ← fnP
+    fin (← use ``SNode.eval_globalAt_at (at_.take 3 ++ [(`lbl, lbl), (`pc, pc), (`i, i)])
+      [.kd hF, .rfl, .rfl, .hyp])
+  -- a `bitcast` between scalar types of one width keeps its operand's word
+  | (``SNode.castAt, #[lbl, pc, n, a]) =>
+    let (at_, hF, hP) ← fnP
+    let (_, ha) ← op a
+    fin (← use ``SNode.eval_bitcast_at (at_ ++ [(`lbl, lbl), (`pc, pc), (`n, n)])
+      [.kd hF, .kd hP, .pf ha, .rfl, .rfl, .rfl, .rfl])
   | (``SNode.gep, #[lbl, pc, base, idx]) =>
     let (at_, hF, hP) ← fnP
     let (iv, hi) ← op idx
@@ -858,8 +1053,9 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
     let (c, _) ← ptrParts (← ptrOf bv)
     let hMb ← blocksOf V
     let st ← get
-    -- `gep_buffer` at the statement's flags and source type, once the statement is matched; else,
-    -- by any word, `gep_buffer_ok`'s value, of no known form (`Classical.choose`)
+    -- `gep_buffer` at the statement's flags and source type, once the statement is matched; else
+    -- `gep_buffer2` at an index `r * S + k` (cell `(r, k)` of a matrix); else, by any word,
+    -- `gep_buffer_ok`'s value, of no known form (`Classical.choose`)
     let k (t : Expr) : MetaM Expr := do
       let some (_, g, _) := t.eq? | throwError "mojo_obl: getelementptr"
       let ga := g.getAppArgs
@@ -873,6 +1069,15 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
         return pf
       catch e =>
         s.restore
+        try
+          let (w, K) ← wordOf iv
+          let (``HAdd.hAdd, #[_, _, _, _, rS, k]) := K.getAppFnArgs | throw e
+          let (``HMul.hMul, #[_, _, _, _, r, S']) := rS.getAppFnArgs | throw e
+          let named := at0 ++ [(`l, ga[0]!), (`r, r), (`S, S'), (`k, k), (`w, w)]
+          let (pf, _) ← (use ``gep_buffer2 named
+            [.pf hMb, .hyp, .dec, .hyp, .arith, .arith, .arith, .dec, .arith, .arith]).run' st
+          return pf
+        catch _ => s.restore
         let (``Val.bits, #[w, x]) := iv.getAppFnArgs | throw e
         let named := at0 ++ [(`l, ga[0]!), (`w, w), (`x, x)]
         let (ex, _) ← (use ``gep_buffer_ok named [.pf hMb, .hyp, .dec]).run' st
@@ -885,13 +1090,67 @@ partial def nodeEval (V S : Expr) (j : Nat) (nd : Expr) : M (Expr × Expr) := do
     let (_, ha) ← op args[4]!
     let (_, hb) ← op args[5]!
     fin (← use ``SNode.eval_fbin_ofFloat [(`op, fop), (`fm, fm), (`n, n)]
-      [.pf ha, .pf hb, .rfl, .rfl, .rfl, .rfl, .rfl, .rfl])
+      [.pf ha, .pf hb, .fn fun t => rflOrHyp t, .fn fun t => rflOrHyp t, .rfl, .rfl, .rfl, .rfl])
   | (``SNode.fbinP, #[fop, fm, ft, n, a, b, pa, pb]) =>
+    let (x, ha) ← op a
+    let (y, hb) ← op b
+    let named := [(`op, fop), (`fm, fm), (`ft, ft), (`n, n), (`pa, pa), (`pb, pb)]
     -- the semantics' `floatBin` on the operands' values and factors, by the kernel
-    let (_, ha) ← op a
-    let (_, hb) ← op b
-    fin (← use ``SNode.eval_fbinP [(`op, fop), (`fm, fm), (`ft, ft), (`n, n), (`pa, pa),
-      (`pb, pb)] [.pf ha, .pf hb, .rfl])
+    let kern : M (Expr × Expr) := do fin (← use ``SNode.eval_fbinP named [.pf ha, .pf hb, .rfl])
+    unless x.hasFVar || y.hasFVar do return ← kern
+    -- symbolic floats: lane 0 of each operand's factors as float pairs (`q`), then `floatBin`
+    -- on them by `floatBin_contract_ofFloat`, else `floatBin_ofFloat_factors`
+    let flt (v : Expr) : M Expr := do
+      let (``Val.ofFloat, #[_, u]) := v.getAppFnArgs
+        | throwError "mojo_obl: not a float{indentExpr v}"
+      return u
+    let sym : M (Expr × Expr) := do
+      let u ← flt x
+      let pty ← mkAppM ``Prod #[← inferType u, ← inferType u]
+      let fac (s p : Expr) : M Expr := do
+        let at0 := [(`V, V), (`vs, vs), (`x, s), (`t, ft)]
+        match (← kdeep p 2).getAppFnArgs with
+        | (``Option.some, #[_, st]) =>
+          let (s₁, s₂) ← kpair st
+          let (_, h₁) ← op s₁
+          let (_, h₂) ← op s₂
+          return (← use ``laneOf_prodsWith_some at0 [.pf h₁, .pf h₂]).1
+        | _ =>
+          let none' ← mkAppOptM ``Option.none #[some pty]
+          let (``SVal.reg, #[r]) := (← kdeep s 2).getAppFnArgs
+            | return (← use ``laneOf_prodsWith_none (at0 ++ [(`q, none')]) [.rfl]).1
+          let (pv, hp) ← prodOf V (← natOf r)
+          let q ← match (← kwhnf pv).getAppFnArgs with
+            | (``Option.some, #[_, vv]) =>
+              let (v₁, v₂) ← kpair vv
+              mkAppOptM ``Option.some #[some pty, some (← mkAppM ``Prod.mk #[← flt v₁, ← flt v₂])]
+            | _ => pure none'
+          return (← use ``laneOf_prodsWith_none (at0 ++ [(`q, q)]) [.kd hp]).1
+      let hpa ← fac a pa
+      let hpb ← fac b pb
+      -- `floatBin t op fm (.ofFloat t u) (.ofFloat t u') (qa.map _) (qb.map _) N = .ok _`
+      let fl (ty : Expr) : M Expr := do
+        let some (_, l, _) := (← instantiateMVars ty).eq? | throwError "mojo_obl: fbinP"
+        let (``floatBin, #[t, o, fm, X, Y, PX, PY, N]) := l.getAppFnArgs
+          | throwError "mojo_obl: fbinP{indentExpr l}"
+        let at0 := [(`t, t), (`op, o), (`fm, fm), (`a, X.appArg!), (`b, Y.appArg!), (`n, N)]
+        let s ← (saveState : MetaM Meta.SavedState)
+        try
+          return (← use ``floatBin_contract_ofFloat
+            (at0 ++ [(`pa, PX.appArg!), (`pb, PY.appArg!)])
+            [.rfl, .rfl, .rfl, .rfl, .rfl, .rfl]).1
+        catch e =>
+          (s.restore : MetaM Unit)
+          try
+            return (← use ``floatBin_ofFloat_factors (at0 ++ [(`px, PX), (`py, PY)])
+              [.rfl, .rfl, .rfl, .rfl, .rfl]).1
+          catch _ =>
+            throwError "mojo_obl: floatBin on symbolic floats{indentExpr l}\n{e.toMessageData}"
+      fin (← use ``SNode.eval_fbinP_ofFloat named [.pf ha, .pf hb, .pf hpa, .pf hpb, .fn fl])
+    let s ← (saveState : MetaM Meta.SavedState)
+    try sym catch e =>
+      (s.restore : MetaM Unit)
+      try kern catch _ => throw e
   | (``SNode.flit, #[ft, lit]) =>
     -- the literal's value by the kernel, a float `.ofFloat ft (Model.ofNatBits N)` when it is one
     fin (← use ``SNode.eval_flit [(`V, V), (`vs, vs)] [.pf (← flitOf ft lit).2])
@@ -1055,12 +1314,67 @@ partial def exitD (V S : Expr) (l : Option Expr) : M (Expr × Expr) := do
     return (t, hint p (← ty t))
   | _ => throwError "mojo_obl: exit{indentExpr x}"
 
+/-- **The `phi` operands of the edge of block `l`** (summary `S`, whose exit is a branch into
+blocks with `phi`s) from `V`: the block `d` it goes to with `S.exit.dest V (vals V S.nodes) =
+some d` (`exitD`), the function `F` with `V.fn = F` (`fnOf`) and the operands of the `phi`s at the
+head of block `d` of `F` for the edge (`phiOps`), as a list. Cached in `St.edges`. -/
+partial def phiEdge (V l S : Expr) : M (Expr × Expr × Expr × Expr × List Expr) := do
+  if let some x := (← get).edges[(V, l, S)]? then return x
+  let (d, hd) ← exitD V S none
+  let (F, hF) ← fnOf V
+  let ops ← kdeep (mkApp3 (mkConst ``phiOps) F l d) 1
+  let (``Option.some, #[_, ops]) := ops.getAppFnArgs
+    | throwError "mojo_obl: no phi operands for the edge into {d}"
+  let res := (d, hd, F, hF, ← klist ops)
+  modify fun s => { s with edges := s.edges.insert (V, l, S) res }
+  return res
+
+/-- **The values of the `phi` operands `ops`** of an edge out of summary `S` from `V`, in the
+edge's scope, `A` the valuation after the block and `frame` the frame at its end
+(`Valuation.afterWith c` and `Valuation.frameAtWith c`, or `Valuation.after` and
+`Valuation.frameAt`): each operand's register, value and `evalV` equation, for a register of `A`
+(`evalV_loc`), an integer constant of a natural number (`evalV_int_ofNat`) or a float constant
+(`evalV_float` and the kernel's `floatLit`), and `evalOps … ops = .ok xs` of them all
+(`evalOps_cons`). Cached in `St.phis`. -/
+partial def phiVals (V S A frame : Expr) (ops : List Expr) :
+    M (Array (Expr × Expr × Expr) × Expr) := do
+  if let some x := (← get).phis[(V, S, A, frame)]? then return x
+  let s ← mkAppM ``Ctx.scope #[mkApp (mkConst ``Valuation.ctx) V,
+    mkApp (mkConst ``Valuation.mem) A, frame,
+    ← mkAppM ``HAdd.hAdd #[mkApp (mkConst ``Valuation.k) V, mkApp (mkConst ``Summary.len) S]]
+  -- each operand's value in the edge's scope
+  let mut items : Array (Expr × Expr × Expr) := #[]
+  for op in ops do
+    let (o, rest) ← kpair op
+    let (t, v) ← kpair rest
+    let v ← kdeep v 2
+    match v.getAppFnArgs with
+    | (``Value.loc, #[r']) =>
+      let (xv, hx) ← regOf A (← natOf r')
+      let (p, _) ← use ``evalV_loc [(`s, s), (`t, t), (`r, r'), (`x, xv)] [.kd hx]
+      items := items.push (o, xv, p)
+    | (``Value.int, #[i]) =>
+      let (``Int.ofNat, #[k]) := i.getAppFnArgs | throwError "mojo_obl: negative phi operand"
+      let (``Ty.int, #[w]) := (← kdeep t 1).getAppFnArgs | throwError "mojo_obl: phi type"
+      let (p, ty) ← use ``evalV_int_ofNat [] [.pf s, .pf w, .pf k]
+      items := items.push (o, ← valOf ty, p)
+    | (``Value.float, #[lit]) =>
+      let (``Ty.fp, #[ft]) := (← kdeep t 1).getAppFnArgs | throwError "mojo_obl: phi type"
+      let (xv, hl) ← flitOf ft lit
+      let (p, _) ← use ``evalV_float [(`s, s), (`ft, ft), (`lit, lit), (`x, xv)] [.pf hl]
+      items := items.push (o, xv, p)
+    | _ => throwError "mojo_obl: phi operand{indentExpr v}"
+  let mut hxs := (← use ``evalOps_nil [] [.pf s]).1
+  for (o, _, p) in items.reverse do
+    hxs := (← use ``evalOps_cons [(`o, o)] [.pf p, .pf hxs]).1
+  modify fun st => { st with phis := st.phis.insert (V, S, A, frame) (items, hxs) }
+  return (items, hxs)
+
 /-- **Register `r` after the edge of block `l`** (summary `S`) from `V`: `Valuation.after`'s for
 a `br` or a conditional branch (`Valuation.into_regs_br`, `Valuation.into_regs_cond`); for a
-branch into blocks with `phi`s, the value of the last `phi` that sets `r`, each operand's value
-in the edge's scope from the registers after the block, an integer constant of a natural number
-or a float constant (`Valuation.into_regs_phi`, `evalOps_cons`, `evalV_loc`, `evalV_int_ofNat`,
-`evalV_float` and the kernel's `floatLit`), else `Valuation.after`'s (`setRegs_of_forall_ne`). -/
+branch into blocks with `phi`s, the value of the last `phi` that sets `r`, from the operands'
+values in the edge's scope (`Valuation.into_regs_phi`, `phiVals`), else `Valuation.after`'s,
+with no operand evaluated (`Valuation.intoWith_regs_phi_ne`). -/
 partial def intoReg (V l S : Expr) (r : Nat) (c? : Option Expr) : M (Expr × Expr) := do
   -- `Valuation.intoWith c` from `Valuation.afterWith c`, or `Valuation.into` from `after`
   let (A, frame, wc) := match c? with
@@ -1083,40 +1397,20 @@ partial def intoReg (V l S : Expr) (r : Nat) (c? : Option Expr) : M (Expr × Exp
       [.rfl, .pf h]
     return (← valOf t, p)
   | (``Exit.phi, _) =>
-    let (d, hd) ← exitD V S none
-    let (F, hF) ← fnOf V
-    let ops ← kdeep (mkApp3 (mkConst ``phiOps) F l d) 1
-    let (``Option.some, #[_, ops]) := ops.getAppFnArgs
-      | throwError "mojo_obl: no phi operands for the edge into {d}"
-    let ops ← klist ops
-    let s ← mkAppM ``Ctx.scope #[mkApp (mkConst ``Valuation.ctx) V,
-      mkApp (mkConst ``Valuation.mem) A, frame,
-      ← mkAppM ``HAdd.hAdd #[mkApp (mkConst ``Valuation.k) V, mkApp (mkConst ``Summary.len) S]]
-    -- each operand's value in the edge's scope
-    let mut items : Array (Expr × Expr × Expr) := #[]
-    for op in ops do
-      let (o, rest) ← kpair op
-      let (t, v) ← kpair rest
-      let v ← kdeep v 2
-      match v.getAppFnArgs with
-      | (``Value.loc, #[r']) =>
-        let (xv, hx) ← regOf A (← natOf r')
-        let (p, _) ← use ``evalV_loc [(`s, s), (`t, t), (`r, r'), (`x, xv)] [.kd hx]
-        items := items.push (o, xv, p)
-      | (``Value.int, #[i]) =>
-        let (``Int.ofNat, #[k]) := i.getAppFnArgs | throwError "mojo_obl: negative phi operand"
-        let (``Ty.int, #[w]) := (← kdeep t 1).getAppFnArgs | throwError "mojo_obl: phi type"
-        let (p, ty) ← use ``evalV_int_ofNat [] [.pf s, .pf w, .pf k]
-        items := items.push (o, ← valOf ty, p)
-      | (``Value.float, #[lit]) =>
-        let (``Ty.fp, #[ft]) := (← kdeep t 1).getAppFnArgs | throwError "mojo_obl: phi type"
-        let (xv, hl) ← flitOf ft lit
-        let (p, _) ← use ``evalV_float [(`s, s), (`ft, ft), (`lit, lit), (`x, xv)] [.pf hl]
-        items := items.push (o, xv, p)
-      | _ => throwError "mojo_obl: phi operand{indentExpr v}"
-    let mut hxs := (← use ``evalOps_nil [] [.pf s]).1
-    for (o, _, p) in items.reverse do
-      hxs := (← use ``evalOps_cons [(`o, o)] [.pf p, .pf hxs]).1
+    let (d, hd, F, hF, ops) ← phiEdge V l S
+    let some_ (v : Expr) := mkSome (mkConst ``Val) v
+    unless ← phiSets ops r do
+      -- no `phi` sets `r`: `A`'s, with no operand evaluated
+      let (xv, h) ← regOf A r
+      let c := c?.getD (mkConst ``Bool.false)
+      let (p, _) ← use ``Valuation.intoWith_regs_phi_ne
+        [(`c, c), (`V, V), (`l, l), (`S, S), (`F, F), (`d, d), (`r, mkNatLit r), (`v, ← some_ xv)]
+        [.rfl, .pf hd, .kd hF, .rfl, .dec, .kd h]
+      let W := match c? with
+        | some c => mkApp4 (mkConst ``Valuation.intoWith) c V l S
+        | none => mkApp3 (mkConst ``Valuation.into) V l S
+      return (xv, hint p (← mkEq (mkApp2 (mkConst ``Valuation.regs) W (mkNatLit r)) (← some_ xv)))
+    let (items, hxs) ← phiVals V S A frame ops
     let (p, t) ← use (lem ``Valuation.into_regs_phi ``Valuation.intoWith_regs_phi)
       ([(`V, V), (`l, l), (`S, S), (`F, F), (`d, d)] ++ wc)
       [.rfl, .pf hd, .kd hF, .rfl, .pf hxs, .pf (mkNatLit r)]
@@ -1125,7 +1419,6 @@ partial def intoReg (V l S : Expr) (r : Nat) (c? : Option Expr) : M (Expr × Exp
     for (o, xv, _) in items do
       if let (``Option.some, #[_, o]) := (← kwhnf o).getAppFnArgs then
         if (← natOf o) == r then last := some xv
-    let some_ (v : Expr) := mkSome (mkConst ``Val) v
     match last with
     | some xv =>
       return (xv, ← mkEqTrans p (← krfl rhs (← some_ xv)))
@@ -1137,6 +1430,102 @@ partial def intoReg (V l S : Expr) (r : Nat) (c? : Option Expr) : M (Expr × Exp
         [.dec]
       return (xv, ← mkEqTrans p (← mkEqTrans q h))
   | _ => throwError "mojo_obl: exit{indentExpr x}"
+
+/-- **The `fmul contract` operands of register `r`** at valuation `V`: `(p, V.prods r = p)`.
+After a block with or without `fmul contract` (`Valuation.afterWith c`, and `Valuation.after` as
+`Valuation.afterWith false`): for a register the block sets, none without `fmul contract`
+(`Valuation.afterWith_prods_off`) or for an entry with no factors
+(`Valuation.afterWith_prods_unfactored`), else the values of its factors
+(`Valuation.afterWith_prods_factors`, `opnd`); for another register, those before the block
+(`Valuation.afterWith_prods_none`). After an edge (`Valuation.intoWith c`, and `Valuation.into`
+as `Valuation.intoWith false`): those after the block for a branch
+(`Valuation.intoWith_prods_br`, `Valuation.intoWith_prods_cond`); for a branch into blocks with
+`phi`s, none at a `phi`'s register that has none after the block, with no operand evaluated
+(`Valuation.intoWith_prods_phi_none`), else none at a `phi`'s register, whose operands have values
+(`Valuation.intoWith_prods_phi`, `phiVals`), and those after the block at another
+(`Valuation.intoWith_prods_phi_ne`). At the
+valuation under `after`s and `into`s, a hypothesis on the entry frame's operands (`f.prods r`
+of `Valuation.entry c k m f`) or on the valuation's (`V.prods r`), else the kernel's reduction of
+closed ones. For every program; an error when they are not known. -/
+partial def prodOf (V : Expr) (r : Nat) : M (Expr × Expr) := do
+  let R := mkNatLit r
+  let ty (p : Expr) : MetaM Expr := mkEq (mkApp2 (mkConst ``Valuation.prods) V R) p
+  -- a lemma's proof, at `V.prods r`
+  let done (pt : Expr × Expr) : M (Expr × Expr) := do
+    let p ← rhsOf pt.2
+    return (p, hint pt.1 (← ty p))
+  let ff := mkConst ``Bool.false
+  match V.getAppFnArgs with
+  | (``Valuation.after, #[V', S]) =>
+    let (p, h) ← prodOf (mkApp3 (mkConst ``Valuation.afterWith) ff V' S) r
+    return (p, hint h (← ty p))
+  | (``Valuation.into, #[V', l, S]) =>
+    let (p, h) ← prodOf (mkApp4 (mkConst ``Valuation.intoWith) ff V' l S) r
+    return (p, hint h (← ty p))
+  | (``Valuation.afterWith, #[c, V', S]) =>
+    let named := [(`V, V'), (`S, S), (`r, R)]
+    match (← kdeep (← mkAppM ``List.lookup #[R, mkApp (mkConst ``Summary.regs) S]) 2).getAppFnArgs
+    with
+    | (``Option.some, #[_, x]) =>
+      let named := named ++ [(`x, x)]
+      if (← kwhnf c).isConstOf ``Bool.false then
+        return ← done (← use ``Valuation.afterWith_prods_off named [.rfl])
+      let fs ← kdeep (mkApp2 (mkConst ``SVal.factors) (mkApp (mkConst ``Summary.nodes) S) x) 2
+      match fs.getAppFnArgs with
+      | (``Option.some, #[_, ab]) =>
+        let (a, b) ← kpair ab
+        let (_, ha) ← opnd V' S none a
+        let (_, hb) ← opnd V' S none b
+        done (← use ``Valuation.afterWith_prods_factors (named ++ [(`a, a), (`b, b)])
+          [.rfl, .rfl, .pf ha, .pf hb])
+      | _ => done (← use ``Valuation.afterWith_prods_unfactored ((`c, c) :: named) [.rfl, .rfl])
+    | _ =>
+      let (_, h) ← prodOf V' r
+      done (← use ``Valuation.afterWith_prods_none ((`c, c) :: named) [.rfl, .pf h])
+  | (``Valuation.intoWith, #[c, V', l, S]) =>
+    let A := mkApp3 (mkConst ``Valuation.afterWith) c V' S
+    let named := [(`c, c), (`V, V'), (`l, l), (`S, S), (`r, R)]
+    let x ← kdeep (mkApp (mkConst ``Summary.exit) S) 2
+    match x.getAppFnArgs with
+    | (``Exit.br, _) =>
+      let (_, h) ← prodOf A r
+      done (← use ``Valuation.intoWith_prods_br named [.rfl, .pf h])
+    | (``Exit.cond, _) =>
+      let (_, h) ← prodOf A r
+      done (← use ``Valuation.intoWith_prods_cond named [.rfl, .pf h])
+    | (``Exit.phi, _) =>
+      let (d, hd, F, hF, ops) ← phiEdge V' l S
+      let named := named ++ [(`F, F), (`d, d)]
+      if ← phiSets ops r then
+        -- none after the block stays none, with no operand evaluated
+        let s ← (saveState : MetaM Meta.SavedState)
+        try
+          let (p, h) ← prodOf A r
+          let (``Option.none, _) := (← kwhnf p).getAppFnArgs | failure
+          return ← done (← use ``Valuation.intoWith_prods_phi_none named
+            [.rfl, .pf hd, .kd hF, .rfl, .kd h])
+        catch _ => (s.restore : MetaM Unit)
+        let frame := mkApp4 (mkConst ``Valuation.frameAtWith) c V' l S
+        let (_, hxs) ← phiVals V' S A frame ops
+        done (← use ``Valuation.intoWith_prods_phi named
+          [.rfl, .pf hd, .kd hF, .rfl, .pf hxs, .dec])
+      else
+        let (_, h) ← prodOf A r
+        done (← use ``Valuation.intoWith_prods_phi_ne named
+          [.rfl, .pf hd, .kd hF, .rfl, .dec, .pf h])
+    | _ => throwError "mojo_obl: exit{indentExpr x}"
+  | _ =>
+    -- the entry frame's operands, or the valuation's
+    let a := match baseOf V with
+      | (_, _, some f) => mkApp2 (mkConst ``Frame.prods) f R
+      | _ => mkApp2 (mkConst ``Valuation.prods) V R
+    let (p, h) ← eqHyp a
+    if h.isFVar then return (p, hint h (← ty p))
+    let a ← instantiateMVars a
+    if a.hasFVar || a.hasMVar then
+      throwError "mojo_obl: register {r} has no known fmul contract operands"
+    let p ← kdeep a 3
+    return (p, hint (← krfl a p) (← ty p))
 
 end
 
@@ -1521,59 +1910,6 @@ def run (g : MVarId) : TacticM (Array MVarId) := g.withContext do
     for m in st.dbgs do logInfo m
     return st.opens
 
-/-- **One value the evaluator computes**, `(e = x, proof)` (for `obl_have`): for a register
-`V.regs r`, `x = some v` (`regOf`); for a memory `V.mem`, the memory `memOf` gives; for a node
-value `(vals V S.nodes)[j]?`, `x = some (.ok v)` (`nodeVals`). `norm` writes `V` as `normV`
-does. For every program; an error when `e` is of none of these forms or has no value. -/
-def haveOf (norm : Expr → M Expr) (e : Expr) : M (Expr × Expr) := do
-  let fail : M (Expr × Expr) :=
-    throwError "obl_have: not a register, memory or node value{indentExpr e}"
-  match e.getAppFnArgs with
-  | (``Valuation.regs, #[V, r]) =>
-    let (v, p) ← regOf (← norm V) (← natOf r)
-    return (← mkEq e (← mkAppOptM ``Option.some #[mkConst ``Val, v]), p)
-  | (``Valuation.mem, #[V]) =>
-    let (m, p, _) ← memOf (← norm V)
-    return (← mkEq e m, p)
-  | (``GetElem?.getElem?, #[_, _, _, _, _, xs, j]) =>
-    let (``vals, #[V, ns]) := xs.getAppFnArgs | fail
-    let (``Summary.nodes, #[S]) := ns.getAppFnArgs | fail
-    let a ← nodeVals (← norm V) S
-    let some (v, p) := (a[← natOf j]?).join | throwError "obl_have: node {j} has no value"
-    let ok ← mkAppOptM ``Except.ok #[mkConst ``Fault, none, v]
-    return (← mkEq e (← mkAppOptM ``Option.some #[none, ok]), p)
-  | _ => fail
-
-/-- **The values of `es` at once**: the conjunction `e₁ = x₁ ∧ … ∧ eₙ = xₙ` of the equations of
-`haveOf` and its proof, from the hypotheses with their parts and the launch facts (`withFacts`),
-in one run: the blocks evaluated for one value serve the others (the state's caches), and each
-valuation is normalized once (`normV`). For every program; `es` is not empty. -/
-def haves (es : Array Expr) : MetaM (Expr × Expr) := do
-  let cache ← IO.mkRef (#[] : Array (Expr × Expr))
-  let norm (V : Expr) : M Expr := do
-    if let some (_, W) := (← cache.get).find? (·.1 == V) then return W
-    let W ← normV V
-    cache.modify (·.push (V, W))
-    return W
-  let (p, _) ← (withFacts do
-    let mut eqs := #[]
-    for e in es do eqs := eqs.push (← haveOf norm e)
-    let (t, q) := eqs.pop.foldr (init := (eqs.back!.1, hint eqs.back!.2 eqs.back!.1))
-      fun (t, p) (u, q) =>
-        (mkApp2 (mkConst ``And) t u, mkApp4 (mkConst ``And.intro) t u (hint p t) q)
-    return hint q t).run {}
-  return (← instantiateMVars (← inferType p), p)
-
-/-- The `n` conjuncts of `t = a₁ ∧ (a₂ ∧ … aₙ)` with their proofs from `h : t` (`And.left`,
-`And.right`); the last one is the rest of the conjunction. -/
-def andSplit (t h : Expr) : Nat → List (Expr × Expr)
-  | 0 | 1 => [(t, h)]
-  | n + 1 =>
-    match t.getAppFnArgs with
-    | (``And, #[a, b]) =>
-      (a, mkApp3 (mkConst ``And.left) a b h) :: andSplit b (mkApp3 (mkConst ``And.right) a b h) n
-    | _ => [(t, h)]
-
 end Obl
 
 /-- **`mojo_obl`** proves the premises of a path summary: a goal `Walk V ps` for a path `ps` of
@@ -1590,31 +1926,45 @@ under `after`s and `into`s: an entry valuation
 `Valuation.entry c k m f`, or any other; rounds `Valuation.round`, iterates `f^[k]` with a literal
 `k` and other constants are first rewritten to them.
 
-It evaluates each node of each block from the hypotheses: the registers (`f.regs r = some v` of
-an entry frame, else `V.regs r = some v`), the function and program (`f.fn = F` or `V.fn = F`,
-`c.prog = P` or `V.ctx.prog = P`), the launch (`c.env = L.env k`, `L.Valid`, and for the 1-D index
-`Launch.index_oneDim`'s hypotheses), struct loads (`m.load … = .ok v`), and the buffers the
+It evaluates the nodes of each block that are read, each once, from the hypotheses: the
+registers (`f.regs r = some v` of an entry frame, else `V.regs r = some v`), the function and
+program (`f.fn = F` or `V.fn = F`, `c.prog = P` or `V.ctx.prog = P`), the launch
+(`c.env = L.env k`, `L.Valid`, and for the 1-D index `Launch.index_oneDim`'s hypotheses), struct
+loads (`m.load … = .ok v`), and the buffers the
 pointers point into (`m.Buffer`, or `m.BufferIn s c size al o w` for a buffer of address space
 `s` owned by `o` with `o.admits c.who = true` unless `o` is `.all`; `Mem.Fits` or its unfolding
 for a generic pointer, `∃ blk, m.blocks c = some blk ∧ blk.addr + size ≤ 2 ^ (l.ptr s).1` for
 one of the buffer's space `s`; `m.Holds`, the alignment `A ∣ al`, a hypothesis or two
-literals). It evaluates the nodes of integer `add` and `mul` (under the no-wrap bounds
-`omega` proves, or without `nuw` and `nsw` modulo `2 ^ w`), the comparisons `slt`, `ult`, `eq`
-and `sge`, `select` (the operand a boolean picks, when `omega` decides it), `llvm.smax`, casts
-(`sext` of any word: its sign extension), `extractvalue`, `getelementptr` (into a buffer by an
-index `omega` bounds, else by any word some value, a pointer or poison, by `gep_buffer_ok`),
-loads (of an element of a 1-D tensor or of a row-major matrix in a buffer), special-register
-calls, float operators (with `fmul contract` factors under `c = true`) and float constants (the
-literal's value by the kernel's evaluation of `floatLit`), on words `BitVec.ofNat w K` whose
-bounds `omega` proves; a node of another kind gets no value. It proves the exits `br` and a
-conditional branch on a comparison whose direction `omega` proves or on a word whose low bit
-the kernel computes, and a branch into blocks with `phi`s on such a comparison or on a constant
-word; after such an edge, the registers its `phi`s set get their operands' values (registers,
-integer constants of natural numbers, or float constants), the others keep theirs, and the position
-the edge enters at is computed from the function. An obligation on a closed valuation that no lemma
-reaches is decided by the kernel. Each obligation or exit it does not prove (one that needs a node
-without a value, a branch `omega` does not decide, a position of an unknown function) is left as a
-goal, and logged as `mojo_obl: open goal`; a goal of another form is left open whole. -/
+literals). It evaluates the nodes of integer `add`, `mul` and `sub` (under the no-wrap bounds
+`omega` proves, or without `nuw` and `nsw` modulo `2 ^ w`), `udiv` and `sdiv` by a positive or
+negative word, `xor` and `ashr` by `w - 1` of a `xor` (0 or all ones by the sign bit),
+the comparisons `slt`, `ult`, `eq` (also of words `omega` does not compare, as an equality of
+residues) and `sge`, `select` (the operand a boolean picks, when `omega` decides it, else of two
+words the word of an `if`, and of two equal operands their value), `llvm.smax`, casts (`sext`
+of any word: its sign extension), `extractvalue`, a global's pointer (`SNode.globalAt`, from a
+hypothesis `c.globals g = some p`), `bitcast` between scalar types of one width (`SNode.castAt`:
+the operand's word), `getelementptr` (into a buffer by an index
+`omega` bounds or by `r * S + k` into an `R × S` matrix's buffer, else by any word some value, a
+pointer or poison, by `gep_buffer_ok`), loads (of an element of a 1-D tensor or of a row-major
+matrix in a buffer), special-register calls (a register equal by a hypothesis to another number,
+`ntid.x = 1024`, as that number's word), the lane-number call (`%laneid`, below 32 by a
+hypothesis or `Launch.laneid_lt`), float operators (with `fmul contract` factors under
+`c = true`; without, an operand's factors `none` by the kernel or a hypothesis
+`f.prods r = none`) and float constants (the literal's value by the kernel's evaluation of
+`floatLit`), on words `BitVec.ofNat w K` whose bounds `omega` proves (after splitting the
+`if`s of the bound), with integer constants of natural numbers and of negative ones
+(`-(k + 1)` as the word of `2 ^ w - (k + 1)`); a node of another kind gets no value, and a node
+with a hypothesis `(vals V S.nodes)[j]? = some (.ok v)`, or one with premises on registers, their
+`fmul contract` operands and nodes at `V` that the evaluation proves, gets that value
+(`Obl.nodeHyp`). It proves the exits `br` and a conditional branch on a comparison whose direction
+`omega` proves or on a word whose low bit the kernel computes, and a branch into blocks with `phi`s
+on such a comparison or on a constant word; after such an edge, the registers its `phi`s set get
+their operands' values (registers, integer constants of natural numbers, or float constants), the
+others keep theirs, and the position the edge enters at is computed from the function. An obligation
+on a closed valuation that no lemma reaches is decided by the kernel. Each obligation or exit it
+does not prove (one that needs a node without a value, a branch `omega` does not decide, a position
+of an unknown function) is left as a goal, and logged as `mojo_obl: open goal`; a goal of another
+form is left open whole. -/
 syntax (name := mojoObl) "mojo_obl" : tactic
 
 open Lean Elab Tactic in
@@ -1623,30 +1973,5 @@ open Lean Elab Tactic in
   let g ← getMainGoal
   let gs ← Obl.run g
   replaceMainGoal gs.toList
-
-/-- **`obl_have h₁ : e₁, …, hₙ : eₙ`** adds the hypotheses `hᵢ : eᵢ = xᵢ`, `xᵢ` the value that
-`mojo_obl`'s evaluator computes from the hypotheses (each with its parts: conjuncts, fields of a
-structure of propositions) and the launch facts: for a register `V.regs r`, `xᵢ = some v`
-(`Obl.regOf`); for a memory `V.mem`, the memory `Obl.memOf` gives; for a node value
-`(vals V S.nodes)[j]?`, `xᵢ = some (.ok v)` (`Obl.nodeVals`). Each `V` is a valuation that
-`Obl.normV` writes as `after`s and `into`s of an entry valuation or of a local valuation. The
-values are computed in one run (`Obl.haves`), so the blocks evaluated for one serve the others.
-The kernel checks the proof; the tactic fails when some `eᵢ` gets no value. For every
-program. -/
-syntax (name := oblHave) "obl_have" sepBy1(group(ident " : " term), ", ") : tactic
-
-open Lean Meta Elab Tactic in
-/-- Runs `obl_have` on the main goal: the values of all items from one run (`Obl.haves`), one
-conjunction split into the named hypotheses (`Obl.andSplit`). -/
-@[tactic oblHave] def evalOblHave : Tactic := fun stx => withMainContext do
-  let items := stx[1].getSepArgs
-  let es ← items.mapM fun it => do instantiateMVars (← elabTerm it[2] none)
-  let lctx ← instantiateLCtxMVars (← getLCtx)
-  let (ty, p) ← withLCtx lctx (← getLocalInstances) (Obl.haves es)
-  let (h, g) ← (← (← getMainGoal).assert `h ty p).intro1
-  let hs := (Obl.andSplit ty (mkFVar h) es.size).toArray
-  let (_, g) ← g.assertHypotheses ((items.zip hs).map fun (it, t, v) =>
-    { userName := it[0].getId, type := t, value := v })
-  replaceMainGoal [← g.tryClear h]
 
 end MojoProof.Sym

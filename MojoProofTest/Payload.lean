@@ -43,8 +43,8 @@ The `phi` assignments of an edge (`Summary.agreesI`), on two programs, each by
   and `next` is not oblivious, as its branch reads payload (`phi_payload_branch`).
 
 Two runs (the skeleton relation, T3b), one program each, for every pair of valuations of its
-function related at
-the skeleton (`Valuation.Skel`) and every set of payload blocks:
+function related at the skeleton (`Valuation.Skel`) with one table of globals and every set of
+payload blocks:
 * `vals_skel` on block `%21` (`vadd21_skel`): its truncation, extension and three geps (nodes 0,
   1, 2, 4 and 7) have one value under both, so its loads and its store go to one address in both
   runs. Its two loads have payload result registers, so `Valuation.LoadsOk` holds
@@ -208,27 +208,30 @@ result is skeleton and its operand payload ((O2)). -/
 theorem phi_payload_labels : Sem.Labels.Ok (.ofFunc phiFn) (labIn phiFn ["p"]) = false := rfl
 
 /-- **The instance of `vals_skel`**: for every two valuations of `vector_addition`'s function
-related at the skeleton of `vaddLab ["25", "27", "28"]`, for every set of payload blocks, nodes 0,
-1, 2, 4 and 7 of block `%21`'s table (the truncation, the extension and the three geps) have one
-value under both. -/
+related at the skeleton of `vaddLab ["25", "27", "28"]` with one table of globals, for every set
+of payload blocks, nodes 0, 1, 2, 4 and 7 of block `%21`'s table (the truncation, the extension
+and the three geps) have one value under both. -/
 theorem vadd21_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
-    (h : V₁.Skel (vaddLab ["25", "27", "28"]) pay V₂) (hf : V₁.fn = Kernels.vadd.fn_0) :
+    (h : V₁.Skel (vaddLab ["25", "27", "28"]) pay V₂) (hg : V₁.ctx.globals = V₂.ctx.globals)
+    (hf : V₁.fn = Kernels.vadd.fn_0) :
     ∀ j ∈ [0, 1, 2, 4, 7],
       (vals V₁ Kernels.vadd.b1.nodes)[j]? = (vals V₂ Kernels.vadd.b1.nodes)[j]? := by
   intro j hj
-  refine vals_skel h (Valuation.loadsOk_of_pay (by rw [hf]; decide +kernel)) j ?_
+  refine vals_skel h hg (Valuation.loadsOk_of_pay (by rw [hf]; decide +kernel)) j ?_
   rw [hf, vadd21_roles]
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hj
   rcases hj with rfl | rfl | rfl | rfl | rfl <;> rfl
 
 /-- **The instance of `Summary.oblivious_skel`**: for every two valuations of `vector_addition`'s
-function related at the skeleton of `vaddLab ["25", "27", "28"]`, for every set of payload blocks
-such that the entry block's three loads (`%5`, `%7`, `%9`, of the byval arguments, whose result
-registers are skeleton) read outside them under the first (`Valuation.LoadsOk`, a premise), each
-of its four blocks exits to one block under both, and each of its loads and its store has one
-pointer value under both. The other blocks' loads have payload results (`loadsOk_of_pay`). -/
+function related at the skeleton of `vaddLab ["25", "27", "28"]` with one table of globals, for
+every set of payload blocks such that the entry block's three loads (`%5`, `%7`, `%9`, of the byval
+arguments, whose result registers are skeleton) read outside them under the first
+(`Valuation.LoadsOk`, a premise), each of its four blocks exits to one block under both, and each of
+its loads and its store has one pointer value under both. The other blocks' loads have payload
+results (`loadsOk_of_pay`). -/
 theorem vadd_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
-    (h : V₁.Skel (vaddLab ["25", "27", "28"]) pay V₂) (hf : V₁.fn = Kernels.vadd.fn_0)
+    (h : V₁.Skel (vaddLab ["25", "27", "28"]) pay V₂) (hg : V₁.ctx.globals = V₂.ctx.globals)
+    (hf : V₁.fn = Kernels.vadd.fn_0)
     (h4 : V₁.LoadsOk (vaddLab ["25", "27", "28"]) pay Kernels.vadd.b0.nodes) :
     ∀ S ∈ [Kernels.vadd.b0, Kernels.vadd.b1, Kernels.vadd.b2, Kernels.vadd.b3],
       Exit.dest V₁ (vals V₁ S.nodes) S.exit = Exit.dest V₂ (vals V₂ S.nodes) S.exit ∧
@@ -236,25 +239,26 @@ theorem vadd_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
   intro S hS
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hS
   rcases hS with rfl | rfl | rfl | rfl
-  · exact Summary.oblivious_skel h (by rw [hf]; decide +kernel) h4
+  · exact Summary.oblivious_skel h hg (by rw [hf]; decide +kernel) h4
   all_goals
-    exact Summary.oblivious_skel h (by rw [hf]; decide +kernel)
+    exact Summary.oblivious_skel h hg (by rw [hf]; decide +kernel)
       (Valuation.loadsOk_of_pay (by rw [hf]; decide +kernel))
 
 /-- **The instance of `Summary.oblivious_skel` on a `phi` edge**: for every two valuations of the
 naive matmul kernel's function related at the skeleton of `labIn SymPhi.naive.fn_0 ["48", "68"]`
-(`phi_agrees`'s labelling), for every set of payload blocks, the exit of `%51` (a branch into
-`%67`, which sets the `phi` `%68`) goes to one block under both, and so does `%67`'s, whose store
-has one pointer value under both. -/
+(`phi_agrees`'s labelling) with one table of globals, for every set of payload blocks, the exit
+of `%51` (a branch into `%67`, which sets the `phi` `%68`) goes to one block under both, and so
+does `%67`'s, whose store has one pointer value under both. -/
 theorem naive_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
-    (h : V₁.Skel (labIn SymPhi.naive.fn_0 ["48", "68"]) pay V₂) (hf : V₁.fn = SymPhi.naive.fn_0) :
+    (h : V₁.Skel (labIn SymPhi.naive.fn_0 ["48", "68"]) pay V₂)
+    (hg : V₁.ctx.globals = V₂.ctx.globals) (hf : V₁.fn = SymPhi.naive.fn_0) :
     ∀ S ∈ [SymPhi.out, SymPhi.fin],
       Exit.dest V₁ (vals V₁ S.nodes) S.exit = Exit.dest V₂ (vals V₂ S.nodes) S.exit ∧
         ∀ e ∈ S.effs, e.ptr.eval V₁ (vals V₁ S.nodes) = e.ptr.eval V₂ (vals V₂ S.nodes) := by
   intro S hS
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hS
   rcases hS with rfl | rfl <;>
-    exact Summary.oblivious_skel h (by rw [hf]; decide +kernel)
+    exact Summary.oblivious_skel h hg (by rw [hf]; decide +kernel)
       (Valuation.loadsOk_of_pay (by rw [hf]; decide +kernel))
 
 /-- `phiFn` with `next`'s `phi` reading `%p` inside a constant expression,
@@ -348,7 +352,8 @@ theorem vadd4_reg6 {V : Valuation} (hf : V.fn = Kernels.vadd.fn_0)
     rfl
   have hi : V.into Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 = V.after Kernels.vadd.b0 := by
     obtain ⟨c, d, e, hx⟩ : ∃ c d e, Kernels.vadd.b0.exit = .cond c d e := ⟨_, _, _, rfl⟩
-    unfold Valuation.into
+    show V.intoWith false _ _ = V.afterWith false _
+    unfold Valuation.intoWith
     rw [hx]
   have hl : Kernels.vadd.b0.regs.lookup 6 = some (.node 1) := rfl
   have hx : (SVal.node 1).eval V (vals V Kernels.vadd.b0.nodes) = .ok (.ptr ⟨out, 0⟩) := by

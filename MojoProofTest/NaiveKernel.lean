@@ -10,9 +10,10 @@ For the one program `naive` (MojoProofTest/SymPhi.lean), compiled with `fmul con
 * `correct`: `Kernel.Sound` of `naive` with `Elem.Out` of the naive bytes (`NaiveSpec.bytes`),
   for every oracle family, launch valid with `z` sides 1, sizes, blocks, tensors and memory that
   meets the matmul precondition `Mat.Pre` (Sem/Precond.lean). It is `NaiveSound.naive_sound`, the
-  instance of `Kernel.sound_mat`, with the threads' runs `NaiveIn.runIn` and `NaiveOut.runOut`;
-  its only premises are the launch's and `Mat.Pre`. `NaiveSound.naive_read` and
-  `NaiveSound.naive_matmul` read its cells against TorchLean's `Tensor.matmul`.
+  instance of `Kernel.sound_mat`, with the run of a thread in bounds `NaiveIn.runIn` (a thread
+  out of bounds is `naive.out`'s, generated); its only premises are the launch's and `Mat.Pre`.
+  `NaiveSound.naive_read` and `NaiveSound.naive_matmul` read its cells against TorchLean's
+  `Tensor.matmul`.
 * `L12`, `in12`, `mem12`, `pre12`, `sound12`: the instance at one block of 2 × 2 threads
   (valid by `NaiveOut.validZ`) with `m = 1`, `n = 2`, `K = 768` (two threads in bounds, two out)
   on the memory `Mat.mem` builds, which meets `Mat.Pre` at every `K ≤ 768` by `Mat.pre_mem`
@@ -20,8 +21,8 @@ For the one program `naive` (MojoProofTest/SymPhi.lean), compiled with `fmul con
 * The corollaries of `correct`, for `naive` at every launch and memory of its family, on every
   observation of a complete run: `read_cover`, every cell of `C` holds its contracted dot loop
   when the launch's window covers `m × n` (its instance `read12` at `L12`, its twin `keep11` at
-  the one-thread launch `L11`, which leaves `C[0, 1]` the caller's); `matmul_nanEq`, each cell
-  in the window against TorchLean's `Tensor.matmul` of the first `K` columns up to NaNs at a
+  the one-thread launch `Launch.one`, which leaves `C[0, 1]` the caller's); `matmul_nanEq`, each
+  cell in the window against TorchLean's `Tensor.matmul` of the first `K` columns up to NaNs at a
   thread that fuses no round (its instance `nanEq_zero` at an oracle family that fuses nothing);
   `matmul_error`, each finite cell in the window within `dotBound` of the real product, for every
   oracle family.
@@ -36,8 +37,8 @@ open FloatLib.Floats.Formats.BinaryInterchange TorchLean
 /-- **The naive matmul kernel's theorem**: `naive` is sound for `Elem.Out` of its bytes, for every
 oracle family, launch valid with `z` sides 1, sizes, blocks, tensors and memory that meets the
 matmul precondition `Mat.Pre` (Sem/Precond.lean) at naive's layout, binary32, alignment 4 and row
-strides 768, 768 and 50257. It is `naive_sound` with the threads' runs `NaiveIn.runIn` and
-`NaiveOut.runOut`. -/
+strides 768, 768 and 50257. It is `naive_sound` with the run of a thread in bounds
+`NaiveIn.runIn`; a thread out of bounds is `naive.out`'s, inside `naive_sound`. -/
 theorem correct {ω : Nat → Nat → Nat} {L : Launch} (hL : L.Valid)
     (hz : L.grid .z = 1 ∧ L.block .z = 1) {m n K bC bA bB : Nat}
     {A : Tensor (Model FloatTy.float.fmt) [m, 768]} {B : Tensor (Model FloatTy.float.fmt) [n, 768]}
@@ -47,7 +48,7 @@ theorem correct {ω : Nat → Nat → Nat} {L : Launch} (hL : L.Valid)
       (fun m => some m.blocks)
       (Elem.Out mem bC (cell L) (bytes ω L K A B) (volume L.grid * volume L.block)) :=
   naive_sound hL hz h.closed ⟨h.ne.1.symm, h.ne.2.1.symm⟩ h.bufs h.x h.y ⟨h.le.1, h.le.2.1, h.lt⟩
-    h.fits (NaiveIn.runIn ω L K bC bA bB A B) (NaiveOut.runOut ω L K bC bA bB A B)
+    h.fits (NaiveIn.runIn ω L K bC bA bB A B)
 
 /-- The launch of one block of 2 × 2 threads (`x` side 2, `y` side 2). -/
 abbrev L12 : Launch := launch2 1 1 2 2
@@ -221,34 +222,26 @@ theorem read12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
   obtain ⟨k, hk, ex, ey, -, he⟩ := h 0 c (by decide) hc
   exact ⟨k, hk, ex, ey, by simpa using he⟩
 
-/-- The launch of one thread (one block of 1 × 1 threads). -/
-abbrev L11 : Launch := launch2 1 1 1 1
-
-/-- `L11` is valid. -/
-theorem valid11 : L11.Valid :=
-  ⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
-    fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩
-
 /-- **The twin of `read_cover`: a launch that does not cover `m × n` leaves a cell the caller's.**
 For every `A` (`1 × 768`), `B` (`2 × 768`) and oracles `ω`, at `m = 1`, `n = 2` and `K = 768` on
-`mem12 A B` (`pre12`), the one thread of `L11` (window 1 × 1) is in bounds and writes only cell
-`(0, 0)`, bytes 0 to 3: in every observation of a complete run, block 1 is some `y` whose bytes
-from offset 4 on, cell `(0, 1)` among them, are those of the caller's block 1 (`naive_read`'s
+`mem12 A B` (`pre12`), the one thread of `Launch.one` (window 1 × 1) is in bounds and writes only
+cell `(0, 0)`, bytes 0 to 3: in every observation of a complete run, block 1 is some `y` whose
+bytes from offset 4 on, cell `(0, 1)` among them, are those of the caller's block 1 (`naive_read`'s
 second clause at `correct`, with no evaluation of the run). So `read_cover`'s premise
 `n ≤ grid.y * block.y` is needed: `C[0, 1]` is not written. It covers this one launch and
 memory. -/
 theorem keep11 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
     (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) {ch : Nat → Nat}
     {Bk : Nat → Option Sem.Block}
-    (hB : Kernel.Obs naive.prog naive.fn_0 L11 (Mat.args z 1 2 3 1 2 768) (mem12 A B)
+    (hB : Kernel.Obs naive.prog naive.fn_0 Launch.one (Mat.args z 1 2 3 1 2 768) (mem12 A B)
       (fun m => some m.blocks) ch ω Bk) {x : Sem.Block} (hx : (mem12 A B).blocks 1 = some x) :
     ∃ y, Bk 1 = some y ∧ ∀ i, 4 ≤ i → y.bytes i = x.bytes i := by
-  obtain ⟨y, hy, -, h, -⟩ := naive_read valid11 ⟨rfl, rfl⟩ (by decide)
-    (correct valid11 ⟨rfl, rfl⟩ (pre12 A B le_rfl)) hx hB
+  obtain ⟨y, hy, -, h, -⟩ := naive_read Launch.valid_one ⟨rfl, rfl⟩ (by decide)
+    (correct Launch.valid_one ⟨rfl, rfl⟩ (pre12 A B le_rfl)) hx hB
   refine ⟨y, hy, fun i hi => h i fun k hk => .inr ?_⟩
   obtain rfl : k = 0 := by
-    have : volume L11.grid * volume L11.block = 1 := by decide
+    have : volume Launch.one.grid * volume Launch.one.block = 1 := by decide
     omega
-  exact (show cell L11 0 + 4 = 4 by decide +kernel).trans_le hi
+  exact (show cell Launch.one 0 + 4 = 4 by decide +kernel).trans_le hi
 
 end MojoProofTest.NaiveKernel

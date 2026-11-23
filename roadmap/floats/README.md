@@ -27,6 +27,8 @@ records. No copy of them is in the repository, so every quote is empty and each 
 ## Open
 
 A rule passes L1 only with a recorded GPU run of a test of it, a conformance test and not a
-proof; STATUS.md lists the cards that have one. The rounding, `deliver` and the NaN rule are
-used by the proved kernels vadd and vmul (L3 evidence); `contract`, `maxnum` and `rsqrt.approx`
-wait for a proved kernel that uses them (the naive matmul, softmax, layer norm).
+proof; STATUS.md lists the cards that have one. The rounding, `deliver` and `contract` are at
+L3: the GPU runs of tests/gpu/ test them on their inputs (binary32 only, no NaN result, and
+`contract` only where it fuses or has nothing to fuse) and the proved kernels use them. The NaN
+rule is used by the proved kernels (L3 evidence) but waits for a GPU run that makes a NaN;
+`maxnum` and `rsqrt.approx` wait for a proved kernel that uses them (softmax, layer norm).

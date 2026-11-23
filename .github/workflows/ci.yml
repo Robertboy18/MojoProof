@@ -1,8 +1,8 @@
 # The checks of CONTRIBUTING.md ("Building and checking"): the build, the tests, the text check, the
-# audit, near_dups.py and the counts' limits (scripts/counts.py), cited.py, the corpus and the two
-# roadmap checks, then the site's build and check. On pull requests that change Lean code, the
-# corpus, the scripts or the roadmap (and by hand from the Actions tab). Pushes to main only rebuild
-# the site.
+# audit, near_dups.py and the counts' limits (scripts/counts.py), cited.py (the names that module
+# docstrings and roadmap card bodies cite), the corpus and the two roadmap checks, then the site's
+# build and check. On pull requests that change Lean code, the corpus, the scripts or the roadmap
+# (and by hand from the Actions tab). Pushes to main only rebuild the site.
 name: CI
 
 on:
@@ -53,6 +53,12 @@ jobs:
       - name: Run the tests
         run: lake test
 
+      - name: The proved kernels' programs (roadmap/llvm-ir/programs.tsv) are current
+        run: lake env lean --run scripts/L3Programs.lean --check
+
+      - name: The L3 resolver's self-test
+        run: lake env lean --run scripts/L3Programs.lean --self-test
+
       - name: No sorry, admit, native_decide, axiom, implemented_by or extern in MojoProof/
         run: "! grep -rnwE 'sorry|admit|native_decide|axiom|implemented_by|extern' MojoProof"
 
@@ -67,7 +73,7 @@ jobs:
       - name: Counts within scripts/counts.tsv
         run: python3 scripts/counts.py audit.log near.log
 
-      - name: Names cited in docstrings
+      - name: Names cited in docstrings and roadmap cards
         run: python3 scripts/cited.py
 
       - name: Corpus manifest

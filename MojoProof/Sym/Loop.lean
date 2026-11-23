@@ -973,8 +973,11 @@ theorem Valuation.into_of_enter {V : Valuation} {l : Nat} {S : Summary} {x : SVa
     (hf : enter (V.ctx.scope (V.after S).mem (V.frameAt l S) (V.k + S.len)) (V.frameAt l S) d' =
       .ok f) :
     V.into l S = { V.after S with regs := f.regs, prods := f.prods } := by
-  rw [Valuation.into, hd]
-  simp only [hx, hf]
+  have hf' : enter (V.ctx.scope (V.afterWith false S).mem (V.frameAtWith false l S)
+      (V.k + S.len)) (V.frameAtWith false l S) d' = .ok f := hf
+  show V.intoWith false l S = { V.afterWith false S with regs := f.regs, prods := f.prods }
+  rw [Valuation.intoWith, hd]
+  simp only [hx, hf']
 
 /-- The address of a pointer in its block's own address space, for every layout `l`, memory `m`
 and pointer `p` whose block (not the null block 0) is `blk`: `blk`'s base plus `p`'s offset,

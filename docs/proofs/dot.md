@@ -226,18 +226,30 @@ type `t'` and flags `fm`:
     matmul (within `dotBound`, under every oracle). When the loop runs `K` iterations over
     matrices of `S > K` columns, statement 9 applies with `f k = (get2 A i k, get2 B j k)` for
     `k < K`, the cell of the first `K` columns (statement 11).
-11. The first `K` columns (`cols`, `get2_cols`, `take_pairs`, `matmul_take_nanEq`,
-    `matmul_take_eq`, `matmul_take_error`). For every `α` with TorchLean's `Storage`, all sizes
-    with `K ≤ s` and `A : Tensor α [m, s]`, `cols K h A : Tensor α [m, K]` is TorchLean's
+11. The first `K` columns (`cols`, `get2_cols`; `cols_pairs`, `matmul_cols_nanEq`,
+    `matmul_cols_eq`, `matmul_cols_error` at two strides; `take_pairs`, `matmul_take_nanEq`,
+    `matmul_take_eq`, `matmul_take_error` at one). For every `α` with TorchLean's `Storage`, all
+    sizes with `K ≤ s` and `A : Tensor α [m, s]`, `cols K h A : Tensor α [m, K]` is TorchLean's
     `Tensor.slice` of `A` along axis 1 from `0` to `K` with step `1`, cast to `[m, K]`, and
-    `get2 (cols K h A) r k = get2 A r k` (`get2_cols`, with `k` cast from `Fin K` to `Fin s`).
-    In every format, for `A : Tensor (Model fmt) [m, s]` and `B : Tensor (Model fmt) [p, s]`, the
-    first `K` of the pairs `(get2 A i k, get2 B j k)`, `k < s`, are
-    `matmulPairs (cols K h A) (cols K h B)ᵀ i j` (`take_pairs`), so statements 4-6 hold for the
-    loop over them against entry `(i, j)` of `Tensor.matmul (cols K h A) (cols K h B)ᵀ`, the bound
-    with `K` terms: `matmul_take_nanEq`, `matmul_take_eq`, `matmul_take_error`, each one line from
-    `take_pairs`. With two strides `sA ≠ sB` the pairs of `cols K hA A` and `cols K hB B` are the
-    ones statement 10 takes, after `get2_cols`.
+    `get2 (cols K h A) r k = get2 A r k` (`get2_cols`, with `k` cast from `Fin K` to `Fin s` by
+    `Fin.castLE h`).
+
+    Two strides. In every format, for all sizes `m`, `p`, `K`, every pair of row strides `sA`,
+    `sB` with `K ≤ sA` and `K ≤ sB` (equal or not), `A : Tensor (Model fmt) [m, sA]`,
+    `B : Tensor (Model fmt) [p, sB]` and indices `i`, `j`: the `K` pairs
+    `(get2 A i k, get2 B j k)`, `k < K` (with `k` cast to `Fin sA` and to `Fin sB`), are
+    `matmulPairs (cols K hA A) (cols K hB B)ᵀ i j` (`cols_pairs`). So statements 4-6 hold for the
+    loop over them against entry `(i, j)` of `Tensor.matmul (cols K hA A) (cols K hB B)ᵀ`, with
+    the same premises (no `fadd` oracle number 2 modulo 3 for the word, an IEEE format and a
+    finite word for the bound) and the bound with `K` terms: `matmul_cols_nanEq`,
+    `matmul_cols_eq`, `matmul_cols_error`. These are the forms for the preconditions' matrices
+    (`Mat.Pre`), whose A and B rows have strides `sA` and `sB` with `K ≤ sA` and `K ≤ sB`.
+
+    One stride. At `sA = sB = s` (with `hA = hB = h`) the `K` pairs are the first `K` of the `s`
+    pairs `(get2 A i k, get2 B j k)`, `k < s`, and the one-stride forms state the lemmas over
+    `(List.ofFn …).take K`, the list the naive kernel's proof builds: `take_pairs`,
+    `matmul_take_nanEq`, `matmul_take_eq`, `matmul_take_error`. Their statements are unchanged,
+    and each is one line from its two-stride form.
 
 The premises of statement 9 are the facts a run of the loop gives. Each is one statement of the
 thread, and in `exec`'s `.fbin` case the operands' recorded factors are `laneOf (prodOf a) 0`
@@ -281,8 +293,16 @@ induction on `j ≤ K` for the first `j` pairs: `List.ofFn_succ_last` splits off
 list, inside the proof), and `floatBin_dotStep` with the premise for `prod j` and the induction
 hypothesis for `acc j` gives `acc (j + 1)`. Statement 10 is statement 9 after statement 8. Statement 11: `get2_cols` unfolds TorchLean's
 `slice_apply` and `castShape_apply_reindex` and compares the two coordinates axis by axis
-(`Shape.Coord.ext_val`, `index_reindexEq`); `take_pairs` compares the two lists entry by entry
-after statement 8.
+(`Shape.Coord.ext_val`, `index_reindexEq`). `cols_pairs` rewrites its right side with statement 8
+and its pairs with `get2_cols`, after which both sides are `List.ofFn` of the same function;
+`matmul_cols_nanEq` and `matmul_cols_error` rewrite their pairs with `cols_pairs` and apply
+`matmul_cell_nanEq` and `matmul_cell_error` at `cols K hA A` and `(cols K hB B)ᵀ`, and
+`matmul_cols_eq` is the two halves of `matmul_cols_nanEq`. The one-stride forms rewrite
+`(List.ofFn v).take K` as `List.ofFn (Fin.take K h v)` (Mathlib's
+`Fin.ofFn_take_eq_take_ofFn`), and `Fin.take K h v k` is `v (Fin.castLE h k)` by definition, so
+each is its two-stride form at `hA = hB = h`. No library lemma states the pairs of two sliced
+rows: TorchLean has no lemma on `slice` and `matmul` together, and Mathlib's `Fin.take` lemmas
+are about one tuple.
 
 Instances (MojoProofTest/Matmul.lean): a 2 × 3 matrix `tA` and a 2 × 3 matrix `tB` of small
 binary32 integers. Statement 7 at a memory made by `Mem.alloc` of `tB`'s bytes; statements 9 and
@@ -291,7 +311,11 @@ TorchLean's `Tensor.matmul tA tBᵀ`. The twin: reading B's six words untranspos
 matrix (element `k * 2 + j` for `(k, j)`), gives pairs whose loop is not TorchLean's entry of
 `tA tBᵀ`. Statement 11 (`take_inst`): the loop over the first 2 of the 3 pairs of row 0 of `tA`
 and of `tB` gives 1, entry `(0, 0)` of the product of the first 2 columns of `tA` and the
-transpose of the first 2 columns of `tB`; its twin is the full entry, -2.
+transpose of the first 2 columns of `tB`; its twin is the full entry, -2. The two-stride forms
+(`cols_inst`): with `tA` (`2 × 3`, stride 3) and the `2 × 2` matrix `mB` (stride 2), the loop
+over the 2 pairs of row 0 of each gives 3, entry `(0, 0)` of the product of the first 2 columns
+of `tA` and the transpose of `mB`'s 2 columns (`matmul_cols_eq` at `sA = 3`, `sB = 2`). Its premise on
+the oracle has the twin `matmul_cell_twin`.
 
 ## Scope
 
@@ -305,6 +329,10 @@ transpose of the first 2 columns of `tB`; its twin is the full entry, -2.
   cells of `NaiveKernel.correct` with statement 11 (docs/proofs/naive.md, docs/proofs/kernel.md).
   That proof applies statement 3 once per round; statements 7, 9 and 10 are not used by it and
   are tested on concrete words (MojoProofTest/Matmul.lean). No other program is connected.
+* Statement 11's two-stride forms hold in every format (the bound in every IEEE format), for
+  every size and every pair of row strides `sA`, `sB` with `K ≤ sA` and `K ≤ sB`.
+  `NaiveSound.naive_matmul` uses the one-stride forms at `s = 768`, the naive kernel's stride for
+  both A and B; no program whose two strides differ is connected to them.
 * Statement 1 relates the loop to FloatLib's `dotInOrder` with source, accumulator and output
   formats all equal to `fmt`, the only case a loop in one format computes.
 * Statement 2 is a forward bound against the exact sum of the decoded words' products. It does

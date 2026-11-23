@@ -1,5 +1,6 @@
 import MojoProof.LLVM.Parser
 import MojoProof.LLVM.Intrinsic
+import MojoProof.LLVM.Asm
 import MojoProof.Util.SHA256
 import MojoProof.Sem.Layout
 
@@ -9,7 +10,10 @@ import MojoProof.Sem.Layout
 `importFile` reads a kernel file, records its SHA-256, parses it (refusing every construct outside
 the subset by name, `MojoProof.LLVM.Parser`) and checks closure: every called function is defined
 in the module or is a declaration that `Intrinsic.ofDecl` recognizes as a supported intrinsic, and
-no call uses inline assembly; and the data layout is one the semantics implements
+every call of inline assembly is of a form `AsmCall.ofText?` recognizes, with the operands
+`AsmCall.checkCall` accepts (MojoProof/LLVM/Asm.lean: the two `cp.async` copies of the multistage
+GEMM kernels, which the semantics refuses to execute); and the data layout is one the semantics
+implements
 (`MojoProof.Sem.Layout.parse`). The result is a `Program`: the module, its digest, its data
 layout, the recognized intrinsic of every declaration, and the kernel entry points.
 
@@ -40,7 +44,10 @@ def Func.callees (f : Func) : List Callee :=
     | .call _ _ c _ => some c
     | _ => none
 
-/-- Check closure of a parsed module and build the program. Errors name the offending callee. -/
+/-- Check closure of a parsed module and build the program: every called function is defined or
+a recognized intrinsic, and every inline assembly call is of a form `AsmCall.ofText?` recognizes
+and passes `AsmCall.checkCall`. Errors name the offending callee, the assembly's template and
+constraints, and for a recognized form the check that fails. -/
 def Module.check (m : Module) (sha : String) : Except String Program := do
   let layout ← Sem.Layout.parse (m.datalayout.getD "")
   let defs := m.funcs.toList.filter (fun f => !f.blocks.isEmpty) |>.map (·.name)
@@ -54,7 +61,15 @@ def Module.check (m : Module) (sha : String) : Except String Program := do
       | .fn n =>
         unless defs.contains n || intrinsics.any (·.1 == n) do
           throw s!"call to undeclared function '@{n}' in '@{f.name}'"
-      | .asm _ t k => throw s!"unsupported inline asm \"{t}\", \"{k}\" in '@{f.name}'"
+      | .asm se t k =>
+        if (AsmCall.ofText? se t k).isNone then
+          throw s!"unsupported inline asm \"{t}\", \"{k}\" in '@{f.name}'"
+    for b in f.blocks do
+      for s in b.stmts do
+        if let .call fm r (.asm se t k) args := s.inst then
+          if let some a := AsmCall.ofText? se t k then
+            if let .error e := a.checkCall fm r args then
+              throw s!"unsupported inline asm \"{t}\", \"{k}\" in '@{f.name}': {e}"
   let kernels := m.funcs.toList.filter (·.cconv == some "ptx_kernel") |>.map (·.name)
   return { module := m, sha256 := sha, layout, intrinsics, kernels }
 

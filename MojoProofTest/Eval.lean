@@ -147,6 +147,20 @@ def launch2 (x y bx by' : Nat) : Launch where
   grid := fun | .x => x | .y => y | .z => 1
   block := fun | .x => bx | .y => by' | .z => 1
 
+/-- **`launch2 x y bx by'` is valid** (`Launch.Valid`), for all four sides with every side
+positive, `x < 2 ^ 31`, `y ≤ 65535` and `bx * by' ≤ 1024` (so `bx`, `by' ≤ 1024`); the premise
+is decidable, so `by decide` proves it at numerals. -/
+theorem launch2_valid {x y bx by' : Nat}
+    (h : 0 < x ∧ 0 < y ∧ 0 < bx ∧ 0 < by' ∧ x < 2 ^ 31 ∧ y ≤ 65535 ∧ bx * by' ≤ 1024) :
+    (launch2 x y bx by').Valid := by
+  obtain ⟨hx, hy, hbx, hby, hx', hy', ht⟩ := h
+  have hbx' : bx ≤ 1024 := (Nat.le_mul_of_pos_right bx hby).trans ht
+  have hby' : by' ≤ 1024 := (Nat.le_mul_of_pos_left by' hbx).trans ht
+  refine ⟨fun d => ?_, fun d => ?_, fun d => ?_, fun d => ?_, ?_⟩
+  all_goals first
+    | (cases d <;> simp only [launch2, Launch.maxGrid, Launch.maxBlock] <;> omega)
+    | (simp only [launch2, volume]; omega)
+
 /-- `v` is the float `r`, bit for bit, or some NaN if `r` is a NaN. -/
 def isF32 (r : Model FloatFormat.binary32) (v : Val) : Bool :=
   match v.float? .float with

@@ -698,7 +698,8 @@ theorem Mem.alloc_bytesIn {m : Mem} (hm : m.BytesIn S) {init : List MemByte}
     (num : Option Nat) :
     (m.alloc l space size align live readOnly owner addr gaddr init num).1.BytesIn S := by
   unfold Mem.alloc
-  cases num <;> exact Mem.set_bytesIn hm (fun i p j _ hp => hinit p j (mem_of_getD hp (by simp)))
+  cases num <;> exact Mem.set_bytesIn hm (fun i p j _ hp => hinit p j (mem_of_getD
+    (show init.getD i .undef = .ptr p j by simpa only [ByteTree.bytesOf_eq] using hp) (by simp)))
 
 /-- The number of an allocation's block is known in the memory after it. -/
 theorem Mem.alloc_known (l : Layout) (m : Mem) (space size align : Nat) (live readOnly : Bool)

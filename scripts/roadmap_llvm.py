@@ -16,11 +16,26 @@ The cards are generated, not written by hand. The inputs are:
   every call of an `llvm.` intrinsic;
 * the records of GPU runs, tests/gpu/<kernel>/record.txt: each names the corpus file of the
   kernel it ran (its `kernel:` line, with the file's sha256 on its `kernel sha256:` line) and
-  says whether the evaluator agreed with the GPU (its `result:` line).
+  says whether the evaluator agreed with the GPU (its `result:` line);
+* the kernel cards, roadmap/kernels/cards/*.md: those with L2 evidence (a theorem concluding
+  `Kernel.Sound`, which scripts/roadmap_status.py checks by the same table), with, for each L2
+  theorem, the corpus file of the program it is about (`theorem_files`), read from
+  roadmap/llvm-ir/programs.tsv, the table scripts/L3Programs.lean writes from the built
+  environment (`roadmap_status.programs`): for each L2 theorem and each theorem of the modules
+  MojoProof.Kernels.* that concludes `Kernel.Sound`, the programs of the `Kernel.Sound`
+  applications of its conclusion (after its binders; not of a premise, not under a negation),
+  each bound to a corpus file by its term: it unfolds to the program constant `mojo_import` added
+  for that file, which passed the import's checks. A program that only records a corpus file's
+  digest (a mutant that keeps it with another module) is bound to no file. The file must be a
+  manifest row of tests/corpus with the digest the constant records, and have it
+  (`corpus_file`). The gate checks the table against the build
+  (`lake env lean --run scripts/L3Programs.lean --check`); this script only reads it.
 
-It writes one card per opcode the corpus uses, one per intrinsic family the corpus calls, and
-one per construct the importer refuses (each distinct reason of REFUSALS.tsv, and each explicit
-refusal of the parser), and the area's README.md.
+It writes one card per opcode the corpus uses, one per intrinsic family the corpus calls, one
+per form of inline assembly the importer accepts (the `AsmCall.text` arms of
+MojoProof/LLVM/Asm.lean, L0: the semantics faults at the call), and one per construct the
+importer refuses (each distinct reason of REFUSALS.tsv, and each explicit refusal of the parser),
+and the area's README.md.
 
 An opcode or family card is L1 only if the semantics runs the construct: its row of
 MojoProofTest/Modelled.lean's table says `returns`, that is, the grid evaluator ran a kernel of the
@@ -35,7 +50,17 @@ never L1. An L1 card is L2 when a record of a GPU run whose result is agreement 
 kernel whose IR uses the construct (the token scan of that kernel's file, not a list): the card's
 `evidence: L2:` lists those records. Such a record is a conformance test, not a proof: the
 evaluator and the GPU gave the same output buffer, bit for bit, on the launches it lists. A record
-whose kernel file's sha256 is not the one it states is an error here. A card's `lean` lists only
+whose kernel file's sha256 is not the one it states is an error here. An L2 card is L3 when the
+IR of a proved kernel uses the construct: a kernel card with L2 evidence has an L2 theorem about a
+program whose corpus file's token scan finds it, and the card's `evidence: L3:` lists those
+kernel card ids. Only the files of the theorems' programs count, not every file a kernel card's
+`corpus` field cites (which must cite them); a theorem whose program is bound to no corpus file
+(a conclusion about no fixed program or about two, or a program that unfolds to no program
+constant `mojo_import` added, even one that records a corpus file's digest) is an error here,
+not a pass, and so is an L2 theorem with no row in the table. L3 means
+used by a proved kernel, not that the construct has a theorem of its own: the kernel's theorem
+covers the forms of the construct in that kernel's IR, at the launches and on the memories its
+premises admit. A card's `lean` lists only
 names that the
 declaration index of scripts/cited.py (`scan` over MojoProof/ and MojoProofTest/) contains, so
 each is a declaration on this tree; the constructors (`Inst.bin`, `BinOp.add`), which that index
@@ -50,6 +75,9 @@ Usage:
   python3 scripts/roadmap_llvm.py --verify-quotes LANGREF.html PTX.html
                                                    exit 1 unless every quote is in the text of
                                                    the given LangRef or PTX ISA copy
+  python3 scripts/roadmap_llvm.py --self-test      exit 1 unless the table reader takes the
+                                                   shadowing case of `self_test` to the inner
+                                                   program's file and refuses the bad rows
 
 The output is sorted and has no timestamps. Python 3 standard library only.
 """
@@ -62,14 +90,18 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 import cited  # noqa: E402  (the declaration index: `scan`)
+import roadmap_status  # noqa: E402  (the cards' front matter: `front_matter`, `parse_evidence`)
 
 AREA = ROOT / 'roadmap' / 'llvm-ir'
+KERNEL_CARDS = ROOT / 'roadmap' / 'kernels' / 'cards'
 CORPUS = ROOT / 'tests' / 'corpus'
 GPU = ROOT / 'tests' / 'gpu'
 LANGREF = 'LLVM LangRef 24.0.0git'
 PTX = 'PTX ISA 9.5'
 SHOWN = 5   # corpus paths listed in a card's front matter
 MODELLED = 'MojoProofTest/Modelled.lean'
+REGEN = roadmap_status.REGEN   # writes roadmap/llvm-ir/programs.tsv
+programs = roadmap_status.programs   # the table's reader
 
 # The first sentence of each cited section (LangRef 24.0.0git and PTX ISA 9.5, docs/TRUST.md T7).
 QUOTES = {
@@ -429,18 +461,90 @@ def rule_table() -> dict[str, list[str]]:
     return out
 
 
-def kernel_files() -> set[str]:
-    """The corpus files of the programs a `mojo_kernel` theorem of the library is about: each
-    program's name is bound to a corpus directory by `mojo_corpus` (MojoProof/Kernels.lean) or to
-    one file by `mojo_import` (MojoProof/Kernels/*.lean)."""
-    mods = [ROOT / 'MojoProof' / 'Kernels.lean'] + sorted((ROOT / 'MojoProof' / 'Kernels').glob('*.lean'))
-    alias = {a: d for m in mods for d, a in re.findall(r'"([^"]+)"\s+as (\w+)', m.read_text())}
-    out = set()
-    for p in mods[1:]:
-        for a in re.findall(r'^mojo_kernel \w+ := Kernels\.(\w+)\.prog', p.read_text(), re.M):
-            q = CORPUS / alias[a]
-            fs = [q] if q.suffix == '.ll' else q.glob('*.ll')
-            out |= {str(f.relative_to(ROOT)) for f in fs}
+def manifest(root: pathlib.Path) -> dict[str, str]:
+    """The rows of `root`/MANIFEST.tsv: each path (under `root`) and its sha256."""
+    f = root / 'MANIFEST.tsv'
+    rows = f.read_text().split('\n')[1:] if f.is_file() else []
+    return dict(r.split('\t')[:2] for r in rows if r.strip())
+
+
+def corpus_file(path: str, sha: str, who: str) -> str:
+    """The corpus file `path` (tests/corpus/<row>) of a program that records digest `sha`: it
+    must be a manifest row of tests/corpus with that sha256, and the file must have it. Anything
+    else is an error here."""
+    m = manifest(CORPUS)
+    row = path.removeprefix('tests/corpus/')
+    assert path.startswith('tests/corpus/') and '..' not in path and m.get(row) == sha, \
+        f'{who}: its file {path} with sha256 {sha} is no manifest row of tests/corpus'
+    f = CORPUS / row
+    assert f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == sha, \
+        f'{who}: {path} does not have the sha256 of its manifest row'
+    return path
+
+
+def theorem_files(names: list[str], table=None) -> dict[str, str]:
+    """For each theorem name of `names`, the corpus file of the program it is about: its rows of
+    the table (`roadmap_status.programs`) must name one program, the one its conclusion's
+    `Kernel.Sound` is about, bound to a corpus file (the program constant `mojo_import` added for
+    it), which must be a manifest row with the digest the constant records (`corpus_file`). A
+    name with no row (the table is stale), no declaration, a theorem about no fixed program or
+    about two, and a program bound to no corpus file are errors here."""
+    table = programs() if table is None else table
+    out = {}
+    for n in names:
+        assert n in table, f'{n}: no row in roadmap/llvm-ir/programs.tsv; run `{REGEN}`'
+        mod, ps = table[n]
+        assert mod != '-', f'{n}: no declaration has that name'
+        assert len(ps) == 1, f'{n}: its conclusion is about {len(ps)} programs {ps}, not one'
+        prog, f, sha = ps[0]
+        assert f != '-', f'{n}: its program {prog} is bound to no corpus file'
+        out[n] = corpus_file(f, sha, f'{n} (its program {prog})')
+    return out
+
+
+def kernel_files(table=None) -> set[str]:
+    """The corpus files of the programs of the library's kernel theorems: the theorems of the
+    table (`programs`) of the modules MojoProof.Kernels and MojoProof.Kernels.* (those
+    `mojo_kernel` adds, `n.correct`, `n.sound`, ...), each the file of its program
+    (`theorem_files`)."""
+    table = programs() if table is None else table
+    return set(theorem_files([n for n, (mod, _) in table.items() if is_kernels(mod)],
+                             table).values())
+
+
+def is_kernels(mod: str) -> bool:
+    """`mod` is MojoProof.Kernels or one of its submodules (the library MojoProofKernels)."""
+    return mod == 'MojoProof.Kernels' or mod.startswith('MojoProof.Kernels.')
+
+
+def proved_kernels(table=None) -> dict[str, dict[str, str]]:
+    """The kernel cards (roadmap/kernels/cards/*.md) with L2 evidence, the proved kernels: for
+    each card id, its L2 theorems, each with the corpus file of the program it is about
+    (`theorem_files`, from the elaborated statement, not from the card). The card's `corpus`
+    field (files or directories, each path a glob) must cite each of those files, else it is an
+    error here. The other files a card cites do not count: a construct that only they use is used
+    by no proved kernel. A row of the table (`programs`) of a theorem outside MojoProof.Kernels
+    that no card names as L2 evidence is an error here (the table is stale)."""
+    table = programs() if table is None else table
+    named = set()
+    out = {}
+    for p in sorted(KERNEL_CARDS.glob('*.md')):
+        keys, _ = roadmap_status.front_matter(p.read_text())
+        ev = roadmap_status.parse_evidence(keys.get('evidence', ''))
+        if 'L2' not in ev:
+            continue
+        cites = set()
+        for item in roadmap_status.items(keys['corpus']):
+            for h in sorted(ROOT.glob(item)):
+                fs = h.rglob('*.ll') if h.is_dir() else [h] if h.suffix == '.ll' else []
+                cites |= {str(f.relative_to(ROOT)) for f in fs}
+        files = theorem_files(ev['L2'], table)
+        for n, f in sorted(files.items()):
+            assert f in cites, f'{p.relative_to(ROOT)}: {n} is about {f}, which it does not cite'
+        out[keys['id']] = files
+        named |= set(ev['L2'])
+    stale = sorted(n for n, (mod, _) in table.items() if n not in named and not is_kernels(mod))
+    assert not stale, f'roadmap/llvm-ir/programs.tsv: rows of no L2 evidence {stale}; run `{REGEN}`'
     return out
 
 
@@ -516,6 +620,15 @@ def gpu_records() -> dict[str, str]:
     return out
 
 
+def accepted_asm() -> list[tuple[str, str, str]]:
+    """The inline assembly the importer accepts: each constructor of `AsmCall`
+    (MojoProof/LLVM/Asm.lean) with the template and constraints of its `text` arm."""
+    body = def_body(read('MojoProof/LLVM/Asm.lean'), 'def text : AsmCall → String × String')
+    out = re.findall(r'\| (\w+) => \("((?:[^"\\]|\\.)*)", "((?:[^"\\]|\\.)*)"\)', body)
+    assert out, 'MojoProof/LLVM/Asm.lean: no `AsmCall.text` arms'
+    return out
+
+
 def refusals_tsv() -> dict[str, list[str]]:
     """The distinct reasons of REFUSALS.tsv (without the function), with their files."""
     out: dict[str, list[str]] = {}
@@ -550,25 +663,33 @@ def ref_of(anchor: str) -> str:
     return f'{PTX if anchor in PTX_ANCHORS else LANGREF} #{anchor}'
 
 
-def card(cid, title, ref, lean, files, tests, body, gpu=()) -> str:
+def card(cid, title, ref, lean, files, tests, body, gpu=(), kernels=()) -> str:
     """A card; L1 when `lean` names declarations, L0 when it is empty (`not stated yet`); L2 when
-    it is L1 and `gpu` lists records of GPU runs (its `evidence: L2:`)."""
-    level = ('L2' if gpu else 'L1') if lean else 'L0'
+    it is L1 and `gpu` lists records of GPU runs (its `evidence: L2:`); L3 when it is L2 and
+    `kernels` maps kernel cards with L2 evidence to their L2 theorems about a program whose IR
+    uses the construct (its `evidence: L3:` lists the cards)."""
+    level = ('L3' if kernels else 'L2') if lean and gpu else 'L1' if lean else 'L0'
+    ev = ([f'L2: {", ".join(gpu)}'] if lean and gpu else []) \
+        + ([f'L3: {", ".join(kernels)}'] if lean and gpu and kernels else [])
     head = ['---', f'id: {cid}', f'title: {title}', 'kind: construct', f'ref: {ref}',
             f'quote: {yq(QUOTES[ref.split("#")[1]])}',
             f'lean: {", ".join(lean) if lean else "not stated yet"}',
             f'corpus: {corpus_field(files)}', f'tests: {", ".join(tests) if tests else "none"}',
-            'upstream:', f'level: {level}'] + ([f'evidence: L2: {", ".join(gpu)}'] if gpu else []) \
+            'upstream:', f'level: {level}'] + ([f'evidence: {"; ".join(ev)}'] if ev else []) \
         + ['---', '']
     return '\n'.join(head) + body.rstrip('\n') + '\n'
 
 
-def open_text(run: str, gpu=()) -> str:
-    """A construct card's open work, from its row of the Modelled table and its GPU records."""
+def open_text(run: str, gpu=(), kernels=()) -> str:
+    """A construct card's open work, from its row of the Modelled table, its GPU records and the
+    proved kernels with a theorem about a program whose IR uses it."""
+    if run == 'returns' and gpu and kernels:
+        return ('L3 is the top of the construct ladder. It says the construct is used by a proved '
+                'kernel, not that it has a theorem of its own: the forms of it that no proved '
+                'kernel\'s IR uses are covered by no theorem.\n')
     if run == 'returns' and gpu:
-        return ('L3 needs a kernel card (roadmap/kernels/) with L2 evidence, a proved kernel, whose '
-                'program uses the construct; this script reads no kernel card and writes no L3 '
-                'evidence.\n')
+        return ('L3 needs a kernel card (roadmap/kernels/) with L2 evidence, a proved kernel, '
+                'with a theorem about a program whose IR uses the construct; there is none.\n')
     if run == 'returns':
         return 'L2 needs a recorded GPU run of a test of the construct; there is none.\n'
     return ('L1 needs a semantics of the construct: the run of its test kernel stops with '
@@ -586,7 +707,9 @@ def generate() -> dict[str, str]:
     fams = families()
     rules = rule_table()
     decls = index()
-    kfiles = kernel_files()
+    table = programs()
+    kfiles = kernel_files(table)
+    proved = proved_kernels(table)
     records = gpu_records()
     used = scan_corpus(ops, fams)
     runs = modelled()
@@ -611,9 +734,27 @@ def generate() -> dict[str, str]:
         if not ks:
             return ''
         return ('\n\nThe programs of the library\'s `mojo_kernel` theorems use it ('
-                + ', '.join(f'`{k}`' for k in ks)
-                + '). L3 counts that only through a kernel card (roadmap/kernels/) with L2 '
-                'evidence, which this script does not read.')
+                + ', '.join(f'`{k}`' for k in ks) + ').')
+
+    def proved_of(files, gpu):
+        """For an L2 card: the kernel cards with L2 evidence one of whose L2 theorems is about a
+        program whose corpus file uses the construct, each with those theorems."""
+        return {k: [n for n, f in sorted(ts.items()) if f in files]
+                for k, ts in sorted(proved.items())
+                if any(f in files for f in ts.values())} if gpu else {}
+
+    def proved_text(kernels):
+        if not kernels:
+            return ''
+        return ('\n\n## Proved kernels\n\nUsed by a proved kernel, not proved on its own. The '
+                'kernel cards with L2 evidence whose `Kernel.Sound` theorems are about a program '
+                'whose IR uses it, with those theorems: '
+                + '; '.join(f'{k} ({", ".join(f"`{n}`" for n in ns)})'
+                            for k, ns in kernels.items())
+                + '. A theorem\'s program is the corpus file `mojo_import` or `mojo_corpus` binds '
+                'it to; the other files a kernel card cites do not count. Each such theorem covers '
+                'the forms of the construct in the IR of the program it is about, at the launches '
+                'and on the memories its premises admit.')
 
     def gpu_of(files, run):
         """The records of GPU runs that agree, of a kernel whose file uses the construct."""
@@ -648,6 +789,7 @@ def generate() -> dict[str, str]:
         run = runs.get(kw)
         assert run, f'{MODELLED} has no row for {kw}'
         gpu = gpu_of(files, run)
+        kernels = proved_of(files, gpu) if lean else []
         ctors = ' or '.join(f'`{typ}.{c}`' for c in op.ctors)
         if op.opctor:
             ctors += f' with `{op.opctor}`'
@@ -670,17 +812,17 @@ def generate() -> dict[str, str]:
                 f'overview). The importer reads `{kw}` as {ctors} (`{parser.split(".", 2)[2]}`); '
                 + sem_text + checker_text(entries) + '\n\n'
                 f'## Corpus\n\n{corpus_text(files, total)}' + kernel_note(files)
-                + gpu_text(gpu) + '\n\n'
+                + gpu_text(gpu) + proved_text(kernels) + '\n\n'
                 '## Out of scope\n\nForms of the instruction the corpus does not use are read by the '
                 'same parser case, but no corpus file exercises them. That the semantics gives '
                 f'`{kw}` the meaning LLVM gives it rests on reading LangRef (docs/TRUST.md T7), '
                 + ('and on the GPU runs above for their inputs, ' if gpu else '')
                 + 'not on a check against LLVM.\n\n'
-                '## Open\n\n' + open_text(run, gpu))
+                '## Open\n\n' + open_text(run, gpu, kernels))
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), lean, sorted(files),
                                       ['MojoProofTest.Rule', 'MojoProofTest.Corpus',
-                                       'MojoProofTest.Modelled'], body, gpu)
-        items.append((cid, title, 'opcode', run == 'returns', gpu))
+                                       'MojoProofTest.Modelled'], body, gpu, kernels)
+        items.append((cid, title, 'opcode', run == 'returns', gpu, kernels))
     for fam in sorted(fams, key=lambda f: list(fams).index(f)):
         files = used.get('fam:' + fam, {})
         if not files:
@@ -693,6 +835,7 @@ def generate() -> dict[str, str]:
         run = runs.get(f'Intrinsic.{fam}')
         assert run, f'{MODELLED} has no row for Intrinsic.{fam}'
         gpu = gpu_of(files, run)
+        kernels = proved_of(files, gpu) if lean else []
         if run == 'returns':
             sem_text = ('The semantics gives a call its meaning in `MojoProof.Sem.intrinsic`'
                         + (', and the grid completes the collective call in '
@@ -718,7 +861,7 @@ def generate() -> dict[str, str]:
                 + checker_text(rules.get(f'Intrinsic.{fam}', [])) + '\n\n'
                 f'## Corpus\n\n{corpus_text(files, total)} The members called: '
                 + ', '.join(f'`{n}`' for n in names_used) + '.' + kernel_note(files)
-                + gpu_text(gpu) + '\n\n'
+                + gpu_text(gpu) + proved_text(kernels) + '\n\n'
                 '## Out of scope\n\nMembers of the family the corpus does not call. '
                 + ('The NVPTX backend\'s documentation of the NVVM intrinsics is not quoted (no '
                    'local copy); that the intrinsic is the PTX instruction cited rests on reading '
@@ -726,11 +869,46 @@ def generate() -> dict[str, str]:
                    + ').' if anchor in PTX_ANCHORS else
                    'That the semantics gives the family the meaning LLVM gives it rests on reading '
                    'LangRef (docs/TRUST.md T7).') + '\n\n'
-                '## Open\n\n' + open_text(run, gpu))
+                '## Open\n\n' + open_text(run, gpu, kernels))
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), lean, sorted(files),
                                       ['MojoProofTest.Rule', 'MojoProofTest.Corpus',
-                                       'MojoProofTest.Modelled'], body, gpu)
-        items.append((cid, title, 'intrinsic', run == 'returns', gpu))
+                                       'MojoProofTest.Modelled'], body, gpu, kernels)
+        items.append((cid, title, 'intrinsic', run == 'returns', gpu, kernels))
+    for ctor, template, constraints in accepted_asm():
+        instr = template.split()[0]
+        anchor = next((a for p, a in ASM_REF.items() if instr.startswith(p)), None)
+        assert anchor, template
+        nargs = template.count('$')
+        slug = re.sub(r'[^a-z0-9]+', '-', instr.lower()).strip('-')
+        cid = f'asm-{slug}-{nargs}'
+        title = f'Inline asm `{instr}` with {nargs} operands'
+        call = f'asm sideeffect "{template}", "{constraints}"'
+        files = {}
+        for f in sorted(CORPUS.rglob('*.ll')):
+            n = f.read_text().count(call)
+            if n:
+                files[str(f.relative_to(ROOT))] = n
+        lean = names(['MojoProof.LLVM.AsmCall', 'MojoProof.LLVM.AsmCall.ofText?',
+                      'MojoProof.LLVM.AsmCall.checkCall', 'MojoProof.LLVM.Module.check',
+                      'MojoProof.Sem.exec'])
+        body = (f'# {title}\n\n'
+                f'## Rule\n\nThe importer accepts a call `call void {call}(...)` '
+                f'(`AsmCall.{ctor}`, recognized by `AsmCall.ofText?` and checked by '
+                '`AsmCall.checkCall` in `Module.check`: the template and constraints exactly, '
+                '`sideeffect`, a `void` result, no fast-math flags or argument attributes, and '
+                'the operands of the form). It is parsed, not modelled: `MojoProof.Sem.exec` has '
+                'no case for inline assembly and stops the thread with an `unsupported` fault, so '
+                'no launch that reaches the call is `Kernel.Sound`. The declarations: '
+                + ', '.join(f'`{x}`' for x in lean) + f'. The quote is the first sentence of PTX '
+                f'ISA\'s section on `{instr.split(".")[0]}`, the instruction the string holds.\n\n'
+                f'## Corpus\n\n{corpus_text(files, total)}' + kernel_note(files) + '\n\n'
+                '## Out of scope\n\nEverything the copy does: no Lean model of it exists, and the '
+                'files that call it import but have no run without a fault.\n\n'
+                '## Open\n\nL1 needs a semantics of the copy (pending until its group\'s '
+                '`cp.async.wait.group`) in place of the fault.\n')
+        out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), [], sorted(files),
+                                      ['MojoProofTest.Asm', 'MojoProofTest.Corpus'], body)
+        items.append((cid, title, 'asm', False, [], []))
     for k, (reason, files) in enumerate(sorted(refusals_tsv().items()), 1):
         asm = re.match(r'unsupported inline asm "([^"]*)"', reason)
         instr = asm.group(1).split()[0] if asm else ''
@@ -741,8 +919,9 @@ def generate() -> dict[str, str]:
         cid = f'refused-asm-{slug}-{nargs}'
         title = f'Refused: inline asm `{instr}` with {nargs} operands'
         body = (f'# {title}\n\n'
-                f'## Rule\n\nThe importer refuses a call of inline assembly: `Parser.inst` reads '
-                f'no `asm` callee, and the corpus check records the files it refuses in '
+                f'## Rule\n\nThe importer refuses a call of inline assembly whose template and '
+                f'constraints are not of a form it accepts (`AsmCall.ofText?` in `Module.check`), '
+                f'and the corpus check records the files it refuses in '
                 f'tests/corpus/REFUSALS.tsv with the reason `{reason}`. The quote is the first '
                 f'sentence of PTX ISA\'s section on `{instr.split(".")[0]}`, the instruction the '
                 f'string holds.\n\n'
@@ -753,7 +932,7 @@ def generate() -> dict[str, str]:
                 'contract) before the importer can accept these files.\n')
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), [], files,
                                       ['MojoProofTest.Corpus'], body)
-        items.append((cid, title, 'refused', False, []))
+        items.append((cid, title, 'refused', False, [], []))
     for kw, msg in parser_refusals:
         word = msg.split("'")[1]
         cid = 'refused-' + word.replace(' ', '-')
@@ -770,19 +949,22 @@ def generate() -> dict[str, str]:
                 'them.\n')
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(f'{kw}-instruction'), [], [],
                                       ['MojoProofTest.Corpus'], body)
-        items.append((cid, title, 'refused', False, []))
-    out['README.md'] = readme(items, total, len(ops), sorted(records))
+        items.append((cid, title, 'refused', False, [], []))
+    out['README.md'] = readme(items, total, len(ops), sorted(records), proved)
     return out
 
 
-def readme(items, total, nops, records) -> str:
-    groups = {'opcode': [], 'intrinsic': [], 'refused': []}
-    for cid, title, g, ok, gpu in items:
-        note = ' (tested against the GPU)' if gpu else \
+def readme(items, total, nops, records, proved) -> str:
+    groups = {'opcode': [], 'intrinsic': [], 'asm': [], 'refused': []}
+    for cid, title, g, ok, gpu, ks in items:
+        note = ' (tested against the GPU, used by a proved kernel)' if ks else \
+            ' (tested against the GPU)' if gpu else \
             '' if ok or g == 'refused' else ' (parsed, not modelled)'
         groups[g].append(f'- [{cid}](cards/{cid}.md): {title}{note}')
-    constructs = [(cid, ok) for cid, _, g, ok, _ in items if g != 'refused']
-    l2 = sum(bool(gpu) for _, _, _, _, gpu in items)
+    constructs = [(cid, ok) for cid, _, g, ok, _, _ in items if g in ('opcode', 'intrinsic')]
+    asm = [cid for cid, _, g, _, _, _ in items if g == 'asm']
+    l2 = sum(bool(gpu) for _, _, _, _, gpu, _ in items)
+    l3 = sum(bool(ks) for _, _, _, _, _, ks in items)
     l1 = sum(ok for _, ok in constructs)
     unmodelled = [cid for cid, ok in constructs if not ok]
     coverage = (f'{l1} of the {len(constructs)} opcode and family cards are L1: the importer reads '
@@ -795,12 +977,30 @@ def readme(items, total, nops, records) -> str:
                     + ('s are' if len(unmodelled) > 1 else ' is')
                     + ' L0, parsed but not modelled: the semantics stops a run at the construct. ')
                    if unmodelled else '')
+                + (('The accepted inline asm card' + ('s ' if len(asm) > 1 else ' ')
+                    + ' and '.join(', '.join(f'`{c}`' for c in asm).rsplit(', ', 1))
+                    + (' are' if len(asm) > 1 else ' is') + ' L0: the importer accepts the call, '
+                    'and `MojoProof.Sem.exec` stops a run at it. ') if asm else '')
                 + 'The refused constructs are L0. '
                 + (f'{l2} of the L1 cards are L2: a record of a GPU run that agrees with the '
                    'evaluator ran a corpus kernel whose IR uses the construct ('
                    + ', '.join(records) + '; a conformance test, not a proof). '
                    if records else 'No card is L2, since no GPU run is recorded. ')
-                + 'No card is L3: this script writes no L3 evidence.')
+                + (f'{l3} of the L2 cards are L3: a kernel card with L2 evidence, a proved kernel, '
+                   'has a `Kernel.Sound` theorem about a program whose IR uses the construct. The '
+                   'proved kernels, their L2 theorems and the corpus files of the programs those '
+                   'are about (the program of the elaborated conclusion and the corpus file of '
+                   'the imported program it unfolds to, programs.tsv, which '
+                   'scripts/L3Programs.lean writes; '
+                   'the other files a kernel card cites do not count): '
+                   + '; '.join(f'{k}: ' + ', '.join(f'`{n}` ({f})' for n, f in sorted(ts.items()))
+                               for k, ts in sorted(proved.items()))
+                   + '. L3 here means used by a proved kernel, not that the construct has a '
+                   'theorem of its own: a kernel\'s theorem covers the forms of the construct in '
+                   'the IR of its program, at the launches and on the memories its premises '
+                   'admit, and no other form.'
+                   if l3 else 'No card is L3: no kernel card with L2 evidence has a theorem about '
+                   'a program whose IR uses an L2 card\'s construct.'))
     return '\n'.join([
         '# LLVM IR constructs',
         '',
@@ -811,8 +1011,9 @@ def readme(items, total, nops, records) -> str:
         '## Scope',
         '',
         f'The LLVM IR the {total} corpus files use: every opcode the importer reads that some '
-        'corpus file uses, every intrinsic family some corpus file calls, and every construct the '
-        'importer refuses. The corpus IR declares no LLVM version (it has no `llvm.ident`); the '
+        'corpus file uses, every intrinsic family some corpus file calls, every form of inline '
+        'assembly the importer accepts, and every construct the importer refuses. The corpus '
+        'IR declares no LLVM version (it has no `llvm.ident`); the '
         'cards cite the LangRef and PTX ISA versions the semantics was read from (LangRef '
         '24.0.0git, PTX ISA 9.5, docs/TRUST.md T7). An opcode or family card is L1 when its `lean` '
         'names exist and the semantics runs the construct: the grid evaluator runs a kernel of it '
@@ -829,6 +1030,10 @@ def readme(items, total, nops, records) -> str:
         '### Intrinsic families',
         '',
         *groups['intrinsic'],
+        '',
+        '### Accepted inline assembly',
+        '',
+        *groups['asm'],
         '',
         '### Refused constructs',
         '',
@@ -853,10 +1058,13 @@ def readme(items, total, nops, records) -> str:
         '',
         '- A recorded GPU run of a kernel that uses the construct, for L2 of the L1 cards that '
         'are not L2.',
+        *(['- A proved kernel (a kernel card with L2 evidence) with a theorem about a program '
+           'whose IR uses the construct, for L3 of the L2 cards that are not L3.']
+          if l3 < l2 else []),
         *(['- A semantics of the constructs parsed but not modelled ('
            + ', '.join(f'`{c}`' for c in unmodelled) + '), for L1.'] if unmodelled else []),
-        '- A model of the refused inline asm (`cvt` to e4m3 and `cp.async.cg`), so the refused '
-        'files import.',
+        '- A model of the refused inline asm (`cvt` to and from e4m3), so the refused files '
+        'import, and a semantics of the accepted `cp.async.cg` copies, for L1 of their cards.',
         '- The block checker\'s refusals listed in each card, which bound what a proved kernel '
         'can use today.',
         '',
@@ -877,10 +1085,50 @@ def verify_quotes(langref: str, ptx: str) -> int:
     return 1 if bad else 0
 
 
+def self_test() -> int:
+    """The table reader on rows of the shapes scripts/L3Programs.lean's self-test elaborates:
+    `L3Test.Outer.Inner.inner` is about `MojoProof.Kernels.vmul.prog`, the imported program that
+    `L3Test.Outer.Inner.p.prog`, shadowing the imported `L3Test.Outer.p.prog` of
+    `L3Test.Outer.outer`, unfolds to, so it is about the vmul file and the outer theorem about the
+    vadd file; a theorem with no program (a premise or a negation), one with two, a mutant that
+    keeps the vadd digest (bound to no file), a row whose file is no manifest row, one whose
+    digest is not its file's, a name with no declaration and a name with no row are each an
+    error."""
+    m = manifest(CORPUS)
+    vadd, vmul = (next(p for p in sorted(m) if p.startswith(d + '/')) for d in ('vadd', 'vmul'))
+    fa, fm = f'tests/corpus/{vadd}', f'tests/corpus/{vmul}'
+    t = programs(roadmap_status.PROGRAMS_HEADER + '\n'
+                 f'L3Test.Outer.Inner.inner\tL3Test\tMojoProof.Kernels.vmul.prog\t{fm}\t{m[vmul]}\n'
+                 f'L3Test.Outer.outer\tL3Test\tL3Test.Outer.p.prog\t{fa}\t{m[vadd]}\n'
+                 'L3Test.premise\tL3Test\t-\t-\t-\n'
+                 f'L3Test.two\tL3Test\tL3Test.a.prog\t{fa}\t{m[vadd]}\n'
+                 f'L3Test.two\tL3Test\tL3Test.b.prog\t{fm}\t{m[vmul]}\n'
+                 'L3Test.mutant\tL3Test\tL3Test.Outer.q.prog\t-\t-\n'
+                 f'L3Test.unlisted\tL3Test\tL3Test.c.prog\ttests/corpus/vadd/none.ll\t{m[vadd]}\n'
+                 f'L3Test.forged\tL3Test\tL3Test.d.prog\t{fa}\t{"0" * 64}\n'
+                 'L3Test.missing\t-\t-\t-\t-\n')
+    want = {'L3Test.Outer.Inner.inner': fm, 'L3Test.Outer.outer': fa}
+    bad = [] if theorem_files(sorted(want), t) == want else ['L3Test.Outer']
+    for n in ('L3Test.premise', 'L3Test.two', 'L3Test.mutant', 'L3Test.unlisted', 'L3Test.forged',
+              'L3Test.missing', 'L3Test.absent'):
+        try:
+            theorem_files([n], t)
+            bad.append(n)
+        except AssertionError:
+            pass
+    for n in bad:
+        print(f'self-test: {n} is not what the reader should make of it')
+    print('self-test: ' + ('failed' if bad else 'the shadowing program is taken to the inner '
+                           'declaration\'s file; the bad rows are refused'))
+    return 1 if bad else 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     if args[:1] == ['--verify-quotes'] and len(args) == 3:
         return verify_quotes(args[1], args[2])
+    if args == ['--self-test']:
+        return self_test()
     if args not in ([], ['--check']):
         print(__doc__)
         return 2

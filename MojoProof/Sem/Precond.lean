@@ -147,7 +147,8 @@ theorem Mem.Closed.alloc {m : Mem} {vs : List Val} (h : m.Closed vs) (l : Layout
     simp only [Mem.alloc, Mem.set] at hc ⊢
     split at hc
     · cases hc
-      exact Nat.lt_succ_of_lt (hinit p j (mem_of_getD hp (by simp)))
+      have hp' : init.getD i .undef = .ptr p j := by simpa only [ByteTree.bytesOf_eq] using hp
+      exact Nat.lt_succ_of_lt (hinit p j (mem_of_getD hp' (by simp)))
     · exact Nat.lt_succ_of_lt (h.bytes c b i p j hc hi hp)
 
 variable {α : Type} [Storage α]

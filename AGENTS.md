@@ -21,7 +21,7 @@ lake build                               # the library MojoProof and the kernels
 lake build MojoProofTest                 # every test module
 lake test                                # the test runner mojoproof_test
 python3 scripts/corpus.py check          # each corpus file against tests/corpus/MANIFEST.tsv
-python3 scripts/cited.py                 # the names cited in module docstrings resolve
+python3 scripts/cited.py                 # the names cited in module docstrings and card bodies resolve
 lake env lean --run scripts/Audit.lean   # the axioms of every declaration, and the counts
 ```
 

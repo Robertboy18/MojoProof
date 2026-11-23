@@ -27,4 +27,4 @@ The bit-level encoding of the inner map (basis images per bit, lines 27-28) beyo
 
 ## Open
 
-A Lean statement of the equation for every swizzle that satisfies the card `swizzle`'s condition. MojoProof states no layout law yet.
+A Lean statement of the equation for every swizzle that satisfies the card `swizzle`'s condition. MojoProof states no law of this card yet; the card `swizzle` has the involution it needs.

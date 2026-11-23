@@ -35,8 +35,10 @@ Definitions (MojoProof/Sym/Block.lean; `Valuation.blocksI` in MojoProof/Sym/Path
 - `StoreAt fn lbl pc ns regs x`: statement `pc` of block `lbl` of `fn` is a `store` whose
   stored operand `w` has `StoreVal ns regs x w`.
 - `StmtPtrs V vs lbl pc σ σ' st s`: the pointer facts of one statement, which takes `σ`
-  to `σ'`. A `load` node at index `j ≥ σ.nodes.length` of `σ'` is node `σ.nodes.length`, at
-  `lbl` and `pc`, with `PtrIs true st s (p.eval V (vals V σ.nodes))`. A `store` effect
+  to `σ'`. A `load` node at index `j ≥ σ.nodes.length` of `σ'` is at `lbl` and `pc`, with
+  `PtrIs true st s (p.eval V (vals V (σ'.nodes.take j)))`, its pointer term on the nodes before
+  it (the node `σ.nodes.length`, or the next one after the node of a global the `load` reads
+  directly, `SNode.globalAt`). A `store` effect
   `SEff.store l pc' v p` in `σ'.effs.drop σ.effs.length` is at `lbl` and `pc`, with
   `PtrIs false st s (p.eval V vs)`, and `st` is `.store vol (.mk t w) ptr al` with
   `σ.op t w = some v`.

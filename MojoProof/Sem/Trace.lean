@@ -20,6 +20,13 @@ Proved for every trace (the predicates `racy` and `kept` of MojoProof/Sem/Spec.l
   that no barrier orders must be by one thread; `racy_eq_false_of_owned` is its instance with one
   discipline for every phase. Instance: MojoProofTest/Phased.lean, a trace that only the per-phase
   form covers (`not_owned`).
+  Both come from the writer form (`racy_eq_false_of_writers`): a map from each phase, block and
+  byte to the tile of the thread that may write it, or `none`; if every access, at each of its
+  bytes, is by that byte's writer or is a read of a byte with no writer, the writers agree across
+  blocks of threads, and two accesses with one writer that no barrier orders are by one thread, the
+  trace has no race. A thread may read bytes outside its own tile, which the halving tree of a
+  reduction needs (`racy_halving`, MojoProof/Sem/Shared.lean). For the phased form the writer of a
+  byte is the tile that holds it (`Tiling.at`, `Owned.at`).
   Offsets that are apart and in bounds are a tiling (`Tiling.ofApart`), so the row-major tiles
   of an output tensor (MojoProof/Sem/Buffer.lean) are one. Instance: the strided tiling of a
   buffer of `n` elements of `w` bytes (`Tiling.strided`, by `apart_stride`).
@@ -192,11 +199,84 @@ theorem Owned.congr {ι : Type} {T T' : Nat → Option (Tiling ι)} {own own' : 
     (h : Owned T own a) : Owned T' own' a :=
   ⟨fun h' => h.read (hT.trans h'), fun t ht => by rw [← ho]; exact h.tile t (hT.trans ht)⟩
 
+/-- The tile of `t` that holds byte `i`, if one does: at most one does, as the tiles are disjoint
+(`Tiling.at_eq`). -/
+noncomputable def Tiling.at {ι : Type} (t : Tiling ι) (i : Int) : Option ι :=
+  open Classical in
+  if h : ∃ j, (t.off j : Int) ≤ i ∧ i < t.off j + t.len j then some h.choose else none
+
+/-- A byte of tile `j` is in tile `j` only, for every tiling, tile and byte. -/
+theorem Tiling.at_eq {ι : Type} {t : Tiling ι} {j : ι} {i : Int} (h1 : (t.off j : Int) ≤ i)
+    (h2 : i < t.off j + t.len j) : t.at i = some j := by
+  unfold Tiling.at
+  split
+  · rename_i h
+    obtain ⟨c1, c2⟩ := h.choose_spec
+    by_contra hne
+    rcases t.disj _ _ (fun e => hne (congrArg some e)) with h' | h' <;> omega
+  · rename_i h
+    exact absurd ⟨j, h1, h2⟩ h
+
+/-- An access that follows the discipline `(T, own)`, at each of its bytes `i`: the tile of
+`T` that holds `i` is its thread's, or the access is a read of an untiled block. For every
+discipline, access and byte. -/
+theorem Owned.at {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι} {a : Access}
+    (h : Owned T own a) {i : Int} (h1 : a.ptr.off ≤ i) (h2 : i < a.ptr.off + a.len) :
+    (T a.ptr.block).bind (·.at i) = some (own a.who.thread) ∨
+      (a.write = false ∧ (T a.ptr.block).bind (·.at i) = none) := by
+  cases hT : T a.ptr.block with
+  | none => exact .inr ⟨h.read hT, rfl⟩
+  | some t =>
+    obtain ⟨t1, t2⟩ := h.tile t hT
+    exact .inl (Tiling.at_eq (by omega) (by omega))
+
+/-- **One writer per byte and barrier interval gives race freedom** (`racy`, every trace). `W p b i`
+is the writer of byte `i` of block `b` in phase `p` (`phases`), a tile of type `ι` or `none` for a
+byte nobody writes in that phase, and `own p` maps each thread to its tile. If at each of its
+bytes every access is by the byte's writer, or is a read of a byte with no writer, accesses of one
+block by two blocks of threads see one writer map of it, and two accesses of a block with a
+writer, with one tile, by different blocks of threads or in one phase, are by one thread, the
+trace has no race. Unlike `racy_eq_false_of_phased`, a thread may read bytes outside its tile.
+-/
+theorem racy_eq_false_of_writers {ι : Type} {W : Nat → Nat → Int → Option ι}
+    {own : Nat → Nat → ι} {tr : List Event}
+    (hW : ∀ x ∈ (phases tr).1, ∀ i : Int, x.1.ptr.off ≤ i → i < x.1.ptr.off + x.1.len →
+      W x.2 x.1.ptr.block i = some (own x.2 x.1.who.thread) ∨
+        (x.1.write = false ∧ W x.2 x.1.ptr.block i = none))
+    (hG : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, x.1.who.cta ≠ y.1.who.cta →
+      x.1.ptr.block = y.1.ptr.block → W x.2 x.1.ptr.block = W y.2 x.1.ptr.block)
+    (hX : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, x.1.ptr.block = y.1.ptr.block →
+      (∃ i, W x.2 x.1.ptr.block i ≠ none) → (x.1.who.cta ≠ y.1.who.cta ∨ x.2 = y.2) →
+      own x.2 x.1.who.thread = own y.2 y.1.who.thread → x.1.who.thread = y.1.who.thread) :
+    racy tr = false := by
+  cases h : racy tr
+  · rfl
+  obtain ⟨x, hx, y, hy, hc⟩ := racy_iff.1 h
+  simp only [clash, Bool.and_eq_true, bne_iff_ne, ne_eq, Bool.or_eq_true, beq_iff_eq] at hc
+  obtain ⟨⟨ht, hc⟩, hk⟩ := hc
+  simp only [Access.conflict, Access.overlaps, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq,
+    decide_eq_true_eq] at hc
+  obtain ⟨⟨⟨⟨⟨⟨hb, h0x⟩, h0y⟩, h1⟩, h2⟩, hw⟩, -⟩ := hc
+  have hτ : W x.2 x.1.ptr.block = W y.2 x.1.ptr.block := by
+    rcases hk with hk | hk
+    · exact hG x hx y hy hk hb
+    · rw [hk]
+  have hx' := hW x hx (max x.1.ptr.off y.1.ptr.off) (le_max_left _ _) (by omega)
+  have hy' := hW y hy (max x.1.ptr.off y.1.ptr.off) (le_max_right _ _) (by omega)
+  rw [← hb, ← hτ] at hy'
+  rcases hx' with hx' | ⟨wx, hx'⟩ <;> rcases hy' with hy' | ⟨wy, hy'⟩
+  · exact (ht (hX x hx y hy hb ⟨_, by rw [hx']; simp⟩ hk
+      (Option.some.inj (hx'.symm.trans hy')))).elim
+  · simp [hx'] at hy'
+  · simp [hx'] at hy'
+  · simp [wx, wy] at hw
+
 /-- **Ownership per barrier interval gives race freedom** (`racy`, every trace). The tiling
 `T p` and the tile map `own p` may change with the phase `p` (`phases`). If every access follows
 the discipline of its phase, accesses of one block by two blocks of threads see one tiling of it,
 and two accesses of a tiled block with one tile, by different blocks of threads or in one phase,
-are by one thread, the trace has no race. -/
+are by one thread, the trace has no race. `racy_eq_false_of_writers` with the writer of a byte the
+tile of `T p` that holds it (`Owned.at`). -/
 theorem racy_eq_false_of_phased {ι : Type} {T : Nat → Nat → Option (Tiling ι)}
     {own : Nat → Nat → ι} {tr : List Event}
     (hO : ∀ x ∈ (phases tr).1, Owned (T x.2) (own x.2) x.1)
@@ -205,27 +285,11 @@ theorem racy_eq_false_of_phased {ι : Type} {T : Nat → Nat → Option (Tiling 
     (hX : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, x.1.ptr.block = y.1.ptr.block →
       T x.2 x.1.ptr.block ≠ none → (x.1.who.cta ≠ y.1.who.cta ∨ x.2 = y.2) →
       own x.2 x.1.who.thread = own y.2 y.1.who.thread → x.1.who.thread = y.1.who.thread) :
-    racy tr = false := by
-  cases h : racy tr
-  · rfl
-  obtain ⟨x, hx, y, hy, hc⟩ := racy_iff.1 h
-  simp only [clash, Bool.and_eq_true, bne_iff_ne, ne_eq, Bool.or_eq_true, beq_iff_eq] at hc
-  obtain ⟨⟨ht, hc⟩, hk⟩ := hc
-  have hb : x.1.ptr.block = y.1.ptr.block := by
-    by_contra hb
-    simp [Access.conflict, Access.overlaps, hb] at hc
-  have hτ : T x.2 x.1.ptr.block = T y.2 x.1.ptr.block := by
-    rcases hk with hk | hk
-    · exact hG x hx y hy hk hb
-    · rw [hk]
-  let o n := if n = x.1.who.thread then own x.2 n else own y.2 n
-  have ox : o x.1.who.thread = own x.2 x.1.who.thread := by simp [o]
-  have oy : o y.1.who.thread = own y.2 y.1.who.thread := by simp [o, Ne.symm ht]
-  have h1 : Owned (T x.2) o x.1 := (hO x hx).congr rfl ox.symm
-  have h2 : Owned (T x.2) o y.1 := (hO y hy).congr (by rw [← hb]; exact hτ.symm) oy.symm
-  have := h1.apart h2 (fun hb hT ho => ht (hX x hx y hy hb hT hk (by rw [← ox, ← oy, ho])))
-    (by simp only [Access.conflict, Bool.and_eq_true] at hc; exact hc.1.1)
-  simp [Access.conflict, this] at hc
+    racy tr = false :=
+  racy_eq_false_of_writers (W := fun p b i => (T p b).bind (·.at i)) (own := own)
+    (fun x hx _ h1 h2 => (hO x hx).at h1 h2)
+    (fun x hx y hy hc hb => by simp only [hG x hx y hy hc hb])
+    fun x hx y hy hb ⟨_, hi⟩ hk ho => hX x hx y hy hb (fun hT => hi (by simp [hT])) hk ho
 
 /-- **Ownership gives race freedom** (`racy`, every trace). If every access of a trace
 follows the discipline `(T, own)`, and threads that access one tiled block have different tiles,
@@ -648,72 +712,51 @@ def retThread : Thread :=
 /-- `retThread`'s step returns at once and keeps the memory, in every context and memory. -/
 theorem step_retThread (c : Ctx) (M : Mem) : step c retThread M = .ok (.done M) := rfl
 
-/-- A fold in `Except` whose step succeeds and keeps an invariant indexed by the number of
-elements folded. -/
-theorem foldlM_ok {α β ε : Type} {f : β → α → Except ε β} {P : Nat → β → Prop}
-    (hP : ∀ k b a, P k b → ∃ b', f b a = .ok b' ∧ P (k + 1) b') :
-    ∀ (xs : List α) (k : Nat) (b : β) {r : Except ε β}, xs.foldlM f b = r → P k b →
-      ∃ b', r = .ok b' ∧ P (k + xs.length) b'
-  | [], k, b, r, hr, hb => ⟨b, hr.symm, hb⟩
-  | a :: xs, k, b, r, hr, hb => by
-    obtain ⟨b1, h1, hb1⟩ := hP k b a hb
-    rw [List.foldlM_cons, h1] at hr
-    obtain ⟨b2, h2, hb2⟩ := foldlM_ok hP xs (k + 1) b1 hr hb1
-    exact ⟨b2, h2, by simpa [Nat.add_assoc, Nat.add_comm 1] using hb2⟩
-
 /-- The launch of `ret void` starts, for every launch, closed memory, address choice and oracle,
 in a grid of `volume L.grid * volume L.block` running threads with an empty trace. -/
 theorem start_ret (L : Launch) {m : Mem} (hm : m.Closed []) (ch : Nat → Nat)
     (oracle : Nat → Nat → Nat) :
-    ∃ g c, Grid.start (Program.ofFunc retFn) retFn L [] m ch oracle = .ok (g, c) ∧ g.mem.trace = [] ∧
-      g.threads.size = volume L.grid * volume L.block ∧
+    ∃ g c, Grid.start (Program.ofFunc retFn) retFn L [] m ch oracle = .ok (g, c) ∧
+      g.mem.trace = [] ∧ g.threads.size = volume L.grid * volume L.block ∧
       ∀ n, n < volume L.grid * volume L.block → g.threads[n]? = some (.run retThread) := by
   unfold Grid.start
   rw [Mem.checkClosed_of_closed hm]
   simp only [bind, Except.bind]
   have hck : Func.check (Program.ofFunc retFn).module retFn = Except.ok () := rfl
+  have hg : (Program.ofFunc retFn).module.globals.toList = [] := rfl
   split
   · rename_i e heq
     exact absurd (hck.symm.trans heq) (by simp)
   · split
     · rename_i e heq
-      obtain ⟨b', hb', -⟩ := foldlM_ok
-        (P := fun _ (b : Mem × List (List (String × Ptr))) =>
-          ∀ c, b.1.next ≤ c → b.1.blocks c = none)
-        (fun k b a hb => by
-          obtain ⟨m, acc⟩ := b
-          simp only at hb
-          have h0 : m.blocks m.next = none := hb m.next le_rfl
-          simp only [shared, Mem.allocNext, h0]
-          refine ⟨_, rfl, fun c hc => ?_⟩
-          simp only [Mem.alloc, Mem.set] at hc ⊢
-          simp only [show c ≠ m.next by omega, ↓reduceIte]
-          exact hb c (by omega)) _ 0 _ heq hm.above
+      obtain ⟨b', hb', -⟩ := Sym.sharedFold_res (fun _ h => by simp [hg] at h) _ _ hm.above heq
       cases hb'
     · rename_i v1 heq1
       obtain ⟨m1, tabs⟩ := v1
       simp only
       split
       · rename_i e heq
-        obtain ⟨b', hb', -⟩ := foldlM_ok (P := fun _ _ => True) (fun k b a _ => by
-          obtain ⟨m, ts⟩ := b
-          exact ⟨_, rfl, trivial⟩) _ 0 _ heq trivial
+        obtain ⟨b', hb', -⟩ := Sym.foldlM_res (P := fun _ => True) (Q := fun _ => True)
+          (fun b k y _ _ hy => by
+            obtain ⟨m, ts⟩ := b
+            exact ⟨_, hy.symm, trivial⟩) _ _ _ (fun _ _ => trivial) trivial heq
         cases hb'
       · rename_i v2 heq2
         obtain ⟨m2, ts⟩ := v2
-        obtain ⟨b', hb', hsz, hall⟩ := foldlM_ok
+        rw [List.range_eq_range'] at heq2
+        obtain ⟨hsz, hall⟩ := Sym.foldlM_range'_inv
           (P := fun k (b : Mem × Array Status) => b.2.size = k ∧
-            ∀ n, n < k → b.2[n]? = some (.run retThread)) (fun k b a hb => by
+            ∀ n, n < k → b.2[n]? = some (.run retThread)) (fun k b b' hs hb => by
           obtain ⟨m, ts⟩ := b
-          refine ⟨(m, ts.push (.run retThread)), rfl, ?_, fun n hn => ?_⟩
-          · simp [hb.1]
-          · have hs : ts.size = k := hb.1
-            rw [Array.getElem?_push]
-            split
-            · rfl
-            · exact hb.2 n (by omega)) _ 0 _ heq2 ⟨rfl, fun n hn => by omega⟩
-        cases hb'
-        simp only [List.length_range, Nat.zero_add] at hsz hall
+          have e : Except.ok (ε := Fault) (m, ts.push (.run retThread)) = .ok b' := hs
+          cases e
+          have hs : ts.size = k := hb.1
+          refine ⟨by simp [hs], fun n hn => ?_⟩
+          rw [Array.getElem?_push]
+          split
+          · rfl
+          · exact hb.2 n (by omega)) _ 0 _ heq2 ⟨rfl, fun n hn => by omega⟩
+        simp only [Nat.zero_add] at hsz hall
         exact ⟨_, _, rfl, rfl, hsz, hall⟩
 
 /-- **The kernel `ret void` is sound on every launch**: for every launch `L` (any grid and block

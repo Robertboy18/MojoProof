@@ -35,8 +35,14 @@ input_dir corpus where
 checkers and the block checker. -/
 @[default_target]
 lean_lib MojoProof where
-  globs := #[.submodules `MojoProof.LLVM, .submodules `MojoProof.Sem, .submodules `MojoProof.Util,
-    .submodules `MojoProof.Cert, .submodules `MojoProof.Sym]
+  globs := #[
+    .submodules `MojoProof.LLVM,
+    .submodules `MojoProof.Layout,
+    .submodules `MojoProof.Sem,
+    .submodules `MojoProof.Util,
+    .submodules `MojoProof.Cert,
+    .submodules `MojoProof.Float,
+    .submodules `MojoProof.Sym]
 
 /-- The imported kernels (`mojo_import`) and their theorems. -/
 @[default_target]

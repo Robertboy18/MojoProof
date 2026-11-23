@@ -12,6 +12,7 @@ itself is proved sound.
 | `MojoProof/Sym/Term.lean` | symbolic values: the node table (`SVal`, `SNode`), their values (`vals`), memory effects (`SEff`), obligations (`Cond`) |
 | `MojoProof/Sym/Checker.lean` | the checker: `summarize`, `Summary`, `covers`, `coversTo` |
 | `MojoProof/Sym/Block.lean` | its soundness: `Block.sound`, `Block.soundC`, the pointer facts |
+| `MojoProof/Sym/Segment.lean` | segments that end at a barrier or a warp shuffle: `summarizeTo`, `SegSummary`, `Seg.sound`, `Seg.through`; or at a lifetime marker: `summarizeLife`, `Seg.lifetime`, `Seg.lifetime_ptr` |
 | `MojoProof/Sym/Path.lean` | along a path: `coversPath`, `coversPathI`, `Walk`, `WalkI`, edges into blocks with `phi`s, returns |
 | `MojoProof/Sym/Loop.lean` | loops: `Block.sound_loop`, invariants, sequences of loops and nested loops |
 | `MojoProof/Sym/PtrMem.lean` | the memory premises of a path from a labelling's memory hypothesis |
@@ -45,18 +46,36 @@ The nodes are:
 - `load` from the entry memory;
 - float operators with their flags and the step whose oracle numbers they read
   (`fbin op fm ft n a b`, `n` steps after the block entry);
-- `call lbl pc`, the special-register call at position `pc` of block `lbl`.
+- `call lbl pc`, the call of a special register or of the lane number at position `pc` of block
+  `lbl`;
+- `castAt lbl pc n a`, the other casts `castV` evaluates (`bitcast`, `addrspacecast`, `fpext`,
+  `fptrunc`, `sitofp`, `uitofp`, `ptrtoint`, each at the types `castOk` names) at position `pc` of
+  block `lbl`, `n` steps after the block entry (whose oracle numbers a float cast reads). Not
+  `fptoui`, `fptosi` or `inttoptr`, which `castV` does not evaluate: the checker refuses them;
+- `globalAt lbl pc i`, the pointer of the global named at operand `i` of the statement at
+  position `pc` of block `lbl`: the context's address of the global (`Ctx.globals`, which
+  `Grid.start` sets per thread block; `SNode.eval_globalAt`), the base of a `getelementptr` on a
+  global and the pointer of a `load` or `store` on a global.
+- `loadAfter lbl pc p es`, the `load` at position `pc` of block `lbl` after a `store` of the
+  block: from the memory the effects `es` before it make from the entry memory (`SEff.run`).
+  MojoProof/Sym/LoadAfter.lean gives its value one effect at a time: a `load` effect leaves it
+  (`SNode.eval_loadAfter_log`), a `store` at a pointer of the same value, type, space and
+  alignment makes it the stored value's decoding (`SNode.eval_loadAfter_store`), a `store` apart
+  from it leaves it (`SNode.eval_loadAfter_apart`, by `Mem.load_store_apart`), and with no
+  effect it is the `load` from the entry memory (`SNode.eval_loadAfter_nil`).
 
 A value used twice is one node referred to twice, so the table has as many nodes as the block has
-value-defining statements, whatever the sharing. A node whose instruction carries a type
-(`getelementptr`'s source type, `load`'s type) names its statement by block label and position
-and reads the type there. As a result `SNode` holds no `Ty`, whose derived equality the kernel
-does not reduce.
+value-defining statements (and one more per `getelementptr`, `load` or `store` on a global),
+whatever the sharing. A
+node whose instruction carries a type (`getelementptr`'s source type, `load`'s type, a cast's
+types) or a name (a global's) names its statement by block label and position and reads the type
+or the name there. As a result `SNode` holds no `Ty`, whose derived equality the kernel does not
+reduce, and no `String`.
 
 `SNode.eval V vs nd` is the value of node `nd` under a valuation `V`, given the values `vs` of the
 nodes before it. The valuation holds the context, the function, the step count at the entry, the
 entry memory, the entry registers and the `fmul contract` operands. The value is computed by the
-semantics' own operations (`intBin`, `icmpV`, `intCast`, `extractV`, `gep`, `Mem.load`,
+semantics' own operations (`intBin`, `icmpV`, `intCast`, `castV`, `extractV`, `gep`, `Mem.load`,
 `floatBin`, `withAttrs`), faults included. So `eval` agrees with the semantics' `exec` by
 construction, not by a separate proof per operation. `vals V ns`, the values of table `ns`, is a
 fold that evaluates each node once, on the values before it.
@@ -84,19 +103,28 @@ again, so a wrong summary from `sym_summary` is refused rather than trusted.
 
 The fragment the checker accepts:
 
-- instructions: `bin`; scalar integer `icmp`; `trunc`, `zext`, `sext`; `extractvalue`;
-  `getelementptr` with one index; `load`; `store`; float operators except `fmul contract`
+- instructions: `bin`; scalar integer `icmp`; `trunc`, `zext`, `sext`; the other casts that
+  `castV` evaluates (`castOk`, which is `castV`'s cases by `castOk_iff`; `SNode.castAt`,
+  `exec_cast`), so not `fptoui`, `fptosi` or `inttoptr`; `extractvalue`;
+  `getelementptr` with one index (on a global, two nodes: the global's pointer, `SNode.globalAt`,
+  then the `getelementptr` on it); `load` and `store` (on a global, the global's pointer,
+  `SNode.globalAt` at the pointer operand, then the `load` or `store` on that node); float
+  operators except `fmul contract`
   (`fadd contract` may fuse with its product, which the frame records and the summary of
   `covers` does not model; the checker `coversC` admits it, below); `select` of integers
-  (`SNode.select`); calls of a special register (a declaration that `P.intrinsics` names
-  `sreg r d`, called with no arguments and no fast-math flags, whose
-  attributes `Func.check` accepts); calls of an integer maximum or minimum (`llvm.smax`,
-  `llvm.smin`, `llvm.umax`, `llvm.umin`: a declaration that `P.intrinsics` names
-  `minmax signed max t`, called with two arguments, no fast-math flags and no parameter, return
-  or call-site attributes, whose attributes `Func.check` accepts; `SNode.minmax`);
-- operands: registers and integer constants;
-- order: `load`, `getelementptr`, `icmp` and special-register calls only before the block's first
-  `store`, since their terms read the entry memory, which a store changes;
+  (`SNode.select`); calls of a special register or of the lane number (a declaration that
+  `P.intrinsics` names `sreg r d` or `laneid`, called with no arguments and no fast-math flags,
+  whose attributes `Func.check` accepts; `exec_sreg`, `exec_laneid`); calls of an integer
+  maximum or minimum (`llvm.smax`, `llvm.smin`, `llvm.umax`, `llvm.umin`: a declaration that
+  `P.intrinsics` names `minmax signed max t`, called with two arguments, no fast-math flags and
+  no parameter, return or call-site attributes, whose attributes `Func.check` accepts;
+  `SNode.minmax`);
+- operands: registers and integer constants, and a global as a `getelementptr`'s base;
+- order: `getelementptr`, `icmp`, `ptrtoint` and the calls of a special register or the lane
+  number only before the block's first `store`, since their terms read the entry memory, which a
+  store changes; a `load` after it is `SNode.loadAfter` (on a global, on the global's
+  `SNode.globalAt` node), with the effects before it, whose operands are nodes before it
+  (`SEff.before`, so they run on its table as on the final one, `SEff.run_before`);
 - terminators: `br`, `br i1` and `ret void`. On an edge into blocks with `phi`s, each `phi`'s
   operand for the edge must be a register, an integer constant or a float constant, and its
   obligation is that the operand evaluates (`SState.phiConds`).
@@ -109,8 +137,9 @@ The fragment the checker accepts:
 
 Everything else makes `summarize` give `none`, so `covers` is `false`:
 
-- other calls (barriers, other intrinsics, module functions);
-- `select` of floats, pointers or vectors, float casts and compares, atomics, `alloca`;
+- other calls (barriers, other intrinsics, module functions); a barrier or a warp shuffle can
+  end a segment instead (`summarizeTo`, below);
+- `select` of floats, pointers or vectors, float compares, atomics, `alloca`;
 - aggregates other than `extractvalue`, and vectors as `getelementptr` indices;
 - `phi`s inside the range (a block with `phi`s is summarized from the position after them);
 - `ret` of a value.
@@ -181,6 +210,36 @@ the terminator's step when its obligations hold, and for either value of the fla
 accepts, then one block that `coversC` accepts. The path and loop checkers take the same flag
 (`coversPathWith`, `WalkWith`, `RoundWith`, `ChainWith`, `coversChainsWith`), and the path and
 loop theorems are proved once for both values (`docs/proofs/contract.md`).
+
+### Segments that end at a collective (`MojoProof/Sym/Segment.lean`)
+
+A thread's step at a barrier or a warp shuffle is a `.wait`, which the grid completes, so
+`summarize` (which ends at the terminator) does not pass one. `summarizeTo P fn lbl p0 p1` is
+the summary (`SegSummary`) of the statements `p0` to `p1 - 1` by the same statement case, ending
+at the collective call at `p1` (`SState.waitAt`: the barrier or a shuffle, `Coll`, with no
+fast-math flags or attributes) with its argument terms; its obligations add that each argument
+term evaluates. `Seg.sound`, for every program: from the entry valuation of a frame at `p0` that
+meets the obligations, the thread's steps reach `p1` with the summary's registers and memory, and
+the step there is the `.wait` of the collective on the arguments' values (`Waits`). The resumed
+thread is at `p1 + 1` with the same function and block (`Thread.resume_at`; `Seg.resume`, from
+the summary's collective and length, the steps to the `.wait` and the resumed frame), where the
+next segment starts (`summarizeTo` again, or `summarize` and `Block.sound` for the last one).
+`summarizeSegs P fn lbl p0 ps` gives the summaries of all of a block's segments, with the
+collective calls at the positions `ps`, and the summary of the rest; `Seg.through`, for every
+program, runs them in a row on one thread (`Seg.Through`), each wait followed by the resume with
+the value and memory `w i` that the `i`-th collective delivers, a parameter. The schedule that
+fires the collectives and supplies those values is not proved.
+
+A segment also ends at a call of `llvm.lifetime.start` or `llvm.lifetime.end` (`SState.lifeAt`,
+`summarizeLife P fn lbl p0 p1`, with the pointer's term), since the effects a summary replays are
+its `load`s and `store`s and the marker's `Mem.setLive` is neither. `Seg.lifetime`, for every
+program: from the entry valuation of a frame at `p0` that meets the obligations (the pointer's
+term evaluates, the effects run, and the statements'), the thread's steps reach `p1` on the
+memory the effects make, and when `intrinsic` gives memory `m'` on the pointer's value (the
+block's `Mem.setLive`, `intrinsic_lifetime_ptr`, or the same memory on `poison`) the step there
+moves on `m'` to `p1 + 1`, where the next segment starts; `Seg.lifetime_ptr` states it for a
+pointer into a block the thread owns and for `poison`. The marker's parameter may carry
+`captures(none)` (`withAttrs_args`).
 
 ### Along a path
 
@@ -447,7 +506,8 @@ names in three places:
 - where `exec` reaches a call (`c.prog.module.funcs.find? (·.name == g)` and
   `c.prog.intrinsics.lookup g`);
 - where `step` checks a `norecurse` callee against the frames;
-- where an operand is a global (`Value.glob name`).
+- where an operand is a global (`Value.glob name`), and so where `SNode.globalAt`'s value reads
+  the context's globals; the checker's `getelementptr` case matches `.glob` and compares no name.
 
 Measured in the kernel with `#ktime` on `vector_addition`'s program (4 functions), in the run
 above:

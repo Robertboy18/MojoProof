@@ -17,7 +17,11 @@ level: L0
 **The rule.** Each block loads tiles of A and B into shared memory, waits at a barrier,
 accumulates the tiles' products, and waits again before the next tiles.
 
-**What is in the code.** One corpus file. It imports. The block checker refuses its block %40
-(MojoProofTest.Mutate pins the refusal), and refuses barrier calls (MojoProof/Sym/Rules.lean).
+**What is in the code.** One corpus file. It imports. The block checker takes its blocks %40
+and %47, each with a `getelementptr` on a shared-memory global
+(`MojoProof.Sym.SNode.eval_globalAt`), and refuses its block %67 at its barrier call
+(MojoProofTest.Mutate pins the refusal); the statements up to a barrier are a segment
+(`MojoProof.Sym.summarizeTo`, `MojoProof.Sym.Seg.sound`; tested on the gemv kernels only), and no
+schedule through a barrier is proved.
 
 **Open.** Every level above L0.

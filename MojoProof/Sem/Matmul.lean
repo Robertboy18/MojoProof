@@ -4,6 +4,7 @@ import TorchLean.Tensor.Contract
 import TorchLean.Tensor.Movement
 import TorchLean.Tensor.ShapeChange
 import FloatLib.Floats.Formats.BinaryInterchange.Model.Instances
+import Mathlib.Data.Fin.Tuple.Take
 
 /-!
 # The matmul and gemv cells against TorchLean (docs/proofs/dot.md)
@@ -63,11 +64,15 @@ The first `K` of `s` columns, for every element type, all sizes with `K ≤ s` a
 * `cols K h A`: TorchLean's `Tensor.slice` of `A : Tensor α [m, s]` along axis 1 from `0` to `K`
   with step `1`, cast to the shape `[m, K]`; `get2_cols`: its entry `(r, k)` is entry `(r, k)` of
   `A`.
-* `take_pairs`: in every format, the first `K` of the pairs `(get2 A i k, get2 B j k)` of row `i`
-  of `A` (`m × s`) and row `j` of `B` (`p × s`) are `matmulPairs (cols K h A) (cols K h B)ᵀ i j`;
-  so `matmul_take_nanEq`, `matmul_take_eq` and `matmul_take_error` are `matmul_cell_nanEq`,
-  `matmul_cell_eq` and `matmul_cell_error` for them, against entry `(i, j)` of
-  `Tensor.matmul (cols K h A) (cols K h B)ᵀ`, the bound with `K` terms.
+* `cols_pairs`: in every format, for every pair of row strides with `K ≤ sA` and `K ≤ sB`, the
+  `K` pairs `(get2 A i k, get2 B j k)`, `k < K`, of row `i` of `A` (`m × sA`) and row `j` of `B`
+  (`p × sB`) are `matmulPairs (cols K hA A) (cols K hB B)ᵀ i j`; so `matmul_cols_nanEq`,
+  `matmul_cols_eq` and `matmul_cols_error` are `matmul_cell_nanEq`, `matmul_cell_eq` and
+  `matmul_cell_error` for them, against entry `(i, j)` of
+  `Tensor.matmul (cols K hA A) (cols K hB B)ᵀ`, the bound with `K` terms.
+* `take_pairs`, `matmul_take_nanEq`, `matmul_take_eq`, `matmul_take_error`: the same at one
+  stride `s`, over the first `K` of the `s` pairs (`(List.ofFn …).take K`, which is
+  `List.ofFn (Fin.take K h …)` by Mathlib's lemma on `Fin.take` and `List.ofFn`).
 
 Scope: the float and the real half of a matmul or gemv cell and the words of a thread's loads and
 float operations, for every format, size and oracle sequence. These lemmas stand alone: none
@@ -379,26 +384,92 @@ theorem get2_cols {α : Type} [Storage α] {m s K : Nat} (h : K ≤ s) (A : Tens
     erw [Shape.Coord.index_reindexEq]
     rfl
 
-/-- **The first `K` pairs of two rows are the pairs of a matmul cell**: in every format, for all
-sizes with `K ≤ s`, matrices `A` (`m × s`) and `B` (`p × s`) and indices `i`, `j`, the first `K`
-of the pairs `(get2 A i k, get2 B j k)`, `k < s`, are `matmulPairs` at `(i, j)` of `cols K h A`
-and TorchLean's transpose of `cols K h B`. -/
+/-- **The `K` pairs of two rows of strides `sA` and `sB` are the pairs of a matmul cell** (the
+two-stride form of `take_pairs`): in every format, for all sizes and every pair of row strides
+with `K ≤ sA` and `K ≤ sB`, matrices `A` (`m × sA`) and `B` (`p × sB`) and indices `i`, `j`, the
+pairs `(get2 A i k, get2 B j k)`, `k < K` (with `k` cast to `Fin sA` and to `Fin sB`), are
+`matmulPairs` at `(i, j)` of `cols K hA A` and TorchLean's transpose of `cols K hB B`. -/
+theorem cols_pairs {sA sB K : Nat} (A : Tensor (Model fmt) [m, sA])
+    (B : Tensor (Model fmt) [p, sB]) (hA : K ≤ sA) (hB : K ≤ sB) (i : Fin m) (j : Fin p) :
+    (List.ofFn fun k : Fin K =>
+        (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k))) =
+      matmulPairs (cols K hA A) (Tensor.permute (cols K hB B) (Shape.adjacentSwap [p, K] 0) [K, p])
+        i j := by
+  rw [matmulPairs_swap]; simp only [get2_cols]
+
+/-- `matmul_cell_nanEq` for the `K` pairs of two rows of strides `sA` and `sB` (`cols_pairs`; the
+two-stride form of `matmul_take_nanEq`): in every format, for all sizes and every pair of row
+strides with `K ≤ sA` and `K ≤ sB`, matrices `A` (`m × sA`), `B` (`p × sB`), indices `i`, `j`,
+every flag `c` and oracle sequence `o` with the contraction off (`c` false, or no `fadd` oracle
+number 2 modulo 3), the loop from `+0` over the pairs `(get2 A i k, get2 B j k)`, `k < K`, and
+entry `(i, j)` of TorchLean's product of `cols K hA A` and the transpose of `cols K hB B` are the
+same word or both NaNs. -/
+theorem matmul_cols_nanEq (c : Bool) (o : Nat → Nat × Nat) {sA sB K : Nat}
+    (A : Tensor (Model fmt) [m, sA]) (B : Tensor (Model fmt) [p, sB]) (hA : K ≤ sA)
+    (hB : K ≤ sB) (i : Fin m) (j : Fin p) (hu : ∀ k, c = true → (o k).2 % 3 ≠ 2) :
+    NaNEq (dotLoop c o (Model.zero fmt false) (List.ofFn fun k : Fin K =>
+        (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k))))
+      (Tensor.get2 (Tensor.matmul (cols K hA A)
+        (Tensor.permute (cols K hB B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j) := by
+  rw [cols_pairs A B hA hB]; exact matmul_cell_nanEq c o _ _ i j hu
+
+/-- The two halves of `matmul_cols_nanEq`, under its premises (every format, size and pair of
+strides with `K ≤ sA` and `K ≤ sB`, the contraction off; the two-stride form of
+`matmul_take_eq`): when TorchLean's entry is not a NaN, the loop's word over the `K` pairs is
+that entry, bit for bit; and the loop's word is a NaN exactly when TorchLean's is. -/
+theorem matmul_cols_eq (c : Bool) (o : Nat → Nat × Nat) {sA sB K : Nat}
+    (A : Tensor (Model fmt) [m, sA]) (B : Tensor (Model fmt) [p, sB]) (hA : K ≤ sA)
+    (hB : K ≤ sB) (i : Fin m) (j : Fin p) (hu : ∀ k, c = true → (o k).2 % 3 ≠ 2) :
+    ((Tensor.get2 (Tensor.matmul (cols K hA A)
+        (Tensor.permute (cols K hB B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j).isNaN = false →
+        dotLoop c o (Model.zero fmt false) (List.ofFn fun k : Fin K =>
+            (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k))) =
+          Tensor.get2 (Tensor.matmul (cols K hA A)
+            (Tensor.permute (cols K hB B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j) ∧
+      (dotLoop c o (Model.zero fmt false) (List.ofFn fun k : Fin K =>
+          (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k)))).isNaN =
+        (Tensor.get2 (Tensor.matmul (cols K hA A)
+          (Tensor.permute (cols K hB B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j).isNaN :=
+  (matmul_cols_nanEq c o A B hA hB i j hu).eq_isNaN
+
+/-- `matmul_cell_error` for the `K` pairs of two rows of strides `sA` and `sB` (`cols_pairs`; the
+two-stride form of `matmul_take_error`): in every IEEE format, for all sizes and every pair of
+row strides with `K ≤ sA` and `K ≤ sB`, matrices `A` (`m × sA`), `B` (`p × sB`), indices `i`,
+`j`, every flag `c` and oracle sequence `o`, a finite loop word from `+0` over the pairs
+`(get2 A i k, get2 B j k)`, `k < K`, is within `dotBound fmt K T` of entry `(i, j)` of
+TorchLean's real product of `cols K hA A` and the transpose of `cols K hB B` mapped by
+`Model.toReal`, with `T` the sum of the absolute products of the `K` pairs. -/
+theorem matmul_cols_error (hfmt : fmt.isIEEE = true) (c : Bool) (o : Nat → Nat × Nat)
+    {sA sB K : Nat} (A : Tensor (Model fmt) [m, sA]) (B : Tensor (Model fmt) [p, sB])
+    (hA : K ≤ sA) (hB : K ≤ sB) (i : Fin m) (j : Fin p)
+    (hf : (dotLoop c o (Model.zero fmt false) (List.ofFn fun k : Fin K =>
+        (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k)))).isFinite =
+        true) :
+    |(dotLoop c o (Model.zero fmt false) (List.ofFn fun k : Fin K =>
+        (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k)))).toReal -
+        Tensor.get2 (Tensor.matmul (Tensor.map Model.toReal (cols K hA A)) (Tensor.map
+          Model.toReal (Tensor.permute (cols K hB B) (Shape.adjacentSwap [p, K] 0) [K, p]))) i j| ≤
+      dotBound fmt K ((List.ofFn fun k : Fin K =>
+        (Tensor.get2 A i (Fin.castLE hA k), Tensor.get2 B j (Fin.castLE hB k))).map
+          fun ab => |ab.1.toReal * ab.2.toReal|).sum := by
+  rw [cols_pairs A B hA hB] at hf ⊢; exact matmul_cell_error hfmt c o _ _ i j hf
+
+/-- **The first `K` pairs of two rows are the pairs of a matmul cell** (`cols_pairs` at one
+stride): in every format, for all sizes with `K ≤ s`, matrices `A` (`m × s`) and `B` (`p × s`)
+and indices `i`, `j`, the first `K` of the pairs `(get2 A i k, get2 B j k)`, `k < s`, are
+`matmulPairs` at `(i, j)` of `cols K h A` and TorchLean's transpose of `cols K h B`. -/
 theorem take_pairs {s K : Nat} (A : Tensor (Model fmt) [m, s]) (B : Tensor (Model fmt) [p, s])
     (h : K ≤ s) (i : Fin m) (j : Fin p) :
     (List.ofFn fun k : Fin s => (Tensor.get2 A i k, Tensor.get2 B j k)).take K =
       matmulPairs (cols K h A) (Tensor.permute (cols K h B) (Shape.adjacentSwap [p, K] 0) [K, p])
-        i j := by
-  rw [matmulPairs_swap]
-  apply List.ext_getElem
-  · simp [h]
-  · intro k h1 h2
-    simp [get2_cols]
+        i j :=
+  (Fin.ofFn_take_eq_take_ofFn h _).symm.trans (cols_pairs A B h h i j)
 
-/-- `matmul_cell_nanEq` for the first `K` pairs of two rows (`take_pairs`): in every format, for
-all sizes with `K ≤ s`, matrices `A` (`m × s`), `B` (`p × s`), indices `i`, `j`, every flag `c`
-and oracle sequence `o` with the contraction off, the loop from `+0` over the first `K` pairs
-`(get2 A i k, get2 B j k)` and entry `(i, j)` of TorchLean's product of `cols K h A` and the
-transpose of `cols K h B` are the same word or both NaNs. -/
+/-- `matmul_cell_nanEq` for the first `K` pairs of two rows (`matmul_cols_nanEq` at one stride):
+in every format, for all sizes with `K ≤ s`, matrices `A` (`m × s`), `B` (`p × s`), indices `i`,
+`j`, every flag `c` and oracle sequence `o` with the contraction off, the loop from `+0` over the
+first `K` pairs `(get2 A i k, get2 B j k)` and entry `(i, j)` of TorchLean's product of
+`cols K h A` and the transpose of `cols K h B` are the same word or both NaNs. -/
 theorem matmul_take_nanEq (c : Bool) (o : Nat → Nat × Nat) {s K : Nat}
     (A : Tensor (Model fmt) [m, s]) (B : Tensor (Model fmt) [p, s]) (h : K ≤ s) (i : Fin m)
     (j : Fin p) (hu : ∀ k, c = true → (o k).2 % 3 ≠ 2) :
@@ -406,11 +477,11 @@ theorem matmul_take_nanEq (c : Bool) (o : Nat → Nat × Nat) {s K : Nat}
         ((List.ofFn fun k : Fin s => (Tensor.get2 A i k, Tensor.get2 B j k)).take K))
       (Tensor.get2 (Tensor.matmul (cols K h A)
         (Tensor.permute (cols K h B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j) := by
-  rw [take_pairs A B h]; exact matmul_cell_nanEq c o _ _ i j hu
+  rw [← Fin.ofFn_take_eq_take_ofFn h]; exact matmul_cols_nanEq c o A B h h i j hu
 
-/-- The two halves of `matmul_take_nanEq`, under its premises: when TorchLean's entry is not a
-NaN, the loop's word over the first `K` pairs is that entry, bit for bit; and the loop's word is a
-NaN exactly when TorchLean's is. -/
+/-- The two halves of `matmul_take_nanEq`, under its premises (`matmul_cols_eq` at one stride):
+when TorchLean's entry is not a NaN, the loop's word over the first `K` pairs is that entry, bit
+for bit; and the loop's word is a NaN exactly when TorchLean's is. -/
 theorem matmul_take_eq (c : Bool) (o : Nat → Nat × Nat) {s K : Nat}
     (A : Tensor (Model fmt) [m, s]) (B : Tensor (Model fmt) [p, s]) (h : K ≤ s) (i : Fin m)
     (j : Fin p) (hu : ∀ k, c = true → (o k).2 % 3 ≠ 2) :
@@ -423,15 +494,15 @@ theorem matmul_take_eq (c : Bool) (o : Nat → Nat × Nat) {s K : Nat}
       (dotLoop c o (Model.zero fmt false)
           ((List.ofFn fun k : Fin s => (Tensor.get2 A i k, Tensor.get2 B j k)).take K)).isNaN =
         (Tensor.get2 (Tensor.matmul (cols K h A)
-          (Tensor.permute (cols K h B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j).isNaN :=
-  (matmul_take_nanEq c o A B h i j hu).eq_isNaN
+          (Tensor.permute (cols K h B) (Shape.adjacentSwap [p, K] 0) [K, p])) i j).isNaN := by
+  rw [← Fin.ofFn_take_eq_take_ofFn h]; exact matmul_cols_eq c o A B h h i j hu
 
-/-- `matmul_cell_error` for the first `K` pairs of two rows (`take_pairs`): in every IEEE format,
-for all sizes with `K ≤ s`, matrices `A` (`m × s`), `B` (`p × s`), indices `i`, `j`, every flag
-`c` and oracle sequence `o`, a finite loop word from `+0` over the first `K` pairs
-`(get2 A i k, get2 B j k)` is within `dotBound fmt K T` of entry `(i, j)` of TorchLean's real
-product of `cols K h A` and the transpose of `cols K h B` mapped by `Model.toReal`, with `T` the
-sum of the absolute products of the `K` pairs. -/
+/-- `matmul_cell_error` for the first `K` pairs of two rows (`matmul_cols_error` at one stride):
+in every IEEE format, for all sizes with `K ≤ s`, matrices `A` (`m × s`), `B` (`p × s`), indices
+`i`, `j`, every flag `c` and oracle sequence `o`, a finite loop word from `+0` over the first `K`
+pairs `(get2 A i k, get2 B j k)` is within `dotBound fmt K T` of entry `(i, j)` of TorchLean's
+real product of `cols K h A` and the transpose of `cols K h B` mapped by `Model.toReal`, with `T`
+the sum of the absolute products of the `K` pairs. -/
 theorem matmul_take_error (hfmt : fmt.isIEEE = true) (c : Bool) (o : Nat → Nat × Nat)
     {s K : Nat} (A : Tensor (Model fmt) [m, s]) (B : Tensor (Model fmt) [p, s]) (h : K ≤ s)
     (i : Fin m) (j : Fin p)
@@ -444,6 +515,6 @@ theorem matmul_take_error (hfmt : fmt.isIEEE = true) (c : Bool) (o : Nat → Nat
           (Tensor.permute (cols K h B) (Shape.adjacentSwap [p, K] 0) [K, p]))) i j| ≤
       dotBound fmt K (((List.ofFn fun k : Fin s => (Tensor.get2 A i k, Tensor.get2 B j k)).take
         K).map fun ab => |ab.1.toReal * ab.2.toReal|).sum := by
-  rw [take_pairs A B h] at hf ⊢; exact matmul_cell_error hfmt c o _ _ i j hf
+  rw [← Fin.ofFn_take_eq_take_ofFn h] at hf ⊢; exact matmul_cols_error hfmt c o A B h h i j hf
 
 end MojoProof.Sem

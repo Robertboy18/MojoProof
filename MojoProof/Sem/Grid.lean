@@ -48,13 +48,25 @@ by 32 (indices in x, y, z order, x fastest). A thread's special registers come f
 every collective call that can complete does; no progress is a deadlock (undefined behavior).
 
 Proved here: `Mem.compact` is the identity (`Mem.compact_eq`) and compiles to `Mem.tabulate`,
-the same memory tabulated (`Mem.compact_csimp`); a closed memory passes the start's
+the same memory tabulated (`Mem.compact_csimp`); the check's loop `allBelow` is
+`(List.range n).all` (`allBelow_eq_all`), which compiled code runs for it (`allBelow_csimp`);
+a closed memory passes the start's
 check (`Mem.checkClosed_of_closed`), for every memory and argument values; a start that
 succeeds keeps every block of the caller's memory unchanged (`Grid.start_blocks`, through
 `Mem.allocNext_blocks`, `shared_blocks`, `launchArgs_blocks` and the fold invariants
-`foldlM_mem_inv`, `foldlM_inv`), and its contexts give thread `n` the program, the number
+`foldlM_mem_inv`, `foldlM_inv`, cases of `foldlM_idx_inv`, an invariant indexed by the
+position), and its contexts give thread `n` the program, the number
 `n`, the launch's special registers and the oracle's row `n` (`Grid.start_ctx`), for every
-program, kernel, launch, memory and choices; every state `Grid.run` reaches is reachable by `Grid.Step` (`Grid.run_reach`), for every program.
+program, kernel, launch, memory and choices; a fold in `Except` over elements of a predicate,
+from a state of an invariant, succeeds with a state of the invariant when every step on such an
+element does (`Sym.foldlM_res`), and an invariant indexed by the next number of a fold over
+consecutive numbers that succeeds holds at its end (`Sym.foldlM_range'_inv`); on a memory with
+no block from its `next` on (`Mem.FreeAbove`), a launch allocation succeeds and keeps it
+(`Sym.allocNext_res`), and so does the shared memory of a block of threads whose globals `shared`
+supports (`Sym.shared_res`), and so does the start's fold of the blocks' shared memories
+(`Sym.sharedFold_res`); the four moved from MojoProof/Sym/Start.lean keep their names in
+`MojoProof.Sym`, whose start results use them; every state `Grid.run` reaches is reachable by
+`Grid.Step` (`Grid.run_reach`), for every program.
 -/
 
 namespace MojoProof.Sem
@@ -164,14 +176,40 @@ mutual
     | x :: xs => max x.bound (Val.bounds xs)
 end
 
+/-- Whether `f i` holds for every `i < n`, for every test `f` and number `n`: `f (n - 1)` first,
+then the numbers below it. It is a `Nat.rec`, which the kernel reduces one number at a time,
+without the tuples of earlier results a structural recursion builds; compiled code runs
+`(List.range n).all f` for it, the same test (`allBelow_csimp`). -/
+def allBelow (f : Nat → Bool) (n : Nat) : Bool :=
+  Nat.rec (motive := fun _ => Bool) true (fun k ih => f k && ih) n
+
+/-- `(List.range n).all f`: `allBelow` from 0 up (`allBelow_eq_all`). Compiled code runs it for
+`allBelow`; it is private, as only `allBelow_csimp` names it. -/
+private def allBelowRange (f : Nat → Bool) (n : Nat) : Bool := (List.range n).all f
+
+/-- `allBelow f n` is `(List.range n).all f`, for every test `f` and number `n`. -/
+theorem allBelow_eq_all (f : Nat → Bool) (n : Nat) : allBelow f n = (List.range n).all f := by
+  induction n with
+  | zero => rfl
+  | succ n ih =>
+    show (f n && allBelow f n) = _
+    rw [ih, List.range_succ, List.all_append, List.all_cons, List.all_nil, Bool.and_true,
+      Bool.and_comm]
+
+/-- **Compiled code may run `allBelowRange` for `allBelow`**: the same test, for every test and
+number (`allBelow_eq_all`). -/
+@[csimp] theorem allBelow_csimp : @allBelow = @allBelowRange :=
+  funext fun f => funext fun n => allBelow_eq_all f n
+
 /-- Every pointer of `vs`, and every pointer byte below the size of a block of `m` numbered below
-`next`, names a number below `next`. -/
+`next`, names a number below `next`. Both loops are `allBelow`, which the kernel reduces in time
+linear in `next` and in each block's size, times the cost of reading a byte (`b.bytes i`). -/
 def Mem.namesBelow (m : Mem) (vs : List Val) : Bool :=
-  decide (Val.bounds vs ≤ m.next) && (List.range m.next).all fun c => match m.blocks c with
-    | some b => (List.range b.size).all fun i => match b.bytes i with
+  decide (Val.bounds vs ≤ m.next) && allBelow (fun c => match m.blocks c with
+    | some b => allBelow (fun i => match b.bytes i with
       | .ptr p _ => decide (p.block < m.next)
-      | _ => true
-    | none => true
+      | _ => true) b.size
+    | none => true) m.next
 
 /-- The caller's memory `m` is closed for argument values `vs`: `next` is at least 1, no block
 has the null pointer's number 0 or a number from `next` on, and every pointer of `vs`, or in a
@@ -222,11 +260,12 @@ theorem Mem.compact_eq (m : Mem) : m.compact = m := rfl
 theorem Mem.checkClosed_of_closed {m : Mem} {vs : List Val} (h : m.Closed vs) :
     m.checkClosed vs = .ok () := by
   have hn : m.namesBelow vs = true := by
-    simp only [Mem.namesBelow, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true,
-      List.mem_range]
+    rw [Mem.namesBelow, allBelow_eq_all]
+    simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, List.mem_range]
     refine ⟨h.vals, fun c _ => ?_⟩
     split
     · rename_i b hc
+      rw [allBelow_eq_all]
       simp only [List.all_eq_true, List.mem_range]
       intro i hi
       split
@@ -289,24 +328,37 @@ def Grid.start (prog : Program) (fn : Func) (L : Launch) (args : List Val) (m : 
                                globals := fun s => (tabs.getD (n / size) []).lookup s }
   return ({ threads := ts, mem := { m.compact with trace := [] } }, ctx)
 
-/-- An invariant of a fold in `Except` that succeeds: one that every step that succeeds on an
-element of `Q` keeps, if every element of the list is of `Q`. -/
-theorem foldlM_mem_inv {α β ε : Type} {f : β → α → Except ε β} {P : β → Prop} {Q : α → Prop}
-    (hP : ∀ b a b', Q a → f b a = .ok b' → P b → P b') :
-    ∀ (xs : List α) (b : β) {r : β}, (∀ a ∈ xs, Q a) → xs.foldlM f b = .ok r → P b → P r
-  | [], b, r, _, hr, hb => by
-    cases hr
+/-- **An invariant of a fold in `Except` that succeeds, indexed by the position.** For every step
+function `f`, list `xs` and invariant `P` indexed by the number of elements folded: if every step
+on entry `i` of `xs` that succeeds from a state of `P i` gives a state of `P (i + 1)`, then a fold
+over `xs` that succeeds from a state of `P 0` gives a state of `P xs.length`. `foldlM_mem_inv`,
+`Sym.foldlM_range'_inv` and `Sym.foldlM_zipIdx_inv` are its cases. -/
+theorem foldlM_idx_inv {α β ε : Type} {f : β → α → Except ε β} :
+    ∀ {P : Nat → β → Prop} (xs : List α),
+      (∀ i a b b', xs[i]? = some a → f b a = .ok b' → P i b → P (i + 1) b') →
+      ∀ {b r : β}, xs.foldlM f b = .ok r → P 0 b → P xs.length r
+  | _, [], _, b, r, h, hb => by
+    obtain rfl : b = r := Except.ok.inj h
     exact hb
-  | a :: xs, b, r, hq, hr, hb => by
-    rw [List.foldlM_cons] at hr
+  | P, a :: xs, hP, b, r, h, hb => by
+    rw [List.foldlM_cons] at h
     cases h1 : f b a with
     | error e =>
-      rw [h1] at hr
-      cases hr
+      rw [h1] at h
+      cases h
     | ok b1 =>
-      rw [h1] at hr
-      exact foldlM_mem_inv hP xs b1 (fun x hx => hq x (List.mem_cons_of_mem a hx)) hr
-        (hP b a b1 (hq a List.mem_cons_self) h1 hb)
+      rw [h1] at h
+      exact foldlM_idx_inv (P := fun i => P (i + 1)) xs
+        (fun i a' c c' ha => hP (i + 1) a' c c' ha) h (hP 0 a b b1 rfl h1 hb)
+
+/-- An invariant of a fold in `Except` that succeeds: one that every step that succeeds on an
+element of `Q` keeps, if every element of the list is of `Q` (`foldlM_idx_inv` at an invariant
+that does not depend on the position). -/
+theorem foldlM_mem_inv {α β ε : Type} {f : β → α → Except ε β} {P : β → Prop} {Q : α → Prop}
+    (hP : ∀ b a b', Q a → f b a = .ok b' → P b → P b') (xs : List α) (b : β) {r : β}
+    (hq : ∀ a ∈ xs, Q a) (hr : xs.foldlM f b = .ok r) (hb : P b) : P r :=
+  foldlM_idx_inv (P := fun _ => P) xs
+    (fun _ a _ _ ha => hP _ a _ (hq a (List.mem_of_getElem? ha))) hr hb
 
 /-- An invariant of a fold in `Except` that succeeds: one that every step that succeeds keeps. -/
 theorem foldlM_inv {α β ε : Type} {f : β → α → Except ε β} {P : β → Prop}
@@ -328,6 +380,133 @@ theorem Mem.allocNext_blocks {l : Layout} {m m' : Mem} {space size align : Nat}
       rintro rfl
       simp [hb] at hn
     simp [Mem.set, hne, hb]
+
+/-- No block of `m` has a number from `next` on (the field `above` of `Mem.Closed`). -/
+def Mem.FreeAbove (m : Mem) : Prop := ∀ c, m.next ≤ c → m.blocks c = none
+
+/-- **A fold in `Except` that succeeds.** For every step function `f`, invariant `P` and
+predicate `Q`: if every step from a state of `P`, on an element of `Q`, succeeds (`.ok`) with a
+state of `P`, then the fold over a list of elements of `Q` from a state of `P` succeeds with a
+state of `P`. Stated for every result `x` of the fold, so that a hypothesis `fold = .error e`
+refutes itself. -/
+theorem _root_.MojoProof.Sym.foldlM_res {α β ε : Type} {f : β → α → Except ε β} {P : β → Prop}
+    {Q : α → Prop}
+    (hf : ∀ b a x, Q a → P b → f b a = x → ∃ b', x = .ok b' ∧ P b') :
+    ∀ (xs : List α) (b : β) (x : Except ε β), (∀ a ∈ xs, Q a) → P b → xs.foldlM f b = x →
+      ∃ r, x = .ok r ∧ P r
+  | [], b, _, _, hb, hx => ⟨b, hx.symm, hb⟩
+  | a :: xs, b, x, hq, hb, hx => by
+    rw [List.foldlM_cons] at hx
+    obtain ⟨b', h1, hb'⟩ := hf b a _ (hq a List.mem_cons_self) hb rfl
+    rw [h1] at hx
+    exact Sym.foldlM_res hf xs b' x (fun y hy => hq y (List.mem_cons_of_mem a hy)) hb' hx
+
+/-- **A launch allocation succeeds.** For every layout, memory `m` with `Mem.FreeAbove`, space,
+size, alignment, liveness, owner, addresses and initial bytes: `Mem.allocNext` returns `.ok`, and
+the memory it returns has `Mem.FreeAbove`. -/
+theorem _root_.MojoProof.Sym.allocNext_res {l : Layout} {m : Mem} {space size align : Nat}
+    {live readOnly : Bool} {owner : Owner} {addr gaddr : Nat} {init : List MemByte}
+    {x : Except Fault (Mem × Nat)}
+    (h : m.FreeAbove)
+    (hx : m.allocNext l space size align live readOnly owner addr gaddr init = x) :
+    ∃ r, x = .ok r ∧ r.1.FreeAbove := by
+  unfold Mem.allocNext at hx
+  rw [h m.next (Nat.le_refl _)] at hx
+  simp only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte, pure, Except.pure] at hx
+  refine ⟨_, hx.symm, fun c hc => ?_⟩
+  simp only [Mem.alloc, Mem.set] at hc ⊢
+  have hne : c ≠ m.next := by omega
+  simp only [hne, ↓reduceIte]
+  exact h c (by omega)
+
+/-- **The shared memory of a block of threads is allocated.** For every layout, globals `gs`,
+dynamic size, block of threads, address choice and memory with `Mem.FreeAbove`: if every global
+is in address space 3 and either has no initializer and is not `constant` or is initialized with
+`undef`, then `shared` returns `.ok`, with a memory with `Mem.FreeAbove`. -/
+theorem _root_.MojoProof.Sym.shared_res {l : Layout} {gs : List Global} {dyn c : Nat}
+    {ch : Nat → Nat} {m : Mem} {x : Except Fault (Mem × List (String × Ptr))}
+    (hg : ∀ g ∈ gs, g.addrSpace = 3 ∧ (g.init = none ∧ g.isConst = false ∨ g.init = some .undef))
+    (h : m.FreeAbove) (hx : shared l gs dyn c ch m = x) : ∃ r, x = .ok r ∧ r.1.FreeAbove := by
+  unfold shared at hx
+  simp only [bind, Except.bind] at hx
+  split at hx
+  · rename_i e he
+    obtain ⟨r, hr, -⟩ := Sym.allocNext_res h he
+    cases hr
+  · rename_i v hv
+    obtain ⟨r, hr, hA⟩ := Sym.allocNext_res h hv
+    cases hr
+    refine Sym.foldlM_res (P := fun r => r.1.FreeAbove) (Q := fun gi => gi.1 ∈ gs)
+      (fun b gi y hq hb hy => ?_) _ _ x (fun a ha => List.fst_mem_of_mem_zipIdx ha) hA hx
+    obtain ⟨m1, acc⟩ := b
+    obtain ⟨g, i⟩ := gi
+    obtain ⟨h3, hi⟩ := hg g hq
+    simp only [pure, Except.pure, throw, throwThe, MonadExceptOf.throw] at hy
+    split at hy
+    · rename_i hne
+      exact absurd h3 hne
+    · split at hy
+      · split at hy
+        · rename_i hn hc
+          rcases hi with ⟨-, hc'⟩ | hu
+          · simp [hc'] at hc
+          · simp [hn] at hu
+        · exact ⟨_, hy.symm, hb⟩
+      · split at hy
+        · rename_i e he
+          obtain ⟨r, hr, -⟩ := Sym.allocNext_res hb he
+          cases hr
+        · rename_i w hw
+          obtain ⟨r, hr, hA'⟩ := Sym.allocNext_res hb hw
+          cases hr
+          exact ⟨_, hy.symm, hA'⟩
+      · rename_i v hv hne
+        rcases hi with ⟨hn, -⟩ | hu
+        · simp [hn] at hne
+        · rw [hu] at hne
+          exact absurd (Option.some.inj hne).symm hv
+
+/-- **The shared memories of a list of blocks of threads are allocated.** For every layout,
+globals `gs` as in `Sym.shared_res`, dynamic size, address choice `ch`, list of block numbers,
+memory with `Mem.FreeAbove` and list of earlier tables: the fold of `Grid.start` that allocates
+each listed block `b`'s shared memory (`shared`, with the address choices `ch (Nat.pair (b + 2) i)`)
+and appends its table returns `.ok`, with a memory with `Mem.FreeAbove`. -/
+theorem _root_.MojoProof.Sym.sharedFold_res {l : Layout} {gs : List Global} {dyn : Nat}
+    {ch : Nat → Nat}
+    (hg : ∀ g ∈ gs, g.addrSpace = 3 ∧ (g.init = none ∧ g.isConst = false ∨ g.init = some .undef))
+    (bs : List Nat) {m : Mem} (acc : List (List (String × Ptr)))
+    {x : Except Fault (Mem × List (List (String × Ptr)))} (h : m.FreeAbove)
+    (hx : bs.foldlM (init := (m, acc)) (fun (m, acc) b => do
+        let (m, tab) ← shared l gs dyn b (fun i => ch (Nat.pair (b + 2) i)) m
+        pure (m, acc ++ [tab])) = x) :
+    ∃ r, x = .ok r ∧ r.1.FreeAbove :=
+  Sym.foldlM_res (P := fun r => r.1.FreeAbove) (Q := fun _ => True)
+    (fun b k y _ hb hy => by
+      simp only [bind, Except.bind, pure, Except.pure] at hy
+      split at hy
+      · rename_i e he
+        obtain ⟨r, hr, -⟩ := Sym.shared_res hg hb he
+        cases hr
+      · rename_i v hv
+        obtain ⟨r, hr, hA⟩ := Sym.shared_res hg hb hv
+        cases hr
+        exact ⟨_, hy.symm, hA⟩) bs _ x (fun _ _ => trivial) h hx
+
+/-- **A fold over consecutive numbers in `Except` that succeeds**, with the number: for every step
+function `f` and invariant `P` indexed by the next number, if every step on number `i` that
+succeeds from a state of `P i` gives a state of `P (i + 1)`, then a fold over `s, …, s + n - 1`
+that succeeds from a state of `P s` gives a state of `P (s + n)` (`foldlM_idx_inv` at
+`List.range' s n`, whose entry `i` is `s + i`). -/
+theorem _root_.MojoProof.Sym.foldlM_range'_inv {β ε : Type} {f : β → Nat → Except ε β}
+    {P : Nat → β → Prop}
+    (hP : ∀ i b b', f b i = .ok b' → P i b → P (i + 1) b') (n s : Nat) (b : β) {r : β}
+    (hr : (List.range' s n).foldlM f b = .ok r) (hb : P s b) : P (s + n) r := by
+  have := foldlM_idx_inv (P := fun i => P (s + i)) (List.range' s n) (fun i a c c' ha h1 hc => by
+    have hi : i < n := by simpa using (List.getElem?_eq_some_iff.1 ha).1
+    rw [List.getElem?_range' hi, Option.some.injEq, Nat.one_mul] at ha
+    subst ha
+    simpa only [Nat.add_assoc] using hP _ c c' h1 hc) hr hb
+  rwa [List.length_range'] at this
 
 /-- The shared memory of a block of threads keeps every block. -/
 theorem shared_blocks {l : Layout} {gs : List Global} {dyn c : Nat} {ch : Nat → Nat} {m m' : Mem}

@@ -6,7 +6,7 @@ ref: modular/modular@bbc13a71:max/kernels/src/linalg/matmul/gpu/__init__.mojo:25
 quote: "def matmul_kernel_naive["
 lean: TorchLean.Tensor.matmul, MojoProof.Sem.matmul_cell_real
 corpus: tests/corpus/mgemm/g_matmul_kernel_naive_*, tests/corpus/mgemm_nocontract, tests/corpus/mgemm_sm80
-tests: MojoProofTest.Matmul, MojoProofTest.SymNaive, MojoProofTest.SymContract, MojoProofTest.SymPhi, MojoProofTest.NaiveThread, MojoProofTest.NaiveStart, MojoProofTest.NaiveKernel, MojoProofTest.NaiveOff, MojoProofTest.Gpu
+tests: MojoProofTest.Matmul, MojoProofTest.SymNaive, MojoProofTest.SymContract, MojoProofTest.SymPhi, MojoProofTest.NaiveThread, MojoProofTest.NaiveStart, MojoProofTest.NaiveKernel, MojoProofTest.NaiveOff, MojoProofTest.ContractOff, MojoProofTest.Gpu
 upstream:
 depends: launch, contract, binary-op-rounding
 level: L4
@@ -43,16 +43,17 @@ step later give another word. `MojoProofTest.NaiveThread.thread_skip` runs an ou
 thread through `%6 → %44 → %69` to `ret`, for every thread and every predicate on the memory at
 the return, from the entry block's obligations and branch; it stores nothing. `skip_threads`
 runs the launch's other three threads by it, so every thread of that launch runs to its end.
-`MojoProofTest.NaiveIn.runIn` discharges `thread_run`'s premises at a symbolic thread: for every
-launch, size, buffer, oracle family and pair of matrices, every in-bounds thread whose entry facts
-are `NaiveSpec.At` runs to `ret` and its store puts the contracted dot loop of its row and column
-at its cell (`NaiveSpec.RunIn`). `MojoProofTest.NaiveOut.runOut` does the same for every
-out-of-bounds thread, which skips to `ret` and stores nothing (`NaiveSpec.RunOut`); its instance
-is `runsZ`, a launch with `m = n = 0`. `MojoProofTest.NaiveStart.runs12` is an instance of both
-at an evaluated start (one block of 2 × 2 threads, `m = 1`, `n = 2`, every `A`, `B`, `K ≤ 768`
-and oracle): `runIn` at threads 0 and 2, `runOut` at threads 1 and 3. `thread0` and
-`skip_threads` are not their instances, since that launch's blocks are smaller than `At` asks
-for.
+`MojoProofTest.NaiveIn.runIn` is `MojoProofTest.NaiveSound.naive.runInv` at a symbolic thread: for
+every launch, size, buffer, oracle family and pair of matrices, every in-bounds thread whose entry
+facts are `NaiveSpec.At` runs to `ret` and its store puts the contracted dot loop of its row and
+column at its cell (`NaiveSpec.RunIn`). `MojoProofTest.NaiveOut.runOut` does the same for every
+out-of-bounds thread, which skips to `ret` and stores nothing (`NaiveSpec.RunOut`); it is
+`MojoProofTest.NaiveSound.naive.out`, the run of an out-of-bounds thread that `mojo_kernel`'s `mat`
+clause generates, at `At`'s facts; its instance is `runsZ`, a launch with `m = n = 0`.
+`MojoProofTest.NaiveStart.runs12` is an instance of both at an evaluated start (one block of 2 × 2
+threads, `m = 1`, `n = 2`, every `A`, `B`, `K ≤ 768` and oracle): `runIn` at threads 0 and 2,
+`runOut` at threads 1 and 3. `thread0` and `skip_threads` are not their instances, since that
+launch's blocks are smaller than `At` asks for.
 
 **The kernel theorem, for one float32 specialization.** `MojoProofTest.NaiveKernel.correct` is
 `Kernel.Sound` of the kernel compiled with `fmul contract`, for every oracle family, valid launch
@@ -62,31 +63,52 @@ every final memory holds the contracted dot loop of row `r` of `A` and row `c` o
 first `K` columns at each cell `(r, c)` with `r < m`, `c < n` and inside the launch's window
 (`r < grid.x * block.x`, `c < grid.y * block.y`), every other byte the caller's. It is the
 library's kernel theorem of a matmul kernel from its threads' runs,
-`MojoProof.Sym.Kernel.sound_mat`, at the naive kernel (`MojoProofTest.NaiveSound.naive_sound`, the
-runs `runIn` and `runOut`), through `MojoProofTest.NaiveSound.naive.sound_mat`, the call that
-`mojo_kernel`'s `mat` clause generates; the threads' runs are proved by hand.
+`MojoProof.Sym.Kernel.sound_mat`, at the naive kernel (`MojoProofTest.NaiveSound.naive_sound`,
+from the run `MojoProofTest.NaiveIn.runIn` of an in-bounds thread only), through
+`MojoProofTest.NaiveSound.naive.sound_mat`, the call that `mojo_kernel`'s `mat` clause generates
+with the run of an out-of-bounds thread (`MojoProofTest.NaiveSound.naive.out`). The run of an
+in-bounds thread is `MojoProofTest.NaiveSound.naive.runInv`, which the `mat … inv` clause
+generates from an invariant of the loop at the heads of its rounds
+(`MojoProof.Sym.LoopIterWith`) by `MojoProof.Sym.RetLsWith.of_iter`, and it proves the function,
+the buffers, `Elem` and `Elem.Only` at every head itself (`MojoProof.Sym.Mat.Head`, by
+`MojoProof.Sym.Mat.Head.iterate`) and the registers the loop keeps
+(`MojoProofTest.NaiveSound.naive.kept`, by `MojoProof.Sym.LoopSeg.kept_round`); the invariant
+(`MojoProofTest.NaiveThread.Inv` with `%48`'s `fmul contract` operands) and its three facts are
+proved by hand: at the loop head (`MojoProofTest.NaiveIn.head_in`), at each round
+(`MojoProofTest.NaiveIn.round_in` and `MojoProofTest.NaiveThread.round_inv`) and at the exit
+(`MojoProofTest.NaiveIn.exit_in`).
 `MojoProofTest.NaiveKernel.sound12` is its instance at one block of 2 × 2 threads, two of them in
-bounds. `MojoProofTest.NaiveKernel.read_cover` reads every cell of `C` off when the
+bounds, with `K = 768`, at the start that `MojoProofTest.NaiveStart.start12` evaluates; at every
+address choice and oracle that start has a complete run whose blocks meet `Elem.Out`
+(`MojoProofTest.NaiveStart.obs12`), so the cells `MojoProofTest.NaiveKernel.read12` reads are
+those of a run that exists (`MojoProofTest.NaiveStart.cells12`).
+`MojoProofTest.NaiveKernel.read_cover` reads every cell of `C` off when the
 window covers `m × n` (`m ≤ grid.x * block.x`, `n ≤ grid.y * block.y`); a cell outside the window
 keeps the caller's bytes: `MojoProofTest.NaiveKernel.keep11`, a launch of one thread with
 `m = 1`, `n = 2`, writes only `C[0, 0]`.
 
 **The kernel compiled with contraction off.** `MojoProofTest.NaiveOff.correct` is
-`Kernel.Sound` of the float32 kernel of tests/corpus/mgemm_nocontract, at every oracle family,
-valid launch with side 1 in `z`, sizes, blocks, tensors and memory meeting `Mat.Pre`. Every
-final memory holds, at each cell in bounds and inside the launch's window, the unfused dot loop
-(`MojoProof.Sem.dotLoop` with no fusion: the float32 product rounded, then the sum rounded).
-Every other byte is the caller's. It is `NaiveKernel.correct` at the never-fusing oracle,
-moved by `MojoProof.Sem.Kernel.Sound.contractOff` with `MojoProof.Sem.dotLoop_neverFuse`.
-`Kernel.Sound.contractOff` holds for every program whose only oracle readers are float binary
-operations, a premise the naive kernel meets by evaluation. By evaluation, the program's
+`Kernel.Sound` of the float32 kernel of tests/corpus/mgemm_nocontract, at every oracle family
+`ω`, valid launch with side 1 in `z`, sizes, blocks, tensors and memory meeting `Mat.Pre`, for
+`Elem.Out` of the naive kernel's bytes at the never-fusing rows `neverFuse (ω k)`. It is
+`NaiveKernel.correct` at those rows, moved by `MojoProof.Sem.Kernel.Sound.contractOff`.
+`MojoProofTest.NaiveOff.correct_unfused` states the same bytes as the unfused dot loop
+(`MojoProof.Sem.dotLoop` with no fusion: the float32 product rounded, then the sum rounded), by
+`MojoProofTest.NaiveOff.bytes_neverFuse` and `MojoProof.Sem.dotLoop_neverFuse`. Every final
+memory holds it at each cell in bounds and inside the launch's window, and every other byte is
+the caller's. `Kernel.Sound.contractOff` holds for every program whose only oracle readers are
+float binary operations, a premise the naive kernel meets by evaluation. Its converse at the
+never-fusing rows is `MojoProof.Sem.Kernel.Sound.contractOff_iff`. By evaluation, the program's
 module is the naive kernel's with the `contract` flags removed.
 `MojoProofTest.NaiveOff.matmul_nanEq` and `MojoProofTest.NaiveOff.matmul_error` compare it with
 TorchLean for every `K ≤ 768`: each cell in bounds and in the launch's window is `NaNEq` to
 `Tensor.matmul` of the first `K` columns, with no premise on the oracle, and within `dotBound` of
 the real product when finite. A run under any oracle family is a run of the naive kernel under the
-never-fusing one (`MojoProofTest.NaiveOff.obs_contractOff`). These cover one program, every
-launch and memory of `Mat.Pre`.
+never-fusing one (`MojoProof.Sym.Kernel.Obs.contractOff`, for every program of the fragment
+`Program.fbinOracle`; both directions in `MojoProof.Sym.Kernel.Obs.contractOff_iff`), and the two
+comparisons are `MojoProofTest.NaiveKernel.matmul_nanEq` and `matmul_error` at that run. These
+cover one program, every launch valid with side 1 in `z` (the cells in its window) and every
+memory of `Mat.Pre`.
 
 **Against TorchLean, for one float32 specialization.** For every oracle family, valid launch with
 side 1 in `z`, `K ≤ 768`, sizes, blocks, tensors and memory meeting `Mat.Pre`, every complete
@@ -116,9 +138,13 @@ that the evaluator's runs of the two imports agree.
 **Not proved.** The kernel theorem covers one of the 13 specializations, and its contraction-off
 build. For the build with contraction, the L3 equality is proved only at a thread whose oracle
 fuses no round; at a fused round only L4's bound holds. The start of a launch of `At`'s sizes
-evaluates in the kernel only with its check of the caller's memory rewritten
-(`Mem.checkClosed_of_closed`, in `MojoProofTest.NaiveStart`), and no theorem applies `correct` at
-an evaluated start.
+evaluates in the kernel with its check of the caller's memory in place
+(`MojoProofTest.NaiveStart.start12`); `correct` is applied at that start for `K = 768` only
+(`MojoProofTest.NaiveKernel.sound12`), and at no other launch or memory.
 
-**Open.** The other specializations; generating the threads' runs, which the `mat` clause leaves
-as premises.
+**Open.** The other specializations; generating or discharging the invariant's three facts (at
+the loop head, at each round and at the exit), which are proved by hand. The `mat … inv` clause
+generates the run of an in-bounds thread from them (`MojoProofTest.NaiveSound.naive.runInv`),
+with the facts `MojoProof.Sym.Mat.Head` and the registers the loop keeps
+(`MojoProofTest.NaiveSound.naive.kept`) at every head of a round, and the run of an
+out-of-bounds thread (`MojoProofTest.NaiveSound.naive.out`).

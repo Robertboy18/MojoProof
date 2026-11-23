@@ -573,3 +573,229 @@ obligation `.mem []`, `%44` is a `br`, and the memory at `%69`'s entry is that o
   discharged at a symbolic thread (the obligation prover), the start facts for the three
   `byval` structs, and the `Elem` bookkeeping of the plan's steps 2, 3 and 5 (among it, that an
   out-of-bounds thread's loads keep the cells).
+
+# Facts at a loop's heads (`LoopSeg.kept`, `LoopSeg.loadsFrom`, `LoopSeg.stepAt`)
+
+Lean: `MojoProof/Sym/LoopFacts.lean`. Tests: `MojoProofTest/LoopFacts.lean`.
+
+**Scope.** Every program, function and loop (`LoopSeg`), every flag `contract`, valuation and
+round count. The checks are Booleans and lists over the summaries, which the kernel computes on a
+concrete loop; the lemmas hold for every loop the checks accept. A round here is the loop path's
+(`Valuation.roundWith c L.h L.H L.B`); a round of a loop with nested loops also runs theirs, and
+the lemmas then hold for its loop path alone, not for the whole round.
+
+## Statement
+
+*Registers the loop keeps.* `Summary.reads S` lists the registers a block reads: the `SVal.reg`
+operands of its nodes, register updates, effects, obligations and exit (`SVal.reads`,
+`SNode.reads`, `SEff.reads`, `Cond.reads`, `Exit.reads`). `Func.keeps F Ss r` holds when no `phi`
+of `F` and no summary of `Ss` sets `r`. `LoopSeg.kept F L` lists, once each and in the order of
+their first read, the registers the loop path and the path out read (`L.H`, `L.B`, `L.X`) that
+the loop path `L.H :: L.B` keeps. `LoopSeg.kept_round`: a register of `LoopSeg.kept F L` that is
+`v` at a valuation of `F` is `v` after every number of rounds. It is `Valuation.iterate_regs_keep`
+(MojoProof/Sym/Inv.lean), the register lemma over `Valuation.roundWith`, with its two premises
+read off the list.
+
+*Memory facts.* `Summary.loadsIn rs S` holds when every effect of `S` is a load whose pointer has
+its base in the registers `rs` (`SVal.baseIn`, MojoProof/Sym/Payload.lean: a register of `rs`, or
+a `getelementptr` node based at one). `LoopSeg.loadsFrom F L rs` holds when the loop path keeps
+each register of `rs` (`Func.keeps`) and each of its blocks passes `Summary.loadsIn rs`.
+`Valuation.iterate_loads`: take a set of blocks `Q` and a property `P` of memories that logging a
+read of a block of `Q` keeps (an access with `a.write = false` and `Q a.ptr.block`). If the loop
+passes `LoopSeg.loadsFrom F L rs`, the registers `rs` have values at `V` that name only blocks of
+`Q`, and `P` holds at `V`'s memory, then `P` holds after every number of rounds. Instances:
+
+- `Valuation.iterate_blocks` (`Q` every block): the memory's blocks and next block number stay
+  (only the trace grows). So `Mem.Buffer`, `Mem.Fits` and `Mem.Holds` stay (their `of_block`,
+  with `Mem.blocks_keep`).
+- `Valuation.iterate_elem` and `Valuation.iterate_only` (`Q = (· ≠ o)`): `Elem … o …` stays
+  (`Elem.log_read`), and so does `Elem.Only o T` (`Elem.Only.log_other`).
+
+*Oracle positions.* `pathOff S ps i` is the number of steps from the entry of the path `S :: ps`
+to the entry of its block `i`. `Valuation.lastWith_off`: block `i`'s entry valuation, the last
+block of the path's first `i + 1` blocks, has the path's step count plus `pathOff S ps i`.
+`LoopSeg.stepAt L S E k j i` is the step count at block `i` of round `j` of `L` (block 0 is the
+header), for a thread whose entry path `S :: E` starts at step count `k`: `k + (pathLen S E + 1)
++ j * (pathLen L.H L.B + 1) + pathOff L.H L.B i`. `LoopSeg.stepAt_k` says that this is the step
+count of that block's entry valuation. A float node at offset `n` of its block reads the oracle at
+that step count plus `n` (`SNode.fbin`'s step field). `LoopSeg.steps_k` gives the step counts of
+the entry path, of `j` rounds and of the loop path's last block from the entry path's length,
+the round's and the last block's offset, each a premise that `decide` proves on a concrete loop.
+
+## Proof
+
+`LoopSeg.kept_round`: a listed register passes `Func.keeps` for the loop path's summaries
+(`List.mem_filter`), which are `Valuation.iterate_regs_keep`'s premises.
+
+`Valuation.iterate_loads`: by induction on the round count, and within a round by induction on
+the loop path. A block's memory is its effects' run (`SEff.apply` folded over the effects), or
+the block's entry memory when they fault. Each load logs a read through its pointer's value,
+whose block is one the base register names (`SVal.eval_baseIn`), so a block of `Q`. An edge keeps
+the memory (`Valuation.intoWith`). The registers `rs` keep their values into the next block and
+the next round (`Valuation.iterate_regs_keep`, with `Func.keeps` from `LoopSeg.loadsFrom`).
+
+`Valuation.lastWith_off`: by induction on the path, with `Valuation.intoWith_k`.
+`LoopSeg.stepAt_k`: `Valuation.roundWith_k` for the entry path and the rounds, then
+`Valuation.lastWith_off` on the first `i` edges of the loop path. `LoopSeg.steps_k`:
+`Valuation.roundWith_k` and `Valuation.lastWith_off` at `L.B.length`.
+
+## Instances
+
+MojoProofTest/LoopFacts.lean, on the naive kernel's `chainN` (`naiveL` after the entry path
+`%6 → %45`):
+
+- `naive_kept`: `LoopSeg.kept naive.fn_0 naiveL` is `%16`, `%26`, `%11`, `%37`, `%12`, `%40`.
+  These are the bound `smax(K, 0)`, the row offset, the pointer to `A`, the column offset, the
+  pointer to `B` and the cell's address (the registers `NaiveSound.naive.kept` states);
+  `naive_kept_round` is `LoopSeg.kept_round` at them.
+- `naive_loads`: the loop passes `LoopSeg.loadsFrom` with `%11` and `%12`. So at a head whose
+  `%11` and `%12` point outside block `o`, the rounds keep `Elem` at `o` (`naive_elem`) and
+  `Elem.Only o` (`naive_only`).
+- `naive_blocks`: at a head whose `%11` and `%12` are pointers, the rounds keep the memory's
+  blocks and next block number (`Valuation.iterate_blocks`), the premise of the buffers'
+  `of_block`.
+- `naive_steps`: the head of round `j` is at `k + 39 + 18 * j` and block 2 (the latch) at
+  `k + 42 + 18 * j` (`LoopSeg.stepAt_k` with the entry path's length 38, the round's 17 and the
+  latch's offset 3, each by `decide`). The latch's `fmul` and `fadd` (offsets 12 and 13) are at
+  `k + 54 + 18 * j` and `k + 55 + 18 * j`, the steps whose oracle numbers `NaiveThread.oN` reads.
+
+And on `cnt2`'s two loops (MojoProofTest/SymLoop.lean), which store: `cnt2_kept` (the bound `%10`
+and the pointers `%11` and `%16`; the counters, set by `phi`s, are not kept), `cnt2_stores`
+(`LoopSeg.loadsFrom` is false for the loop that stores) and `cnt2_steps` (`LoopSeg.steps_k`: 1
+step for the entry block, 6 a round, 2 to the body).
+
+# Design: the loop clause for a matmul thread (partly implemented)
+
+This section is a design. Of its order of work, steps 2 and 3 are in the Lean sources ("Facts at a
+loop's heads" above); steps 1 and 4 are not, and no statement of theirs is proved. It says what the
+loop clause of `mojo_kernel` (docs/kernel.md, "The loop clause") must carry so that, with `mat`, the
+command computes a matmul thread's chain from the loop's header and proves the thread's run, in
+place of the chain and the run the user gives today, and which statements change.
+
+## Today
+
+- `mat paths chains` (docs/proofs/kernel.md, "The 2-D clause") takes the chains as a term
+  (`[chainN]`, written by hand in MojoProofTest/NaiveThread.lean) and leaves the run `Hin` of a
+  thread in bounds to the user.
+- `mat paths chains inv` (docs/proofs/kernel.md, "`Hin` from an invariant" and "The heads of
+  the rounds") also generates `n.runInv`, the run of a thread in bounds from its entry facts,
+  `Elem`, `Elem.Only` and `LoopIterWith` (an invariant's three facts at the heads of the rounds,
+  where `Mat.Head` holds) through `RetLsWith.of_iter`, with the edge by `mojo_obl` and `Mat.Head`
+  at every head by mojo_inv and `Mat.Head.iterate`; `n.kept`, each register the loop keeps
+  (`LoopSeg.kept`) at every head with its value at the loop head (`LoopSeg.kept_round`); and
+  `n.sound_inv`, whose one premise is `LoopIterWith` at each thread's
+  `Mat.Thread`. `Mat.Thread` (Sym/KernelMat.lean) is the structure of a thread's facts that
+  step 1 below names `Mat.Thread` and `Mat.Facts`: one structure has both the thread's
+  parameters and its facts. For the naive kernel, `NaiveIn.runIn` is `naive.runInv` at
+  `head_in`, `round_in` and `exit_in` (8 lines), the last two by `mojo_obl` (`naive_rounds`,
+  `naive_exit`) with `Mat.Head` and the registers the loop keeps (`naive.kept`) at the loop's
+  heads; `thread_run` is then not used by it.
+- The loop clause `loop h := pre inv trips post` computes the chain from the header and proves
+  `n.entry`, `n.init`, `n.step` and `n.exit` at every valuation `V` of `pre`. Its four terms are
+  closed terms over a valuation (`pre : Valuation → Prop`, `inv : Valuation → Nat → Valuation →
+  Prop`, `trips : Valuation → Nat`, `post : Valuation → Mem → Prop`), and its default tactic
+  evaluates one concrete launch.
+
+The two do not combine, for three reasons.
+
+1. `Hin`'s premises and its postcondition mention the binders of `Kernel.sound_mat`: the launch
+   `L`, the thread `k`, the sizes `m`, `n`, `K`, the blocks `o`, `a`, `b`, the strides, the
+   tensors `x` and `y`, the memory `m₀`, the cell width `w` and the bytes `bs`. A closed `pre`
+   or `post` cannot name them.
+2. The bytes `bs` are a binder of `Kernel.sound_mat`, so no run can show that a thread stores
+   `bs k`. The clause must fix them as a function of the inputs, as `NaiveSpec.bytes` does.
+3. The obligations hold only under facts that `Kernel.sound_mat` does not state: the strides
+   and the element type the IR's address arithmetic and loads assume (naive's IR multiplies by
+   768 and 50257 and loads `float`), `K` at most the input stride, and the `i32` products of the
+   address arithmetic below `2 ^ 31` (`NaiveSpec.At.dims`).
+
+## What the clause must carry
+
+**The thread's parameters as one record.** A structure `Mat.Thread` with the launch, the thread,
+the sizes, the blocks, the strides, the element type with its encoder and alignment, the
+tensors, the memory `m₀`, the cell width and the oracle family. The clause's terms take it:
+
+- `pre : Mat.Thread → Prop` in place of `Valuation → Prop`: the strides, the element type, `K`
+  and the `i32` ranges;
+- `inv : Mat.Thread → Nat → Valuation → Prop` in place of `Valuation → Nat → Valuation → Prop`:
+  the loop-carried registers only (below);
+- `trips : Mat.Thread → Nat` in place of `Valuation → Nat` (`max K 0` for naive);
+- `bytes : Mat.Thread → Nat → Option (List MemByte)` in place of `post`: the postcondition is
+  `Hin`'s, `Elem` after `k + 1` threads and `Elem.Only`, at those bytes.
+
+**The entry facts as one predicate.** `Mat.Facts θ c m' f`: the premises of `Hin` from
+`c.prog = prog` to `Elem.Only`, with the thread's entry valuation `Valuation.entry c 0 m' f`.
+`n.entry` and `n.init` are stated at every `θ` of `pre`, every `c`, `m'`, `f` of
+`Mat.Facts θ`, at that valuation.
+
+**The 2-D index facts.** On a 1-D launch the index of thread `k` is `k` (`Launch.index_oneDim`),
+so the index needs no name of its own. On a 2-D launch the row and the column are
+`L.index k .x` and `L.index k .y`, which no tactic simplifies, so the facts must name them as two
+numbers `r` and `col` with:
+
+- `r < m` and `col < n` (the thread is in the matrix: `Hin`'s window);
+- `ctaid.d * ntid.d + tid.d` of `L.env k` equal to `r` for `d = .x` and to `col` for `d = .y`
+  (the definition of `Launch.index`), each special register below its bound and the sums below
+  `2 ^ 42` (`Launch.sreg_lt`, `Launch.index_lt`), so the IR's `zext`, `sext`, `mul` and `add`
+  of them give the words of the natural numbers (`Launch.index_ops`);
+- side 1 in `z` (`hz`), so that no `z` register enters the index.
+
+These are the hypotheses `OblMatmul.naive_entry` takes, and `mojo_obl` proves the entry path's
+obligations from them at every launch.
+
+**The heads' facts, computed.** Besides the loop-carried registers, the facts at the loop's heads
+are mostly facts the checker computes ("Facts at a loop's heads" above). The `mat … inv` clause
+now proves the first two kinds below at every head: the registers the loop keeps
+(`naive.kept`, by `LoopSeg.kept_round`) and the memory facts with the function (`Mat.Head`, by
+`Mat.Head.iterate` at `LoopSeg.bases`; docs/proofs/kernel.md, "The heads of the rounds"):
+
+- *registers the loop keeps*: `LoopSeg.kept` and `LoopSeg.kept_round`. For naive these are `%11`,
+  `%12` (the input pointers), `%16` (`smax(K, 0)`), `%26`, `%37` (row and column times the stride)
+  and `%40` (the cell's address);
+- *the memory facts*: `LoopSeg.loadsFrom` and `Valuation.iterate_loads`, with
+  `Valuation.iterate_elem` and `Valuation.iterate_only` for `Elem` and `Elem.Only` at `o` and
+  `Valuation.iterate_blocks` for `Buffer`, `Fits` and `Holds`. For naive the bases are `%11` and
+  `%12`, at `a` and `b`;
+- *the oracle positions*: `LoopSeg.stepAt` and `LoopSeg.stepAt_k`. The oracle numbers of each
+  round's `fmul` and `fadd` (`NaiveThread.oN`) are `LoopSeg.stepAt` of the latch plus the nodes'
+  offsets 12 and 13. `NaiveThread.steps` is an instance of `LoopSeg.steps_k`.
+
+The generated invariant at round `j` is then the user's `inv θ j W` together with these three,
+and the user writes only the loop-carried registers (for naive, `NaiveThread.Inv`: `%47 = j` and
+`%48` the `dotLoop` of the first `j` pairs).
+
+## Which statements change
+
+- `Kernel.sound_mat`, `LoopChain`, `coversChainsWith`, `RetLsWith`, `NaiveThread.thread_run`,
+  `thread_skip`, `NaiveSpec.At` and `naive_sound` keep their statements. The new run is an
+  instance of `Hin`'s shape, so `Kernel.sound_mat` takes it as it is.
+- The loop clause without `mat` keeps its four terms and its obligations.
+- New with `mat` and a loop clause: `n.chains` and `n.coversChains` (as for the loop clause; for
+  naive a test that `n.chains = [chainN]`), the obligations `n.entry`, `n.init`, `n.step` and
+  `n.exit` over `θ` and `Mat.Facts θ`, and `n.loop`, the run of a thread in bounds at every `θ`
+  of `pre`: `Hin`'s body with `bs := bytes θ`.
+- New theorem `n.sound_matLoop`: `n.sound_mat` without `Hin`, with the premise `pre θ` and the
+  bytes fixed to `bytes θ`. `n.sound_mat` stays, so a kernel whose run the clause does not prove
+  keeps the hand proof, and no generated statement changes.
+- For naive, `NaiveIn`'s four theorems would be the instances of `n.entry`, `n.init`, `n.step`
+  and `n.exit`, and `NaiveIn.runIn` a corollary of `n.loop`; `Mat.Head` and `naive.kept`, which
+  the `mat … inv` clause now generates, would be the generated part of the invariant, with
+  `NaiveThread.Inv`.
+
+## What the tactic must still do
+
+The default tactic must be `mojo_obl`, which proves `OblMatmul`'s obligations at every launch,
+not `decide +kernel`, which evaluates one. The accumulator's step (`floatBin_dotStep` and
+`dotLoop` of `ps.take (j + 1)`, NaiveIn's `round_in`) and the stored bytes at the exit stay
+kernel-specific and are the clause's tactic.
+
+## Order of the work
+
+1. `Mat.Thread` and `Mat.Facts`, and `Kernel.sound_mat`'s premise `Hin` over them, as a
+   corollary of `Kernel.sound_mat`.
+2. Done: the register list and lemma (`LoopSeg.kept`, `LoopSeg.kept_round`), and the load-only
+   check with the memory lemma (`LoopSeg.loadsFrom`, `Valuation.iterate_loads`).
+3. Done: the oracle positions (`pathOff`, `Valuation.lastWith_off`, `LoopSeg.stepAt`,
+   `LoopSeg.stepAt_k`, `LoopSeg.steps_k`).
+4. The clause in `elabMat`, and naive as its instance with the twins of the loop clause's tests
+   (a tactic that leaves an obligation, a wrong header).

@@ -4,12 +4,12 @@ title: Stepping by a stride is exact only for an affine layout
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:120
 quote: "this first: only an affine layout makes that step exact."
-lean: not stated yet
+lean: MojoProof.Layout.Lay.call_add
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws
 upstream:
 depends: crd2idx
-level: L0
+level: L1
 ---
 # Stepping by a stride is exact only for an affine layout
 
@@ -25,6 +25,10 @@ The statement that, for an affine layout, the next coordinate's offset is the cu
 
 Which kernels step by a stride without checking `is_affine`: that is a per-kernel question.
 
+## In MojoProof
+
+`Lay.call_add`: on every flat layout, the offset of the sum of two exact coordinates is the sum of their offsets, so stepping one coordinate by 1 adds that mode's stride. A swizzle is not affine: `Swizzle(1, 0, 1)` maps 1 to 1 and 2 to 3 (MojoProofTest.LayoutLaws, by `decide`). `is_affine` itself is not transcribed.
+
 ## Open
 
-A Lean statement for affine layouts. MojoProof states no layout law yet.
+`is_affine` in Lean, and the stepping law for every layout it accepts.

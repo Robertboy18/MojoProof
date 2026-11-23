@@ -1,0 +1,652 @@
+{
+ "seed": 1729,
+ "slots": 323,
+ "cases": [
+  {
+   "kind": "call",
+   "shape": [
+    1
+   ],
+   "stride": [
+    1
+   ],
+   "slot": 0,
+   "count": 2
+  },
+  {
+   "kind": "call",
+   "shape": [
+    1,
+    2
+   ],
+   "stride": [
+    8,
+    5
+   ],
+   "slot": 2,
+   "count": 3
+  },
+  {
+   "kind": "call",
+   "shape": [
+    3,
+    2
+   ],
+   "stride": [
+    2,
+    11
+   ],
+   "slot": 5,
+   "count": 7
+  },
+  {
+   "kind": "call",
+   "shape": [
+    4,
+    1,
+    4
+   ],
+   "stride": [
+    1,
+    4,
+    4
+   ],
+   "slot": 12,
+   "count": 17
+  },
+  {
+   "kind": "call",
+   "shape": [
+    3,
+    2,
+    4
+   ],
+   "stride": [
+    9,
+    0,
+    11
+   ],
+   "slot": 29,
+   "count": 25
+  },
+  {
+   "kind": "call",
+   "shape": [
+    1,
+    4,
+    3
+   ],
+   "stride": [
+    1,
+    1,
+    4
+   ],
+   "slot": 54,
+   "count": 13
+  },
+  {
+   "kind": "call",
+   "shape": [
+    3,
+    [
+     4,
+     4
+    ]
+   ],
+   "stride": [
+    12,
+    [
+     3,
+     1
+    ]
+   ],
+   "slot": 67,
+   "count": 49
+  },
+  {
+   "kind": "call",
+   "shape": [
+    4,
+    [
+     1,
+     2
+    ]
+   ],
+   "stride": [
+    1,
+    [
+     4,
+     4
+    ]
+   ],
+   "slot": 116,
+   "count": 9
+  },
+  {
+   "kind": "call",
+   "shape": [
+    1,
+    [
+     4,
+     2
+    ]
+   ],
+   "stride": [
+    4,
+    [
+     8,
+     7
+    ]
+   ],
+   "slot": 125,
+   "count": 9
+  },
+  {
+   "kind": "exact",
+   "shape": [
+    4,
+    2
+   ],
+   "stride": [
+    1,
+    4
+   ],
+   "crds": [
+    [
+     0,
+     1
+    ],
+    [
+     2,
+     1
+    ],
+    [
+     1,
+     0
+    ],
+    [
+     3,
+     1
+    ]
+   ],
+   "slot": 134,
+   "count": 4
+  },
+  {
+   "kind": "exact",
+   "shape": [
+    2,
+    4,
+    3
+   ],
+   "stride": [
+    8,
+    11,
+    8
+   ],
+   "crds": [
+    [
+     0,
+     2,
+     1
+    ],
+    [
+     0,
+     0,
+     1
+    ],
+    [
+     1,
+     0,
+     2
+    ],
+    [
+     1,
+     2,
+     2
+    ]
+   ],
+   "slot": 138,
+   "count": 4
+  },
+  {
+   "kind": "idx2crd",
+   "shape": [
+    1,
+    2
+   ],
+   "stride": [
+    3,
+    2
+   ],
+   "idxs": [
+    1,
+    1,
+    0,
+    2
+   ],
+   "slot": 142,
+   "count": 8
+  },
+  {
+   "kind": "idx2crd",
+   "shape": [
+    4,
+    3,
+    3
+   ],
+   "stride": [
+    2,
+    3,
+    3
+   ],
+   "idxs": [
+    0,
+    93,
+    64,
+    29
+   ],
+   "slot": 150,
+   "count": 12
+  },
+  {
+   "kind": "idx2crd",
+   "shape": [
+    2,
+    2
+   ],
+   "stride": [
+    3,
+    1
+   ],
+   "idxs": [
+    3
+   ],
+   "slot": 162,
+   "count": 2
+  },
+  {
+   "kind": "rowmajor",
+   "shape": [
+    1,
+    3
+   ],
+   "slot": 164,
+   "count": 3
+  },
+  {
+   "kind": "rowmajor",
+   "shape": [
+    2,
+    2,
+    3
+   ],
+   "slot": 167,
+   "count": 12
+  },
+  {
+   "kind": "coalesce",
+   "shape": [
+    3,
+    1
+   ],
+   "stride": [
+    1,
+    12
+   ],
+   "slot": 179,
+   "count": 4
+  },
+  {
+   "kind": "coalesce",
+   "shape": [
+    1,
+    3,
+    4
+   ],
+   "stride": [
+    11,
+    7,
+    0
+   ],
+   "slot": 183,
+   "count": 13
+  },
+  {
+   "kind": "coalesce",
+   "shape": [
+    2,
+    4,
+    1
+   ],
+   "stride": [
+    1,
+    1,
+    11
+   ],
+   "slot": 196,
+   "count": 9
+  },
+  {
+   "kind": "coalesce",
+   "shape": [
+    2,
+    1,
+    3
+   ],
+   "stride": [
+    1,
+    7,
+    2
+   ],
+   "slot": 205,
+   "count": 7
+  },
+  {
+   "kind": "upcast",
+   "factor": 2,
+   "shape": [
+    2,
+    2
+   ],
+   "stride": [
+    2,
+    7
+   ],
+   "slot": 212,
+   "count": 4
+  },
+  {
+   "kind": "upcast",
+   "factor": 4,
+   "shape": [
+    1,
+    1
+   ],
+   "stride": [
+    16,
+    4
+   ],
+   "slot": 216,
+   "count": 4
+  },
+  {
+   "kind": "upcast",
+   "factor": 2,
+   "shape": [
+    4
+   ],
+   "stride": [
+    0
+   ],
+   "slot": 220,
+   "count": 2
+  },
+  {
+   "kind": "zdiv",
+   "shape": [
+    4,
+    2
+   ],
+   "stride": [
+    9,
+    4
+   ],
+   "tile": [
+    3,
+    3
+   ],
+   "slot": 222,
+   "count": 1
+  },
+  {
+   "kind": "zdiv",
+   "shape": [
+    2,
+    6
+   ],
+   "stride": [
+    1,
+    2
+   ],
+   "tile": [
+    1,
+    2
+   ],
+   "slot": 223,
+   "count": 13
+  },
+  {
+   "kind": "zdiv",
+   "shape": [
+    5
+   ],
+   "stride": [
+    1
+   ],
+   "tile": [
+    2
+   ],
+   "slot": 236,
+   "count": 5
+  },
+  {
+   "kind": "bprod",
+   "block": [
+    [
+     2,
+     3
+    ],
+    [
+     1,
+     4
+    ]
+   ],
+   "tiler": [
+    [
+     2,
+     2
+    ],
+    [
+     3,
+     2
+    ]
+   ],
+   "slot": 241,
+   "count": 25
+  },
+  {
+   "kind": "bprod",
+   "block": [
+    [
+     3,
+     2
+    ],
+    [
+     1,
+     3
+    ]
+   ],
+   "tiler": [
+    [
+     1,
+     2
+    ],
+    [
+     3,
+     3
+    ]
+   ],
+   "slot": 266,
+   "count": 13
+  },
+  {
+   "kind": "bprod",
+   "block": [
+    [
+     2
+    ],
+    [
+     2
+    ]
+   ],
+   "tiler": [
+    [
+     2
+    ],
+    [
+     1
+    ]
+   ],
+   "slot": 279,
+   "count": 5
+  },
+  {
+   "kind": "swizzle",
+   "bits": 2,
+   "base": 1,
+   "shift": 4,
+   "xs": [
+    194,
+    33,
+    63,
+    34,
+    255,
+    209
+   ],
+   "slot": 284,
+   "count": 6
+  },
+  {
+   "kind": "swizzle",
+   "bits": 1,
+   "base": 3,
+   "shift": 4,
+   "xs": [
+    199,
+    19,
+    2,
+    182,
+    40,
+    188
+   ],
+   "slot": 290,
+   "count": 6
+  },
+  {
+   "kind": "swizzle",
+   "bits": 2,
+   "base": 2,
+   "shift": -1,
+   "xs": [
+    70,
+    76,
+    30,
+    72,
+    57,
+    242
+   ],
+   "slot": 296,
+   "count": 6
+  },
+  {
+   "kind": "swizzle",
+   "bits": 3,
+   "base": 2,
+   "shift": 4,
+   "xs": [
+    88,
+    186,
+    106,
+    69,
+    151,
+    76
+   ],
+   "slot": 302,
+   "count": 6
+  },
+  {
+   "kind": "swizzle",
+   "bits": 2,
+   "base": 0,
+   "shift": 1,
+   "xs": [
+    6,
+    5
+   ],
+   "slot": 308,
+   "count": 2
+  },
+  {
+   "kind": "compose",
+   "a": [
+    [
+     4,
+     3
+    ],
+    [
+     1,
+     4
+    ]
+   ],
+   "b": [
+    [
+     6
+    ],
+    [
+     2
+    ]
+   ],
+   "slot": 310,
+   "count": 6
+  },
+  {
+   "kind": "compose",
+   "a": [
+    [
+     2,
+     4
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "b": [
+    [
+     2,
+     2
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "slot": 316,
+   "count": 4
+  },
+  {
+   "kind": "compose",
+   "a": [
+    [
+     6,
+     2
+    ],
+    [
+     1,
+     6
+    ]
+   ],
+   "b": [
+    [
+     3
+    ],
+    [
+     4
+    ]
+   ],
+   "slot": 320,
+   "count": 3
+  }
+ ]
+}

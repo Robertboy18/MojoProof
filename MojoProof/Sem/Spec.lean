@@ -310,6 +310,22 @@ def Kernel.Sound {β : Type} (prog : Program) (fn : Func) (L : Launch) (args : L
   ∀ ch oracle, adm ch oracle → ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c) ∧
     Grid.Sound L c g obs R
 
+/-- **A sound kernel has an observation at every admitted address choice and oracle family**: for
+every program, kernel, launch, arguments, memory, admission `adm`, observation `obs` and relation
+`R`, if the kernel is sound (`Kernel.Sound`) and `adm ch ω`, then the launch starts under `ch`
+and `ω` at a grid `g` with configuration `c`, some grid `g'` that `g` reaches has every thread
+returned, and `obs` at `g'`'s memory is a `y` with `R y`. A sound grid makes progress and
+terminates (`Grid.Sound.result`). -/
+theorem Kernel.Sound.exists_obs {β : Type} {prog : Program} {fn : Func} {L : Launch}
+    {args : List Val} {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop}
+    {obs : Mem → Option β} {R : β → Prop} (h : Kernel.Sound prog fn L args m adm obs R)
+    {ch : Nat → Nat} {ω : Nat → Nat → Nat} (ha : adm ch ω) :
+    ∃ y, (∃ g c g', Grid.start prog fn L args m ch ω = .ok (g, c) ∧
+      Relation.ReflTransGen (Grid.Step L c) g g' ∧ g'.Done ∧ obs g'.mem = some y) ∧ R y := by
+  obtain ⟨g, c, hs, hS⟩ := h ch ω ha
+  obtain ⟨y, hR, ⟨g', hr, hd⟩, hy⟩ := hS.result
+  exact ⟨y, ⟨g, c, g', hs, hr, hd, hy g' hr hd⟩, hR⟩
+
 /-- Every pair of addresses a real execution can give a block is a choice: addresses `A` in the
 block's space and `G` in the generic space, multiples of its alignment and below 2 to the
 power of the pointer widths, are those of the block `Mem.alloc` makes with choices `A / align`

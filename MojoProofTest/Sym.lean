@@ -98,6 +98,11 @@ def relabelNode (a b : Nat) : SNode → SNode
       (px.map fun (u, v) => (relabel a b u, relabel a b v))
       (py.map fun (u, v) => (relabel a b u, relabel a b v))
   | .flit ft lit => .flit ft lit
+  | .castAt l pc n x => .castAt l pc n (relabel a b x)
+  | .globalAt l pc i => .globalAt l pc i
+  | .loadAfter l pc x es => .loadAfter l pc (relabel a b x) (es.map fun
+      | .load l' pc' y => .load l' pc' (relabel a b y)
+      | .store l' pc' v y => .store l' pc' (relabel a b v) (relabel a b y))
 
 /-- The number of local `%n` of `vector_addition`. -/
 def local? (n : String) : Nat :=

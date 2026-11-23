@@ -9,16 +9,14 @@ docs/proofs/payload.md, "Obliviousness on terms". The term form of T3b's labelli
 under a labelling `lab` (`Labels`), each node of the table gets a role, payload (`true`) or
 skeleton (`false`), computed from the roles of the nodes before it, as `vals` computes values.
 
-* `scanSnoc f ns`: the list each of whose entries is `f` of the entries before it and the next
-  element of `ns` (the fold `vals` and `roles` both are). Proved for every `f` and list:
-  `scanSnoc_length` (one entry per element), `scanSnoc_snoc`, `scanSnoc_append` and
-  `scanSnoc_getElem?` (entry `j` is `f` of the entries of the first `j` elements and element
-  `j`).
 * `SVal.pay`, `SNode.pay`, `roles`: an entry register is payload by its label, a constant never;
   a node is payload if an operand is, if it is a `call`, `getelementptr` or `load` whose
   statement's result register (`resReg`) is labelled payload, and always if it is a float
-  operation, whose NaN results the oracle chooses ((O2) of Sem/Labels.lean). `roles_length` and
-  `roles_getElem?` are `scanSnoc`'s lemmas at `SNode.pay`.
+  operation, whose NaN results the oracle chooses ((O2) of Sem/Labels.lean), or a `load` after a
+  `store` (`SNode.loadAfter`); a global's pointer (`SNode.globalAt`) never, as the two runs have
+  one table of globals (`hg` below). `roles` is the fold
+  `scanSnoc` (MojoProof/Sym/Term.lean) at `SNode.pay`, and `roles_length` and `roles_getElem?` are
+  its lemmas there.
 * `Summary.oblivious` (docs/proofs/payload.md, "Obliviousness on terms"): the exit condition, the
   pointer of each effect, and the base, index and pointer operands of each `getelementptr` and
   `load` node are payload-free (`SVal.payloadFree`): (O1) on terms.
@@ -46,11 +44,11 @@ valuations:
 * `Valuation.LoadsOk lab pay V ns`: under `V`, each `load` node of `ns` whose statement's result
   register is skeleton points outside `pay` (`Labels.MemAt` at a `load`, on terms).
   `Valuation.loadsOk_of_pay`: it holds when every `load` node has a payload result register.
-* `vals_skel`: under related valuations meeting `LoadsOk` under the first, every node whose role
-  is skeleton has one value under both (`SVal.eval_skel` for operands, `SNode.eval_skel` for
-  nodes: `icmpV`, `gep` and `withAttrs` read only the memory's shape, `gep_shape`,
-  `icmpV_shape`, `withAttrs_shape`; a skeleton load reads a block outside `pay`,
-  `Mem.load_skel`).
+* `vals_skel`: under related valuations with one table of globals (`hg`) meeting `LoadsOk` under
+  the first, every node whose role is skeleton has one value under both (`SVal.eval_skel` for
+  operands, `SNode.eval_skel` for nodes: `icmpV`, `gep` and `withAttrs` read only the memory's
+  shape, `gep_shape`, `icmpV_shape`, `withAttrs_shape`; a skeleton load reads a block outside
+  `pay`, `Mem.load_skel`; a global's pointer is the table's).
 * `Summary.oblivious_skel`: under such valuations, an oblivious summary's exit goes to one block
   (or to none) under both (`Exit.dest`, so a branch into blocks with `phi`s too), and each
   effect's pointer (`SEff.ptr`) has one value under both.
@@ -62,8 +60,9 @@ valuations:
 * `SNode.payOk` and `Summary.payOk`: (O3) on the payload nodes. An integer operator is total
   (`BinOp.total`) and its second operand is skeleton if it reads its value (`BinOp.skelB`); a
   `getelementptr` and a `load` have skeleton operands; a `load` reads a data type (`Ty.data`); a
-  float operation has neither `nnan` nor `ninf`. `Valuation.StoresOk`: each `store` of a payload
-  value writes to a block of `pay` (`Labels.MemAt` at a `store`, on terms).
+  float operation has neither `nnan` nor `ninf`; a global's pointer is skeleton (`Valuation.Rel`
+  has one table of globals). `Valuation.StoresOk`: each `store` of a payload value writes to a
+  block of `pay` (`Labels.MemAt` at a `store`, on terms).
 * `vals_rel`: every node has related values under both (`Val.Skel` at a payload role, equal at
   a skeleton one; `SVal.eval_rel`, `SNode.eval_rel`).
 * `SEff.run_rel`: the effects of an oblivious summary make related memories (`Mem.SkelEq`), or
@@ -93,64 +92,17 @@ namespace MojoProof.Sym
 
 open MojoProof.LLVM MojoProof.Sem
 
-section scan
-
-variable {α β : Type} (f : List β → α → β)
-
-/-- The list each of whose entries is `f` of the entries before it and the next element of `ns`,
-in order (`vals` and `roles` are this fold). -/
-def scanSnoc (ns : List α) : List β :=
-  ns.foldl (fun acc a => acc ++ [f acc a]) []
-
-/-- The fold of `scanSnoc` from entries `acc` only appends, one entry per element. -/
-theorem scanSnoc_fold (ns : List α) (acc : List β) :
-    ∃ ws, ns.foldl (fun acc a => acc ++ [f acc a]) acc = acc ++ ws ∧ ws.length = ns.length := by
-  induction ns generalizing acc with
-  | nil => exact ⟨[], (List.append_nil _).symm, rfl⟩
-  | cons a ns ih =>
-    obtain ⟨ws, h, hl⟩ := ih (acc ++ [f acc a])
-    refine ⟨f acc a :: ws, ?_, ?_⟩
-    · rw [List.foldl_cons, h, List.append_assoc]; rfl
-    · simp only [List.length_cons, hl]
-
-/-- One entry per element. -/
-theorem scanSnoc_length (ns : List α) : (scanSnoc f ns).length = ns.length := by
-  obtain ⟨ws, h, hl⟩ := scanSnoc_fold f ns []
-  rw [scanSnoc, h, List.nil_append, hl]
-
-/-- The entries of a list with `a` appended: the list's entries, then `f` of them and `a`. -/
-theorem scanSnoc_snoc (ns : List α) (a : α) :
-    scanSnoc f (ns ++ [a]) = scanSnoc f ns ++ [f (scanSnoc f ns) a] := by
-  simp only [scanSnoc, List.foldl_append, List.foldl_cons, List.foldl_nil]
-
-/-- Appending elements keeps the entries before. -/
-theorem scanSnoc_append (ns ns' : List α) : ∃ ws, scanSnoc f (ns ++ ns') = scanSnoc f ns ++ ws := by
-  obtain ⟨ws, h, -⟩ := scanSnoc_fold f ns' (scanSnoc f ns)
-  exact ⟨ws, by rw [scanSnoc, List.foldl_append]; exact h⟩
-
-/-- **Entry `j`**: for every `f`, list `ns` and `j`, entry `j` of `scanSnoc f ns` is `f` of the
-entries of the first `j` elements and element `j`, and there is none when `ns` has no element
-`j`. -/
-theorem scanSnoc_getElem? (ns : List α) (j : Nat) :
-    (scanSnoc f ns)[j]? = ns[j]?.map fun a => f (scanSnoc f (ns.take j)) a := by
-  by_cases hj : j < ns.length
-  · obtain ⟨ws, hw⟩ := scanSnoc_append f (ns.take (j + 1)) (ns.drop (j + 1))
-    rw [List.take_append_drop] at hw
-    rw [hw, List.take_add_one, List.getElem?_eq_getElem hj, Option.toList_some, scanSnoc_snoc,
-      List.getElem?_append_left (by
-        simp only [List.length_append, scanSnoc_length, List.length_take, List.length_singleton]
-        omega),
-      List.getElem?_append_right (by simp only [scanSnoc_length, List.length_take]; omega)]
-    simp [scanSnoc_length, List.length_take, Nat.min_eq_left (Nat.le_of_lt hj)]
-  · rw [List.getElem?_eq_none (by rw [scanSnoc_length]; omega), List.getElem?_eq_none (by omega)]
-    rfl
-
-end scan
-
 /-- The result register of statement `pc` of block `lbl` of `fn`, if any (`Valuation.stmt`'s
 lookup, then `Stmt.res`). -/
 def resReg (fn : Func) (lbl pc : Nat) : Option Nat :=
   ((fn.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?)).bind (·.res)
+
+/-- Whether the statement at position `pc` of block `lbl` of `fn` is a float cast (`fpext` or
+`fptrunc`), whose NaN results the oracle chooses. -/
+def floatCastAt (fn : Func) (lbl pc : Nat) : Bool :=
+  match (fn.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) with
+  | some ⟨_, .cast op _ _, _⟩ => (op matches .fpext | .fptrunc)
+  | _ => false
 
 /-- Whether operand `x` of function `fn` is payload under `lab`, given the roles `ps` of the
 nodes before it: an entry register by its label, a constant never, a node by its role. -/
@@ -162,8 +114,11 @@ def SVal.pay (lab : Labels) (fn : Func) (ps : List Bool) : SVal → Bool
 /-- The role of a node of function `fn` under `lab`, given the roles `ps` of the nodes before
 it: payload if an operand is (`SVal.pay`; a `select`'s condition among them), if it is a `call`,
 `getelementptr` or `load` whose statement's result register is labelled payload, and always for
-a float operation, whose NaN results the oracle chooses ((O2) of Sem/Labels.lean); never for a
-float constant, which reads no payload. -/
+a float operation, whose NaN results the oracle chooses ((O2) of Sem/Labels.lean), for a float
+cast (`SNode.castAt` at an `fpext` or `fptrunc`, `floatCastAt`) for the same reason, and for a
+`load` after a `store` (`SNode.loadAfter`), whose memory the block's stores make; never for a
+float constant, which reads no payload, nor for a global's pointer (`SNode.globalAt`), which the
+context's table of globals gives, one table in the two runs (`hg` of `SNode.eval_skel`). -/
 def SNode.pay (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
   | .bin _ _ _ a b | .icmp _ _ a b | .minmax _ _ a b => a.pay lab fn ps || b.pay lab fn ps
   | .cast _ _ a | .extract _ a => a.pay lab fn ps
@@ -173,7 +128,9 @@ def SNode.pay (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
   | .load lbl pc p => p.pay lab fn ps || (resReg fn lbl pc).any (lab.reg fn.name)
   | .fbin .. | .fbinP .. => true
   | .select _ c a b => c.pay lab fn ps || a.pay lab fn ps || b.pay lab fn ps
-  | .flit .. => false
+  | .flit .. | .globalAt .. => false
+  | .castAt lbl pc _ a => a.pay lab fn ps || floatCastAt fn lbl pc
+  | .loadAfter .. => true
 
 /-- The roles of the nodes of table `ns` of function `fn` under `lab`, in order (`true`:
 payload), each from the roles of the nodes before it. -/
@@ -209,12 +166,12 @@ def Summary.oblivious (lab : Labels) (fn : Func) (S : Summary) : Bool :=
   S.effs.all (fun e => free e.ptr) &&
   S.nodes.all fun
     | .gep _ _ a b => free a && free b
-    | .load _ _ p => free p
+    | .load _ _ p | .loadAfter _ _ p _ => free p
     -- a `select` chooses an operand by its condition, as a branch does
     | .select _ c _ _ => free c
     -- the other nodes neither choose nor address memory
     | .bin .. | .icmp .. | .cast .. | .extract .. | .call .. | .fbin .. | .minmax .. | .fbinP ..
-    | .flit .. => true
+    | .flit .. | .castAt .. | .globalAt .. => true
 
 /-- **The roles agree with the labelling**: every register the summary sets whose entry is
 payload is labelled payload under `lab`. A register labelled payload may have a skeleton entry
@@ -322,12 +279,13 @@ theorem SVal.eval_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuatio
   | int w i => rfl
   | node j => simp only [SVal.eval, hvs j hx]
 
-/-- For every labelling, payload blocks and valuations related at the skeleton, node values equal
-at the skeleton roles `ps`, and node `nd` whose role on `ps` is skeleton and which, if a `load`
-with a skeleton result register, points outside `pay` under the first, `nd` has one value under
-both. -/
+/-- For every labelling, payload blocks and valuations related at the skeleton with one table of
+globals (`hg`), node values equal at the skeleton roles `ps`, and node `nd` whose role on `ps` is
+skeleton and which, if a `load` with a skeleton result register, points outside `pay` under the
+first, `nd` has one value under both. -/
 theorem SNode.eval_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuation}
-    (h : V₁.Skel lab pay V₂) {ps : List Bool} {vs₁ vs₂ : List (Except Fault Val)}
+    (h : V₁.Skel lab pay V₂) (hg : V₁.ctx.globals = V₂.ctx.globals) {ps : List Bool}
+    {vs₁ vs₂ : List (Except Fault Val)}
     (hvs : ∀ j, ps.getD j false = false → vs₁[j]? = vs₂[j]?) {nd : SNode}
     (hnd : nd.pay lab V₁.fn ps = false)
     (hl : ∀ lbl pc p q, nd = .load lbl pc p →
@@ -376,8 +334,9 @@ theorem SNode.eval_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuati
       obtain rfl := hv.2 hnp
       exact .refl (fun _ => rfl) _
     · rfl
-  | fbin | fbinP => simp [SNode.pay] at hnd
+  | fbin | fbinP | loadAfter => simp [SNode.pay] at hnd
   | flit ft lit => rfl
+  | globalAt lbl pc i => simp only [SNode.eval, hst, hg]
   | select w c a b =>
     simp only [SNode.pay, Bool.or_eq_false_iff] at hnd
     simp only [SNode.eval, SVal.eval_skel h hvs hnd.1.1, SVal.eval_skel h hvs hnd.1.2,
@@ -385,13 +344,33 @@ theorem SNode.eval_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuati
   | minmax sg mx a b =>
     simp only [SNode.pay, Bool.or_eq_false_iff] at hnd
     simp only [SNode.eval, SVal.eval_skel h hvs hnd.1, SVal.eval_skel h hvs hnd.2]
+  | castAt lbl pc n a =>
+    simp only [SNode.pay, Bool.or_eq_false_iff] at hnd
+    -- a cast but `fpext` and `fptrunc` reads no oracle number (`castV_ch`), and memories of one
+    -- shape give one cast (`castV_shape`)
+    have hf : (match V₂.stmt lbl pc with
+        | some ⟨_, .cast op _ _, _⟩ => (op matches .fpext | .fptrunc)
+        | _ => false) = false := by rw [← hst]; exact hnd.2
+    simp only [SNode.eval, hst, h.prog, SVal.eval_skel h hvs hnd.1]
+    generalize V₂.stmt lbl pc = o at hf ⊢
+    rcases o with _ | ⟨res, inst, md⟩
+    · rfl
+    cases inst
+    case cast op tv t =>
+      obtain ⟨s, _⟩ := tv
+      cases a.eval V₂ vs₂ with
+      | error e => rfl
+      | ok x =>
+        exact (castV_shape hS (Val.namesIn_top x) _ _ _ _ _).trans (castV_ch hf _ _ _ _ _ _ _)
+    all_goals rfl
 
 /-- **Skeleton nodes have one value in two runs.** For every labelling `lab`, payload blocks
-`pay`, table `ns` and valuations related at the skeleton (`Valuation.Skel`) whose skeleton loads
-read outside `pay` under the first (`Valuation.LoadsOk`), every node whose role is skeleton has
-one value under both (and every number past the table, none). -/
+`pay`, table `ns` and valuations related at the skeleton (`Valuation.Skel`) with one table of
+globals (`hg`) whose skeleton loads read outside `pay` under the first (`Valuation.LoadsOk`),
+every node whose role is skeleton has one value under both (and every number past the table,
+none). -/
 theorem vals_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuation} (h : V₁.Skel lab pay V₂)
-    {ns : List SNode} (hl : V₁.LoadsOk lab pay ns) :
+    (hg : V₁.ctx.globals = V₂.ctx.globals) {ns : List SNode} (hl : V₁.LoadsOk lab pay ns) :
     ∀ j, (roles lab V₁.fn ns).getD j false = false → (vals V₁ ns)[j]? = (vals V₂ ns)[j]? := by
   induction ns using List.reverseRecOn with
   | nil => intro j _; rfl
@@ -418,7 +397,7 @@ theorem vals_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuation} (h
       rw [List.getElem?_append_right (vals_length V₁ ns).le,
         List.getElem?_append_right (vals_length V₂ ns).le, vals_length, vals_length,
         Nat.sub_self, List.getElem?_cons_zero, List.getElem?_cons_zero]
-      refine congrArg some (SNode.eval_skel h ih hj fun lbl pc p q hnd hr hp => ?_)
+      refine congrArg some (SNode.eval_skel h hg ih hj fun lbl pc p q hnd hr hp => ?_)
       exact hl ns.length lbl pc p q (by
           rw [List.getElem?_append_right (Nat.le_refl ns.length), Nat.sub_self, hnd,
             List.getElem?_cons_zero]) hr
@@ -431,15 +410,16 @@ theorem vals_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuation} (h
 
 /-- **An oblivious summary takes one edge and one address per access in two runs.** For every
 labelling, payload blocks, summary oblivious under `lab` and valuations related at the skeleton
-whose skeleton loads read outside `pay` under the first: the exit goes to one block (or to none)
-under both (`Exit.dest`: a branch, a conditional branch, and a branch into blocks with `phi`s),
-and each effect's pointer has one value under both. -/
+with one table of globals whose skeleton loads read outside `pay` under the first: the exit goes
+to one block (or to none) under both (`Exit.dest`: a branch, a conditional branch, and a branch
+into blocks with `phi`s), and each effect's pointer has one value under both. -/
 theorem Summary.oblivious_skel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuation}
-    (h : V₁.Skel lab pay V₂) {S : Summary} (hS : S.oblivious lab V₁.fn = true)
+    (h : V₁.Skel lab pay V₂) (hg : V₁.ctx.globals = V₂.ctx.globals) {S : Summary}
+    (hS : S.oblivious lab V₁.fn = true)
     (hl : V₁.LoadsOk lab pay S.nodes) :
     Exit.dest V₁ (vals V₁ S.nodes) S.exit = Exit.dest V₂ (vals V₂ S.nodes) S.exit ∧
       ∀ e ∈ S.effs, e.ptr.eval V₁ (vals V₁ S.nodes) = e.ptr.eval V₂ (vals V₂ S.nodes) := by
-  have hvs := vals_skel h hl
+  have hvs := vals_skel h hg hl
   simp only [Summary.oblivious, Bool.and_eq_true, List.all_eq_true] at hS
   obtain ⟨⟨hx, he⟩, -⟩ := hS
   refine ⟨?_, fun e hm => SVal.eval_skel h hvs (by simpa [SVal.payloadFree] using he e hm)⟩
@@ -504,7 +484,9 @@ before it: an integer operator is total (`BinOp.total`) and its second operand i
 reads its value (`BinOp.skelB`: a shift amount or a divisor); a `getelementptr` and a `load`
 have skeleton operands, and a `load`'s statement reads a data type (`loadData`); a float
 operation has neither `nnan` nor `ninf`; a `select` has a skeleton condition. Comparisons, casts,
-`extractvalue`, calls and integer maxima and minima pass. -/
+`extractvalue`, calls and integer maxima and minima pass; a `load` after a `store`
+(`SNode.loadAfter`) does not, since the relation of the memories the stores make is not checked
+here. -/
 def SNode.payOk (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
   | .bin op fl _ _ b => op.total fl && (!op.skelB || !b.pay lab fn ps)
   | .gep _ _ a b => !a.pay lab fn ps && !b.pay lab fn ps
@@ -512,11 +494,13 @@ def SNode.payOk (lab : Labels) (fn : Func) (ps : List Bool) : SNode → Bool
       ((fn.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?)).all loadData
   | .fbin _ fm _ _ _ _ | .fbinP _ fm _ _ _ _ _ _ => !fm.nnan && !fm.ninf
   | .select _ c _ _ => !c.pay lab fn ps
-  -- related operands give related values or the same fault (`SNode.eval_rel`)
-  | .icmp .. | .cast .. | .extract .. | .minmax .. => true
+  -- related operands give related values or the same fault (`SNode.eval_rel`; for a cast that
+  -- names its statement, under any oracle numbers: `castV_skel`)
+  | .icmp .. | .cast .. | .extract .. | .minmax .. | .castAt .. => true
   -- a special-register call and a float constant have no operand, and their value is the same
-  -- in both runs
-  | .call .. | .flit .. => true
+  -- in both runs; a global's pointer is never payload (`SNode.pay`)
+  | .call .. | .flit .. | .globalAt .. => true
+  | .loadAfter .. => false
 
 /-- **(O3) on a summary's table**: each node whose role is payload passes `SNode.payOk` on the
 roles of the nodes before it. -/
@@ -636,7 +620,7 @@ theorem SNode.eval_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuatio
     rw [hj] at this
     exact Labels.Rel.except_eq this
   cases hp : nd.pay lab V₁.fn ps
-  · rw [SNode.eval_skel h.skel heq hp hl]
+  · rw [SNode.eval_skel h.skel h.globals heq hp hl]
     exact Except.Rel.refl (Labels.Rel.refl Val.Skel.refl false) _
   have hok := hok hp
   refine Except.Rel.imp (R := Val.Skel) (fun _ _ h => Labels.Rel.of_rel rfl h) ?_
@@ -717,6 +701,13 @@ theorem SNode.eval_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuatio
   | flit ft lit =>
     simp only [SNode.eval]
     exact Except.Rel.refl Val.Skel.refl _
+  | castAt lbl pc n a =>
+    simp only [SNode.eval, hst, h.prog]
+    split
+    · exact (hto a).bind fun _ _ hx => castV_skel h.mem _ _ _ _ hx _ _
+    · exact .error _
+  | globalAt => simp [SNode.pay] at hp
+  | loadAfter => simp [SNode.payOk] at hok
 
 /-- **Every node has related values in two runs.** For every labelling `lab`, payload blocks
 `pay`, table `ns` and valuations related by `Valuation.Rel` whose skeleton loads read outside
@@ -846,7 +837,8 @@ theorem Valuation.after_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Val
     (V₁.after S).Rel lab pay (V₂.after S) := by
   have hvs := vals_rel h hl (Summary.payOk_getElem? ho)
   refine ⟨h.prog, h.env, h.who, h.globals, h.fn, ?_, fun r => ?_, fun r => ?_⟩
-  · exact (SEff.run_rel h hvs (Summary.oblivious_skel h.skel hS hl).2 hs).toOption.getD h.mem
+  · exact (SEff.run_rel h hvs (Summary.oblivious_skel h.skel h.globals hS hl).2 hs).toOption.getD
+      h.mem
   · exact (Valuation.after_regs h hvs r).imp fun _ _ hx =>
       Labels.Rel.mono Val.Skel.refl (Summary.agrees_end ha) hx
   · show Option.Rel _ (regProd V₁ S.regs r) (regProd V₂ S.regs r)
@@ -884,7 +876,7 @@ theorem enter_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuation} (h
       (ch := fun i => V₂.ctx.oracle (Nat.pair (V₂.k + S.len) i)) (p := S.endPay lab V₁.fn)
       hA.mem fun n hn => (Labels.Rel.option_eq (hn ▸ hr n)).symm).1
   have hf : Frame.Skel lab (V₁.frameAt l S) (V₂.frameAt l S) :=
-    ⟨by simp only [Valuation.frameAt, h.fn], hA.regs, hA.prods⟩
+    ⟨by simp only [Valuation.frameAt, Valuation.frameAtWith, h.fn], hA.regs, hA.prods⟩
   have e1 : (V₂.frameAt l S).fn = V₁.fn := h.fn.symm
   have e1' : (V₁.frameAt l S).fn = V₁.fn := rfl
   have e2 : (V₁.frameAt l S).label = l := rfl
@@ -954,9 +946,12 @@ theorem Valuation.into_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valu
   have hA := Valuation.after_rel h hS ha1 hl ho hs
   have hvs := vals_rel h hl (Summary.payOk_getElem? ho)
   have hr := Valuation.after_regs h hvs
-  have hd := (Summary.oblivious_skel h.skel hS hl).1
-  unfold Valuation.into
-  rw [← hd]
+  have hd := (Summary.oblivious_skel h.skel h.globals hS hl).1
+  unfold Valuation.into Valuation.intoWith
+  rw [← hd, show V₁.afterWith false S = V₁.after S from rfl,
+    show V₂.afterWith false S = V₂.after S from rfl,
+    show V₁.frameAtWith false l S = V₁.frameAt l S from rfl,
+    show V₂.frameAtWith false l S = V₂.frameAt l S from rfl]
   cases hx : S.exit with
   | br d => exact hA
   | cond c d e => exact hA
@@ -1010,7 +1005,8 @@ def SVal.baseIn (ns : List SNode) (rs : List Nat) : SVal → Bool
     | some (.gep _ _ (.int ..) _) | some (.gep _ _ (.node _) _) => false
     | some (.bin ..) | some (.icmp ..) | some (.cast ..) | some (.extract ..) | some (.call ..)
     | some (.load ..) | some (.fbin ..) | some (.select ..) | some (.minmax ..) | some (.fbinP ..)
-    | some (.flit ..) | none => false
+    | some (.flit ..) | some (.castAt ..) | some (.globalAt ..) | some (.loadAfter ..)
+    | none => false
   | .int .. => false
 
 /-- **A pointer from its base register.** For every set of blocks `B`, valuation `V`, table
@@ -1178,7 +1174,7 @@ theorem Cond.holds_rel {lab : Labels} {pay : Nat → Prop} {V₁ V₂ : Valuatio
     obtain ⟨m, hm⟩ := h₁
     simp only [Cond.effsIn, List.all_eq_true, decide_eq_true_eq] at hd
     have hr := SEff.run_rel h hvs
-      (fun e he => (Summary.oblivious_skel h.skel hS hl).2 e (hd e he))
+      (fun e he => (Summary.oblivious_skel h.skel h.globals hS hl).2 e (hd e he))
       (fun lbl pc v p q he hv hp => hs lbl pc v p q (hd _ he) hv hp)
     rw [hm] at hr
     show ∃ m, SEff.run V₂ (vals V₂ S.nodes) es = .ok m
@@ -1216,7 +1212,7 @@ theorem WalkI.rel {lab : Labels} {pay : Nat → Prop} {fn : Func} :
     refine ⟨fun d hm' => Cond.holds_rel h hS hl ho hs (List.all_eq_true.1 hd.1 d hm') (hW₀ d hm'),
       ?_, WalkI.rel ps (Valuation.into_rel h hS ha hl ho hs)
         ((Valuation.into_k V₁ l S).2.1.trans hf) hc hd.2 hm hW⟩
-    rw [← (Summary.oblivious_skel h.skel hS hl).1]
+    rw [← (Summary.oblivious_skel h.skel h.globals hS hl).1]
     exact hx
 
 /-- **Two runs of a returning path** (the transfer to the next block's entry, T3c, composed with

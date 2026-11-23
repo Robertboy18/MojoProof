@@ -1,6 +1,7 @@
 import MojoProof.Sym.Inv
 import MojoProofTest.SymLoop
 import MojoProofTest.NaiveThread
+import MojoProofTest.Ops
 
 /-!
 # mojo_inv on two loops
@@ -22,8 +23,19 @@ Tests of mojo_inv (MojoProof/Sym/Inv.lean), the register half of a loop's invari
 * `naive_head`: after the entry block and `%45` (`NaiveThread.head`), `%47` is 0 and `%48` is the
   `phi`'s float constant `+0`; `naive_head_open` is its twin, with the function behind an
   irreducible definition, `%48` left open and logged;
+* `naive_iter`: after the head and any number of rounds, the bound `%16` is `max K 0`, with the
+  head's function read through the path from the frame's; `naive_iter_open` is its twin, with
+  the function behind the same irreducible definition, `%16` left open and logged;
 * `cnt_regs_open`: the twin of `cnt_regs` with the counter's register behind an irreducible
-  definition, left open and logged, then closed once unfolded.
+  definition, left open and logged, then closed once unfolded;
+* `naive_mem`: the memory half after a round of the naive loop, under `naive_regs`'s premises
+  less `%16` and `%48`: the buffers `bA` and `bB` (`Mem.Buffer`, `Mem.Fits`, `Mem.Holds` of `A`)
+  and the facts `Elem` and `Elem.Only` on an output block other than theirs, through the round's
+  two loads;
+  `naive_mem_open` is its twin, with `bB`'s block apart from the output block behind an
+  irreducible definition, `Elem.Only` left open and logged, then closed once unfolded;
+* `naive_store`: the naive kernel's store of `%68` into `%40`'s cell (`SymPhi.fin`), from a
+  block's run: `Elem` after one more thread and `Elem.Only`.
 
 Each covers one loop, for every valuation, bound and round that the premises allow.
 -/
@@ -138,6 +150,36 @@ theorem naive_head_open (c : Ctx) (m : Mem) (f : Frame) (hf : IsNaive f) :
   unfold IsNaive at hf
   mojo_inv
 
+/-- **The naive loop's bound after rounds from its head, by mojo_inv.** For every context `c`,
+memory `m`, frame `f` of `naive`'s function whose `%5` is the 32-bit word of `K < 2 ^ 31`, and
+count `j`: after the path `%6 → %45` (`NaiveThread.head`) and `j` rounds (`NaiveThread.round`),
+`%16 = smax(sext %5, 0)` is the 64-bit word of `max K 0`. No `phi` and no block of the round
+sets `%16` (`Valuation.iterate_regs_keep`); the function at the head comes from `f`'s through
+the path, with no hypothesis on the head's function. -/
+theorem naive_iter (c : Ctx) (m : Mem) (f : Frame) (hf : f.fn = naive.fn_0) (K j : Nat)
+    (hK : K < 2 ^ 31) (h5 : f.regs (idx "5") = some (.bits 32 (BitVec.ofNat 32 K))) :
+    (NaiveThread.round^[j] (head (Valuation.entry c 0 m f))).regs (idx "16") =
+      some (.bits 64 (BitVec.ofNat 64 (max K 0))) := by
+  mojo_inv
+
+/--
+info: mojo_inv: open goal
+  (NaiveThread.round^[j] (head (Valuation.entry c 0 m f))).regs (idx "16") =
+    some (Val.bits 64 (BitVec.ofNat 64 (max K 0)))
+-/
+#guard_msgs (whitespace := lax) in
+/-- **The twin of `naive_iter`**: with the function stated as `IsNaive`, mojo_inv does not know
+which registers the round's `phi`s and blocks set, so it leaves `%16` open, as logged; unfolding
+`IsNaive` lets it close it, from the frame's function. For every context, memory, frame, `K` and
+count. -/
+theorem naive_iter_open (c : Ctx) (m : Mem) (f : Frame) (hf : IsNaive f) (K j : Nat)
+    (hK : K < 2 ^ 31) (h5 : f.regs (idx "5") = some (.bits 32 (BitVec.ofNat 32 K))) :
+    (NaiveThread.round^[j] (head (Valuation.entry c 0 m f))).regs (idx "16") =
+      some (.bits 64 (BitVec.ofNat 64 (max K 0))) := by
+  mojo_inv
+  unfold IsNaive at hf
+  mojo_inv
+
 /-- The counter `%i` (register 4) of `W` is `i`; irreducible, so that mojo_inv does not find
 it. -/
 @[irreducible] def CntIs (W : Valuation) (i : Nat) : Prop :=
@@ -156,6 +198,82 @@ theorem cnt_regs_open {n i : Nat} (hn : n ≤ 2 ^ 60) (hi : i < n) {W : Valuatio
     (Valuation.round 1 cntH bodyC W).regs 4 = some (.bits 64 (BitVec.ofNat 64 (i + 1))) := by
   mojo_inv
   unfold CntIs at h4
+  mojo_inv
+
+/-- **The memory half after a round of the naive loop, by mojo_inv.** For every inner dimension
+`K ≤ 768`, sizes `m`, `n` with `m * 768 < 2 ^ 31` and `n * 768 < 2 ^ 31`, row `r < m`, column
+`c < n`, blocks `bA`, `bB` and `o` with `bA ≠ o` and `bB ≠ o`, matrix `A`, round
+`i < max K 0`, valuation `W` with the registers of `OblMatmul.naive_rounds` other than `%16`
+and `%48`, the buffers `bA` and `bB` and `bA`'s contents, and every memory `m₀`, width `w`, cell
+map, byte map, count `k` and set `T` with `Elem m₀ o w cell bs k W.mem` and `Elem.Only o T W.mem`:
+after the round (`NaiveThread.round`, whose memory is `W.mem` with its two loads logged) `bA` is
+still the buffer holding `A`, `bB` still fits, and `Elem` and `Elem.Only` still hold, since the
+loads read `bA` and `bB`, not `o`. -/
+theorem naive_mem (K m n r c bA bB o i : Nat)
+    (A : TorchLean.Tensor (Model FloatTy.float.fmt) [m, 768]) (W : Valuation)
+    (hK : K ≤ 768) (hm : m * 768 < 2 ^ 31) (hn : n * 768 < 2 ^ 31) (hr : r < m) (hc : c < n)
+    (hi : i < max K 0) (hP : W.ctx.prog = naive.prog) (hfn : W.fn = naive.fn_0)
+    (h47 : W.regs (idx "47") = some (.bits 64 (BitVec.ofNat 64 i)))
+    (h26 : W.regs (idx "26") = some (.bits 32 (BitVec.ofNat 32 (r * 768))))
+    (h37 : W.regs (idx "37") = some (.bits 32 (BitVec.ofNat 32 (c * 768))))
+    (h11 : W.regs (idx "11") = some (.ptr ⟨bA, 0⟩))
+    (h12 : W.regs (idx "12") = some (.ptr ⟨bB, 0⟩))
+    (hbA : W.mem.Buffer bA (m * 768 * 4) 4 false) (hbB : W.mem.Buffer bB (n * 768 * 4) 4 false)
+    (hfA : W.mem.Fits naive.prog.layout bA (m * 768 * 4))
+    (hfB : W.mem.Fits naive.prog.layout bB (n * 768 * 4))
+    (hA : W.mem.Holds naive.prog.layout bA (.fp .float) (Val.ofFloat .float)
+      (rowMajor naive.prog.layout (.fp .float) 0) A)
+    (hoA : bA ≠ o) (hoB : bB ≠ o) {m₀ : Mem} {w k : Nat} {cell : Nat → Nat}
+    {bs : Nat → Option (List MemByte)} {T : Nat → Prop}
+    (hE : Elem m₀ o w cell bs k W.mem) (hO : Elem.Only o T W.mem) :
+    (NaiveThread.round W).mem.Buffer bA (m * 768 * 4) 4 false ∧
+      (NaiveThread.round W).mem.Fits naive.prog.layout bB (n * 768 * 4) ∧
+      (NaiveThread.round W).mem.Holds naive.prog.layout bA (.fp .float) (Val.ofFloat .float)
+        (rowMajor naive.prog.layout (.fp .float) 0) A ∧
+      Elem m₀ o w cell bs k (NaiveThread.round W).mem ∧
+      Elem.Only o T (NaiveThread.round W).mem := by
+  mojo_inv
+
+/--
+info: mojo_inv: open goal
+  Elem.Only o T (NaiveThread.round W).mem
+-/
+#guard_msgs (whitespace := lax) in
+/-- **The twin of `naive_mem`'s `Elem.Only`**: with `bB` apart from the output block `o` stated as
+`Ops.Off` (irreducible, so `omega` does not see it), the inequality for the round's load of `bB`
+is not found, so mojo_inv leaves `Elem.Only` open, as logged; unfolding `Ops.Off` lets it close
+it. For the same premises as `naive_mem`, less `Elem`, the matrix and `bA`'s contents. -/
+theorem naive_mem_open (K m n r c bA bB o i : Nat) (W : Valuation)
+    (hK : K ≤ 768) (hm : m * 768 < 2 ^ 31) (hn : n * 768 < 2 ^ 31) (hr : r < m) (hc : c < n)
+    (hi : i < max K 0) (hP : W.ctx.prog = naive.prog) (hfn : W.fn = naive.fn_0)
+    (h47 : W.regs (idx "47") = some (.bits 64 (BitVec.ofNat 64 i)))
+    (h26 : W.regs (idx "26") = some (.bits 32 (BitVec.ofNat 32 (r * 768))))
+    (h37 : W.regs (idx "37") = some (.bits 32 (BitVec.ofNat 32 (c * 768))))
+    (h11 : W.regs (idx "11") = some (.ptr ⟨bA, 0⟩))
+    (h12 : W.regs (idx "12") = some (.ptr ⟨bB, 0⟩))
+    (hbA : W.mem.Buffer bA (m * 768 * 4) 4 false) (hbB : W.mem.Buffer bB (n * 768 * 4) 4 false)
+    (hfA : W.mem.Fits naive.prog.layout bA (m * 768 * 4))
+    (hfB : W.mem.Fits naive.prog.layout bB (n * 768 * 4))
+    (hoA : bA ≠ o) (hoB : Ops.Off bB o) {T : Nat → Prop} (hO : Elem.Only o T W.mem) :
+    Elem.Only o T (NaiveThread.round W).mem := by
+  mojo_inv
+  unfold Ops.Off at hoB
+  mojo_inv
+
+/-- **The naive kernel's store, by mojo_inv.** For every valuation `V` of `naive`'s program and
+function at thread `j`, with `%68` any value `x` whose bytes are `bs j` and `%40` at cell
+`cell j` of an output block `o`, and every memory `me` of the run of `%67`'s store
+(`SymPhi.fin`): `me` has `Elem` after `j + 1` threads when `V.mem` has it after `j` threads
+(`Elem.apply_store`), and `Elem.Only o T` when `V.mem` has and `j` is in `T`
+(`Elem.Only.apply`). -/
+theorem naive_store {V : Valuation} {x : Val} {o j : Nat} {m₀ me : Mem} {cell : Nat → Nat}
+    {bs : Nat → Option (List MemByte)} {T : Nat → Prop}
+    (hP : V.ctx.prog = naive.prog) (hfn : V.fn = naive.fn_0) (hw : V.ctx.who.thread = j)
+    (h68 : V.regs (idx "68") = some x) (h40 : V.regs (idx "40") = some (.ptr ⟨o, cell j⟩))
+    (he : naive.prog.layout.encode (.fp .float) x = bs j)
+    (hE : Elem m₀ o 4 cell bs j V.mem) (hO : Elem.Only o T V.mem) (hT : T j)
+    (hr : SEff.run V (vals V fin.nodes) fin.effs = .ok me) :
+    Elem m₀ o 4 cell bs (j + 1) me ∧ Elem.Only o T me := by
   mojo_inv
 
 end MojoProofTest.Inv

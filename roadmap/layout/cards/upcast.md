@@ -4,11 +4,11 @@ title: `upcast` divides strides and shapes by the factor with `shape_div`
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:2228
 quote: "new_stride = shape_div(d, factor)"
-lean: not stated yet
+lean: MojoProof.Layout.Lay.upcast, MojoProof.Layout.shapeDiv, MojoProof.Layout.shapeDiv_factor, MojoProof.Layout.Lay.upcast_modes, MojoProof.Layout.Lay.upcast_call
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
-level: L0
+level: L1
 ---
 # `upcast` divides strides and shapes by the factor with `shape_div`
 
@@ -24,6 +24,10 @@ Factors and strides where one divides the other.
 
 Other factors, where `shape_div` returns 1 or the sign and the result is not a coarsening.
 
+## In MojoProof
+
+`Lay.upcast` and `shapeDiv` transcribe `upcast` and `shape_div` on layouts whose modes are leaves. `Lay.upcast_modes`: when the factor divides every stride and every stride is positive, upcasting keeps each extent and divides each stride by the factor; `Lay.upcast_call`: the factor times the upcast offset is the original offset. For every flat layout and factor under that condition. A stride 0 gives the extent 0 (`shape_div(4, shape_div(2, 0))`, a division by 0, which the model and Mojo's compiled code both evaluate to 0); MojoProofTest.LayoutLaws has the example.
+
 ## Open
 
-A Lean statement under the divisibility condition. MojoProof states no layout law yet.
+A positive stride that divides the factor, such as the stride-1 mode of the docstring's `row_major[4, 8]` example, where the extent is divided instead; nested modes.

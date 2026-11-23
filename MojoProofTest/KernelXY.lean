@@ -1,4 +1,5 @@
 import MojoProofTest.SkelVadd
+import MojoProofTest.Eval
 
 /-!
 # 2-D cells apart, and `Elem.Out` at the end of a run
@@ -22,12 +23,11 @@ namespace MojoProofTest.KernelXY
 open MojoProof MojoProof.Sem MojoProof.LLVM MojoProof.Sym
 
 /-- The launch of one block of 2 × 3 threads (`x` side 2, `y` side 3). -/
-def L2x3 : Launch := ⟨fun _ => 1, fun | .x => 2 | .y => 3 | _ => 1, 0⟩
+def L2x3 : Launch := launch2 1 1 2 3
 
-/-- `L2x3` is valid. -/
+/-- `L2x3` is valid (`launch2_valid`). For this one launch. -/
 theorem valid2x3 : L2x3.Valid :=
-  ⟨fun d => by cases d <;> decide, fun d => by cases d <;> decide,
-    fun d => by cases d <;> decide, fun d => by cases d <;> decide, by decide⟩
+  launch2_valid (by decide)
 
 /-- **The 2-D cells of `L2x3` are apart** (`Launch.apart_xy` at row stride 3, row bound 2,
 column bound 3 and width 4): the cells `(row * 3 + col) * 4` of its threads are 4 bytes

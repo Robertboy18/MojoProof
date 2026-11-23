@@ -449,15 +449,15 @@ a getelementptr in block %entry of @f does not index its type: an index into flo
       | .ok _ => "admitted"
       | .error e => e
 
--- On tiled_matmul the block checker refuses a block (%40, at its getelementptr on the
--- shared-memory global), so a mutant is unsupported.
+-- On tiled_matmul the block checker refuses a block (%67, at the barrier call at its statement 0),
+-- so a mutant is unsupported.
 /--
 info: mutants: generated 57, selected 1, admitted 1, equivalent 0, conforming 0, killed 0, unknown 1
 not admitted: malformed 0
 admitted: duplicate 0, unsupported 1, infrastructure failure 0, timeout 0, open proof 0
 admitted: killed 0, equivalent 0, conforming 0, survived 0
 admitted, counted as unknown: refuted by evaluation (uncertified) 0, passes 0, unclassified 0
-0: inbounds toggle at fn 0 %3 stmt 25: unsupported (the block checker refuses block %40 of @tiled_matmul_tiled_matmul_kerne6A6A_2b5f0ce79ef83e63)
+0: inbounds toggle at fn 0 %3 stmt 25: unsupported (the block checker refuses block %67 of @tiled_matmul_tiled_matmul_kerne6A6A_2b5f0ce79ef83e63)
 -/
 #guard_msgs in
 #eval IO.println (run [.inbounds] Kernels.matmul.prog 1).text

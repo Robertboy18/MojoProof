@@ -110,9 +110,9 @@ theorem latch_prods {c : Ctx} (hP : c.prog = naive.prog) {t : Thread} {m : Mem} 
   obtain ⟨h65, -, h66, -⟩ := latch_nodes
   refine ⟨fe, me, hS, ?_, ?_⟩
   · rw [hpr]
-    simp only [regProdIn, h65, latch_factors.1, Option.bind_some]
+    simp only [prodsWith, Bool.cond_true, regProdIn, h65, latch_factors.1, Option.bind_some]
   · rw [hpr]
-    simp only [regProdIn, h66, latch_factors.2, Option.bind_none]
+    simp only [prodsWith, Bool.cond_true, regProdIn, h66, latch_factors.2, Option.bind_none]
 
 /-- **The latch's back edge** (`Block.soundC`, `Ends.edgeC`): for every context `c` of `naive`'s
 program and thread whose innermost frame `f` (above frames `rest`) is at the latch's entry, with

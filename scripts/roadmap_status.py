@@ -14,8 +14,9 @@ card and checks, reporting every problem it finds:
 * a ref `repo:<path>:<line>` names a file of this repository, and its line contains the quote;
 * every name in lean is a declaration (`lean: not stated yet` names none). The declaration
   index is scripts/cited.py's `scan` over MojoProof/ and MojoProofTest/, plus the names the
-  command `mojo_kernel n := ...` adds that `scan` does not list (`n.covers`, `n.correct`, ...;
-  below, `generated`), plus, for a name whose first component is another package's root
+  command `mojo_kernel n := ...` adds that `scan` does not list (`n.covers`, `n.correct`, ...,
+  with `mat` its names and with an invariant `n.runInv` and `n.sound_inv`; below, `generated`)
+  and the blocks `n.b<i>`, plus, for a name whose first component is another package's root
   (`FloatLib`, `TorchLean`), `scan` over that package's sources under .lake/packages. No Lean
   runs;
 * every name in tests is a declaration or a module MojoProofTest.<M> with a file
@@ -26,20 +27,32 @@ card and checks, reporting every problem it finds:
   or `<area>/<id>`;
 * evidence is `L<k>: item, item; L<m>: ...`, each level once, at most the kind's top level;
   an item is a declaration name (as for lean), except that a GPU run level's items (kernel L1,
-  construct L2) are files of this repository (the record of the run), and construct L3's
-  items are kernel card ids whose card has L2 evidence;
+  construct L2) are files of this repository, each the record of a GPU run that agrees (its
+  first line starts with `GPU run record:`, its `kernel:` line names a file under tests/corpus/,
+  for a kernel card one of the card's corpus files, and its `result:` line starts with
+  `agree`), and construct L3's items are kernel card ids whose card has L2 evidence;
 * level is the computed level: the highest level whose evidence, and that of every level below
   it, is present (L0 is the card itself; construct L1's evidence is its lean names);
-* a kernel's L2 evidence states `Kernel.Sound`.
+* a kernel's L2 evidence concludes `Kernel.Sound` of programs bound to corpus files, by the
+  table roadmap/llvm-ir/programs.tsv (`programs`, `l2_problem`), which scripts/L3Programs.lean
+  writes from the built environment: each theorem's row must name a declaration whose
+  conclusion, after its binders, is `Kernel.Sound` of a program (or a conjunction of such), and
+  every such program must be bound to a corpus file, that is, unfold to a program constant
+  `mojo_import` added for that file. A theorem that mentions `Kernel.Sound` only in a premise or
+  under a negation, or about a program that keeps an imported program's digest with another
+  module, does not count. The gate checks the table against the build
+  (`lake env lean --run scripts/L3Programs.lean --check`); this script only reads it.
 
-For a kernel's L2 to L4 evidence it also reads what the cited theorems' premises restrict, from
-the theorem's statement and the section variables it takes (those it `include`s or names), in
-its source, or for a name a `mojo_kernel` command adds, from the command's statement template
-in MojoProof/Sym/KernelCmd.lean: the launches (`L.Valid`, and a grid or block of side 1 in `y`
-and `z`, `grid .y = 1`, is a one-dimensional launch), and above L2 whether an output is assumed
-finite (`isFinite = true →`) and whether its real value is the exact one rounded (`roundAt`).
-This reads text, not Lean: another premise on the launch's shape is reported as such, without
-its meaning.
+For a kernel's L2 to L4 evidence it also reads what the cited theorems' premises restrict, from the
+theorem's statement and the section variables it takes (those it `include`s or names), in its
+source, or for a name a `mojo_kernel` command adds, from the command's statement template in
+MojoProof/Sym/KernelCmd.lean (the `mat` clause's theorems have none: their premises are not read):
+the launches (`L.Valid`, and a grid or block of side 1 in `y` and `z`, `grid .y = 1`, is a
+one-dimensional launch), and above L2 whether an output is assumed finite (`isFinite = true →`),
+whether its real value is the exact one rounded (`roundAt`), and whether the thread's oracle fuses
+no round (`% 3 ≠ 2`: no oracle number selects the fused `fadd contract` of its right-hand product).
+A premise only some of a level's theorems have is reported after their names. This reads text, not
+Lean: another premise on the launch's shape is reported as such, without its meaning.
 
 It writes roadmap/STATUS.md (a table per area: each card's level, the evidence present above
 it, the scope of the theorems it cites, and what the next level needs), roadmap/status.yaml
@@ -50,7 +63,9 @@ sorted and has no timestamps, so it is the same for the same cards and code.
 
 With --check it writes nothing, and exits 1 if a check fails or if STATUS.md, status.yaml or
 graph.dot differ from what it would write (graph.svg is not compared). Without it, it exits 1,
-writing nothing, if a check fails. Python 3 standard library only.
+writing nothing, if a check fails. With --self-test it reads no card and exits 1 unless
+`l2_problem` accepts the bound rows of `self_test` and refuses its others. Python 3 standard
+library only.
 """
 import glob
 import pathlib
@@ -63,6 +78,9 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import cited  # noqa: E402  (the declaration index: `scan`)
 
 ROADMAP = ROOT / 'roadmap'
+PROGRAMS = ROADMAP / 'llvm-ir' / 'programs.tsv'   # written by scripts/L3Programs.lean
+REGEN = 'lake env lean --run scripts/L3Programs.lean'
+PROGRAMS_HEADER = 'theorem\tmodule\tprogram\tfile\tsha256'
 REQUIRED = ('id', 'title', 'kind', 'ref', 'quote', 'lean', 'corpus', 'tests', 'upstream', 'level')
 OPTIONAL = ('depends', 'evidence')
 NONE = {'lean': 'not stated yet', 'corpus': 'none', 'tests': 'none'}
@@ -73,7 +91,8 @@ LADDER = {
         ('L0', 'card written', 'the card, with every check passing'),
         ('L1', 'imported, and the evaluator agrees with a GPU run: a conformance test of the '
          'evaluator against the GPU on the recorded inputs, not a proof',
-         'a tracked record of a GPU run of the corpus kernel (a file of this repository)'),
+         'a tracked record of a GPU run of the corpus kernel that agrees (a file of this '
+         'repository)'),
         ('L2', 'memory safety and race freedom for every valid launch of the shape the theorem '
          'states',
          'a Kernel.Sound theorem (declaration name); the launches its premises admit are listed '
@@ -91,7 +110,8 @@ LADDER = {
         ('L1', 'modelled in Lean', 'the card\'s lean names'),
         ('L2', 'tested against the GPU: a conformance test of the model against the GPU on the '
          'recorded inputs, not a proof',
-         'a tracked record of a GPU run of a test of the construct (a file of this repository)'),
+         'a tracked record of a GPU run of a test of the construct that agrees (a file of '
+         'this repository)'),
         ('L3', 'used by a proved kernel', 'a kernel card id whose card has L2 evidence'),
     ],
 }
@@ -106,12 +126,17 @@ NEXT = {
     ('construct', 'L3'): 'L3 needs a proved kernel that uses it',
 }
 
-# Names `mojo_kernel n := ...` adds (MojoProof/Sym/KernelCmd.lean), by the clause that adds them.
+# Names `mojo_kernel n := ...` adds (MojoProof/Sym/KernelCmd.lean), by the clause that adds them:
+# `None`, `map2` and `loop` for a command without `mat`; with `mat` the command adds only the names
+# of `mat`, and with an invariant (the word `inv` in a `mat` command) also those of `inv`.
 GENERATED = {
     None: ('paths', 'covers', 'sound_of', 'args', 'starts', 'sound'),
     'map2': ('argTy', 'argTail', 'ret', 'correct'),
     'loop': ('chains', 'coversChains', 'entry', 'init', 'step', 'exit', 'loop'),
+    'mat': ('names', 'starts', 'out', 'sound_mat'),
+    'inv': ('runInv', 'sound_inv'),
 }
+CLAUSES = re.compile(r'\b(map2|loop|mat|inv)\b')
 BLOCK = re.compile(r'b\d+')
 KERNEL = re.compile(r'^mojo_kernel\s+([^\s:]+)\s+:=')
 EVIDENCE = re.compile(r'^\s*(L\d)\s*:\s*(.*?)\s*$')
@@ -128,6 +153,7 @@ SHAPE = re.compile(r'\b(grid|block)\s+\.[xyz]\s*(=|≤|<|≥|>|∣)')
 VALID = re.compile(r'\bL\.Valid\b|\bLaunch\.Valid\b')
 FINITE = re.compile(r'isFinite\s*=\s*true\s*→')
 ROUNDED = re.compile(r'\broundAt\b')
+NOFUSE = re.compile(r'%\s*3\s*≠\s*2\b')
 OPEN, CLOSE = '({[⦃', ')}]⦄'
 
 
@@ -214,11 +240,13 @@ def launch_scope(text: str) -> str:
     return f'{valid}launches with {shape}{other}'
 
 
-def scope(level: str, text: str | None) -> str:
-    """What a cited theorem's premises restrict: for L2 the launches, above it also whether a
-    finite output is assumed and whether the real value is the exact one rounded."""
+def scope(level: str, text: str | None) -> list[str]:
+    """What a cited theorem's premises restrict, the launches first: for L2 the launches, above
+    it also whether a finite output is assumed, whether the real value is the exact one rounded,
+    and whether the thread's oracle fuses no round (no oracle number 2 modulo 3, `% 3 ≠ 2`: the
+    oracle number of `contract` that fuses the product on the right of an `fadd`)."""
     if text is None:
-        return 'premises not read'
+        return ['premises not read']
     qs = [launch_scope(text)]
     if level != 'L2':
         fin, rnd = FINITE.search(text), ROUNDED.search(text)
@@ -229,7 +257,39 @@ def scope(level: str, text: str | None) -> str:
             qs.append('where the output is finite')
         elif rnd:
             qs.append('where the output is the exact real result rounded to the format')
-    return ', '.join(qs)
+        if NOFUSE.search(text):
+            qs.append('for a thread whose oracle fuses no round (no oracle number 2 modulo 3)')
+    return qs
+
+
+def short(name: str) -> str:
+    """A declaration's name without the library's root namespace."""
+    for root in ('MojoProofTest.', 'MojoProof.'):
+        if name.startswith(root):
+            return name[len(root):]
+    return name
+
+
+def level_scope(scopes: dict[str, list[str]]) -> str:
+    """The scope of one level's cited theorems (`scope` of each, by name): the launches and
+    premises they all have, then each premise only some have, after the names of those; if
+    their launches differ, each theorem's scope after its name."""
+    if not scopes:
+        return ''
+    first = next(iter(scopes.values()))
+    if all(sc == first for sc in scopes.values()):
+        return ', '.join(first)
+    if any(sc[0] != first[0] for sc in scopes.values()):
+        return '; '.join(dict.fromkeys(f'{short(n)}: {", ".join(sc)}'
+                                       for n, sc in scopes.items()))
+    common = [q for q in first[1:] if all(q in sc[1:] for sc in scopes.values())]
+    own: dict[str, list[str]] = {}
+    for n, sc in scopes.items():
+        for q in sc[1:]:
+            if q not in common:
+                own.setdefault(q, []).append(short(n))
+    return ', '.join([first[0]] + common + [f'{" and ".join(ns)} only {q}'
+                                            for q, ns in own.items()])
 
 
 class Index:
@@ -248,30 +308,47 @@ class Index:
         for m in TEMPLATE.finditer(cmd):
             self.templates.setdefault(m.group(1), cmd[m.start():].split(':=', 1)[0])
         self.packages: dict[str, set[str]] = {}
+        self.table: dict[str, tuple[str, list[tuple[str, str, str]]]] | None = None
+
+    def programs(self) -> dict[str, tuple[str, list[tuple[str, str, str]]]]:
+        """The table of programs (`programs`), read once."""
+        if self.table is None:
+            self.table = programs()
+        return self.table
 
     def add_file(self, text: str) -> None:
         decls = cited.scan(text)[0]
         self.decls |= decls
         self.statements.update(premises_of(text))
-        lines = text.split('\n')
+        # as `cited.scan` reads the file: comments blanked, the kernel's full name from the
+        # namespaces open at the command
+        lines = cited.COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text).split('\n')
+        stack: list[str] = []   # namespace segments, '' for a section or a mutual block
         prev = ''
         for i, line in enumerate(lines):
+            if m := cited.SCOPE.match(line):
+                kind, rest = m.group(1), m.group(2).split()
+                if kind == 'namespace' and rest:
+                    stack.append(rest[0])
+                elif kind in ('section', 'mutual'):
+                    stack.append('')
+                elif kind == 'end' and stack:
+                    stack.pop()
             m = KERNEL.match(line)
             if m and prev.strip() != '#guard_msgs in':
-                n = m.group(1)
-                bases = [d[:-len('.sound_of')] for d in decls
-                         if d == f'{n}.sound_of' or d.endswith(f'.{n}.sound_of')]
+                base = '.'.join([s for s in stack if s] + [m.group(1)])
                 body = []
                 for cont in lines[i:]:
                     if not cont.strip():
                         break
                     body.append(cont)
-                words = set(re.findall(r'\b(map2|loop)\b', '\n'.join(body)))
-                for base in bases:
+                words = set(CLAUSES.findall('\n'.join(body)))
+                clauses = ['mat'] + (['inv'] if 'inv' in words else []) if 'mat' in words else \
+                    [None] + [w for w in ('map2', 'loop') if w in words]
+                if base in decls:
                     self.kernels.add(base)
-                    for clause, names in GENERATED.items():
-                        if clause is None or clause in words:
-                            self.generated |= {f'{base}.{s}' for s in names}
+                    for clause in clauses:
+                        self.generated |= {f'{base}.{s}' for s in GENERATED[clause]}
             if line.strip():
                 prev = line
 
@@ -308,6 +385,82 @@ class Index:
             return False
         pkg = self.package(root)
         return pkg is not None and name in pkg
+
+
+def programs(text: str | None = None) -> dict[str, tuple[str, list[tuple[str, str, str]]]]:
+    """The table scripts/L3Programs.lean writes from the built environment
+    (roadmap/llvm-ir/programs.tsv, or `text`): for each theorem, its module (`-`: no declaration)
+    and the programs its conclusion is about, each as (program, file, sha256): the program
+    constant `mojo_import` added that it unfolds to, that constant's corpus file and recorded
+    digest, or for a program bound to no file its term and `-`, `-`. Raises ValueError on a table
+    of another shape."""
+    if text is None:
+        text = PROGRAMS.read_text() if PROGRAMS.is_file() else ''
+    rows = text.split('\n')
+    if rows[0] != PROGRAMS_HEADER:
+        raise ValueError(f'roadmap/llvm-ir/programs.tsv is no table of programs; run `{REGEN}`')
+    out: dict[str, tuple[str, list[tuple[str, str, str]]]] = {}
+    for r in rows[1:]:
+        if r:
+            cols = r.split('\t')
+            if len(cols) != 5:
+                raise ValueError(f'roadmap/llvm-ir/programs.tsv: a row of {len(cols)} columns, '
+                                 f'not 5: {r!r}; run `{REGEN}`')
+            n, mod, prog, f, sha = cols
+            ps = out.setdefault(n, (mod, []))[1]
+            if prog != '-':
+                ps.append((prog, f, sha))
+    return out
+
+
+def l2_problem(table: dict[str, tuple[str, list[tuple[str, str, str]]]], name: str) -> str | None:
+    """Why theorem `name` is no L2 evidence by the table of programs (`programs`), or None when
+    it is: it must have a row (else the table is stale), be a declaration, conclude `Kernel.Sound`
+    of a program, and have every program its conclusion is about bound to a corpus file."""
+    if name not in table:
+        return f'has no row in roadmap/llvm-ir/programs.tsv; run `{REGEN}`'
+    mod, ps = table[name]
+    if mod == '-':
+        return 'is no declaration (roadmap/llvm-ir/programs.tsv)'
+    if not ps:
+        return 'does not conclude Kernel.Sound of a program (roadmap/llvm-ir/programs.tsv)'
+    unbound = [p for p, f, _ in ps if f == '-']
+    if unbound:
+        return (f'concludes Kernel.Sound of {", ".join(unbound)}, which no corpus file\'s '
+                'imported program is (roadmap/llvm-ir/programs.tsv)')
+    return None
+
+
+def self_test() -> int:
+    """`l2_problem` on rows of the shapes scripts/L3Programs.lean's self-test elaborates: a
+    theorem about a program bound to a file and one about two such programs pass; a premise-only
+    or negated mention (a declaration with no program), a mutant that keeps a corpus digest (a
+    program bound to no file), a theorem with a bound and an unbound program, a name with no
+    declaration and a name with no row fail; a table of the old four-column shape is refused."""
+    d = '8e4779ad' + '0' * 56
+    t = programs(PROGRAMS_HEADER + '\n'
+                 f'T.outer\tT\tT.p.prog\ttests/corpus/vadd/a.ll\t{d}\n'
+                 f'T.two\tT\tT.p.prog\ttests/corpus/vadd/a.ll\t{d}\n'
+                 f'T.two\tT\tT.q.prog\ttests/corpus/vmul/b.ll\t{d}\n'
+                 'T.premise\tT\t-\t-\t-\n'
+                 'T.negated\tT\t-\t-\t-\n'
+                 'T.mutant\tT\tT.m.prog\t-\t-\n'
+                 f'T.mixed\tT\tT.p.prog\ttests/corpus/vadd/a.ll\t{d}\n'
+                 'T.mixed\tT\tT.m.prog\t-\t-\n'
+                 'T.missing\t-\t-\t-\t-\n')
+    bad = [n for n in ('T.outer', 'T.two') if l2_problem(t, n) is not None]
+    bad += [n for n in ('T.premise', 'T.negated', 'T.mutant', 'T.mixed', 'T.missing', 'T.absent')
+            if l2_problem(t, n) is None]
+    try:
+        programs('theorem\tmodule\tprogram\tsha256\n' f'T.outer\tT\tT.p.prog\t{d}\n')
+        bad.append('the four-column table')
+    except ValueError:
+        pass
+    for n in bad:
+        print(f'self-test: {n} is not what l2_problem should make of it')
+    print('self-test: ' + ('failed' if bad else 'the bound rows pass; the premise, the negation, '
+                           'the mutant, the mixed row, the missing name and the old table fail'))
+    return 1 if bad else 0
 
 
 def items(value: str) -> list[str]:
@@ -365,11 +518,36 @@ class Card:
         self.level = 'L0'
         self.present: list[str] = []   # levels above `level` with evidence present
         self.files = 0                 # corpus kernels (.ll files) matched
+        self.corpus: set[str] = set()  # the corpus files matched, relative to the repository
         self.scopes: dict[str, str] = {}   # kernel level: what its theorems' premises restrict
 
     @property
     def key(self) -> str:
         return f'{self.area}/{self.id}'
+
+
+def record_problem(text: str, corpus: set[str] | None) -> str | None:
+    """Why `text` is not the record of a GPU run that agrees, or None: its first line starts with
+    `GPU run record:`, its `kernel:` line names a file under tests/corpus/ (for a kernel card,
+    `corpus` is the card's corpus files and the file is one of them), and its `result:` line
+    starts with `agree`. The rest of the record (the launches, the inputs, the evaluator's lines)
+    is not read."""
+    lines = text.split('\n')
+    if not lines[0].startswith('GPU run record:'):
+        return 'is no GPU run record (its first line does not start with GPU run record:)'
+    keys: dict[str, str] = {}
+    for line in lines[1:]:
+        key, sep, value = line.partition(': ')
+        if sep and key in ('kernel', 'result'):
+            keys.setdefault(key, value.strip())
+    kern = keys.get('kernel', '')
+    if not kern.startswith('tests/corpus/') or '..' in kern or not (ROOT / kern).is_file():
+        return 'names no file under tests/corpus on its kernel: line'
+    if corpus is not None and kern not in corpus:
+        return f'ran {kern}, none of the card\'s corpus files'
+    if not keys.get('result', '').startswith('agree'):
+        return 'records no agreement (its result: line does not start with agree)'
+    return None
 
 
 def check_card(c: Card, index: Index) -> list[str]:
@@ -423,6 +601,7 @@ def check_card(c: Card, index: Index) -> list[str]:
             if not p.startswith('tests/corpus/') or '..' in p or not files:
                 errs.append(f'corpus path {p} matches no file under tests/corpus')
             c.files += len({f for f in files if f.endswith('.ll')})
+            c.corpus |= {pathlib.Path(f).relative_to(ROOT).as_posix() for f in files}
     try:
         c.evidence = parse_evidence(k.get('evidence', ''))
     except ValueError as e:
@@ -435,18 +614,25 @@ def check_card(c: Card, index: Index) -> list[str]:
             for p in its:
                 if not (ROOT / p).is_file() or '..' in p:
                     errs.append(f'{lv} evidence {p} is no file of this repository')
+                elif bad := record_problem((ROOT / p).read_text(),
+                                           c.corpus if k['kind'] == 'kernel' else None):
+                    errs.append(f'{lv} evidence {p} {bad}')
         elif not (k['kind'] == 'construct' and lv == 'L3'):
             for n in its:
                 if not index.has(n):
                     errs.append(f'{lv} evidence {n} is no declaration')
             if k['kind'] == 'kernel':
-                c.scopes[lv] = '; '.join(dict.fromkeys(scope(lv, index.statement(n))
-                                                       for n in its))
+                c.scopes[lv] = level_scope({n: scope(lv, index.statement(n)) for n in its})
                 if lv == 'L2':
+                    try:
+                        table = index.programs()
+                    except ValueError as e:
+                        errs.append(str(e))
+                        table = None
                     for n in its:
-                        st = index.statement(n)
-                        if index.has(n) and st is not None and 'Kernel.Sound' not in st:
-                            errs.append(f'L2 evidence {n} does not state Kernel.Sound')
+                        if table is not None and index.has(n) and \
+                                (bad := l2_problem(table, n)) is not None:
+                            errs.append(f'L2 evidence {n} {bad}')
     return errs
 
 
@@ -601,9 +787,11 @@ def write_graph(areas: dict[str, str], cards: dict[str, Card]) -> str:
 
 
 def main(argv: list[str]) -> int:
+    if argv[1:] == ['--self-test']:
+        return self_test()
     check = argv[1:] == ['--check']
     if argv[1:] and not check:
-        print('usage: roadmap_status.py [--check]')
+        print('usage: roadmap_status.py [--check | --self-test]')
         return 2
     errs: list[str] = []
     areas: dict[str, str] = {}

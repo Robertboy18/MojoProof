@@ -1,11 +1,15 @@
-# The warp butterfly as a reduction tree (`bflyRounds`, `bflyTree`, `eval_bflyTree`, `depth_bflyTree`, `leaves_warp`, `shflSource_bfly`, `bfly_warp_error`, `bfly_warp_add`)
+# The warp butterfly as a reduction tree (`bflyRounds`, `bflyTree`, `eval_bflyTree`, `depth_bflyTree`, `leaves_bfly`, `leaves_warp`, `shflSource_bfly`, `bfly_warp_error`, `bfly_add_error`, `bflyRounds_congr`)
 
 Lean: proved, for every carrier, combining operation, offsets, values and lane as stated below,
 in MojoProof/Sem/Bfly.lean. Instances and twins: MojoProofTest/Bfly.lean. The tree type is
 FloatLib's `FloatLib.Numerics.ReductionTree` (FloatLib/Numerics/Reduction/Tree.lean), and the
-error bound is FloatLib's `ReductionTree.abs_eval_sub_exact_le_depth`
-(FloatLib/Numerics/Reduction/Error.lean). The statements are about the rounds as functions of the
-lanes' values; that a grid run of a kernel computes them is not proved (see "Not proved").
+error bounds are FloatLib's `ReductionTree.abs_eval_sub_exact_le_depth`
+(FloatLib/Numerics/Reduction/Error.lean) and, for IEEE additions,
+`Model.ReductionTree.abs_toReal_eval_sub_sum_le_depth`
+(FloatLib/Floats/Formats/BinaryInterchange/Reduction/Tree.lean), stated for every tree as
+`eval_error` and `sum_error` in MojoProof/Float/Tree.lean (float-reductions.md, statements 4 and
+5). The statements are about the rounds as functions of the lanes' values; that a grid run of a
+kernel computes them is not proved (see "Not proved").
 
 ## What the kernels compute
 
@@ -51,18 +55,31 @@ node of its own tree and lane `l ^^^ m`'s.
    `(bflyTree ms l).eval combine v = bflyRounds combine ms v l`.
 2. `depth_bflyTree`: for all offsets and every lane, `(bflyTree ms l).depth = ms.length`; at a
    warp, 5.
-3. `leaves_warp`: for every lane `l < 32`, the leaves of `bflyTree warpOffsets l` are a
-   permutation of `0, ..., 31`: each lane's value is a leaf exactly once.
+3. `leaves_bfly`: for every `k`, offsets `ms` that are a permutation of
+   `1, 2, 4, ..., 2 ^ (k - 1)` (the rounds in any order) and lane `l < 2 ^ k`, the leaves of
+   `bflyTree ms l` are a permutation of `0, ..., 2 ^ k - 1`: each lane's value is a leaf exactly
+   once. `leaves_warp` is its case `k = 5` at `warpOffsets`, for every lane `l < 32`.
 4. `shflSource_bfly`: for all `l, m < 32`, `shflSource .bfly l m 31 = l ^^^ m`.
 5. `bfly_warp_error`: for every carrier, `combine`, values `v`, map `interpret : β → ℝ`,
-   `u ≥ 0` and lane `l < 32`: if at every node of lane `l`'s tree the combination of the
+   `u ≥ 0`, offsets `ms`, lane `l` and width `w` such that the leaves of `bflyTree ms l` are a
+   permutation of `0, ..., w - 1`: if at every node of lane `l`'s tree the combination of the
    operands `x`, `y` it meets is within `u · (|x| + |y|)` of their exact sum
    (`ReductionTree.AllNodes`), then
-   `|interpret (bflyRounds combine warpOffsets v l) - Σ_{j<32} interpret (v j)|` is at most
-   `((1 + u) ^ 5 - 1) · Σ_{j<32} |interpret (v j)|`.
-6. `bfly_warp_add`: for every `v : Nat → Model .binary32` and lane `l < 32`, if every addition at
-   a node of lane `l`'s tree has a finite result, statement 5 holds with `combine = Model.add`,
-   `interpret = Model.toReal` and `u = Model.unitRoundoffAt .binary32` (`2 ^ -24`).
+   `|interpret (bflyRounds combine ms v l) - Σ_{j<w} interpret (v j)|` is at most
+   `((1 + u) ^ ms.length - 1) · Σ_{j<w} |interpret (v j)|`. At `warpOffsets`, `l < 32` and
+   `w = 32` (statement 3) the bound is `((1 + u) ^ 5 - 1) · Σ_{j<32} |interpret (v j)|`; at `2 ^ k` lanes and
+   offsets as in statement 3, `((1 + u) ^ k - 1) · Σ_{j<2^k} |interpret (v j)|`.
+6. `bfly_add_error`: in every IEEE format, for every `v : Nat → Model fmt`, offsets `ms`, lane `l`
+   and width `w` such that the leaves of `bflyTree ms l` are a permutation of `0, ..., w - 1`: if
+   lane `l`'s value `r` after the rounds of `Model.add` is finite, then every `v j` with `j < w`
+   is finite, and `|r - Σ_{j<w} v j| ≤ ((1 + u) ^ ms.length - 1) · Σ_{j<w} |v j|` over the real
+   values, with `u = Model.unitRoundoffAt fmt`. Only the root's sum is assumed finite. At
+   binary32, `warpOffsets` and `w = 32` (statement 3) the bound is
+   `((1 + 2 ^ -24) ^ 5 - 1) · Σ_{j<32} |v j|`, the binary32 case of statement 5 with
+   `combine = Model.add` and `interpret = Model.toReal`, under a finite root only.
+7. `bflyRounds_congr`: for every carrier, combining operation, offsets and lane, lane `l`'s value
+   after the rounds depends only on the values of the leaves of `bflyTree ms l`: two families
+   that agree there give the same value.
 
 The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule over 32 inputs
 (FloatLib's `clog_le_depth`); a loop over the 32 values (FloatLib's `leftChain`) has depth 31.
@@ -74,15 +91,26 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
    `l`'s and lane `l ^^^ m`'s, which are equal by the hypothesis. Start with `T = leaf`, `w = v`.
 2. The same induction: if every lane's tree has depth `d`, after a round every lane's tree has
    depth `max d d + 1 = d + 1`.
-3. By kernel evaluation (`decide +kernel`) of the 32 permutation checks.
+3. As multisets, lane `l`'s leaves are lane 0's leaves XOR `l` (induction on the rounds from the
+   last one: a round with offset `m` makes lane `l`'s leaves its own and lane `l ^^^ m`'s, and
+   XOR is associative), and a round with offset `m` adds lane 0's leaves XOR `m` to them. Two
+   rounds commute (`List.Perm.foldl_eq'`), so lane 0's leaves depend only on the multiset of the
+   offsets; at `1, 2, ..., 2 ^ (k - 1)` in order they are `0, ..., 2 ^ k - 1`, by induction on
+   `k` with `2 ^ k ^^^ j = 2 ^ k + j` for `j < 2 ^ k`. XOR with `l < 2 ^ k` permutes that list:
+   it has no duplicates (XOR with `l` is injective) and stays below `2 ^ k`
+   (`Nat.xor_lt_two_pow`). `leaves_warp` checks that `warpOffsets` is a permutation of
+   `1, 2, 4, 8, 16` by `decide`.
 4. Unfold `shflSource`: with clamp 31 the segment mask is 0 and the largest lane is 31; `m % 32 =
    m`, and `l ^^^ m < 32` (`Nat.xor_lt_two_pow`), so the source is in range.
-5. FloatLib's `abs_eval_sub_exact_le_depth` at lane `l`'s tree, rewritten by statement 1 on the
-   computed side, statement 2 for the depth, and `eval_add_eq_sum` with statement 3 for the exact
-   sum and for `sumAbs`.
-6. FloatLib's `Model.abs_toReal_add_sub_le_unitRoundoffAt` (an IEEE addition with a finite result
-   is within `2 ^ -24 · |x + y|` of the exact sum `x + y`, subnormal results included) and
-   `|x + y| ≤ |x| + |y|` give statement 5's node premise; then statement 5.
+5. `eval_error` (FloatLib's `abs_eval_sub_exact_le_depth` with the sums over the permuted
+   leaves) at lane `l`'s tree, rewritten by statement 1 on the computed side and statement 2 for
+   the depth.
+6. `sum_error` at lane `l`'s tree, rewritten the same way. In it, a finite IEEE sum has finite
+   operands (FloatLib's `Model.isFinite_of_isFinite_add`), so by induction on the tree a finite
+   root gives FloatLib's `FiniteEval` of the tree mapped by `v`, the leaves of such a tree are
+   finite, and FloatLib's `Model.ReductionTree.abs_toReal_eval_sub_sum_le_depth` bounds it.
+7. Statement 1 on both sides, then induction on the tree: a leaf's value is the family's at the
+   leaf, and a node's leaves are its two subtrees'.
 
 ## Instances and twins
 
@@ -91,7 +119,15 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
   `v j = j`, every lane ends with `0 + ... + 31 = 496`, by evaluation (`decide +kernel`).
 - `bfly_twin`: with offsets `[16, 8, 4, 2, 2]` (the last round repeated instead of offset 1),
   lane 0's leaves are not a permutation of `0, ..., 31`: each even lane occurs twice and no odd
-  lane occurs, so statement 3 needs the warp's offsets.
+  lane occurs, so statement 3 needs offsets that are distinct powers of two.
+- `leaves_mixed`: statement 3 at `k = 3`, the offsets `1, 4, 2` (not in descending order) and
+  lane 5: the leaves are a permutation of `0, ..., 7`; with eight lanes holding `1` at binary32
+  (`add_mixed`), statement 6 bounds lane 5's sum by `((1 + u) ^ 3 - 1) · 8`.
+- `add_ones`: statement 6 at binary32, `warpOffsets`, lane 0 and 32 lanes holding `1`: the root's
+  sum `32` is finite by evaluation, so every lane is finite and the bound holds.
+- `exact4`: statement 5 away from a warp, at the offsets `2, 1`, lane 3 (leaves `3, 1, 2, 0`, by
+  evaluation), `w = 4` and exact addition of reals (`u = 0`): for every `v`, lane 3's value is
+  `Σ_{j<4} v j`.
 
 ## Not proved
 
@@ -99,7 +135,8 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
   that needs the run's shuffles to complete with every lane of the warp at the same round
   (`Grid.fire`), and both kernels are outside the block checker's fragment from their entry
   block, so they have no proof path on this branch.
-- That the stored output is near the row's exact dot product: lane `l`'s partial sum is a loop
-  over the columns `32 i + l`, whose `fadd contract` may fuse with the `fmul contract` (`T9`);
-  the row's whole schedule is the butterfly tree over 32 such loops.
-- NaN and infinite results: `bfly_warp_add` assumes every node's sum is finite.
+- The row's dot product, the butterfly over the 32 strided loops whose `fadd contract` may fuse
+  with the `fmul contract` (`T9`), is warp-dot.md: within a closed-form bound of TorchLean's real
+  entry when finite, and FloatLib's reduction along lane 0's tree, up to NaNs, with the
+  contraction off. That a grid run computes it is not proved there either.
+- Any bound when the result is infinite or a NaN: statement 6 assumes the root's sum finite.

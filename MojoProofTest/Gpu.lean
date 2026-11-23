@@ -18,8 +18,9 @@ whole buffer, the words the kernel writes and those it must not write.
 
 * `vadd`, `vmul`, `vsub`: the programs `Kernels.<kernel>.prog` (the library's imports of the
   corpus files), 1-D launches on the buffers `lhs`, `rhs` and the output and the size `n`. Every
-  thread gets the oracle that is always 0; the kernels' only float operation is one `fadd`,
-  `fmul` or `fsub` without `contract`, on finite inputs, so no oracle choice reaches the output.
+  thread gets the oracle that is always 0; the kernels' only float operation is one
+  `fadd contract`, `fmul` or `fsub contract` whose operands carry no `fmul contract` product, on
+  finite inputs, so no oracle choice reaches the output.
 * `naive`: the program `naiveSm80.prog`, the import of the naive matmul kernel's IR for sm_80
   (tests/corpus/mgemm_sm80/), whose function is that of `naive` (MojoProofTest/SymPhi.lean, the
   kernel of the proofs) but for its name (`naiveSm80_fn`). 2-D launches on the buffers `C` (the

@@ -29,16 +29,23 @@ wrapper, in a scratch directory, and `corpus.py add` read the IR from that direc
   one count, no loops and no `contract`; `Kernel.sound_mat` its case for a matmul kernel (the
   output and two input structs, then the `i32` sizes `m`, `n`, `K`, with 2-D cells), whose two
   per-thread premises are the runs of the threads in and out of bounds. No clause of
-  `mojo_kernel` generates the per-thread premise for any shape other than `map2`'s, and the
+  `mojo_kernel` generates the whole per-thread premise for any shape other than `map2`'s (`mat`
+  generates the run out of bounds), and the
   tactic `mojo_ret`, which proves `map2`'s, handles only parameters `%0` to `%3`, paths without
   loops and launches with side 1 in `y` and `z`.
-- **Matmul kernels: `mat`, with the threads' runs yours.** For a kernel of `Kernel.sound_mat`'s
+- **Matmul kernels: `mat`, with the run in bounds yours.** For a kernel of `Kernel.sound_mat`'s
   shape, `mojo_kernel` with the clause `mat paths chains` (the kernel's loop-free paths and its
   sequences of loops, which it checks by evaluation) generates the call of `Kernel.sound_mat`:
-  the start, the register names, the codec, the attributes and the coverage are proved by the
-  command, and the theorem `n.sound_mat` is left with the memory premises (`Mat.Pre` gives them)
-  and the two runs `Hin` and `Hout` as premises, which you prove. See docs/kernel.md, "The
-  matmul clause `mat`".
+  the start, the register names, the codec, the attributes, the coverage and the run of a thread
+  out of bounds (`n.out`, a path of `paths` that stores nothing) are proved by the command, and
+  the theorem `n.sound_mat` is left with the memory premises (`Mat.Pre` gives them), the sizes
+  below `2 ^ 31`, the bytes none out of bounds, and the run of a thread in bounds `Hin` as
+  premises, which you prove. With `mat paths chains inv`, for a kernel with one loop and no
+  nested loop, `Hin` is proved from your invariant: `n.sound_inv` leaves one premise, at each
+  thread in bounds the invariant at the loop head, its step over each round and the path out to
+  `ret`, at the heads of the rounds, where the command gives the facts that rounds which only
+  read keep (`LoopIterWith` with `Mat.Head`) and `n.kept` the registers the loop keeps. See
+  docs/kernel.md, "The matmul clause `mat`".
 - **Loops: a clause with your invariant, for loops in sequence.** The `loop` clause takes, per
   loop, the header's block number, a precondition, an invariant, a trip count, a postcondition
   and a tactic (default `decide +kernel`, which closes few obligations). The kernel must have one
@@ -126,7 +133,7 @@ The repository already has this row, and `add` refuses a file already in the man
 own kernel, use your own family name.
 
 A new row changes the corpus's counts, which a test checks: in `MojoProofTest/Corpus.lean`, the
-expected message of `#mojo_corpus` (`mojo_corpus: 114 rows, 85 imported, ...` after this
+expected message of `#mojo_corpus` (`mojo_corpus: 114 rows, 107 imported, ...` after this
 example) must count your row, or step 8's build fails there with "Docstring on `#guard_msgs`
 does not match".
 
@@ -296,7 +303,8 @@ python3 scripts/corpus.py check
 `MojoProofTest` the test modules, and `lake test` runs the test runner: for every corpus file, its
 digest, its parse, its print and its import. The audit checks that every declaration uses only
 the three standard axioms, and prints counts (repeated definitions and theorems, unused
-declarations) to compare with their limits in `scripts/counts.tsv`, all 0.
+declarations) to compare with their limits in `scripts/counts.tsv`, all 0 except
+`instances_tests`, at 1.
 
 The repository's copy, `MojoProof/Kernels/Vsub.lean`, is `MyKernel.lean` with three changes:
 it is in `namespace MojoProof.Kernels`, so its names are `MojoProof.Kernels.vsub.*`; it imports

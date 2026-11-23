@@ -21,14 +21,18 @@ and each card says "quote to be added".
 - [barriers](cards/barriers.md): the block barrier and the happens-before it gives.
 - [warp-shuffles](cards/warp-shuffles.md): `shfl.sync` with the full mask.
 - [atomics](cards/atomics.md): `atomicrmw` with a commutative operation and an unused result.
-- [mma](cards/mma.md): the tensor cores' multiply-accumulate; parsed, not modelled.
-- [ldmatrix](cards/ldmatrix.md): a warp's load of matrices from shared memory; not modelled.
-- [cp-async](cards/cp-async.md): asynchronous copies; their groups' commit and wait run as
-  no-ops, the copies are refused.
+- [mma](cards/mma.md): the tensor cores' multiply-accumulate; modelled as a warp-collective
+  step, not yet run by the grid.
+- [ldmatrix](cards/ldmatrix.md): a warp's load of matrices from shared memory; modelled, not
+  yet run by the grid.
+- [cp-async](cards/cp-async.md): asynchronous copies and their groups; modelled per thread,
+  not yet run by the grid (exec runs the commit and wait as no-ops and faults at the copies).
 
 ## Open
 
 A construct passes L1 only with a recorded GPU run of a test of it, a conformance test and not
-a proof; STATUS.md lists the cards that have one. The launch is used by the proved kernels
-(L3 evidence); the barrier, shuffles, shared memory and atomics wait for a proved kernel that
-uses them; `mma`, `ldmatrix` and `cp.async` wait for a model.
+a proof; STATUS.md lists the cards that have one. The launch is at L3: the GPU runs of
+tests/gpu/ test it on their launches (one- and two-dimensional, `z` sides 1) and the proved
+kernels use it. The barrier, shuffles, shared memory and atomics wait for a GPU run and a
+proved kernel that use them; `mma`, `ldmatrix` and `cp.async` have a model the grid does not
+run yet, and wait for its dispatch.

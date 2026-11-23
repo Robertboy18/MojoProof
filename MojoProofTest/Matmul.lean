@@ -43,6 +43,10 @@ and `tB = [[1, 0, -1], [2, 1, 0]]`, whose product `tA tBᵀ` (TorchLean's transp
 * `take_inst`, the instance of `matmul_take_eq` and its twin: the loop over the first 2 of the 3
   pairs of row 0 of `tA` and row 0 of `tB` gives 1, entry `(0, 0)` of the product of the first 2
   columns of `tA` and the transpose of the first 2 columns of `tB`, and not the full entry -2.
+* `cols_inst`, the instance of `matmul_cols_eq` at two strides: the loop over the 2 pairs of row
+  0 of `tA` (stride 3) and row 0 of `mB` (stride 2) gives 3, entry `(0, 0)` of the product of the
+  first 2 columns of `tA` and the transpose of `mB`'s 2 columns. The twin of its oracle premise is
+  `matmul_cell_twin`.
 -/
 
 namespace MojoProofTest.Matmul
@@ -343,5 +347,28 @@ theorem take_inst :
   refine ⟨h, e.1 (by rw [← e.2, h]; decide +kernel), ?_⟩
   rw [h, cells.1]
   decide +kernel
+
+/-- **The instance of `matmul_cols_eq`**, a test of one example at two different strides: the
+loop without the `contract` flag (oracle numbers `(0, 0)`) from `+0` over the 2 pairs of row 0 of
+`tA` (stride 3) and row 0 of `mB` (stride 2), `(1, 1)` and `(2, 1)`, gives 3 (`0x40400000`), by
+evaluation; that word is entry `(0, 0)` of TorchLean's product of the first 2 columns of `tA` and
+the transpose of the 2 columns of `mB` (`matmul_cols_eq` at `sA = 3`, `sB = 2`, from its NaN half
+and the word). -/
+theorem cols_inst :
+    dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false) (List.ofFn fun k : Fin 2 =>
+        (Tensor.get2 tA 0 (Fin.castLE (by decide) k), Tensor.get2 mB 0 (Fin.castLE le_rfl k))) =
+        f32 0x40400000 ∧
+      dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false) (List.ofFn fun k : Fin 2 =>
+          (Tensor.get2 tA 0 (Fin.castLE (by decide) k), Tensor.get2 mB 0 (Fin.castLE le_rfl k))) =
+        Tensor.get2 (Tensor.matmul (cols 2 (by decide) tA)
+          (Tensor.permute (cols 2 le_rfl mB) (Shape.adjacentSwap [2, 2] 0) [2, 2])) 0 0 := by
+  have h : dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false) (List.ofFn fun k : Fin 2 =>
+      (Tensor.get2 tA 0 (Fin.castLE (by decide) k), Tensor.get2 mB 0 (Fin.castLE le_rfl k))) =
+      f32 0x40400000 := by
+    simp only [Tensor.get2_eq_apply, tA, mB, Tensor.Rep.get_ofFn]
+    decide +kernel
+  have e := matmul_cols_eq false (fun _ => (0, 0)) tA mB (K := 2) (by decide) le_rfl 0 0
+    (fun _ h => by cases h)
+  exact ⟨h, e.1 (by rw [← e.2, h]; decide +kernel)⟩
 
 end MojoProofTest.Matmul

@@ -1,10 +1,10 @@
 digraph packages {
   rankdir=LR;
   node [shape=box, fontname="Helvetica"];
-  "MojoProof" [label="MojoProof\nthis repository\n155 modules loaded"];
-  "mathlib" [label="mathlib\nfc4f59e577fe (v4.36.0)\n2693 modules loaded"];
-  "TorchLean" [label="TorchLean\n6e4b63353b87 (v1.5)\n39 modules loaded"];
-  "floatlib" [label="floatlib\nfc2fad1f9c7d (v4.1.0)\n575 modules loaded"];
+  "MojoProof" [label="MojoProof\nthis repository\n202 modules loaded"];
+  "mathlib" [label="mathlib\nfc4f59e577fe (v4.36.0)\n2695 modules loaded"];
+  "TorchLean" [label="TorchLean\n6e4b63353b87 (v1.5)\n43 modules loaded"];
+  "floatlib" [label="floatlib\nfc2fad1f9c7d (v4.1.0)\n577 modules loaded"];
   "plausible" [label="plausible\n054b228ce0ac (main)\n13 modules loaded"];
   "LeanSearchClient" [label="LeanSearchClient\n4fb58e749ef3 (main)\n4 modules loaded"];
   "importGraph" [label="importGraph\n8370c640afcd (main)\n38 modules loaded"];

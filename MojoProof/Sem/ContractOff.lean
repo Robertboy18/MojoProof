@@ -31,9 +31,14 @@ removed and `P`'s layout and intrinsics:
   (`Grid.FbinOracle`)" is a lockstep bisimulation, hence `Grid.Sound.contractOff`;
 - `Grid.start_contractOff`: the start of `fn.contractOff` in `Q` under `ω` is the start of `fn`
   in `P` under the rows `neverFuse (ω n)`, mapped;
+- `Grid.start_ctxOff`: for `P` and a kernel of the fragment (`Func.fbinOracle`), the two starts
+  are related by the lockstep relation, with context families related by `CtxOff`;
 - `Kernel.Sound.contractOff`: for `P` of the fragment (`Program.fbinOracle`) and a kernel of the
-  fragment (`Func.fbinOracle`), `Kernel.Sound` of `fn` in `P` gives `Kernel.Sound` of
-  `fn.contractOff` in `Q` for every oracle family whose never-fusing rows are admitted.
+  fragment, `Kernel.Sound` of `fn` in `P` gives `Kernel.Sound` of `fn.contractOff` in `Q` for
+  every oracle family whose never-fusing rows are admitted;
+- `Kernel.Sound.contractOff_iff`: the converse, `fn.contractOff` in `Q` is sound for an
+  admissibility exactly when `fn` in `P` is sound at the never-fusing rows of the families it
+  admits.
 
 Not proved here: an instance (docs/proofs/contract-off.md).
 -/
@@ -428,13 +433,10 @@ theorem exec_contractOff_call {c : Ctx} {Q : Program} (hQ : Q.module = c.prog.mo
   · have hF : c.prog.module.contractOff.funcs.find? (·.name == g) = none := by
       rw [LLVM.Module.contractOff_funcs, Array.find?_map, Function.comp_def]
       simp only [Func.contractOff_name, hG, Option.map_none]
-    cases h : exec c s k f _ <;>
-    · simp only [exec, bind, Except.bind, hG] at h
-      simp only [exec, bind, Except.bind, hQ, hF, evalTV_ch]
-      repeat' split at h
-      all_goals cases h
-      all_goals simp only [Except.map, *]
-      all_goals rfl
+    simp only [exec, bind, Except.bind, hG, hQ, hF, evalTV_ch, throw, throwThe,
+      MonadExceptOf.throw]
+    repeat' split
+    all_goals simp only [Except.map, *]
   cases hE : fn.blocks.isEmpty
   · exact exec_contractOff_found hQ hl hi o s ch k f res fm ret g args md hG (.inl hE)
   rcases hL : c.prog.intrinsics.lookup g with _ | i
@@ -1192,6 +1194,54 @@ theorem Grid.start_fbinOracle {prog : Program} {fn : Func} {L : Launch} {args : 
     exact hfn
   · cases ht
 
+/-- For every relation `R`: if result `x`, related by `R` to result `y`, is the value `a`, then
+`y` is a value related to `a`. -/
+theorem _root_.Except.Rel.ok_left {ε α β : Type} {R : α → β → Prop} {x : Except ε α}
+    {y : Except ε β} (h : Except.Rel R x y) {a : α} (hx : x = .ok a) : ∃ b, y = .ok b ∧ R a b := by
+  subst hx
+  cases h with
+  | ok h => exact ⟨_, rfl, h⟩
+
+/-- For every relation `R`: if result `y`, to which `R` relates result `x`, is the value `b`, then
+`x` is a value related to `b`. -/
+theorem _root_.Except.Rel.ok_right {ε α β : Type} {R : α → β → Prop} {x : Except ε α}
+    {y : Except ε β} (h : Except.Rel R x y) {b : β} (hy : y = .ok b) : ∃ a, x = .ok a ∧ R a b := by
+  subst hy
+  cases h with
+  | ok h => exact ⟨_, rfl, h⟩
+
+/-- **The two starts, related.** For every program `P` of the fragment (`Program.fbinOracle`),
+program `Q` with the module of `P.contractOff`, the layout of `P` and the intrinsics of `P`,
+kernel `fn` with no `fpext` or `fptrunc` (`Func.fbinOracle`), launch, arguments, memory, address
+choices `ch` and oracle family `ω`: the start of `fn` in `P` under the rows `neverFuse (ω n)` and
+the start of `fn.contractOff` in `Q` under `ω` both fail, with one fault, or both succeed, with
+grids related by the relation of `Grid.lockstep_contractOff` (the first's frames are of the
+fragment, the second grid is the first mapped by `Grid.contractOff`) and context families related
+by `CtxOff`. -/
+theorem Grid.start_ctxOff {P Q : Program} (hQ : Q.module = P.module.contractOff)
+    (hl : Q.layout = P.layout) (hi : Q.intrinsics = P.intrinsics) (hP : P.fbinOracle = true)
+    {fn : Func} (hfn : fn.fbinOracle = true) (L : Launch) (args : List Val) (m : Mem)
+    (ch : Nat → Nat) (ω : Nat → Nat → Nat) :
+    Except.Rel (fun r₁ r₂ : Grid × (Nat → Ctx) =>
+        (r₁.1.FbinOracle ∧ r₂.1 = r₁.1.contractOff) ∧ CtxOff P Q ω r₁.2 r₂.2)
+      (Grid.start P fn L args m ch fun n => neverFuse (ω n))
+      (Grid.start Q fn.contractOff L args m ch ω) := by
+  have hr := Grid.start_contractOff hQ hl fn L args m ch ω
+  generalize hs : Grid.start P fn L args m ch (fun n => neverFuse (ω n)) = r₁ at hr ⊢
+  generalize Grid.start Q fn.contractOff L args m ch ω = r₂ at hr ⊢
+  cases hr with
+  | error e => exact .error e
+  | @ok a _ hr =>
+    obtain ⟨g, c⟩ := a
+    exact .ok ⟨⟨Grid.start_fbinOracle hs hfn, hr.1⟩,
+      { prog := fun n => (Grid.start_ctx hs n).1
+        ctx := hr.2
+        oracle := fun n => (Grid.start_ctx hs n).2.2.2
+        module := hQ
+        layout := hl
+        intrinsics := hi
+        frag := hP }⟩
+
 /-- **`Kernel.Sound` with contraction off.** For every program `P` of the fragment
 (`Program.fbinOracle`), program `Q` with the module of `P.contractOff`, the layout of `P` and the
 intrinsics of `P`, kernel `fn` with no `fpext` or `fptrunc` (`Func.fbinOracle`), launch,
@@ -1206,21 +1256,36 @@ theorem Kernel.Sound.contractOff {P Q : Program} (hQ : Q.module = P.module.contr
     Kernel.Sound Q fn.contractOff L args m (fun ch ω => adm ch fun n => neverFuse (ω n)) obs R := by
   intro ch ω ha
   obtain ⟨g, c, hs, hg⟩ := h ch _ ha
-  have hr := Grid.start_contractOff hQ hl fn L args m ch ω
-  rw [hs] at hr
-  generalize Grid.start Q fn.contractOff L args m ch ω = r at hr ⊢
-  cases hr with
-  | @ok _ r₂ hr =>
-  obtain ⟨g₂, c₂⟩ := r₂
-  obtain ⟨rfl, hc⟩ := hr
-  have hC : CtxOff P Q ω c c₂ :=
-    { prog := fun n => (Grid.start_ctx hs n).1
-      ctx := hc
-      oracle := fun n => (Grid.start_ctx hs n).2.2.2
-      module := hQ
-      layout := hl
-      intrinsics := hi
-      frag := hP }
-  exact ⟨_, c₂, rfl, Grid.Sound.contractOff hC (Grid.start_fbinOracle hs hfn) hg⟩
+  obtain ⟨⟨g₂, c₂⟩, hs₂, ⟨hf, e⟩, hC⟩ :=
+    (Grid.start_ctxOff hQ hl hi hP hfn L args m ch ω).ok_left hs
+  obtain rfl : g₂ = g.contractOff := e
+  exact ⟨_, c₂, hs₂, Grid.Sound.contractOff hC hf hg⟩
+
+/-- **The converse of `Kernel.Sound.contractOff`.** For every program `P` of the fragment
+(`Program.fbinOracle`), program `Q` with the module of `P.contractOff`, the layout of `P` and the
+intrinsics of `P`, kernel `fn` with no `fpext` or `fptrunc` (`Func.fbinOracle`), launch,
+arguments, memory, admissibility `adm`, observation and relation `R`: `fn.contractOff` is sound in
+`Q` for `adm` exactly when `fn` is sound in `P` for the oracle families `neverFuse (ω n)` of the
+families `ω` that `adm` admits, at the same address choices. Right to left is
+`Kernel.Sound.contractOff`; left to right moves `Grid.Sound` back across the flipped lockstep
+bisimulation. Families with a fusing row are not covered on the right
+(docs/proofs/contract-off.md). -/
+theorem Kernel.Sound.contractOff_iff {P Q : Program} (hQ : Q.module = P.module.contractOff)
+    (hl : Q.layout = P.layout) (hi : Q.intrinsics = P.intrinsics) (hP : P.fbinOracle = true)
+    {fn : Func} (hfn : fn.fbinOracle = true) {L : Launch} {args : List Val} {m : Mem}
+    {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type} {obs : Mem → Option β}
+    {R : β → Prop} :
+    Kernel.Sound Q fn.contractOff L args m adm obs R ↔
+      Kernel.Sound P fn L args m (fun ch ω' => ∃ ω, adm ch ω ∧ ω' = fun n => neverFuse (ω n))
+        obs R := by
+  refine ⟨fun h => ?_, fun h ch ω ha =>
+    Kernel.Sound.contractOff hQ hl hi hP hfn h ch ω ⟨ω, ha, rfl⟩⟩
+  rintro ch _ ⟨ω, ha, rfl⟩
+  obtain ⟨g₂, c₂, hs₂, hg⟩ := h ch ω ha
+  obtain ⟨⟨g, c⟩, hs, hS, hC⟩ := (Grid.start_ctxOff hQ hl hi hP hfn L args m ch ω).ok_right hs₂
+  refine ⟨g, c, hs, (Grid.lockstep_contractOff hC L).symm.sound hS ?_ hg⟩
+  intro x y hxy _
+  obtain ⟨-, rfl⟩ := hxy
+  rfl
 
 end MojoProof.Sem

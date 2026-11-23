@@ -42,13 +42,20 @@ What each one checks:
   - `unused`: library declarations nothing mentions, except the targets in `scripts/targets.txt`.
   - `equivalences`: theorems `f as ↔ g bs` or `f as = g bs` whose two sides are headed by two
     different definitions of the library.
+  - `instances` and `instances_tests`: theorems of the library (of the tests) whose statement is
+    an instance of a library theorem's, with that theorem's binders as metavariables and
+    reducible unfolding, by a proof that does not reach it: a specialization proved again.
 
   With `--deps <file>` it also writes the facts that `scripts/deps.py` turns into
   `docs/DEPENDENCIES.md` and `docs/deps/`.
 - `scripts/cited.py`: every name in backticks whose last component is snake_case (`addr_twin`,
   `Mem.load_skel`), in a module docstring of `MojoProof/` or `MojoProofTest/`, must be a declaration
   that resolves from the citing file. A library lemma of the same last name does not count, and
-  neither does a field name standing in for a qualified name.
+  neither does a field name standing in for a qualified name. In the body of every roadmap card
+  (`roadmap/**/cards/*.md`), every backticked span that begins with a fully qualified name
+  (`MojoProofTest.NaiveOff.correct`, or the head of a term) must begin with a declaration or a
+  module of the library or its tests. A name that none of our files declares resolves also against
+  the Lean files under `.lake/packages/` (Mathlib, Batteries); Lean's own library is not read.
 - `scripts/corpus.py check`: every corpus file matches its manifest row (sha256, line count, kernel
   name, arch, PTX version), and no `.ll` file under `tests/corpus/` is missing from the manifest.
   A row whose source lacks the Apache-LLVM line is flagged `UNLICENSED`, and a row whose `lib` is
@@ -58,8 +65,12 @@ What each one checks:
   of 15 or more lines that share at least 70% of their 5-token shingles (`near-duplicate
   clusters`), with the five largest clusters listed.
 
-The audit exits with an error only for an axiom. The counts it prints have limits in
-`scripts/counts.tsv`, which are all 0; if a count drops below its limit, lower the limit.
+The audit exits with an error only for an axiom or when one of its probes fails: the
+equivalences probe (it must count the public `@[csimp]` equality of `MojoProofTest.AuditProbe`
+and not the one whose right-hand side is private), the duplicates probe (the two statements that
+differ through an `abbrev` must pair) and the instances probe (`outS_eight` must be reported and
+`outS_eight_of_lt` not). The counts it prints have limits in `scripts/counts.tsv`, which are all
+0 except `instances_tests`, at 1; if a count drops below its limit, lower the limit.
 `near_dups` and `width_families` in that file are the `near-duplicate clusters` and `width families`
 counts that `scripts/near_dups.py` prints. `python3 scripts/counts.py <audit output> <near_dups
 output>` checks every limit and exits 1 if a count exceeds its limit or is missing; CI saves the

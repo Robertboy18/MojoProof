@@ -7,30 +7,27 @@ import MojoProof.Sem.Grid
 result here is for every program, kernel, launch, argument values, memory, address choice and
 oracle.
 
-* `Mem.FreeAbove`: no block of the memory has a number from `next` on (`Mem.Closed.above`).
-* `foldlM_res`: a fold in `Except` whose every step, from a state of an invariant `P`, on an
-  element of `Q`, succeeds with a state of `P`, succeeds with a state of `P`.
-* `allocNext_res`: on a memory with `FreeAbove`, an allocation of the launch (`Mem.allocNext`)
-  succeeds, for every size, alignment, owner, address and initial bytes, and keeps `FreeAbove`.
-* `shared_res`: on such a memory the shared memory of a block of threads (`shared`) is allocated
-  when every global is in address space 3 and is either external and not `constant` or
-  initialized with `undef`.
-* `launchArgs_res`: on such a memory the arguments of a thread (`launchArgs`) are made when every
-  `byval(T)` parameter's argument encodes as a `T` (`Layout.encode`) and every other parameter's
-  attributes accept its argument on every memory (`withAttrs`).
+* `Mem.FreeAbove` (no block of the memory has a number from `next` on), `foldlM_res`,
+  `allocNext_res` and `shared_res` are in MojoProof/Sem/Grid.lean, with their names, so that the
+  semantics' own start results use them.
+* `launchArgs_res`: on a memory with `Mem.FreeAbove` the arguments of a thread (`launchArgs`)
+  are made when every `byval(T)` parameter's argument encodes as a `T` (`Layout.encode`) and
+  every other parameter's attributes accept its argument on every memory (`withAttrs`).
 * `Grid.start_ok`: the launch starts when the kernel passes its check (`Func.check`), the
   caller's memory is closed for the arguments (`Mem.Closed`), the globals and arguments are as
   above, and the kernel has a body. No premise is about the launch, the address choice or the
   oracle: `Grid.start` checks none of them, and it does not compare the number of arguments with
   the number of parameters (it pairs them by `List.zip`).
-* `foldlM_range'_inv`: an invariant indexed by the next number of a fold over consecutive numbers
-  that succeeds.
+* `foldlM_range'_inv` (MojoProof/Sem/Grid.lean): an invariant indexed by the next number of a
+  fold over consecutive numbers that succeeds, a case of `foldlM_idx_inv` (the same file), an
+  invariant indexed by the position of a fold over any list that succeeds.
 * `Grid.start_args`: the start's grid has `volume L.grid * volume L.block` threads, each at the
   start of the kernel with the arguments `launchArgs` makes for it, whose blocks the grid's memory
   keeps.
 * `Param.byval?`, `byvalBlock`, `LaunchArg`: a parameter's `byval` type, the block `launchArgs`
   makes for such an argument, and what it makes for each parameter. `foldlM_zipIdx_inv`: an
-  invariant indexed by the position of a fold over a list with its indices.
+  invariant indexed by the position of a fold over a list with its indices (`foldlM_idx_inv` at
+  the list `xs.zipIdx`).
   `launchArgs_byval`: every value `launchArgs` makes is its `LaunchArg` in the memory it returns.
   `Thread.start_regs`: a started thread's frame holds each argument in the register its
   parameter names, for the first parameter naming it.
@@ -39,89 +36,6 @@ oracle.
 namespace MojoProof.Sym
 
 open MojoProof.LLVM MojoProof.Sem
-
-/-- No block of `m` has a number from `next` on (the field `above` of `Mem.Closed`). -/
-def _root_.MojoProof.Sem.Mem.FreeAbove (m : Mem) : Prop := ∀ c, m.next ≤ c → m.blocks c = none
-
-/-- **A fold in `Except` that succeeds.** For every step function `f`, invariant `P` and
-predicate `Q`: if every step from a state of `P`, on an element of `Q`, succeeds (`.ok`) with a
-state of `P`, then the fold over a list of elements of `Q` from a state of `P` succeeds with a
-state of `P`. Stated for every result `x` of the fold, so that a hypothesis `fold = .error e`
-refutes itself. -/
-theorem foldlM_res {α β ε : Type} {f : β → α → Except ε β} {P : β → Prop} {Q : α → Prop}
-    (hf : ∀ b a x, Q a → P b → f b a = x → ∃ b', x = .ok b' ∧ P b') :
-    ∀ (xs : List α) (b : β) (x : Except ε β), (∀ a ∈ xs, Q a) → P b → xs.foldlM f b = x →
-      ∃ r, x = .ok r ∧ P r
-  | [], b, _, _, hb, hx => ⟨b, hx.symm, hb⟩
-  | a :: xs, b, x, hq, hb, hx => by
-    rw [List.foldlM_cons] at hx
-    obtain ⟨b', h1, hb'⟩ := hf b a _ (hq a List.mem_cons_self) hb rfl
-    rw [h1] at hx
-    exact foldlM_res hf xs b' x (fun y hy => hq y (List.mem_cons_of_mem a hy)) hb' hx
-
-/-- **A launch allocation succeeds.** For every layout, memory `m` with `Mem.FreeAbove`, space,
-size, alignment, liveness, owner, addresses and initial bytes: `Mem.allocNext` returns `.ok`, and
-the memory it returns has `Mem.FreeAbove`. -/
-theorem allocNext_res {l : Layout} {m : Mem} {space size align : Nat} {live readOnly : Bool}
-    {owner : Owner} {addr gaddr : Nat} {init : List MemByte} {x : Except Fault (Mem × Nat)}
-    (h : m.FreeAbove)
-    (hx : m.allocNext l space size align live readOnly owner addr gaddr init = x) :
-    ∃ r, x = .ok r ∧ r.1.FreeAbove := by
-  unfold Mem.allocNext at hx
-  rw [h m.next (Nat.le_refl _)] at hx
-  simp only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte, pure, Except.pure] at hx
-  refine ⟨_, hx.symm, fun c hc => ?_⟩
-  simp only [Mem.alloc, Mem.set] at hc ⊢
-  have hne : c ≠ m.next := by omega
-  simp only [hne, ↓reduceIte]
-  exact h c (by omega)
-
-/-- **The shared memory of a block of threads is allocated.** For every layout, globals `gs`,
-dynamic size, block of threads, address choice and memory with `Mem.FreeAbove`: if every global
-is in address space 3 and either has no initializer and is not `constant` or is initialized with
-`undef`, then `shared` returns `.ok`, with a memory with `Mem.FreeAbove`. -/
-theorem shared_res {l : Layout} {gs : List Global} {dyn c : Nat} {ch : Nat → Nat} {m : Mem}
-    {x : Except Fault (Mem × List (String × Ptr))}
-    (hg : ∀ g ∈ gs, g.addrSpace = 3 ∧ (g.init = none ∧ g.isConst = false ∨ g.init = some .undef))
-    (h : m.FreeAbove) (hx : shared l gs dyn c ch m = x) : ∃ r, x = .ok r ∧ r.1.FreeAbove := by
-  unfold shared at hx
-  simp only [bind, Except.bind] at hx
-  split at hx
-  · rename_i e he
-    obtain ⟨r, hr, -⟩ := allocNext_res h he
-    cases hr
-  · rename_i v hv
-    obtain ⟨r, hr, hA⟩ := allocNext_res h hv
-    cases hr
-    refine foldlM_res (P := fun r => r.1.FreeAbove) (Q := fun gi => gi.1 ∈ gs)
-      (fun b gi y hq hb hy => ?_) _ _ x (fun a ha => List.fst_mem_of_mem_zipIdx ha) hA hx
-    obtain ⟨m1, acc⟩ := b
-    obtain ⟨g, i⟩ := gi
-    obtain ⟨h3, hi⟩ := hg g hq
-    simp only [pure, Except.pure, throw, throwThe, MonadExceptOf.throw] at hy
-    split at hy
-    · rename_i hne
-      exact absurd h3 hne
-    · split at hy
-      · split at hy
-        · rename_i hn hc
-          rcases hi with ⟨-, hc'⟩ | hu
-          · simp [hc'] at hc
-          · simp [hn] at hu
-        · exact ⟨_, hy.symm, hb⟩
-      · split at hy
-        · rename_i e he
-          obtain ⟨r, hr, -⟩ := allocNext_res hb he
-          cases hr
-        · rename_i w hw
-          obtain ⟨r, hr, hA'⟩ := allocNext_res hb hw
-          cases hr
-          exact ⟨_, hy.symm, hA'⟩
-      · rename_i v hv hne
-        rcases hi with ⟨hn, -⟩ | hu
-        · simp [hn] at hne
-        · rw [hu] at hne
-          exact absurd (Option.some.inj hne).symm hv
 
 /-- **The arguments of a thread are made.** For every layout, memory with `Mem.FreeAbove`, thread
 number, kernel `fn`, argument values `args` and address choice: if the argument of every
@@ -201,33 +115,12 @@ theorem Grid.start_ok {prog : Program} {fn : Func} {L : Launch} {args : List Val
     exfalso
     unfold Grid.start at hs
     simp only [bind, Except.bind, hf, Mem.checkClosed_of_closed hC] at hs
-    have hA : m.FreeAbove := hC.above
     split at hs
     · rename_i e' he
-      obtain ⟨r, hr, -⟩ := foldlM_res (P := fun r => r.1.FreeAbove) (Q := fun _ => True)
-        (fun b k y _ hb' hy => by
-          simp only [pure, Except.pure] at hy
-          split at hy
-          · rename_i e he
-            obtain ⟨r, hr, -⟩ := shared_res hg hb' he
-            cases hr
-          · rename_i v hv
-            obtain ⟨r, hr, hA'⟩ := shared_res hg hb' hv
-            cases hr
-            exact ⟨_, hy.symm, hA'⟩) _ _ _ (fun _ _ => trivial) hA he
+      obtain ⟨r, hr, -⟩ := sharedFold_res hg _ _ hC.above he
       cases hr
     · rename_i v1 h1
-      obtain ⟨r1, hr1, hA1⟩ := foldlM_res (P := fun r => r.1.FreeAbove) (Q := fun _ => True)
-        (fun b k y _ hb' hy => by
-          simp only [pure, Except.pure] at hy
-          split at hy
-          · rename_i e he
-            obtain ⟨r, hr, -⟩ := shared_res hg hb' he
-            cases hr
-          · rename_i v hv
-            obtain ⟨r, hr, hA'⟩ := shared_res hg hb' hv
-            cases hr
-            exact ⟨_, hy.symm, hA'⟩) _ _ _ (fun _ _ => trivial) hA h1
+      obtain ⟨r1, hr1, hA1⟩ := sharedFold_res hg _ _ hC.above h1
       cases hr1
       split at hs
       · rename_i e' he
@@ -249,25 +142,6 @@ theorem Grid.start_ok {prog : Program} {fn : Func} {L : Launch} {args : List Val
               · exact ⟨_, hy.symm, hA'⟩) _ _ _ (fun _ _ => trivial) hA1 he
         cases hr
       · cases hs
-
-/-- **A fold over consecutive numbers in `Except` that succeeds**, with the number: for every step
-function `f` and invariant `P` indexed by the next number, if every step on number `i` that
-succeeds from a state of `P i` gives a state of `P (i + 1)`, then a fold over `s, …, s + n - 1`
-that succeeds from a state of `P s` gives a state of `P (s + n)`. -/
-theorem foldlM_range'_inv {β ε : Type} {f : β → Nat → Except ε β} {P : Nat → β → Prop}
-    (hP : ∀ i b b', f b i = .ok b' → P i b → P (i + 1) b') :
-    ∀ (n s : Nat) (b : β) {r : β}, (List.range' s n).foldlM f b = .ok r → P s b → P (s + n) r
-  | 0, s, b, r, hr, hb => by
-    obtain rfl : b = r := Except.ok.inj hr
-    exact hb
-  | n + 1, s, b, r, hr, hb => by
-    rw [List.range'_succ, List.foldlM_cons] at hr
-    cases h1 : f b s with
-    | error e => rw [h1] at hr; cases hr
-    | ok b1 =>
-      rw [h1] at hr
-      have h' := foldlM_range'_inv hP n (s + 1) b1 hr (hP s b b1 h1 hb)
-      rwa [Nat.add_assoc, Nat.add_comm 1 n] at h'
 
 /-- **The start's threads, one by one.** For every program, kernel `fn`, launch, argument values,
 memory, address choice `ch` and oracle whose start gives grid `g`: `g` has
@@ -365,33 +239,16 @@ theorem LaunchArg.mono {l : Layout} {m m' : Mem} {n : Nat} {ch : Nat → Nat} {i
 /-- **An invariant along a fold over a list with its indices.** For every step function `f` in
 `Except` and invariant `P` indexed by the position: if every step on entry `i` of `xs` from a
 state of `P i` that succeeds gives a state of `P (i + 1)`, then a fold over `xs.zipIdx` from a
-state of `P 0` that succeeds gives a state of `P xs.length`. -/
+state of `P 0` that succeeds gives a state of `P xs.length` (`foldlM_idx_inv` at `xs.zipIdx`,
+whose entry `i` is `(xs[i], i)`). -/
 theorem foldlM_zipIdx_inv {α β ε : Type} {f : β → α × Nat → Except ε β} {P : Nat → β → Prop}
     (xs : List α) (hP : ∀ i a b b', xs[i]? = some a → f b (a, i) = .ok b' → P i b → P (i + 1) b')
     {b r : β} (h : xs.zipIdx.foldlM f b = .ok r) (hb : P 0 b) : P xs.length r := by
-  suffices key : ∀ (ys : List α) (s : Nat) (b : β),
-      (∀ i a, ys[i]? = some a → xs[s + i]? = some a) →
-      (ys.zipIdx s).foldlM f b = .ok r → P s b → P (s + ys.length) r by
-    have := key xs 0 b (fun i a h => by rwa [Nat.zero_add]) h hb
-    rwa [Nat.zero_add] at this
-  intro ys
-  induction ys with
-  | nil =>
-    intro s b _ h hb
-    obtain rfl : b = r := Except.ok.inj h
-    exact hb
-  | cons y ys ih =>
-    intro s b hy h hb
-    rw [List.zipIdx_cons, List.foldlM_cons] at h
-    cases h1 : f b (y, s) with
-    | error e => rw [h1] at h; cases h
-    | ok b1 =>
-      rw [h1] at h
-      have hs : xs[s]? = some y := by simpa using hy 0 y rfl
-      have h' := ih (s + 1) b1 (fun i a ha => by
-        have := hy (i + 1) a (by simpa using ha)
-        rwa [show s + (i + 1) = s + 1 + i by omega] at this) h (hP s y b b1 hs h1 hb)
-      rwa [List.length_cons, show s + (ys.length + 1) = s + 1 + ys.length by omega]
+  have := foldlM_idx_inv xs.zipIdx (fun i p c c' hp => by
+    rw [List.getElem?_zipIdx, Option.map_eq_some_iff] at hp
+    obtain ⟨a, ha, rfl⟩ := hp
+    simpa only [Nat.zero_add] using hP i a c c' ha) h hb
+  rwa [List.length_zipIdx] at this
 
 /-- **The arguments `launchArgs` makes.** For every layout, memory, thread number `n`, kernel
 `fn`, argument values `args` and address choice `ch`: if `launchArgs` returns memory `m'` and

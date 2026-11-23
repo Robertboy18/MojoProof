@@ -1,5 +1,6 @@
 import MojoProofTest.SymPhi
 import MojoProof.Sym.Vals
+import MojoProof.Sym.OblHave
 
 /-!
 # mojo_obl and mojo_vals on the naive matrix product's blocks
@@ -16,6 +17,12 @@ summary has one node, the float constant `0.000000e+00` at type `float` that the
   float `0` and as the literal's value `floatLit`.
 * `flitS`, `flit_open`: a summary whose float constant is an unknown literal; mojo_obl leaves its
   obligation open, as logged.
+* `dotS`, `dotS_vals`: a hand-written summary of a `fmul contract` of registers 1 and 2 and the
+  `fadd contract` of register 0 and that product (the latch's two nodes on registers);
+  `obl_have` gives its nodes' values on symbolic floats, `deliver` of the product and `deliver`
+  of `contract` with its factors.
+* `dotS_open`: the same summary on operands that are any values; mojo_obl leaves the obligation
+  open, as logged, and proves it once register 0 is a float.
 -/
 
 namespace MojoProofTest.OblNaive
@@ -63,5 +70,47 @@ theorem flit_open (V : Valuation) (lit : FloatLit) (v : Val)
     ∀ d ∈ (flitS lit).obls, d.Holds V (vals V (flitS lit).nodes) := by
   mojo_obl
   exact Cond.holds_ok (SVal.eval_node (vals_getElem?_eval rfl (SNode.eval_flit hl)))
+
+/-- A block of two nodes on registers, for every valuation: node 0 is `fmul contract` of registers 1
+and 2 at type `float`, node 1 is `fadd contract` of register 0 and node 0, whose `fmul contract`
+operands are registers 1 and 2 (as `%66` of the naive matrix product's latch on `%48` and the
+loads). Its obligation is that node 1 evaluates; no register, no effect, a `ret` exit. -/
+def dotS : Summary :=
+  { nodes := [.fbinP .fmul { contract := true } .float 0 (.reg 1) (.reg 2) none none,
+      .fbinP .fadd { contract := true } .float 1 (.reg 0) (.node 0) none (some (.reg 1, .reg 2))],
+    regs := [], effs := [], obls := [.ok (.node 1)], exit := .ret, len := 2 }
+
+/-- **The nodes of `dotS` on symbolic floats by `obl_have`**: for every valuation `V` and floats
+`x`, `a`, `b` of type `float` in registers 0, 1 and 2, none of which has `fmul contract` operands,
+node 1 is `deliver` of `contract` of `x`, the product node 0 (`deliver` of `a.mul b` under the
+oracle number of statement 0) and its factors `(a, b)`, under the oracle number of statement 1
+(`SNode.eval_fbinP_ofFloat`, `floatBin_contract_ofFloat`, `floatBin_ofFloat_factors`). -/
+theorem dotS_vals (V : Valuation) (x a b : Model FloatTy.float.fmt)
+    (h0 : V.regs 0 = some (.ofFloat .float x)) (h1 : V.regs 1 = some (.ofFloat .float a))
+    (h2 : V.regs 2 = some (.ofFloat .float b)) (hp : V.prods 0 = none)
+    (hp1 : V.prods 1 = none) (hp2 : V.prods 2 = none) :
+    (vals V dotS.nodes)[1]? = some (.ok (.ofFloat .float (deliver (contract false x
+      (deliver (a.mul b) (V.ctx.oracle (Nat.pair V.k 0) / 3)) none (some (a, b))
+      (V.ctx.oracle (Nat.pair (V.k + 1) 0))) (V.ctx.oracle (Nat.pair (V.k + 1) 0) / 3)))) := by
+  obl_have e : (vals V dotS.nodes)[1]?
+  exact e
+
+/--
+info: mojo_obl: open goal
+  Cond.Holds V (vals V dotS.nodes) (Cond.ok (SVal.node 1))
+-/
+#guard_msgs (whitespace := lax) in
+/-- **The twin of `dotS_vals`**: for every valuation `V` and values `v`, `a`, `b` in registers 0,
+1 and 2 (`a` and `b` floats), the obligation of `dotS` holds when `v` is a float. The evaluator
+gives a float operator on an operand that is no float `.ofFloat t u` no value, so mojo_obl leaves
+the obligation that node 1 evaluates open, as logged; after `subst` it proves it. -/
+theorem dotS_open (V : Valuation) (v : Val) (x a b : Model FloatTy.float.fmt)
+    (h0 : V.regs 0 = some v) (h1 : V.regs 1 = some (.ofFloat .float a))
+    (h2 : V.regs 2 = some (.ofFloat .float b)) (hp : V.prods 0 = none)
+    (hp1 : V.prods 1 = none) (hp2 : V.prods 2 = none) (hv : v = .ofFloat .float x) :
+    ∀ d ∈ dotS.obls, d.Holds V (vals V dotS.nodes) := by
+  mojo_obl
+  subst hv
+  mojo_obl
 
 end MojoProofTest.OblNaive

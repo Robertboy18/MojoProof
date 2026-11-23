@@ -2,7 +2,8 @@ import MojoProof.Sym.Kernel
 import MojoProof.Sym.Command
 import MojoProof.Sym.Start
 import MojoProof.Sym.Ops
-import MojoProof.Sym.KernelMat
+import MojoProof.Sym.KernelIter
+import MojoProof.Sym.RetFlag
 
 /-!
 # A kernel's paths as Lean terms: `mojo_kernel`
@@ -17,9 +18,8 @@ the constant it denotes), and, when the command is elaborated:
    field is a pointer), a `scalars` parameter is an integer that is not `byval`, and a `pointers`
    parameter is a pointer that is not `byval` (such as `ptr addrspace(1) %p`). A clause list
    that names fewer parameters than `fn` has is refused, so a launch built from the clauses passes
-   one value per parameter. The flag `contract` (before the loop clauses, if any; not with `map2`,
-   whose theorem has no variant with the flag) puts
-   `fmul contract` in the checker's fragment: steps 2 to 5 then use the variants with the flag
+   one value per parameter. The flag `contract` (before the loop clauses, if any) puts
+   `fmul contract` in the checker's fragment: steps 2 to 6 then use the variants with the flag
    (`summarizeC`, `coversEntryWith true`, `coversChainsWith true`, `EdgeWith true`,
    `Valuation.roundWith true`, `RoundWith true`, `RetWith true`, `RetLsWith true` by
    `ChainWith.loop`, `Kernel.sound_of_chainsWith` and `Kernel.sound_entryWith` at
@@ -102,7 +102,11 @@ the constant it denotes), and, when the command is elaborated:
    every valid launch whose grid and block have side 1 in `y` and `z`, alignment, blocks, count
    below `2 ^ 31`, tensors, thread, context, oracle and frame and memory with the start's facts),
    proved by the tactic mojo_ret (MojoProof/Sym/Ops.lean), an error at `n.ret` if it does
-   not prove it; and the kernel theorem `n.correct`, `Kernel.sound_map2` at `n.covers`,
+   not prove it; with `contract`, `n.ret`'s path is a `RetWith true`, mojo_ret's `Ret` moved by
+   `RetWith.exists_true_of_ret` (Sym/RetFlag.lean) on paths that record no `fmul contract`
+   product (`pathNoProds`, decided; an error at `n.ret` on others); and the kernel theorem
+   `n.correct`, `Kernel.sound_map2` (with `contract`, `Kernel.sound_map2With` at
+   `contract := true`) at `n.covers`,
    `n.starts` and `n.ret`, for every such launch and every caller's memory of `Map2.Pre` at `t`,
    `e` and `n.argTail`, every address choice and oracle. Both are about the one kernel `fn`.
    The clause names are the binder names of the blocks and the count in both;
@@ -123,18 +127,33 @@ the constant it denotes), and, when the command is elaborated:
    program discharged (the paths and the chains by `decide +kernel`, the parameters by `rfl`, the
    names by `n.names`, the codec by `Layout.Codec.ptrArg`, the alignment by `decide`, `withAttrs`
    by `rfl`, the start by `n.starts`). The launch's and the memory's premises and the threads'
-   runs `Hin` and `Hout` remain, named so that a caller passes them by name. Its instance is the
-   naive matmul kernel (MojoProofTest/NaiveSound.lean).
+   runs `Hin` and `Hout` remain, named so that a caller passes them by name. With
+   `mat paths chains inv`, when `chains` reduces (`whnf`) to one chain of one loop with no nested
+   loop (otherwise an error naming the reason and `fn`, before anything is added), it also adds
+   `n.runInv`, the run of one thread in bounds from its entry facts, its memory's `Elem` and
+   `Elem.Only`, and an invariant `I` and a trip count `N` of the caller's with the three facts
+   `LoopIterWith` at the heads of the rounds by `RetLsWith.of_iter`
+   (MojoProof/Sym/KernelIter.lean), with the edge into the loop by `mojo_obl` and the facts
+   `Mat.Head` (the function, the buffers, `Elem` and `Elem.Only`) at the head of every round by
+   mojo_inv at the loop head and `Mat.Head.iterate` at the registers `LoopSeg.bases` (an error if
+   one is not discharged, with the goal left open, and nothing added), `n.kept`, each register
+   that the loop keeps (`LoopSeg.kept`) at the head of every round with its value at the loop
+   head by `obl_have` (or that value itself where `obl_have` gives it only as a
+   `Classical.choose`), and `n.sound_inv`,
+   `n.sound_mat` with `Hin` replaced by one premise `H`, `LoopIterWith` at each thread in bounds
+   `th : Mat.Thread` (its facts as one structure), with `I` and `N` of `th`. Its instance is the naive matmul kernel
+   (MojoProofTest/NaiveSound.lean).
 
 In a library module (`MojoProof.*`), or in any module with the option `mojo_kernel.share` true,
 a definition `n.b<i>`, `n.paths`, `n.chains`, `n.args`, `n.argTy` or `n.argTail` whose value
-an earlier definition of `mojo_import` or `mojo_kernel` has, in the imports or the module, is not
-added again: the command uses that constant (`kernelDef`, by `share` of
+an earlier definition of `mojo_import`, `sym_summary` or `mojo_kernel` has, in the imports or the
+module, is not added again: the command uses that constant (`kernelDef`, by `share` of
 MojoProof/LLVM/Quote.lean), so the library has no two definitions of one value, nor does a test
-module that sets the option.
-vector_multiply's blocks `%4`, `%30` and `%31`, arguments, struct type and tail are `vadd.b0`,
-`vadd.b2`, `vadd.b3`, `vadd.args`, `vadd.argTy` and `vadd.argTail` (MojoProof/Kernels/Vmul.lean).
-In a test module without the option each is added under its own name.
+module that sets the option. vector_multiply's blocks `%4`, `%30` and `%31`, arguments, struct
+type and tail are `vadd.b0`, `vadd.b2`, `vadd.b3`, `vadd.args`, `vadd.argTy` and `vadd.argTail`
+(MojoProof/Kernels/Vmul.lean). In a test module without the option, the command uses an earlier
+definition of the module itself the same way (not one of the imports), and adds the others under
+their own names; MojoProofTest/KernelContract.lean's `kgK.args` is `kfK.args`.
 
 Nothing here is trusted: the theorems are checked by the kernel, so a wrong summary, path or
 quotation makes `n.covers` or `n.coversChains` fail, not hold. This module is executable code
@@ -222,6 +241,21 @@ def kernelSegs (succ : Nat → List Nat) (stop : Nat → Bool) :
 partial def identsOf (stx : Syntax) : Array Syntax :=
   if stx.isIdent then #[stx] else stx.getArgs.foldl (fun a s => a ++ identsOf s) #[]
 
+/-- The constants that `simp only` unfolds for the parameters of function `c` to be a list
+literal: `c`, then, while they are those of another constant `g` (`c` is `{ g with … }`), `g`'s.
+For a function `mojo_import` adds, `[c]`. -/
+partial def paramsConsts (c : Name) : MetaM (List Name) := do
+  let some (.defnInfo d) := (← getEnv).find? c | return [c]
+  match ← whnfCore (.proj ``Func 5 d.value) with
+  | .proj ``Func 5 (.const g _) | .app (.const ``Func.params _) (.const g _) =>
+    return c :: (← paramsConsts g)
+  | _ => return [c]
+
+/-- The `simp` arguments that unfold the parameters of function `c` (`paramsConsts`). -/
+def paramsSimp (c : Name) : CommandElabM (Array (TSyntax ``Lean.Parser.Tactic.simpLemma)) := do
+  (← liftTermElabM (paramsConsts c)).toArray.mapM fun g =>
+    `(Lean.Parser.Tactic.simpLemma| $(mkCIdent g):ident)
+
 /-- A term that elaborates to value `v` (`Val.ptr` with its block and offset, `Val.bits` from the
 number of its bits). -/
 partial def valTerm : Val → CommandElabM Lean.Term
@@ -243,25 +277,35 @@ def clausesOf (stx : Syntax) : CommandElabM (List (String × Nat)) := do
     | some i => pure (x, i)
     | none => throwErrorAt a "mojo_kernel: {a} is not a parameter a<i>"
 
-/-- Whether `mojo_kernel` shares definitions outside the library (default `false`): when `true`,
-a definition `n.b<i>`, `n.paths`, `n.chains`, `n.args`, `n.argTy` or `n.argTail` whose value an
-earlier definition of `mojo_import` or `mojo_kernel` has, in the imports or the module, is not
-added again and the command uses that constant (`kernelDef`). In a library module
-(`MojoProof.*`) the command shares definitions whatever the option's value. -/
+/-- Whether `mojo_kernel` shares definitions of the imports outside the library (default
+`false`): a definition `n.b<i>`, `n.paths`, `n.chains`, `n.args`, `n.argTy` or `n.argTail` whose
+value an earlier definition of `mojo_import`, `sym_summary` or `mojo_kernel` has is not added
+again and the command uses that constant (`kernelDef`). When `true`, the earlier definition may be
+in the imports or the module; when `false`, outside the library, only in the module. In a library
+module (`MojoProof.*`) the command shares with the imports whatever the option's value. -/
 register_option mojo_kernel.share : Bool := {
   defValue := false
-  descr := "whether mojo_kernel uses an earlier definition of a value in a module outside \
-    MojoProof.* too (it always does in a library module)" }
+  descr := "whether mojo_kernel uses an earlier definition of a value in the imports in a module \
+    outside MojoProof.* too (it always does in a library module, and always uses one of the \
+    module itself)" }
 
 /-- The constant of a definition `name : type := value` of `mojo_kernel`, with docstring `doc` and
-its equation lemmas enabled (`enableRealizationsForConst`): in a library module (`MojoProof.*`), or
-in any module when the option `mojo_kernel.share` is true, an earlier definition of `mojo_import`
-or `mojo_kernel` of the same value, in the imports or the module, if there is one (`share`; no two
-definitions of one value); otherwise `name`, added. -/
+its equation lemmas enabled (`enableRealizationsForConst`): an earlier definition of
+`mojo_import`, `sym_summary` or `mojo_kernel` of the same value, if there is one; otherwise
+`name`, added and recorded in `defs` (MojoProof/LLVM/Quote.lean). In a library module
+(`MojoProof.*`), or in any module when the option `mojo_kernel.share` is true, the earlier
+definition is one of the imports or of the module (`share`); otherwise one of the module itself
+(`defs`' entries of the module). So no module has two definitions of one value. -/
 def kernelDef (name : Name) (type value : Expr) (doc : String) : CoreM Name := do
-  let c ← if (← getEnv).mainModule.getRoot == `MojoProof || mojo_kernel.share.get (← getOptions)
+  let env ← getEnv
+  let c ← if env.mainModule.getRoot == `MojoProof || mojo_kernel.share.get (← getOptions)
     then pure (← share name type value).constName!
-    else do addDef name type value; pure name
+    else match (defs.getEntries env).find? (·.1 == value) with
+      | some (_, c) => pure c
+      | none => do
+        addDef name type value
+        modifyEnv (defs.addEntry · (value, name))
+        pure name
   if c == name then
     enableRealizationsForConst name
     addDocStringCore name doc
@@ -282,7 +326,8 @@ paths `n.paths`, the theorem `n.covers : coversEntry P fn n.paths = true` and th
 `writes` parameter's `byval` struct, a `pointers` parameter's pointer, each at offset 0 of a block
 number, and a `scalars` parameter's bit vector), the start `n.starts` and the kernel theorem
 `n.sound` on them; with `map2 t e bytes`, also `n.argTy`, `n.argTail`, each thread's `Ret`
-`n.ret` (by `mojo_ret`) and the kernel theorem `n.correct` (`Kernel.sound_map2`). With
+`n.ret` (by `mojo_ret`) and the kernel theorem `n.correct` (`Kernel.sound_map2`; with
+`contract`, a `RetWith true` and `Kernel.sound_map2With`). With
 `loop i := pre inv trips post by tac` (block `i` the header of the kernel's one loop,
 `pre : Valuation → Prop` on the thread's entry valuation, `inv : Valuation → Nat → Valuation →
 Prop` the invariant by round at that valuation, `trips : Valuation → Nat` the trip count,
@@ -301,25 +346,30 @@ flag (`summarizeC`, `coversEntryWith true`, `coversChainsWith true`, `EdgeWith t
 `Valuation.roundWith true`, `RoundWith true`, `RetWith true`, `RetLsWith true`,
 `Kernel.sound_of_chainsWith` and `Kernel.sound_entryWith`), and `n.sound_loop`'s per-thread
 premise also has an admitted address choice and oracle and the thread's oracle. Errors on
-clauses that do not name each parameter once with its kind, on `contract` with `map2`,
+clauses that do not name each parameter once with its kind,
 on a block outside the checker's fragment, on a loop without a `loop` clause
 (naming its header), on loop clauses without one path into the first loop and, for each loop, one
 round and one path out into the next loop or, after the last, to a `ret`, or whose obligations
 `tac` does not all close (naming each one it leaves), and with `map2` on an `fn` that is not a
 constant, a program with globals, a kernel of another shape or a loop; a refused command adds
-nothing. In a library module or with `mojo_kernel.share`, a summary, the paths, the chains, the
-arguments, the struct type or tail of an earlier definition's value are that definition
-(`kernelDef`). With `mat paths chains` (after the other clauses; `contract` optional), for a
-kernel of the parameters `byval` output, two `byval` inputs and `i32` sizes `m`, `n`, `K`, the
-command adds only `n.names`, `n.starts` (on `Mat.args`) and `n.sound_mat`, `Kernel.sound_mat`
-at `paths` and `chains` with every premise of the program discharged, whose premises are the
-memory premises and the threads' runs `Hin` and `Hout` (`elabMat`). -/
+nothing. A summary, the paths, the chains, the arguments, the struct type or tail of an earlier
+definition's value are that definition (`kernelDef`): one of the imports or the module in a
+library module or with `mojo_kernel.share`, one of the module otherwise. With `mat paths chains`
+(after the other clauses; `contract` optional), for a kernel of the parameters `byval` output,
+two `byval` inputs and `i32` sizes `m`, `n`, `K`, the command adds only `n.names`, `n.starts`
+(on `Mat.args`) and `n.sound_mat`, `Kernel.sound_mat` at `paths` and `chains` with every premise
+of the program discharged, whose premises are the memory premises and the threads' runs `Hin` and
+`Hout` (`elabMat`). With `mat paths chains inv` (`chains` one chain of one loop with no nested
+loop), it also adds `n.runInv`, a thread's run from an invariant's three facts `LoopIterWith`
+at the heads of the rounds, with `Mat.Head` there, `n.kept`, the registers the loop keeps at
+those heads, and `n.sound_inv`, `n.sound_mat` with `Hin` replaced by those facts at each thread's
+`Mat.Thread`. -/
 syntax (name := mojoKernel) "mojo_kernel " ident " := " term:max term:max
   (&" reads " sepBy1(ident " := " ident, ", "))? (&" writes " sepBy1(ident " := " ident, ", "))?
   (&" scalars " sepBy1(ident " := " ident, ", "))? (&" pointers " sepBy1(ident " := " ident, ", "))?
   (&" map2 " term:max term:max term:max)? (&" contract")?
   (&" loop " num " := " term:max term:max term:max term:max (" by " Lean.Parser.Tactic.tacticSeq)?)*
-  (&" mat " term:max term:max)? : command
+  (&" mat " term:max term:max (&" inv")?)? : command
 
 /-- Proves the theorem `name : type` by the tactic `tac` without error recovery, and adds it:
 `true` if `tac` closes the goal and its proof has no placeholder (`Expr.hasSorry`) and no
@@ -634,11 +684,35 @@ def elabSoundLoop (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String) (fn :
     `!invariant.load` and has an observation meeting the predicate. It covers this one \
     kernel."
 
-/-- The binder names of `n.sound_mat` other than the six clause names: no clause of `mat` may
-have one of them as its name. -/
+/-- The binder names of `n.sound_mat` and `n.out` other than the six clause names: no clause
+of `mat` may have one of them as its name. -/
 def matBinders : List Name :=
   [`L, `hL, `hz, `α, `t, `enc, `al, `sA, `sB, `sC, `x, `y, `mem, `hC, `hne, `hbuf, `hx, `hy,
-    `hsC, `hfit, `adm, `w, `bs, `Hin, `Hout]
+    `hsC, `hfit, `adm, `w, `bs, `Hin, `hsz, `hbs, `k, `q0, `q1, `q2, `c, `m₀, `m', `f, `hk, `hS,
+    `h, `hE, `hO, `ps, `me]
+
+/-- The binder names that `mat … inv` adds in `n.runInv`, `n.kept` and `n.sound_inv`: no clause
+of `mat … inv` may have one of them as its name. -/
+def matInvBinders : List Name :=
+  [`I, `N, `H, `th, `C, `i, `W, `hW]
+
+/-- The one chain of the `mat` clause's `chains` (an elaborated term of type `List LoopChain`)
+and its one loop, by `whnf` at the default transparency: `.ok (C, Lp)` if `chains` reduces to
+`[C]`, `C.loops` to `[Lp]` and `Lp.inner` to `[]`; otherwise `.error` with the first of the three
+that fails. The check of `mat … inv`. -/
+def matInvChain (chains : Expr) : MetaM (Except String (Expr × Expr)) := do
+  let one (e : Expr) : MetaM (Option Expr) := do
+    let e ← whnf e
+    unless e.isAppOfArity ``List.cons 3 do return none
+    unless (← whnf e.appArg!).isAppOfArity ``List.nil 1 do return none
+    return some e.appFn!.appArg!
+  let some C ← one chains
+    | return .error "inv needs one chain; the chains do not reduce to a list of one"
+  let some Lp ← one (mkApp (mkConst ``LoopChain.loops) C)
+    | return .error "inv needs a chain of one loop; its loops do not reduce to a list of one"
+  unless (← whnf (mkApp (mkConst ``LoopSeg.inner) Lp)).isAppOfArity ``List.nil 1 do
+    return .error "inv needs a loop with no nested loop; its nested loops do not reduce to []"
+  return .ok (C, Lp)
 
 /-- `mojo_kernel n := P fn … mat paths chains`, the `mat` clause (a matmul kernel: three `byval`
 structs, the output then the two inputs, then the `i32` sizes `m`, `n`, `K`), with paths `paths`
@@ -651,10 +725,36 @@ with names other than `matBinders` and each other's; parameter `j` named `%j`; `
 checker accepting them at the flag `contract`, evaluated; no `map2` or `loop` clause; an
 error naming the reason and `fn` otherwise, before anything is added), it adds the theorems
 `n.names` (parameter `j` has register name `j`, by `decide +kernel`), `n.starts` (the start on
-`Mat.args z o a b m n K` succeeds, `Sym.Grid.start_ok`, proved as step 5's) and `n.sound_mat`,
-`Kernel.sound_mat` at `fn` with every premise that depends only on the program discharged; the
-threads' runs `Hin` and `Hout` stay its premises. If one of the three does not elaborate, the
-command restores the environment, so it adds nothing. -/
+`Mat.args z o a b m n K` succeeds, `Sym.Grid.start_ok`, proved as step 5's), `n.out` (a thread
+out of bounds runs some path of the clause to `ret`, from `Mat.Entry`, the sizes below `2 ^ 31`
+and no bytes of a thread out of bounds: `RetWith.of_first` at the first path that the three path
+facts by `decide +kernel`, its premises by `mojo_obl` at the thread's 2-D index facts and the
+memory by `mojo_ret` discharge, tried in order on each side of the row's bound) and
+`n.sound_mat`, `Kernel.sound_mat` at `fn` with every premise that depends only on the program
+discharged and `Hout` by `n.out`; the run of a thread in bounds, `Hin`, stays its premise. With
+`inv` (`chains` one chain of one loop with no nested loop by `matInvChain`, checked before the
+path checker, and no clause name in `matInvBinders`), it also adds `n.runInv` (the run of a
+thread in bounds from its entry facts, `Elem` and `Elem.Only`, and `LoopIterWith` at an
+invariant `I` and a trip count `N`: `RetLsWith.of_iter` with the edge into the loop by
+`mojo_obl` at the thread's 2-D index facts and `Mat.Head` at every head of a round by mojo_inv
+at the loop head and `Mat.Head.iterate`, at the registers `LoopSeg.bases` of the loop evaluated
+here, each one's value at the loop head by `obl_have`), `n.kept` (each register of
+`LoopSeg.kept` at every head of a round, with the value that `obl_have` computes at the loop head
+from `Mat.Entry`, the launch's validity, the sizes and the thread's 2-D index facts, by
+`LoopSeg.kept_round`; a register whose value `obl_have` gives only as a `Classical.choose` is
+stated with its value at the loop head itself) and `n.sound_inv` (`n.sound_mat`'s
+statement with `Hin` replaced by `LoopIterWith` at each thread's `Mat.Thread`, proved by
+`n.runInv` at each thread). If one of them does not elaborate, the command restores the
+environment, so it adds nothing; for `n.out` the error says that no path of the clause is
+discharged; for `n.runInv`, before the attempt, that the loop path stores or loads through a
+pointer whose base is not a register the loop keeps (`LoopSeg.loadsFrom` at `LoopSeg.bases` is
+false, evaluated), with the blocks at which it fails, and after it, that a register of
+`LoopSeg.bases` has no value at the loop head by `obl_have` or one not shown to name a block
+other than the output's, with the register, or else that `mojo_obl` does not discharge the edge
+into the loop or `Mat.Head` at the loop head is not proved; for `n.kept` that the function at
+the loop head is not proved or that a register the loop keeps has no value there by `obl_have`.
+After an attempt the error ends with the attempt's first error from its first goal (`⊢ …`,
+without the hypotheses) on; the failed attempt's messages are dropped. -/
 unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
   let n := stx[1].getId
   let base := (← getCurrNamespace) ++ n
@@ -676,6 +776,7 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
   if let some e := clauseError fn.params (rd ++ wr) scalars ptrs then
     throwError "mojo_kernel: {e} ({fnText})"
   let contract := !stx[10].isNone
+  let rname (l : Nat) : String := s!"%{fn.names.getD l s!"{l}"}"
   unless stx[9].isNone && stx[11].getArgs.isEmpty do
     throwError "mojo_kernel: mat is not combined with map2 or loop ({fnText})"
   let some fnC := fnC? | throwError "mojo_kernel: mat needs the kernel as a constant; {fnText} \
@@ -707,33 +808,72 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
     throwError "mojo_kernel: mat needs parameter j named %j, for each j ({fnText})"
   let xsN := (wr ++ rd ++ scalars).map (·.1)
   if let some x := xsN.find? fun x => matBinders.contains (.mkSimple x) then
-    throwError "mojo_kernel: mat: the clause name {x} is a binder name of {n}.sound_mat \
-      ({fnText})"
+    throwError "mojo_kernel: mat: the clause name {x} is a binder name of {n}.sound_mat or \
+      {n}.out ({fnText})"
   unless xsN.eraseDups.length == xsN.length do
     throwError "mojo_kernel: mat: two clauses have one name ({fnText})"
+  let inv := !stx[12][3].isNone
+  if inv then
+    if let some x := xsN.find? fun x => matInvBinders.contains (.mkSimple x) then
+      throwError "mojo_kernel: mat: the clause name {x} is a binder name of {n}.runInv, \
+        {n}.kept or {n}.sound_inv ({fnText})"
   let pathsStx : Lean.Term := ⟨stx[12][1]⟩
   let chainsStx : Lean.Term := ⟨stx[12][2]⟩
-  -- no empty list, evaluated before the path checker: the checker's cover of no path is vacuous,
-  -- and the theorem would then cover only launches with no thread on that side
+  -- no empty list, evaluated, and with `inv` one chain of one loop with no nested loop, by
+  -- `whnf`, before the path checker: the checker's cover of no path is vacuous, and the theorem
+  -- would then cover only launches with no thread on that side
+  let chainsTy := mkApp (mkConst ``List [.zero]) (mkConst ``LoopChain)
   let scope0 := (← get).nextMacroScope
-  let (noP, noC) ← liftTermElabM <| Term.withoutErrToSorry do
-    let e ← Term.elabTermEnsuringType (← `(List.isEmpty
+  let (nP, noC, invE, rs, ks, badS, badL) ← liftTermElabM <| Term.withoutErrToSorry do
+    let e ← Term.elabTermEnsuringType (← `(List.length
       ($pathsStx : List (List (Nat × List MojoProof.Sym.Cond × MojoProof.Sym.Summary)))))
-      (mkConst ``Bool)
+      (mkConst ``Nat)
     let c ← Term.elabTermEnsuringType
       (← `(List.isEmpty ($chainsStx : List MojoProof.Sym.LoopChain))) (mkConst ``Bool)
     Term.synthesizeSyntheticMVarsNoPostponing
-    pure (← evalExpr Bool (mkConst ``Bool) (← instantiateMVars e),
-      ← evalExpr Bool (mkConst ``Bool) (← instantiateMVars c))
-  -- the check keeps none of its names (two Booleans), so its macro scopes are reused: the
-  -- theorem's hygienic binder names are those it has without the check
+    -- with `inv`, the registers the loop keeps and loads through (`LoopSeg.bases`) and those it
+    -- keeps (`LoopSeg.kept`), evaluated, and the blocks of the loop path at which
+    -- `LoopSeg.loadsFrom` at `LoopSeg.bases` fails (`Summary.loadsIn`): those with a store, and
+    -- those with a load whose pointer's base is not a register of `LoopSeg.bases`
+    let (invE, rs, ks, badS, badL) ← if inv then do
+        let ch ← Term.elabTermEnsuringType chainsStx chainsTy
+        let fe ← Term.elabTermEnsuringType fnstx (mkConst ``Func)
+        Term.synthesizeSyntheticMVarsNoPostponing
+        match ← matInvChain (← instantiateMVars ch) with
+        | .error e => pure (some e, [], [], [], [])
+        | .ok (_, Lp) =>
+          let fe ← instantiateMVars fe
+          let nl := mkApp (mkConst ``List [.zero]) (mkConst ``Nat)
+          let rs ← evalExpr (List Nat) nl (mkApp2 (mkConst ``LoopSeg.bases) fe Lp)
+          -- the loop itself, evaluated, and its blocks sorted here: a term elaborated in the
+          -- user's module for them would add its `match` (on `SEff`) to that module
+          let L ← evalExpr LoopSeg (mkConst ``LoopSeg) Lp
+          let ps := (L.h :: L.B.map (·.1)).zip (L.H :: L.B.map (·.2.2))
+          let bad (st : Bool) : List Nat := ps.filterMap fun p =>
+            if !Summary.loadsIn rs p.2 && p.2.effs.any (· matches .store ..) == st then some p.1
+            else none
+          pure (none, rs, ← evalExpr (List Nat) nl (mkApp2 (mkConst ``LoopSeg.kept) fe Lp),
+            bad true, bad false)
+      else pure (none, [], [], [], [])
+    pure (← evalExpr Nat (mkConst ``Nat) (← instantiateMVars e),
+      ← evalExpr Bool (mkConst ``Bool) (← instantiateMVars c), invE, rs, ks, badS, badL)
+  -- the checks keep none of their names: they return a number, a Boolean and an error text,
+  -- their elaboration's state is dropped and `evalExpr` adds its declaration only for the
+  -- evaluation. So their macro scopes are reused, and the theorems' hygienic binder names are
+  -- those they have without the checks. The path checker's `evalExpr` below may then give its
+  -- declaration the name of one of these (`_tmp` with the same macro scope): that one is no
+  -- longer in the environment, and the value is the path checker's (its refusals in
+  -- MojoProofTest/NaiveSound.lean). A check that kept a declaration with a hygienic name could
+  -- not reuse them.
   modify fun s => { s with nextMacroScope := scope0 }
-  if noP then
+  if nP == 0 then
     throwError "mojo_kernel: mat needs a path; with no paths the theorem covers only launches \
       with no thread out of bounds ({fnText})"
   if noC then
     throwError "mojo_kernel: mat needs a chain; with no chains the theorem covers only launches \
       with no thread in bounds ({fnText})"
+  if let some e := invE then
+    throwError "mojo_kernel: mat: {e} ({fnText})"
   -- the paths and the chains, by the path checker, evaluated
   let cq : Lean.Term := quote contract
   let (okE, okC) ← liftTermElabM <| Term.withoutErrToSorry do
@@ -754,7 +894,7 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
   -- environment is restored
   let env0 ← getEnv
   try
-    let fnId : Ident := mkCIdent fnC
+    let fnUnf ← paramsSimp fnC
     let namesId := mkIdent (n ++ `names)
     elabCommand (← `(command|
       theorem $namesId : ∀ j (p : Param), ($fnstx).params[j]? = some p → p.name = some j := by
@@ -783,7 +923,7 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
           (fun g hg => by rw [show ($Pstx).module.globals.toList = [] from rfl] at hg; cases hg)
           (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel)
         all_goals
-          simp only [Mat.args, $fnId:ident, List.zip_cons_cons, List.zip_nil_left,
+          simp only [Mat.args, $fnUnf,*, List.zip_cons_cons, List.zip_nil_left,
             List.mem_cons, Prod.mk.injEq, List.not_mem_nil] at hpv
           repeat' rcases hpv with ⟨hp, hv⟩ | hpv
         all_goals subst_vars
@@ -797,23 +937,108 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
       `{xsN[2]!}`, sizes `{xsN[3]!}`, `{xsN[4]!}`, `{xsN[5]!}`, memory closed for the arguments \
       (`Mem.Closed`, the one premise), address choice and oracle (`Sym.Grid.start_ok`, generated \
       by `mojo_kernel {n}`). It covers this one kernel."
-    let some [L, hL, hz, α, t, enc, al, sA, sB, sC, x, y, mem, hC, hne, hbuf, hx, hy, hsC, hfit,
-        adm, w, bs, Hin, Hout] := some (matBinders.map mkIdent) | throwError "unreachable"
+    -- two lists: a list literal of more than 32 elements is not a pattern
+    let some [L, hL, hz, α, t, enc, al, sA, sB, sC, x, y, mem, hC, hne, hbuf, hx, hy, hsC, hfit] :=
+        some ((matBinders.take 20).map mkIdent) | throwError "unreachable"
+    let some [adm, w, bs, Hin, hsz, hbs, k, q0, q1, q2, c, m₀, m', f, hk, hS, h, hE, hO, ps, me] :=
+        some ((matBinders.drop 20).map mkIdent) | throwError "unreachable"
     let some [xo, xa, xb, xm, xn, xK] := some xs.toList | throwError "unreachable"
     let alq := quote (P.layout.align T)
     let spq := quote sp
     let startsC := mkCIdent (base ++ `starts)
     let namesC := mkCIdent (base ++ `names)
-    liftTermElabM <| Term.withoutErrToSorry do
-      let Tt ← Term.exprToSyntax (toExpr T)
-      let body ← `(fun {$L : Launch} ($hL : Launch.Valid $L)
+    let outC := mkCIdent (base ++ `out)
+    -- thread `k` in bounds, its cell, and the 2-D index of its row and its column as the sums of
+    -- special registers that `mojo_obl` reads
+    let Sk ← `($k < volume (Launch.grid $L) * volume (Launch.block $L) ∧
+      Launch.index $L $k .x < $xm ∧ Launch.index $L $k .y < $xn)
+    let SF ← `(fun $k:ident => $Sk)
+    let cellF ← `(fun $k:ident => (Launch.index $L $k .x * $sC + Launch.index $L $k .y) * $w)
+    let sx ← `((Launch.env $L $k).sreg .ctaid .x * (Launch.env $L $k).sreg .ntid .x +
+      (Launch.env $L $k).sreg .tid .x)
+    let sy ← `((Launch.env $L $k).sreg .ctaid .y * (Launch.env $L $k).sreg .ntid .y +
+      (Launch.env $L $k).sreg .tid .y)
+    -- one attempt per path of the clause, the `i`-th by membership `i`, in order
+    let mems ← (List.range nP).foldlM (fun (acc : Array Lean.Term) _ => do
+      match acc.back? with
+      | none => pure (acc.push (← `(List.mem_cons_self)))
+      | some prev => pure (acc.push (← `(List.mem_cons_of_mem _ $prev)))) #[]
+    let alts ← mems.mapM fun mi =>
+      `(tactic| exact ⟨_, $mi, RetWith.of_first (by decide +kernel) (by mojo_obl)
+        fun me hme => ⟨Elem.skip (by mojo_ret) hb, by mojo_ret⟩⟩)
+    let some last := alts.back? | throwError "unreachable"
+    let tryPaths ← alts.pop.foldrM (fun a acc => `(tactic| first | $a:tactic | $acc:tactic)) last
+    let outTy ← `(∃ $ps:ident ∈ $pathsStx, RetWith $cq (Valuation.entry $c 0 $m' $f)
+      (fun $me:ident => Elem $m₀ $xo $w $cellF $bs ($k + 1) $me ∧ Elem.Only $xo $SF $me) $ps)
+    -- the struct type as syntax is an elaborated term, so it is made in the elaboration's monad
+    let outBody (Tt : Lean.Term) : TermElabM Lean.Term :=
+      `(fun {$L : Launch} ($hL : Launch.Valid $L) {$xo $xa $xb $xm $xn $xK : Nat}
+        {$α : Type} [TorchLean.Storage $α] {$t : Ty} {$enc : $α → Val} {$al $sA $sB $sC : Nat}
+        {$x : TorchLean.Tensor $α [$xm, $sA]} {$y : TorchLean.Tensor $α [$xn, $sB]} {$w : Nat}
+        {$bs : Nat → Option (List MemByte)} ($hsz : $xm < 2 ^ 31 ∧ $xn < 2 ^ 31 ∧ $xK < 2 ^ 31)
+        ($hbs : ∀ $k:ident, ¬ ($Sk) → $bs $k = none) {$k $q0 $q1 $q2 : Nat} {$c : Ctx}
+        {$m₀ $m' : Mem} {$f : Frame}
+        ($hk : $k < volume (Launch.grid $L) * volume (Launch.block $L)) ($hS : ¬ ($Sk))
+        ($h : Mat.Entry $Pstx $fnstx $L $Tt $zt $alq $t $enc $al $xo $xa $xb $xK $sC $x $y $k $c
+          $q0 $q1 $q2 $m' $f)
+        ($hE : Elem $m₀ $xo $w $cellF $bs $k $m') ($hO : Elem.Only $xo $SF $m') =>
+      show $outTy from by
+        obtain ⟨⟨hcp, hce, -⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
+          ⟨hr3, hr4, hr5⟩, -, -, ⟨hbC, -⟩⟩ := $h
+        obtain ⟨hm, hn, hK⟩ := $hsz
+        have hb := $hbs $k $hS
+        rcases Nat.lt_or_ge (Launch.index $L $k .x) $xm with hX | hX
+        · have hY : $xn ≤ $sy := Nat.le_of_not_lt fun hY => $hS ⟨$hk, hX, hY⟩
+          replace hX : $sx < $xm := hX
+          clear $hS $hbs
+          $tryPaths
+        · replace hX : $xm ≤ $sx := hX
+          clear $hS $hbs
+          $tryPaths)
+    -- the messages before `n.out`: on failure, the failed attempts' are dropped
+    let msgs0 := (← get).messages
+    try
+      liftTermElabM <| Term.withoutErrToSorry do
+        let e ← Term.elabTerm (← outBody (← Term.exprToSyntax (toExpr T))) none
+        Term.synthesizeSyntheticMVarsNoPostponing
+        let e ← instantiateMVars e
+        let ty ← instantiateMVars (← inferType e)
+        if e.hasSorry || e.hasExprMVar || ty.hasExprMVar then
+          throwError "unsolved goals"
+        addDecl <| .thmDecl { name := base ++ `out, levelParams := [], type := ty, value := e }
+    catch ex =>
+      modify fun s => { s with messages := msgs0 }
+      throwError "mojo_kernel: mat: {n}.out does not elaborate: no path of the clause is \
+        discharged for a thread out of bounds by `RetWith.of_first`, `mojo_obl` and `mojo_ret` \
+        ({fnText}): {ex.toMessageData}"
+    addDocStringCore (base ++ `out) s!"**A thread of `{fnText}` out of bounds runs a path of the \
+      `mat` clause to `ret`** (generated by `mojo_kernel {n}`), for every launch `L` valid, block \
+      numbers `{xsN[0]!}` (output), `{xsN[1]!}`, `{xsN[2]!}`, sizes `{xsN[3]!}`, `{xsN[4]!}`, \
+      `{xsN[5]!}` below `2 ^ 31`, element type, encoder, alignment, row strides, tensors, cell \
+      width and bytes `bs` that are none at every thread out of bounds: every thread `k` of `L` \
+      out of bounds (its row at least `{xsN[3]!}`, or its row below `{xsN[3]!}` and its column at \
+      least `{xsN[4]!}`) with the facts of `Mat.Entry` at blocks `q0`, `q1`, `q2`, context `c`, \
+      memory `m'` and frame `f`, from a memory of `Elem` after `k` threads (from `m₀`) whose \
+      accesses to `{xsN[0]!}` are by threads in bounds (`Elem.Only`), runs some path of the \
+      clause from `f`'s entry valuation to `ret` (`RetWith`) with a memory of `Elem` after \
+      `k + 1` threads (it puts no bytes, `Elem.skip`) whose accesses to `{xsN[0]!}` are by \
+      threads in bounds. The proof is `RetWith.of_first` at a path whose blocks after the first \
+      have no effects: the path's facts by `decide +kernel`, its premises (the branch out of \
+      bounds among them) by `mojo_obl` at the thread's row and column, the memory by \
+      `mojo_ret`. It covers this one kernel and is `{n}.sound_mat`'s `Hout`."
+    -- `n.sound_mat`'s binders before `Hin`, and its call of `Kernel.sound_mat` at the run `hin` of
+    -- a thread in bounds (`n.sound_inv` has the same binders and call)
+    let matCommon (rest : Lean.Term) : TermElabM Lean.Term :=
+      `(fun {$L : Launch} ($hL : Launch.Valid $L)
           ($hz : Launch.grid $L .z = 1 ∧ Launch.block $L .z = 1) {$xo $xa $xb $xm $xn $xK : Nat}
           {$α : Type} [TorchLean.Storage $α] {$t : Ty} {$enc : $α → Val} {$al $sA $sB $sC : Nat}
           {$x : TorchLean.Tensor $α [$xm, $sA]} {$y : TorchLean.Tensor $α [$xn, $sB]} {$mem : Mem}
           $hC:ident $hne:ident $hbuf:ident $hx:ident $hy:ident $hsC:ident $hfit:ident
           {$adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {$w : Nat}
-          {$bs : Nat → Option (List MemByte)} $Hin:ident $Hout:ident =>
-        Kernel.sound_mat (contract := $cq) (prog := $Pstx) (fn := $fnstx) (paths := $pathsStx)
+          {$bs : Nat → Option (List MemByte)} ($hsz : $xm < 2 ^ 31 ∧ $xn < 2 ^ 31 ∧ $xK < 2 ^ 31)
+          ($hbs : ∀ $k:ident, ¬ ($Sk) → $bs $k = none) => $rest)
+    let matCall (Tt hin : Lean.Term) : TermElabM Lean.Term :=
+      `(Kernel.sound_mat (contract := $cq) (prog := $Pstx) (fn := $fnstx) (paths := $pathsStx)
           (chains := $chainsStx) (T := $Tt) (z := $zt) (al' := $alq) (m := $xm) (n := $xn)
           (K := $xK) (t := $t) (enc := $enc) (al := $al) (o := $xo) (a := $xa) (b := $xb)
           (sA := $sA) (sB := $sB) (sC := $sC) (x := $x) (y := $y) (mem := $mem) (adm := $adm)
@@ -821,7 +1046,11 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
           ⟨rfl, rfl, rfl⟩ ⟨rfl, rfl, rfl⟩
           (Layout.Codec.ptrArg _ $spq (by decide +kernel) (by decide +kernel) rfl rfl rfl)
           ⟨by decide, by decide⟩ (fun _ => ⟨rfl, rfl, rfl⟩) $hC $hne $hbuf $hx $hy $hsC $hfit
-          (fun ch oracle _ => $startsC $L $xo $xa $xb $xm $xn $xK $hC ch oracle) $Hin $Hout)
+          (fun ch oracle _ => $startsC $L $xo $xa $xb $xm $xn $xK $hC ch oracle) $hin
+          (fun _ _ _ _ _ _ _ _ _ _ _ hk hS _ h hE hO => $outC $hL $hsz $hbs hk hS h hE hO))
+    liftTermElabM <| Term.withoutErrToSorry do
+      let Tt ← Term.exprToSyntax (toExpr T)
+      let body ← matCommon (← `(fun $Hin:ident => $(← matCall Tt Hin)))
       let e ← Term.elabTerm body none
       Term.synthesizeSyntheticMVarsNoPostponing
       let e ← instantiateMVars e
@@ -835,17 +1064,504 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
       depends only on the program discharged (the paths and the chains of the `mat` clause by \
       `decide +kernel`, the parameters and their `byval` types by `rfl`, the names by \
       `{n}.names`, the codec of the struct by `Layout.Codec.ptrArg`, the `withAttrs` of the \
-      sizes by `rfl`, the start by `{n}.starts`). For every launch valid with `z` sides 1, block \
-      numbers `{xsN[0]!}` (output), `{xsN[1]!}`, `{xsN[2]!}` (inputs), sizes `{xsN[3]!}`, \
-      `{xsN[4]!}`, `{xsN[5]!}`, element type, encoder, alignment, row strides, tensors and \
-      caller's memory with the memory premises of `Kernel.sound_mat`, admission, cell width and \
-      bytes: if `Hin` (a thread in bounds runs some sequence of loops of the clause to `ret`) \
-      and `Hout` (a thread out of bounds takes some path of the clause to `ret`) hold, \
-      `{fnText}` is sound on `Mat.args` (`Kernel.Sound`) for the observation of the blocks and \
-      `Elem.Out` at the 2-D cells. It covers this one kernel; `Hin` and `Hout` are the user's."
+      sizes by `rfl`, the start by `{n}.starts`, the run of a thread out of bounds, `Hout`, by \
+      `{n}.out`). For every launch valid with `z` sides 1, block numbers `{xsN[0]!}` (output), \
+      `{xsN[1]!}`, `{xsN[2]!}` (inputs), sizes `{xsN[3]!}`, `{xsN[4]!}`, `{xsN[5]!}` below \
+      `2 ^ 31`, element type, encoder, alignment, row strides, tensors and caller's memory with \
+      the memory premises of `Kernel.sound_mat`, admission, cell width and bytes `bs` that are \
+      none at every thread out of bounds: if `Hin` holds (a thread in bounds, with the facts of \
+      `Mat.Entry`, runs some sequence of loops of the clause to `ret`), `{fnText}` is sound on \
+      `Mat.args` (`Kernel.Sound`) for the observation of the blocks and `Elem.Out` at the 2-D \
+      cells. It covers this one kernel; `Hin` is the user's."
+    if inv then
+      let some [I, N, H, th, C, iI, W, hW] := some (matInvBinders.map mkIdent)
+        | throwError "unreachable"
+      let runInvC := mkCIdent (base ++ `runInv)
+      -- the one chain and its one loop as syntax, in the elaboration that uses them
+      let invChain : TermElabM (Lean.Term × Lean.Term) := do
+        let chE ← Term.elabTermEnsuringType chainsStx chainsTy
+        Term.synthesizeSyntheticMVarsNoPostponing
+        let .ok (Ce, Le) ← matInvChain (← instantiateMVars chE) | throwError "unreachable"
+        return (← Term.exprToSyntax Ce, ← Term.exprToSyntax Le)
+      -- the first goal `⊢ …` an error's text shows, without the goal's hypotheses
+      let goalOf (s : String) : Option String := match s.splitOn "⊢ " with
+        | _ :: g :: _ => some ("⊢ " ++ ((g.splitOn "\n\n").headD g))
+        | _ => none
+      -- the first error of a failed attempt (a tactic's) after the messages `ms`, from its first
+      -- goal on if it shows one; else the exception's message
+      let why (ms : MessageLog) (ex : Exception) : CommandElabM String := do
+        match (((← get).messages.toList.drop ms.toList.length).filter
+            (·.severity matches .error)).head? with
+        | some m => do
+          let s ← liftTermElabM m.data.toString
+          pure ((goalOf s).getD s)
+        | none => liftTermElabM ex.toMessageData.toString
+      -- the start of the error of a register of `LoopSeg.bases` that `hr` below does not
+      -- discharge, after which it names the register and the cause
+      let premiseMark := "`Mat.Head.iterate`'s premise on the registers `LoopSeg.bases` fails"
+      -- `Mat.Head.iterate`'s premise `LoopSeg.loadsFrom` at `LoopSeg.bases`, false: the blocks
+      -- of the loop path at which it fails, evaluated above
+      unless badS.isEmpty && badL.isEmpty do
+        let blocks (ls : List Nat) : String :=
+          (if ls.length == 1 then "block " else "blocks ") ++ ", ".intercalate (ls.map rname)
+        let parts := (if badS.isEmpty then [] else [s!"{blocks badS} of the loop path stores"]) ++
+          if badL.isEmpty then [] else [s!"{blocks badL} of the loop path loads through a \
+            pointer whose base is not a register the loop keeps"]
+        throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: `Mat.Head.iterate`'s \
+          premise `LoopSeg.loadsFrom` at `LoopSeg.bases` ({", ".intercalate (rs.map rname)}) is \
+          false: {"; ".intercalate parts} ({fnText})"
+      -- the messages before `n.runInv`: on failure, `mojo_obl`'s and the elaborator's are dropped
+      let msgs := (← get).messages
+      try
+        liftTermElabM <| Term.withoutErrToSorry do
+          let Tt ← Term.exprToSyntax (toExpr T)
+          let (Cs, Ls) ← invChain
+          -- the thread's entry valuation and the memory predicate at `ret`
+          let V ← `(Valuation.entry $c 0 $m' $f)
+          let Q ← `(fun $me:ident =>
+            Elem $m₀ $xo $w $cellF $bs ($k + 1) $me ∧ Elem.Only $xo $SF $me)
+          -- the loop head's entry valuation and the facts at the head of every round
+          let V0 ← `(Valuation.roundWith $cq ($Cs).l ($Cs).S ($Cs).E $V)
+          let Ft ← `(Mat.Head $Pstx $fnstx $t $enc $al $xo $xa $xb $sC $x $y $w $cellF $bs $k
+            $m₀ $SF)
+          -- each register of `rs` at the loop head, by `obl_have`, a pointer to `a` or `b`; if
+          -- not, an error naming the register (`premiseMark`, read by the refusal below)
+          let hr ← rs.foldrM (fun r acc => do
+            let no (s : String) : TSyntax `str :=
+              Syntax.mkStrLit s!"{premiseMark} at {rname r}: {s}"
+            `(List.forall_mem_cons.2 ⟨by
+              first
+                | obl_have g : ($V0).regs $(quote r)
+                | fail $(no "obl_have gives it no value at the loop head")
+              exact ⟨_, g, by
+                try simp only [Val.NamesIn]
+                first
+                  | exact ($hne).1
+                  | exact ($hne).2
+                  | fail $(no "its value at the loop head is not shown to name a block other \
+                      than the output's by `hne` (`a` or `b` other than the output)")⟩,
+              $acc⟩)) (← `(fun _ h => nomatch h))
+          let body ← `(fun {$L : Launch} ($hL : Launch.Valid $L) {$xo $xa $xb $xm $xn $xK : Nat}
+              {$α : Type} [TorchLean.Storage $α] {$t : Ty} {$enc : $α → Val}
+              {$al $sA $sB $sC : Nat} {$x : TorchLean.Tensor $α [$xm, $sA]}
+              {$y : TorchLean.Tensor $α [$xn, $sB]} {$w : Nat} {$bs : Nat → Option (List MemByte)}
+              ($hsz : $xm < 2 ^ 31 ∧ $xn < 2 ^ 31 ∧ $xK < 2 ^ 31) {$k $q0 $q1 $q2 : Nat}
+              {$c : Ctx} {$m₀ $m' : Mem} {$f : Frame} ($hS : $Sk)
+              ($h : Mat.Entry $Pstx $fnstx $L $Tt $zt $alq $t $enc $al $xo $xa $xb $xK $sC $x $y
+                $k $c $q0 $q1 $q2 $m' $f) ($hne : $xa ≠ $xo ∧ $xb ≠ $xo)
+              ($hE : Elem $m₀ $xo $w $cellF $bs $k $m') ($hO : Elem.Only $xo $SF $m')
+              {$I : Nat → Valuation → Prop} {$N : Nat}
+              ($H : LoopIterWith $cq $Ls $V ($Cs).l ($Cs).S ($Cs).E $Q $N $Ft $I) =>
+            show ∃ $C:ident ∈ $chainsStx, RetLsWith $cq $Q ($C).loops $V ($C).l ($C).ds ($C).S
+                ($C).E from
+              ⟨$Cs, List.mem_singleton_self _, RetLsWith.of_iter (L := $Ls) rfl
+                (by
+                  clear $H $hE $hO
+                  obtain ⟨⟨hcp, hce, -⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
+                    ⟨hr3, hr4, hr5⟩, -, -, ⟨hbC, -⟩⟩ := $h
+                  obtain ⟨hm, hn, hK⟩ := $hsz
+                  obtain ⟨hk, hX, hY⟩ := $hS
+                  replace hX : $sx < $xm := hX
+                  replace hY : $sy < $xn := hY
+                  mojo_obl)
+                (by
+                  clear $H
+                  obtain ⟨⟨hcp, hce, hcw⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
+                    ⟨hr3, hr4, hr5⟩, hbA, hbB, hbC⟩ := $h
+                  exact Mat.Head.iterate (c := $cq) (L := $Ls) (rs := $(quote rs))
+                    (by decide +kernel) (by mojo_inv) $hr)
+                $H⟩)
+          let e ← Term.elabTerm body none
+          Term.synthesizeSyntheticMVarsNoPostponing
+          let e ← instantiateMVars e
+          let ty ← instantiateMVars (← inferType e)
+          if e.hasSorry || e.hasExprMVar || ty.hasExprMVar then
+            throwError "unsolved goals"
+          addDecl <| .thmDecl { name := base ++ `runInv, levelParams := [], type := ty, value := e }
+      catch ex =>
+        let why ← why msgs ex
+        let logged := ((← get).messages.toList.drop msgs.toList.length).any
+          (·.severity matches .error)
+        modify fun s => { s with messages := msgs }
+        -- a register of `LoopSeg.bases` that `hr` does not discharge, with no error before: its
+        -- `fail`, the exception, names it in its first line, and its goal follows the hypotheses
+        let t ← liftTermElabM ex.toMessageData.toString
+        if !logged && t.startsWith premiseMark then
+          throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: \
+            {(t.splitOn "\n").headD t} ({fnText}): {(goalOf t).getD ""}"
+        throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: the edge into the loop \
+          is not discharged by mojo_obl at the thread's 2-D index facts, or `Mat.Head` at the loop \
+          head is not proved by mojo_inv ({fnText}): {why}"
+      addDocStringCore (base ++ `runInv) s!"**A thread of `{fnText}` in bounds runs the `mat` \
+        clause's chain to `ret`, from an invariant** (generated by `mojo_kernel {n}`, `inv`): for \
+        every launch `L` valid, block numbers `{xsN[0]!}` (output), `{xsN[1]!}`, `{xsN[2]!}`, \
+        sizes `{xsN[3]!}`, `{xsN[4]!}`, `{xsN[5]!}` below `2 ^ 31`, element type, encoder, \
+        alignment, row strides, tensors, cell width, bytes `bs`, thread `k` in bounds (`hS`), \
+        blocks `q0`, `q1`, `q2`, context `c`, memories `m₀` and `m'` and frame `f` with the \
+        facts of `Mat.Entry` (`h`), `a` and `b` other than the output (`hne`), a memory `m'` of \
+        `Elem` after `k` threads (from `m₀`) with `Elem.Only` (`hE`, `hO`), invariant `I` and trip \
+        count `N`: if `I` is an invariant of the chain's loop at the heads of its rounds (`H : \
+        LoopIterWith`, at the iterates of the round from the loop head's entry valuation after \
+        the chain's path in: `I 0` there; at the head of every round `i < N` with the thread's \
+        context and round `i`'s step count where `Mat.Head` (the function, the buffers of \
+        `Mat.Entry`, `Elem` after `k` threads and `Elem.Only`) and `I i` hold, the round's \
+        premises (`RoundWith`) and `I (i + 1)` after it; at the head of round `N` with those \
+        facts and `I N`, the path out to `ret` with `Elem` after `k + 1` threads and \
+        `Elem.Only`, `RetWith`), the thread runs the chain from `f`'s entry valuation to `ret` \
+        (`RetLsWith`), the conclusion of `{n}.sound_mat`'s premise `Hin`. The proof is \
+        `RetLsWith.of_iter`, with the edge into the loop by `mojo_obl` at the thread's row and \
+        column, and `Mat.Head` at every head by mojo_inv at the loop head and \
+        `Mat.Head.iterate` (the loop reads memory only through the registers it keeps \
+        `LoopSeg.bases`, numbers `{rs}`, by `decide +kernel`, each a pointer to `a` or `b` at the \
+        loop head by `obl_have`). The registers the loop keeps have their loop-head values at \
+        every head (`{n}.kept`, `LoopSeg.kept_round`), so `I` need not carry them. \
+        It covers this one kernel, whose chain is one loop with no nested loop."
+      -- `n.kept`: each register the loop keeps at the head of every round, with its value at the
+      -- loop head by `obl_have`; on failure, `obl_have`'s and the elaborator's messages are dropped
+      let msgsK := (← get).messages
+      let mut opnK : List Nat := []
+      try
+        opnK ← liftTermElabM <| Term.withoutErrToSorry do
+          let Tt ← Term.exprToSyntax (toExpr T)
+          let (Cs, Ls) ← invChain
+          let V0 ← `(Valuation.roundWith $cq ($Cs).l ($Cs).S ($Cs).E (Valuation.entry $c 0 $m' $f))
+          let hf := mkIdent `hf
+          let gs := (List.range ks.length).toArray.map fun j => mkIdent (.mkSimple s!"g{j}")
+          let tys ← ks.toArray.mapM fun r => `(($V0).regs $(quote r))
+          -- `opn`: the registers whose value is stated as the one at the loop head, unevaluated
+          let mk (opn : List Nat) : TermElabM (Expr × Expr) := do
+            let eqs ← ks.toArray.mapM fun r =>
+              if opn.contains r then `(($W).regs $(quote r) = ($V0).regs $(quote r))
+              else `(($W).regs $(quote r) = some _)
+            let ps ← (ks.toArray.zip gs).mapM fun (r, g) => do
+              let p ← `((congrArg (fun V : Valuation => V.regs $(quote r)) $hW).trans
+                (LoopSeg.kept_round (c := $cq) (L := $Ls) (by decide +kernel) $hf $g $iI))
+              if opn.contains r then `(($p).trans ($g).symm) else pure p
+            let concl ← if eqs.isEmpty then `(True) else
+              eqs.pop.foldrM (fun e acc => `($e ∧ $acc)) eqs.back!
+            let pf ← if ps.isEmpty then `(trivial) else `(⟨$[$ps],*⟩)
+            let body ← `(fun {$L : Launch} ($hL : Launch.Valid $L)
+                {$xo $xa $xb $xm $xn $xK : Nat}
+                {$α : Type} [TorchLean.Storage $α] {$t : Ty} {$enc : $α → Val}
+                {$al $sA $sB $sC : Nat} {$x : TorchLean.Tensor $α [$xm, $sA]}
+                {$y : TorchLean.Tensor $α [$xn, $sB]}
+                ($hsz : $xm < 2 ^ 31 ∧ $xn < 2 ^ 31 ∧ $xK < 2 ^ 31) {$k $q0 $q1 $q2 : Nat}
+                {$c : Ctx} {$m' : Mem} {$f : Frame} ($hS : $Sk)
+                ($h : Mat.Entry $Pstx $fnstx $L $Tt $zt $alq $t $enc $al $xo $xa $xb $xK $sC $x $y
+                  $k $c $q0 $q1 $q2 $m' $f) ($iI : Nat) {$W : Valuation}
+                ($hW : $W = (Valuation.roundWith $cq ($Ls).h ($Ls).H ($Ls).B)^[$iI] $V0) =>
+              show $concl from by
+                -- copies: the conclusion's values are holes over the binders, so the goal stays
+                have h' := $h
+                have hsz' := $hsz
+                have hS' := $hS
+                obtain ⟨⟨hcp, hce, hcw⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
+                  ⟨hr3, hr4, hr5⟩, hbA, hbB, hbC⟩ := h'
+                obtain ⟨hm, hn, hK⟩ := hsz'
+                obtain ⟨hk, hX, hY⟩ := hS'
+                replace hX : $sx < $xm := hX
+                replace hY : $sy < $xn := hY
+                have $hf : ($V0).fn = $fnstx := by mojo_inv
+                obl_have $[$gs:ident : $tys],*
+                -- the thread's index as `Launch.index`, as `hS` states it
+                try simp only [← Launch.index.eq_1] at $[$gs:ident]*
+                exact $pf)
+            let e ← Term.elabTerm body none
+            Term.synthesizeSyntheticMVarsNoPostponing
+            let e ← instantiateMVars e
+            let ty ← instantiateMVars (← inferType e)
+            if e.hasSorry || e.hasExprMVar || ty.hasExprMVar then
+              throwError "unsolved goals"
+            pure (e, ty)
+          let (e, ty) ← mk []
+          -- the registers whose value `obl_have` gives only as `Classical.choose …`
+          let opn ← forallTelescope ty fun _ b => do
+            let mut b := b
+            let mut acc : Array Nat := #[]
+            for j in [0:ks.length] do
+              let cj := if j + 1 < ks.length then b.appFn!.appArg! else b
+              if (cj.find? (·.isConstOf ``Classical.choose)).isSome then acc := acc.push ks[j]!
+              if j + 1 < ks.length then b := b.appArg!
+            pure acc.toList
+          let (e, ty) ← if opn.isEmpty then pure (e, ty) else mk opn
+          addDecl <| .thmDecl { name := base ++ `kept, levelParams := [], type := ty, value := e }
+          pure opn
+      catch ex =>
+        let why ← why msgsK ex
+        modify fun s => { s with messages := msgsK }
+        throwError "mojo_kernel: mat: inv: {n}.kept does not elaborate: the function at the loop \
+          head is not proved by mojo_inv, or a register the loop keeps (`LoopSeg.kept`, numbers \
+          {ks}) has no value there by obl_have ({fnText}): {why}"
+      let opnText := if opnK.isEmpty then "" else s!", except each of `{opnK}`, whose value \
+        there `obl_have` gives only as a `Classical.choose`, which has at `W` its value at `V₀`"
+      addDocStringCore (base ++ `kept) s!"**The registers that the loop of `{fnText}` keeps, at \
+        the head of every round** (generated by `mojo_kernel {n}`, `inv`): for every launch `L` \
+        valid, block numbers `{xsN[0]!}` (output), `{xsN[1]!}`, `{xsN[2]!}`, sizes `{xsN[3]!}`, \
+        `{xsN[4]!}`, `{xsN[5]!}` below `2 ^ 31`, element type, encoder, alignment, row strides, \
+        tensors, thread `k` in bounds (`hS`), blocks `q0`, `q1`, `q2`, context `c`, memory `m'` \
+        and frame `f` with the facts of `Mat.Entry` (`h`), count `i` and the head `W` of round \
+        `i` (`hW`: the `i`-th iterate of the round from the loop head's entry valuation after \
+        the chain's path in, as in `{n}.runInv`): each register that the loop keeps \
+        (`LoopSeg.kept`, numbers `{ks}`, in that order) has at `W` the value that `obl_have` \
+        computes at the loop head `V₀` (the thread's index as `Launch.index`){opnText}. The \
+        proof is `LoopSeg.kept_round` at each (`decide +kernel`), with the \
+        function at the loop head by mojo_inv. It covers this one kernel."
+      liftTermElabM <| Term.withoutErrToSorry do
+        let Tt ← Term.exprToSyntax (toExpr T)
+        let (Cs, Ls) ← invChain
+        let thTy ← `(Mat.Thread $Pstx $fnstx $L $Tt $zt $alq $t $enc $al $xo $xa $xb $xK $sC $x $y
+          $adm $w $bs)
+        let Qth ← `(fun $me:ident => Elem ($th).m₀ $xo $w $cellF $bs (($th).k + 1) $me ∧
+          Elem.Only $xo $SF $me)
+        let hTy ← `(∀ $th:ident : $thTy, LoopIterWith $cq $Ls
+          (Valuation.entry ($th).c 0 ($th).m' ($th).f) ($Cs).l ($Cs).S ($Cs).E $Qth ($N $th)
+          (Mat.Head $Pstx $fnstx $t $enc $al $xo $xa $xb $sC $x $y $w $cellF $bs ($th).k
+            ($th).m₀ $SF) ($I $th))
+        let hin ← `(fun ch oracle ha k q0 q1 q2 c m₀ m' f hS hω h hE hO =>
+          $runInvC $hL $hsz hS h $hne hE hO
+            ($H ⟨ch, oracle, ha, k, q0, q1, q2, c, m₀, m', f, hS, hω, h, hE, hO⟩))
+        let body ← matCommon (← `(fun {$I : $thTy → Nat → Valuation → Prop} {$N : $thTy → Nat}
+          ($H : $hTy) => $(← matCall Tt hin)))
+        let e ← Term.elabTerm body none
+        Term.synthesizeSyntheticMVarsNoPostponing
+        let e ← instantiateMVars e
+        let ty ← instantiateMVars (← inferType e)
+        if e.hasSorry || e.hasExprMVar || ty.hasExprMVar then
+          throwError "mojo_kernel: mat: inv: {n}.sound_inv does not elaborate ({fnText})"
+        addDecl <|
+          .thmDecl { name := base ++ `sound_inv, levelParams := [], type := ty, value := e }
+      addDocStringCore (base ++ `sound_inv) s!"**The kernel theorem of `{fnText}` from an \
+        invariant of its loop** (generated by `mojo_kernel {n}`, `inv`): `{n}.sound_mat`'s \
+        statement with the run of a thread in bounds `Hin` replaced by one premise `H` on every \
+        thread in bounds with its facts (`Mat.Thread`): the caller's invariant `I th` with trip \
+        count `N th` is an invariant of the chain's loop at the heads of its rounds at the thread \
+        (`LoopIterWith` with `Mat.Head` at each head, as in `{n}.runInv`). The proof is \
+        `Kernel.sound_mat` at `{n}.sound_mat`'s arguments with `Hin` by `{n}.runInv` at each \
+        thread. It covers this one kernel; `I`, `N` and `H` are the user's."
   catch e =>
     setEnv env0
     throw e
+
+/-- Step 5 of `elabMojoKernel`: for a kernel `fnC` (a constant) of a program without globals,
+the arguments `n.args` from the clauses (a buffer's `byval` struct with a pointer to a block
+number and the zero value of every other field, a pointer parameter's pointer, a scalar's bit
+vector), `n.starts` (the start on them succeeds, `Sym.Grid.start_ok`) and `n.sound` (`sound_of`
+on `n.args` from `Mem.Closed`). It returns the clauses by parameter index, the arguments' terms,
+their binders and names, and the name of `n.args`, for steps 5' and 6. -/
+def elabArgs (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String) (P : Program) (fn : Func)
+    (fnC : Name) (bufs scalars ptrs : List (String × Nat)) (soundN pathsN : Name)
+    (loops : Bool) :
+    CommandElabM (Array (String × Nat × Bool) × Array Lean.Term ×
+      Array (TSyntax ``Lean.Parser.Term.bracketedBinder) × Array Ident × Name) := do
+  let base := ns ++ n
+  let short (c : Name) : Name := c.replacePrefix ns .anonymous
+  let fnUnf ← paramsSimp fnC
+  -- a buffer's and a pointer's binder is a block number, a scalar's a bit vector
+  let cls := (bufs ++ ptrs).map (fun (x, i) => (x, i, true)) ++
+    scalars.map fun (x, i) => (x, i, false)
+  let byIdx := ((List.range fn.params.length).filterMap fun i => cls.find? (·.2.1 == i)).toArray
+  let xs : Array Ident := byIdx.map fun (x, _, _) => mkIdent (.mkSimple x)
+  let mut binders : Array (TSyntax ``Lean.Parser.Term.bracketedBinder) := #[]
+  let mut elems : Array Lean.Term := #[]
+  for (x, i, isBuf) in byIdx do
+    let xi := mkIdent (.mkSimple x)
+    if isBuf then
+      binders := binders.push (← `(bracketedBinder| ($xi : Nat)))
+      match (fn.params.getD i default).attrs.findSome? (fun a : Attr => match a with
+          | .ty "byval" t => some t | _ => none) with
+      | some (.struct (_ :: ts)) =>
+        let es := #[← `(Val.ptr ⟨$xi, 0⟩)] ++
+          (← ts.toArray.mapM fun t => valTerm ((P.layout.zero t).getD .undef))
+        elems := elems.push (← `(Val.agg [$es,*]))
+      -- a `pointers` parameter, with no `byval`: its argument is the pointer itself
+      | _ => elems := elems.push (← `(Val.ptr ⟨$xi, 0⟩))
+    else
+      let w := match (fn.params.getD i default).ty with | .int w => w | _ => 0
+      binders := binders.push (← `(bracketedBinder| ($xi : BitVec $(quote w))))
+      elems := elems.push (← `(Val.bits $(quote w) $xi))
+  let lams (t : Lean.Term) : CommandElabM Lean.Term :=
+    byIdx.foldrM (init := t) fun (x, i, isBuf) t => do
+      let xi := mkIdent (.mkSimple x)
+      let w := match (fn.params.getD i default).ty with | .int w => w | _ => 0
+      if isBuf then `(fun ($xi : Nat) => $t) else `(fun ($xi : BitVec $(quote w)) => $t)
+  let ptrText := if ptrs.isEmpty then "" else "a pointer parameter's pointer to offset 0 of a \
+    block number, "
+  let argsN ← kernelDefOf (base ++ `args) (← lams (← `(([$elems,*] : List Val))))
+    s!"The arguments of `{fnText}` from the clauses of `mojo_kernel {n}`, in parameter order: a \
+      buffer's `byval` struct with a pointer to offset 0 of a block number and the zero value of \
+      every other field, {ptrText}a scalar as a bit vector."
+  let argsId := mkCIdent argsN
+  let startsId := mkIdent (n ++ `starts)
+  -- the proof needs `Array.anyM.loop` (a well-founded recursion) unsealed; `unseal` fails on a
+  -- constant the module has already unsealed, so it is added only when the constant is sealed
+  let sealed := (← getReducibilityStatus ``Array.anyM.loop) matches .irreducible
+  let unsealIn (c : TSyntax `command) : CommandElabM (TSyntax `command) :=
+    if sealed then `(command| unseal Array.anyM.loop in $c:command) else pure c
+  elabCommand (← unsealIn (← `(command|
+    theorem $startsId (L : Launch) $binders* {m : Mem} (hC : m.Closed ($argsId $xs*))
+        (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
+        ∃ g c, Sem.Grid.start $Pstx $fnstx L ($argsId $xs*) m ch oracle = .ok (g, c) := by
+      refine Sym.Grid.start_ok ch oracle rfl hC
+        (fun g hg => by rw [show ($Pstx).module.globals.toList = [] from rfl] at hg; cases hg)
+        (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel)
+      all_goals
+        simp only [$argsId:ident, $fnUnf,*, List.zip_cons_cons, List.zip_nil_left,
+          List.mem_cons, Prod.mk.injEq, List.not_mem_nil] at hpv
+        repeat' rcases hpv with ⟨hp, hv⟩ | hpv
+      all_goals try subst_vars
+      all_goals first
+        | exact ⟨_, rfl⟩
+        | (simp at hnb; done)
+        | (simp at ht; done)
+        | (simp at ht; subst ht; rfl))))
+  addDocStringCore (base ++ `starts) s!"`{fnText}` starts on `{short argsN}` for every launch, \
+    block numbers, scalars, memory closed for the arguments (`Mem.Closed`, the one premise), \
+    address choice and oracle (`Sym.Grid.start_ok`, generated by `mojo_kernel {n}`). It covers \
+    this one kernel."
+  let body ← lams (← `(fun {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop}
+      {β : Type} {obs : Mem → Option β} {R : β → Prop} (hC : Mem.Closed m ($argsId $xs*))
+      (hm : Mem.BytesIn (Mem.Known m) m) => @$(mkCIdent soundN) L ($argsId $xs*) m adm β obs R hm
+        fun ch oracle _ => $startsId L $xs* hC ch oracle))
+  let body ← `(fun {L : Launch} => $body)
+  liftTermElabM do
+    let e ← Term.elabTerm body none
+    Term.synthesizeSyntheticMVarsNoPostponing
+    let e ← instantiateMVars e
+    addDecl <| .thmDecl
+      { name := base ++ `sound, levelParams := [], type := ← inferType e, value := e }
+  addDocStringCore (base ++ `sound) s!"The kernel theorem for `{fnText}` on `{short argsN}` \
+    (`Kernel.Sound`), generated by `mojo_kernel {n}`, for every launch, block numbers, scalars, \
+    memory closed for the arguments (`Mem.Closed`), admission, observation and predicate: \
+    `{n}.sound_of` with the start by `{n}.starts`. Its premises are `Mem.Closed`, the pointer \
+    bytes (`Mem.BytesIn`), the observation reading only blocks, and the invariant \
+    {if loops then "of each thread" else s!"along `{short pathsN}`"} as in \
+    `{n}.sound_of`. It covers this one kernel."
+  pure (byIdx, elems, binders, xs, argsN)
+
+/-- Step 6 of `elabMojoKernel`, the `map2` clause of a binary elementwise kernel, after its checks
+(which `elabMojoKernel` makes before anything is added): `n.argTy`, the `byval` struct type `T`
+of `a0` to `a2` (a pointer in address space `sp` and a tail), `n.argTail`, the tail's zero value
+`z`, `n.ret` (each thread's path is a `Ret`, by `mojo_ret`) and `n.correct` (`Kernel.sound_map2`
+at `n.covers`, `n.starts` and `n.ret`). With `contract`, `n.ret`'s path is a `RetWith true`
+(mojo_ret's `Ret` moved by `RetWith.exists_true_of_ret`, the paths' `pathNoProds` by
+`decide +kernel`) and `n.correct` is `Kernel.sound_map2With (contract := true)`. `rd`, `wr` and
+`scalars` are the clauses of the reads `a0`, `a1`, the write `a2` and the count `a3`; `t` is the
+element type of the clause. -/
+def elabMap2 (stx : Syntax) (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String)
+    (P : Program) (scalars rd wr : List (String × Nat)) (T : Ty) (sp : Nat) (z : Val) (t : Ty)
+    (argsN pathsN : Name) (contract : Bool) : CommandElabM Unit := do
+  let base := ns ++ n
+  let short (c : Name) : Name := c.replacePrefix ns .anonymous
+  let argsId := mkCIdent argsN
+  let tstx : Lean.Term := ⟨stx[9][1]⟩
+  let encstx : Lean.Term := ⟨stx[9][2]⟩
+  let bytesstx : Lean.Term := ⟨stx[9][3]⟩
+  let argTyN ← liftCoreM <| kernelDef (base ++ `argTy) (mkConst ``Ty) (toExpr T)
+    s!"The type of the `byval` parameters `a0` to `a2` of `{fnText}`: a struct of a pointer and a \
+      tail (generated by `mojo_kernel {n}`)."
+  let argTailN ← kernelDefOf (base ++ `argTail) (← `(($(← valTerm z) : Val)))
+    s!"The zero tail of a struct of type `{short argTyN}`, as in `{short argsN}` (generated by \
+      `mojo_kernel {n}`)."
+  let argTyId := mkCIdent argTyN
+  let argTailId := mkCIdent argTailN
+  let (xa, xb, xo, xn) := (mkIdent (.mkSimple rd[0]!.1), mkIdent (.mkSimple rd[1]!.1),
+    mkIdent (.mkSimple wr[0]!.1), mkIdent (.mkSimple scalars[0]!.1))
+  let wq := quote (P.layout.size t)
+  let alq := quote (P.layout.align t)
+  let alq' := quote (P.layout.align T)
+  let retId := mkIdent (n ++ `ret)
+  let pathsId := mkCIdent pathsN
+  let Qstx : Lean.Term ← `(Elem m₀ $xo $wq (fun i => $wq * i) ($bytesstx ω x y $xn) (k + 1))
+  let (retT, retPf) : Lean.Term × Lean.Term ← if contract then
+      pure (← `(∃ ps ∈ $pathsId, RetWith true (Valuation.entry c 0 m f) $Qstx ps),
+        ← `(by refine RetWith.exists_true_of_ret (by decide +kernel) ?_; mojo_ret))
+    else
+      pure (← `(∃ ps ∈ $pathsId, Ret (Valuation.entry c 0 m f) $Qstx ps), ← `(by mojo_ret))
+  elabCommand (← `(command|
+    theorem $retId {L : Launch} (hL : L.Valid)
+        (hg : L.grid .y = 1 ∧ L.grid .z = 1) (hb : L.block .y = 1 ∧ L.block .z = 1) {al : Nat}
+        (hal : $alq ∣ al) {$xa $xb $xo $xn N : Nat} {x y : TorchLean.Tensor _ [N]}
+        (hne : $xa ≠ $xb ∧ $xa ≠ $xo ∧ $xb ≠ $xo) (hnN : $xn ≤ N) (h31 : $xn < 2 ^ 31) {k : Nat}
+        (hk : k < volume L.grid * volume L.block) {c : Ctx} (hcp : c.prog = $Pstx)
+        (hce : c.env = L.env k) (hcw : c.who = ⟨k, k / volume L.block⟩) {ω : Nat → Nat → Nat}
+        (hco : c.oracle = ω k) {m₀ m : Mem} {f : Frame} (hf : f.fn = $fnstx) {p0 p1 p2 : Nat}
+        (hr0 : f.regs 0 = some (.ptr ⟨p0, 0⟩)) (hr1 : f.regs 1 = some (.ptr ⟨p1, 0⟩))
+        (hr2 : f.regs 2 = some (.ptr ⟨p2, 0⟩))
+        (hr3 : f.regs 3 = some (.bits 32 (BitVec.ofNat 32 $xn)))
+        (hv0 : m.load ($Pstx).layout c.who 0 $argTyId ⟨p0, 0⟩ (some $alq') =
+          .ok (.agg [.ptr ⟨$xa, 0⟩, $argTailId]))
+        (hv1 : m.load ($Pstx).layout c.who 0 $argTyId ⟨p1, 0⟩ (some $alq') =
+          .ok (.agg [.ptr ⟨$xb, 0⟩, $argTailId]))
+        (hv2 : m.load ($Pstx).layout c.who 0 $argTyId ⟨p2, 0⟩ (some $alq') =
+          .ok (.agg [.ptr ⟨$xo, 0⟩, $argTailId]))
+        (hA : m.Buffer $xa ($xn * ($Pstx).layout.size $tstx) al false)
+        (hB : m.Buffer $xb ($xn * ($Pstx).layout.size $tstx) al false)
+        (hO : m.Buffer $xo ($xn * ($Pstx).layout.size $tstx) al true)
+        (hx : m.Holds ($Pstx).layout $xa $tstx $encstx (rowMajor ($Pstx).layout $tstx 0) x)
+        (hy : m.Holds ($Pstx).layout $xb $tstx $encstx (rowMajor ($Pstx).layout $tstx 0) y)
+        (hFa : m.Fits ($Pstx).layout $xa ($xn * ($Pstx).layout.size $tstx))
+        (hFb : m.Fits ($Pstx).layout $xb ($xn * ($Pstx).layout.size $tstx))
+        (hFo : m.Fits ($Pstx).layout $xo ($xn * ($Pstx).layout.size $tstx))
+        (hp : p0 ≠ $xo ∧ p1 ≠ $xo ∧ p2 ≠ $xo)
+        (hE : Elem m₀ $xo $wq (fun i => $wq * i) ($bytesstx ω x y $xn) k m) :
+        $retT :=
+      $retPf))
+  let retName := if contract then "`RetWith true`" else "`Ret`"
+  addDocStringCore (base ++ `ret) s!"**Each thread's path of `{fnText}` is a {retName}** (by \
+    `mojo_ret`{if contract then ", moved by `RetWith.exists_true_of_ret` on paths with no \
+    `fmul contract` product" else ""}, generated by `mojo_kernel {n}`). For every valid launch \
+    whose grid and block \
+    have side 1 in `y` and `z`, alignment `al` that `{P.layout.align t}` divides, distinct blocks \
+    `{rd[0]!.1}`, `{rd[1]!.1}`, `{wr[0]!.1}`, count `{scalars[0]!.1} ≤ N` below `2 ^ 31`, tensors \
+    `x`, `y`, thread `k` of the launch, context of the program with thread `k`'s registers, \
+    identity and oracle `ω k`, caller's memory `m₀`, memory `m` of `Elem` after `k` threads \
+    with the bytes of the `map2` clause at cells `{P.layout.size t} i`, and frame of the kernel \
+    whose registers `%0` to `%2` point to blocks other than `{wr[0]!.1}` from which \
+    `{short argTyN}` loads as the structs of the three buffers and whose `%3` is the count, on \
+    which the three are buffers of the count's elements that fit and the inputs hold `x`, `y` \
+    row-major from 0: some path of `{short pathsN}` from the frame's entry is a {retName} to \
+    `Elem` after `k + 1` threads. It covers this one kernel, at every launch, thread, frame and \
+    memory that meet these premises."
+  let correctId := mkIdent (n ++ `correct)
+  let coversId' := mkCIdent (base ++ `covers)
+  let startsId' := mkCIdent (base ++ `starts)
+  let retId' := mkCIdent (base ++ `ret)
+  let soundId : Lean.Term ← if contract then `(Kernel.sound_map2With (contract := true))
+    else `(Kernel.sound_map2)
+  let soundText := if contract then "`Kernel.sound_map2With (contract := true)`" else
+    "`Kernel.sound_map2`"
+  elabCommand (← `(command|
+    theorem $correctId {L : Launch} (hL : L.Valid)
+        (hg : L.grid .y = 1 ∧ L.grid .z = 1) (hb : L.block .y = 1 ∧ L.block .z = 1) {al : Nat}
+        (hal : $alq ∣ al) {$xa $xb $xo $xn N : Nat} {x y : TorchLean.Tensor _ [N]} {m : Mem}
+        (hP : Map2.Pre ($Pstx).layout $tstx $encstx al $argTailId m $xa $xb $xo $xn x y)
+        {ω : Nat → Nat → Nat} :
+        Kernel.Sound $Pstx $fnstx L ($argsId $xa $xb $xo (BitVec.ofNat 32 $xn)) m
+          (fun _ ω' => ω' = ω) (fun m => some m.blocks)
+          (Elem.Out m $xo (fun i => $wq * i) ($bytesstx ω x y $xn)
+            (volume L.grid * volume L.block)) :=
+      $soundId $coversId' rfl ⟨rfl, rfl, rfl, rfl⟩ (T := $argTyId) ⟨rfl, rfl, rfl, rfl⟩
+        (Layout.Codec.ptrArg _ $(quote sp) (by decide +kernel) (by decide +kernel) rfl rfl rfl)
+        (al' := $alq') ⟨by decide, by decide⟩ hP (fun _ => rfl)
+        (fun ch => $startsId' L $xa $xb $xo _ hP.closed ch ω) (apart_mul $wq)
+        fun _ hk _ hcp hce hcw hco _ _ _ hf _ _ _ hr0 hr1 hr2 hr3 hv0 hv1 hv2 hA hB hO hx hy hFa
+          hFb hFo hp hE => $retId' hL hg hb hal hP.ne hP.le hP.lt hk hcp hce hcw hco hf hr0 hr1
+            hr2 hr3 hv0 hv1 hv2 hA hB hO hx hy hFa hFb hFo hp hE))
+  addDocStringCore (base ++ `correct) s!"**The kernel theorem of `{fnText}`** (generated by \
+    `mojo_kernel {n}`). For every valid launch `L` whose grid and block have side 1 in `y` and \
+    `z`, alignment `al` that `{P.layout.align t}` divides, block numbers `{rd[0]!.1}`, \
+    `{rd[1]!.1}`, `{wr[0]!.1}`, count `{scalars[0]!.1}`, tensors `x`, `y` of length `N`, oracle \
+    `ω` and caller's memory `m` of `Map2.Pre` at the element type and encoder of the `map2` \
+    clause and tail `{short argTailN}` (`m` closed for the arguments; distinct buffers \
+    `{rd[0]!.1}`, `{rd[1]!.1}` read-only and `{wr[0]!.1}` writable, each of at least \
+    `{scalars[0]!.1}` elements whose generic addresses do not wrap; the inputs holding \
+    `x`, `y`; `{scalars[0]!.1} ≤ N` and `{scalars[0]!.1} < 2 ^ 31`): `{fnText}` is sound on \
+    `{short argsN}` at every address choice and `ω` (`Kernel.Sound`) for the observation of the \
+    blocks and `Elem.Out`: block `{wr[0]!.1}` is `m`'s with, at cell `{P.layout.size t} i`, the \
+    bytes the `map2` clause gives each thread `i` of the launch put in turn (`Elem.put`; nothing \
+    where it gives `none`), and every other block of `m` is unchanged. It covers this one \
+    kernel, at every launch and input that meet these premises \
+    ({soundText} at `{n}.covers`, `{n}.starts` and `{n}.ret`)."
 
 /-- Elaborates `mojo_kernel` without the `mat` clause; `unsafe` because it evaluates the program
 and the summaries. -/
@@ -868,14 +1584,11 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
     let fne ← instantiateMVars fne
     pure (← evalExpr Program (mkConst ``Program) Pe, ← evalExpr Func (mkConst ``Func) fne,
       fne.consumeMData.constName?)
-  -- 1. the clauses, and the flag `contract` not with `map2` (`Kernel.sound_map2` has no variant
-  -- with the flag)
+  -- 1. the clauses
   if let some e := clauseError fn.params bufs scalars ptrs then
     throwError "mojo_kernel: {e} ({fnText})"
   let contract := !stx[10].isNone
   let loopStxs := stx[11].getArgs.toList
-  if contract && !stx[9].isNone then
-    throwError "mojo_kernel: contract is not combined with map2 ({fnText})"
   -- 2. the summaries (added after every check, so that a refused command adds nothing), with
   -- `fmul contract` in the fragment under the flag
   let name (l : Nat) : String := s!"%{fn.names.getD l s!"{l}"}"
@@ -944,8 +1657,13 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
   -- accepts the loops' paths, and their terms have their types
   let tup (i : Nat) : Nat × List Cond × Summary :=
     (lbl i, (sums.getD i default).obls, sums.getD i default)
-  let terms (g : Syntax) : Lean.Term × Lean.Term × Lean.Term × Lean.Term :=
-    (⟨g[3]⟩, ⟨g[4]⟩, ⟨g[5]⟩, ⟨g[6]⟩)
+  -- a clause's four terms, each at its type, so that each elaborates against it (a term with
+  -- field notation on a binder without a type, `fun V i W => inv V.ctx i W`, among them)
+  let terms (g : Syntax) : CommandElabM (Lean.Term × Lean.Term × Lean.Term × Lean.Term) := do
+    let (pre, inv, trips, post) : Lean.Term × Lean.Term × Lean.Term × Lean.Term :=
+      (⟨g[3]⟩, ⟨g[4]⟩, ⟨g[5]⟩, ⟨g[6]⟩)
+    return (← `(($pre : Valuation → Prop)), ← `(($inv : Valuation → Nat → Valuation → Prop)),
+      ← `(($trips : Valuation → Nat)), ← `(($post : Valuation → Mem → Prop)))
   if let some en := en? then
     let C : LoopChain := ⟨lbl 0, (tup 0).2.1, (tup 0).2.2, en.tail.map tup,
       loops.toList.map fun (h, bk, ou) => ⟨lbl h, phiCount fn (lbl h), (tup h).2.1, (tup h).2.2,
@@ -955,11 +1673,9 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
         {if hdrs.length == 1 then "" else "s"} at {hdrsText} \
         ({if contract then "coversChainsWith true" else "coversChains"})"
     for g in loopStxs do
-      let (preS, invS, tripsS, postS) := terms g
+      let (preS, invS, tripsS, postS) ← terms g
       liftTermElabM <| Term.withoutErrToSorry do
-        let _ ← Term.elabTerm (← `((($preS : Valuation → Prop),
-          ($invS : Valuation → Nat → Valuation → Prop), ($tripsS : Valuation → Nat),
-          ($postS : Valuation → Mem → Prop)))) none
+        let _ ← Term.elabTerm (← `(($preS, $invS, $tripsS, $postS))) none
         Term.synthesizeSyntheticMVarsNoPostponing
   -- the prerequisites of the `map2` clause, checked before anything is added, so that a refused
   -- command declares nothing
@@ -1033,9 +1749,9 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
     | none => pure none
     | some en => do
       let pt (q : List Nat) : String := pathText q
-      let cls : List LoopClause := (loopStxs.zip loops.toList).map fun (g, h, bk, ou) =>
-        (h, phiCount fn (lbl h), bk, ou, terms g, if g[7].isNone then none else some g[7][1],
-          blk h, pt bk, pt ou)
+      let cls : List LoopClause ← (loopStxs.zip loops.toList).mapM fun (g, h, bk, ou) => do
+        return (h, phiCount fn (lbl h), bk, ou, ← terms g,
+          if g[7].isNone then none else some g[7][1], blk h, pt bk, pt ou)
       try
         some <$> elabLoopClause n ns Pstx fnstx fnText (pathText en) bns lbl tupleE tupleTy en cls
           contract
@@ -1090,193 +1806,17 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
   -- 5. the arguments from the clauses, the start on them, and the kernel theorem from `Mem.Closed`
   let some fnC := fnC? | return
   unless P.module.globals.isEmpty do return
-  let fnId : Ident := mkCIdent fnC
-  -- a buffer's and a pointer's binder is a block number, a scalar's a bit vector
-  let cls := (bufs ++ ptrs).map (fun (x, i) => (x, i, true)) ++
-    scalars.map fun (x, i) => (x, i, false)
-  let byIdx := ((List.range fn.params.length).filterMap fun i => cls.find? (·.2.1 == i)).toArray
-  let xs : Array Ident := byIdx.map fun (x, _, _) => mkIdent (.mkSimple x)
-  let mut binders : Array (TSyntax ``Lean.Parser.Term.bracketedBinder) := #[]
-  let mut elems : Array Lean.Term := #[]
-  for (x, i, isBuf) in byIdx do
-    let xi := mkIdent (.mkSimple x)
-    if isBuf then
-      binders := binders.push (← `(bracketedBinder| ($xi : Nat)))
-      match (fn.params.getD i default).attrs.findSome? (fun a : Attr => match a with
-          | .ty "byval" t => some t | _ => none) with
-      | some (.struct (_ :: ts)) =>
-        let es := #[← `(Val.ptr ⟨$xi, 0⟩)] ++
-          (← ts.toArray.mapM fun t => valTerm ((P.layout.zero t).getD .undef))
-        elems := elems.push (← `(Val.agg [$es,*]))
-      -- a `pointers` parameter, with no `byval`: its argument is the pointer itself
-      | _ => elems := elems.push (← `(Val.ptr ⟨$xi, 0⟩))
-    else
-      let w := match (fn.params.getD i default).ty with | .int w => w | _ => 0
-      binders := binders.push (← `(bracketedBinder| ($xi : BitVec $(quote w))))
-      elems := elems.push (← `(Val.bits $(quote w) $xi))
-  let lams (t : Lean.Term) : CommandElabM Lean.Term :=
-    byIdx.foldrM (init := t) fun (x, i, isBuf) t => do
-      let xi := mkIdent (.mkSimple x)
-      let w := match (fn.params.getD i default).ty with | .int w => w | _ => 0
-      if isBuf then `(fun ($xi : Nat) => $t) else `(fun ($xi : BitVec $(quote w)) => $t)
-  let ptrText := if ptrs.isEmpty then "" else "a pointer parameter's pointer to offset 0 of a \
-    block number, "
-  let argsN ← kernelDefOf (base ++ `args) (← lams (← `(([$elems,*] : List Val))))
-    s!"The arguments of `{fnText}` from the clauses of `mojo_kernel {n}`, in parameter order: a \
-      buffer's `byval` struct with a pointer to offset 0 of a block number and the zero value of \
-      every other field, {ptrText}a scalar as a bit vector."
-  let argsId := mkCIdent argsN
-  let startsId := mkIdent (n ++ `starts)
-  -- the proof needs `Array.anyM.loop` (a well-founded recursion) unsealed; `unseal` fails on a
-  -- constant the module has already unsealed, so it is added only when the constant is sealed
-  let sealed := (← getReducibilityStatus ``Array.anyM.loop) matches .irreducible
-  let unsealIn (c : TSyntax `command) : CommandElabM (TSyntax `command) :=
-    if sealed then `(command| unseal Array.anyM.loop in $c:command) else pure c
-  elabCommand (← unsealIn (← `(command|
-    theorem $startsId (L : Launch) $binders* {m : Mem} (hC : m.Closed ($argsId $xs*))
-        (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
-        ∃ g c, Sem.Grid.start $Pstx $fnstx L ($argsId $xs*) m ch oracle = .ok (g, c) := by
-      refine Sym.Grid.start_ok ch oracle rfl hC
-        (fun g hg => by rw [show ($Pstx).module.globals.toList = [] from rfl] at hg; cases hg)
-        (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel)
-      all_goals
-        simp only [$argsId:ident, $fnId:ident, List.zip_cons_cons, List.zip_nil_left,
-          List.mem_cons, Prod.mk.injEq, List.not_mem_nil] at hpv
-        repeat' rcases hpv with ⟨hp, hv⟩ | hpv
-      all_goals try subst_vars
-      all_goals first
-        | exact ⟨_, rfl⟩
-        | (simp at hnb; done)
-        | (simp at ht; done)
-        | (simp at ht; subst ht; rfl))))
-  addDocStringCore (base ++ `starts) s!"`{fnText}` starts on `{short argsN}` for every launch, \
-    block numbers, scalars, memory closed for the arguments (`Mem.Closed`, the one premise), \
-    address choice and oracle (`Sym.Grid.start_ok`, generated by `mojo_kernel {n}`). It covers \
-    this one kernel."
-  let body ← lams (← `(fun {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop}
-      {β : Type} {obs : Mem → Option β} {R : β → Prop} (hC : Mem.Closed m ($argsId $xs*))
-      (hm : Mem.BytesIn (Mem.Known m) m) => @$(mkCIdent soundN) L ($argsId $xs*) m adm β obs R hm
-        fun ch oracle _ => $startsId L $xs* hC ch oracle))
-  let body ← `(fun {L : Launch} => $body)
-  liftTermElabM do
-    let e ← Term.elabTerm body none
-    Term.synthesizeSyntheticMVarsNoPostponing
-    let e ← instantiateMVars e
-    addDecl <| .thmDecl
-      { name := base ++ `sound, levelParams := [], type := ← inferType e, value := e }
-  addDocStringCore (base ++ `sound) s!"The kernel theorem for `{fnText}` on `{short argsN}` \
-    (`Kernel.Sound`), generated by `mojo_kernel {n}`, for every launch, block numbers, scalars, \
-    memory closed for the arguments (`Mem.Closed`), admission, observation and predicate: \
-    `{n}.sound_of` with the start by `{n}.starts`. Its premises are `Mem.Closed`, the pointer \
-    bytes (`Mem.BytesIn`), the observation reading only blocks, and the invariant \
-    {if chainsN?.isSome then "of each thread" else s!"along `{short pathsN}`"} as in \
-    `{n}.sound_of`. It covers this one kernel."
+  let (byIdx, elems, binders, xs, argsN) ← elabArgs n ns Pstx fnstx fnText P fn fnC bufs scalars
+    ptrs soundN pathsN chainsN?.isSome
   -- 5'. with the loop clauses: the kernel theorem on `n.args` from `Mem.Closed`, each thread by
   -- `n.loop` from the start's facts, among them the registers of the scalars and pointers
   if let (some chainsN, g :: _) := (chainsN?, loopStxs) then
-    let (preS, _, _, postS) := terms g
+    let (preS, _, _, postS) ← terms g
     elabSoundLoop n ns Pstx fnstx fnText fn byIdx elems binders xs argsN pathsN chainsN preS postS
       (hdrs.length == 1) contract
   -- 6. a binary elementwise kernel: the struct type and tail, each thread's `Ret`, the theorem
   let some (rd, wr, T, sp, z, t) := map2? | return
-  let tstx : Lean.Term := ⟨stx[9][1]⟩
-  let encstx : Lean.Term := ⟨stx[9][2]⟩
-  let bytesstx : Lean.Term := ⟨stx[9][3]⟩
-  let argTyN ← liftCoreM <| kernelDef (base ++ `argTy) (mkConst ``Ty) (toExpr T)
-    s!"The type of the `byval` parameters `a0` to `a2` of `{fnText}`: a struct of a pointer and a \
-      tail (generated by `mojo_kernel {n}`)."
-  let argTailN ← kernelDefOf (base ++ `argTail) (← `(($(← valTerm z) : Val)))
-    s!"The zero tail of a struct of type `{short argTyN}`, as in `{short argsN}` (generated by \
-      `mojo_kernel {n}`)."
-  let argTyId := mkCIdent argTyN
-  let argTailId := mkCIdent argTailN
-  let (xa, xb, xo, xn) := (mkIdent (.mkSimple rd[0]!.1), mkIdent (.mkSimple rd[1]!.1),
-    mkIdent (.mkSimple wr[0]!.1), mkIdent (.mkSimple scalars[0]!.1))
-  let wq := quote (P.layout.size t)
-  let alq := quote (P.layout.align t)
-  let alq' := quote (P.layout.align T)
-  let retId := mkIdent (n ++ `ret)
-  let pathsId := mkCIdent pathsN
-  elabCommand (← `(command|
-    theorem $retId {L : Launch} (hL : L.Valid)
-        (hg : L.grid .y = 1 ∧ L.grid .z = 1) (hb : L.block .y = 1 ∧ L.block .z = 1) {al : Nat}
-        (hal : $alq ∣ al) {$xa $xb $xo $xn N : Nat} {x y : TorchLean.Tensor _ [N]}
-        (hne : $xa ≠ $xb ∧ $xa ≠ $xo ∧ $xb ≠ $xo) (hnN : $xn ≤ N) (h31 : $xn < 2 ^ 31) {k : Nat}
-        (hk : k < volume L.grid * volume L.block) {c : Ctx} (hcp : c.prog = $Pstx)
-        (hce : c.env = L.env k) (hcw : c.who = ⟨k, k / volume L.block⟩) {ω : Nat → Nat → Nat}
-        (hco : c.oracle = ω k) {m₀ m : Mem} {f : Frame} (hf : f.fn = $fnstx) {p0 p1 p2 : Nat}
-        (hr0 : f.regs 0 = some (.ptr ⟨p0, 0⟩)) (hr1 : f.regs 1 = some (.ptr ⟨p1, 0⟩))
-        (hr2 : f.regs 2 = some (.ptr ⟨p2, 0⟩))
-        (hr3 : f.regs 3 = some (.bits 32 (BitVec.ofNat 32 $xn)))
-        (hv0 : m.load ($Pstx).layout c.who 0 $argTyId ⟨p0, 0⟩ (some $alq') =
-          .ok (.agg [.ptr ⟨$xa, 0⟩, $argTailId]))
-        (hv1 : m.load ($Pstx).layout c.who 0 $argTyId ⟨p1, 0⟩ (some $alq') =
-          .ok (.agg [.ptr ⟨$xb, 0⟩, $argTailId]))
-        (hv2 : m.load ($Pstx).layout c.who 0 $argTyId ⟨p2, 0⟩ (some $alq') =
-          .ok (.agg [.ptr ⟨$xo, 0⟩, $argTailId]))
-        (hA : m.Buffer $xa ($xn * ($Pstx).layout.size $tstx) al false)
-        (hB : m.Buffer $xb ($xn * ($Pstx).layout.size $tstx) al false)
-        (hO : m.Buffer $xo ($xn * ($Pstx).layout.size $tstx) al true)
-        (hx : m.Holds ($Pstx).layout $xa $tstx $encstx (rowMajor ($Pstx).layout $tstx 0) x)
-        (hy : m.Holds ($Pstx).layout $xb $tstx $encstx (rowMajor ($Pstx).layout $tstx 0) y)
-        (hFa : m.Fits ($Pstx).layout $xa ($xn * ($Pstx).layout.size $tstx))
-        (hFb : m.Fits ($Pstx).layout $xb ($xn * ($Pstx).layout.size $tstx))
-        (hFo : m.Fits ($Pstx).layout $xo ($xn * ($Pstx).layout.size $tstx))
-        (hp : p0 ≠ $xo ∧ p1 ≠ $xo ∧ p2 ≠ $xo)
-        (hE : Elem m₀ $xo $wq (fun i => $wq * i) ($bytesstx ω x y $xn) k m) :
-        ∃ ps ∈ $pathsId, Ret (Valuation.entry c 0 m f)
-          (Elem m₀ $xo $wq (fun i => $wq * i) ($bytesstx ω x y $xn) (k + 1)) ps := by
-      mojo_ret))
-  addDocStringCore (base ++ `ret) s!"**Each thread's path of `{fnText}` is a `Ret`** (by \
-    `mojo_ret`, generated by `mojo_kernel {n}`). For every valid launch whose grid and block \
-    have side 1 in `y` and `z`, alignment `al` that `{P.layout.align t}` divides, distinct blocks \
-    `{rd[0]!.1}`, `{rd[1]!.1}`, `{wr[0]!.1}`, count `{scalars[0]!.1} ≤ N` below `2 ^ 31`, tensors \
-    `x`, `y`, thread `k` of the launch, context of the program with thread `k`'s registers, \
-    identity and oracle `ω k`, caller's memory `m₀`, memory `m` of `Elem` after `k` threads \
-    with the bytes of the `map2` clause at cells `{P.layout.size t} i`, and frame of the kernel \
-    whose registers `%0` to `%2` point to blocks other than `{wr[0]!.1}` from which \
-    `{short argTyN}` loads as the structs of the three buffers and whose `%3` is the count, on \
-    which the three are buffers of the count's elements that fit and the inputs hold `x`, `y` \
-    row-major from 0: some path of `{short pathsN}` from the frame's entry is a `Ret` to `Elem` \
-    after `k + 1` threads. It covers this one kernel, at every launch, thread, frame and memory \
-    that meet these premises."
-  let correctId := mkIdent (n ++ `correct)
-  let coversId' := mkCIdent (base ++ `covers)
-  let startsId' := mkCIdent (base ++ `starts)
-  let retId' := mkCIdent (base ++ `ret)
-  elabCommand (← `(command|
-    theorem $correctId {L : Launch} (hL : L.Valid)
-        (hg : L.grid .y = 1 ∧ L.grid .z = 1) (hb : L.block .y = 1 ∧ L.block .z = 1) {al : Nat}
-        (hal : $alq ∣ al) {$xa $xb $xo $xn N : Nat} {x y : TorchLean.Tensor _ [N]} {m : Mem}
-        (hP : Map2.Pre ($Pstx).layout $tstx $encstx al $argTailId m $xa $xb $xo $xn x y)
-        {ω : Nat → Nat → Nat} :
-        Kernel.Sound $Pstx $fnstx L ($argsId $xa $xb $xo (BitVec.ofNat 32 $xn)) m
-          (fun _ ω' => ω' = ω) (fun m => some m.blocks)
-          (Elem.Out m $xo (fun i => $wq * i) ($bytesstx ω x y $xn)
-            (volume L.grid * volume L.block)) :=
-      Kernel.sound_map2 $coversId' rfl ⟨rfl, rfl, rfl, rfl⟩ (T := $argTyId) ⟨rfl, rfl, rfl, rfl⟩
-        (Layout.Codec.ptrArg _ $(quote sp) (by decide +kernel) (by decide +kernel) rfl rfl rfl)
-        (al' := $alq') ⟨by decide, by decide⟩ hP (fun _ => rfl)
-        (fun ch => $startsId' L $xa $xb $xo _ hP.closed ch ω) (apart_mul $wq)
-        fun _ hk _ hcp hce hcw hco _ _ _ hf _ _ _ hr0 hr1 hr2 hr3 hv0 hv1 hv2 hA hB hO hx hy hFa
-          hFb hFo hp hE => $retId' hL hg hb hal hP.ne hP.le hP.lt hk hcp hce hcw hco hf hr0 hr1
-            hr2 hr3 hv0 hv1 hv2 hA hB hO hx hy hFa hFb hFo hp hE))
-  addDocStringCore (base ++ `correct) s!"**The kernel theorem of `{fnText}`** (generated by \
-    `mojo_kernel {n}`). For every valid launch `L` whose grid and block have side 1 in `y` and \
-    `z`, alignment `al` that `{P.layout.align t}` divides, block numbers `{rd[0]!.1}`, \
-    `{rd[1]!.1}`, `{wr[0]!.1}`, count `{scalars[0]!.1}`, tensors `x`, `y` of length `N`, oracle \
-    `ω` and caller's memory `m` of `Map2.Pre` at the element type and encoder of the `map2` \
-    clause and tail `{short argTailN}` (`m` closed for the arguments; distinct buffers \
-    `{rd[0]!.1}`, `{rd[1]!.1}` read-only and `{wr[0]!.1}` writable, each of at least \
-    `{scalars[0]!.1}` elements whose generic addresses do not wrap; the inputs holding \
-    `x`, `y`; `{scalars[0]!.1} ≤ N` and `{scalars[0]!.1} < 2 ^ 31`): `{fnText}` is sound on \
-    `{short argsN}` at every address choice and `ω` (`Kernel.Sound`) for the observation of the \
-    blocks and `Elem.Out`: block `{wr[0]!.1}` is `m`'s with, at cell `{P.layout.size t} i`, the \
-    bytes the `map2` clause gives each thread `i` of the launch put in turn (`Elem.put`; nothing \
-    where it gives `none`), and every other block of `m` is unchanged. It covers this one \
-    kernel, at every launch and input that meet these premises \
-    (`Kernel.sound_map2` at `{n}.covers`, `{n}.starts` and `{n}.ret`)."
-
+  elabMap2 stx n ns Pstx fnstx fnText P scalars rd wr T sp z t argsN pathsN contract
 
 /-- Elaborates `mojo_kernel`: with the `mat` clause by `elabMat`, otherwise by `elabMojoKernel`;
 `unsafe` because both evaluate the program. -/

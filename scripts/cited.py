@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cited.py: every name a module docstring cites is declared where the docstring can mean it.
+"""cited.py: every name a module docstring or a roadmap card cites is declared where it can mean it.
 
 A module docstring (`/-! ... -/`) in MojoProof/ or MojoProofTest/ that cites in backticks a name
 whose last component is snake_case (`addr_twin`, `Mem.load_skel`) must name a declaration `N.name`
@@ -14,11 +14,28 @@ OTHER (file, kernel and keyword names, which are not Lean) or PLANNED needs noth
 `mojo_kernel N := …` names the test `N`, and when it is not under `#guard_msgs` (a refusal) it
 declares `N.sound_of`, and with a `loop` clause also `N.sound_loop` (which the command adds only
 when it also adds `N.args`; cited.py does not check that condition); with a `mat` clause it
-declares `N.names`, `N.starts` and `N.sound_mat` and not `N.sound_of`. A tactic declared by `elab`,
+declares `N.names`, `N.starts`, `N.out` and `N.sound_mat` and not `N.sound_of`, and with `inv`
+at the end of the `mat` clause's line also `N.runInv`, `N.kept` and `N.sound_inv`; with a `map2`
+clause also `N.argTy`, `N.argTail`, `N.ret` and `N.correct`. A tactic declared by `elab`,
 `syntax` or `macro` with a quoted name (`elab "kernel_check" : tactic`, with or without a trailing
 space inside the quotes) is a declaration of that name at the root. So a library lemma `Mem.load_skel` does not stand in for a deleted test
-`load_skel`. Prints each missing name and the count; exits 1 if any is missing.
+`load_skel`. A name that none of our files declares at those namespaces may be a dependency's: it
+resolves if a Lean file of a package under `.lake/packages/` declares it at one of them (the
+packages are read, by the same scan, at the first such name), so a docstring can cite Mathlib's
+`Fin.ofFn_take_eq_take_ofFn`. Lean's own library (`Init`, `Std`, `Lean`) is not read, so a name
+declared only there is reported.
+
+The body of every roadmap card (`roadmap/**/cards/*.md`, after the front matter between its
+first two `---` lines) is checked too, against the same declarations: every backticked span that
+begins with a fully qualified name (`MojoProof.` or `MojoProofTest.` and one or more components,
+`MojoProofTest.NaiveOff.correct`, or the head of a term, `MojoProof.Sem.deliver r n`) must begin
+with a declaration (a structure field or a name a command above generates included) or a module
+of the library or its tests (`MojoProofTest.NaiveStart`). Short names in card bodies are not
+checked: a card opens no namespace, so they are ambiguous.
+
+Prints each missing name and the count; exits 1 if any is missing.
 """
+import functools
 import pathlib
 import re
 import sys
@@ -36,6 +53,7 @@ OTHER = {
     'n.loop',           # what `mojo_kernel n` adds with a loop clause: the thread's run
     'n.sound_loop',     # and the kernel theorem through the loop (MojoProof/Sym/KernelCmd.lean)
     'n.sound_mat',      # what `mojo_kernel n` adds with the mat clause (MojoProof/Sym/KernelCmd.lean)
+    'n.sound_inv',      # and with `mat … inv` (MojoProof/Sym/KernelCmd.lean)
     'mojo_kills',       # checks the refutation theorems of mutants (MojoProof/LLVM/Mutate.lean)
     'matmul_kernel_naive_float32_float32_float32_True_16_16826c8c',  # corpus kernels
     'tiled_matmul',     # corpus kernels
@@ -56,12 +74,17 @@ FIELD = re.compile(r'^  ([a-z][A-Za-z0-9_\']*) :')
 KERNEL = re.compile(r'^mojo_kernel\s+([^\s:]+)\s+:=')
 LOOP = re.compile(r'^\s+loop\s+\d+\s*:=')
 MAT = re.compile(r'(?:^|\s)mat\s')
+INV = re.compile(r'\sinv\s*$')
+MAP2 = re.compile(r'(?:^|\s)map2\s')
 TACTIC = re.compile(r'^\s*(?:elab|syntax|macro)(?:\s+\(name\s*:=\s*[^)]*\))?\s+"([a-z][A-Za-z0-9_]*) ?"[^\n]*:\s*tactic\b')
 COMMENT = re.compile(r'/-.*?-/|--[^\n]*', re.S)
 DOC = re.compile(r'/-!(.*?)-/', re.S)
 TICK = re.compile(r"`((?:[A-Za-z_][A-Za-z0-9_'₂]*\.)*[a-z][A-Za-z0-9'₂]*(?:_[A-Za-z0-9'₂]+)+)`")
 PATH = re.compile(r'\b(MojoProof(?:Test)?/[A-Za-z0-9_/]+\.lean)\b')
 MODULE = re.compile(r'\b(MojoProof(?:Test)?(?:\.[A-Z][A-Za-z0-9_]*)+)\b')
+FRONT = re.compile(r'\A---\n.*?\n---\n', re.S)
+SPAN = re.compile(r'`([^`]*)`')
+QUAL = re.compile(r"(MojoProof(?:Test)?(?:\.[\w'!?]+)+)(?![\w'!?.])")
 
 
 def ancestors(ns: str) -> list[str]:
@@ -94,7 +117,11 @@ def scan(text: str) -> tuple[set[str], set[str], set[str], set[str]]:
                 kernel = full
         if kernel and MAT.search(line):
             decls.discard(f'{kernel}.sound_of')
-            decls.update(f'{kernel}.{x}' for x in ('names', 'starts', 'sound_mat'))
+            decls.update(f'{kernel}.{x}' for x in ('names', 'starts', 'out', 'sound_mat'))
+            if INV.search(line):
+                decls.update(f'{kernel}.{x}' for x in ('runInv', 'kept', 'sound_inv'))
+        if kernel and MAP2.search(line):
+            decls.update(f'{kernel}.{x}' for x in ('argTy', 'argTail', 'ret', 'correct'))
         if m := TACTIC.match(line):
             decls.add(m.group(1))
         if line.strip():
@@ -129,6 +156,32 @@ def scan(text: str) -> tuple[set[str], set[str], set[str], set[str]]:
     return decls, spaces, opens, fields
 
 
+@functools.cache
+def package_decls() -> frozenset[str]:
+    """The full names that the Lean files of the packages under `.lake/packages/` declare (`scan`),
+    each package's own `.lake` directory skipped: the dependencies' declarations."""
+    decls: set[str] = set()
+    for pkg in sorted((pathlib.Path('.lake') / 'packages').glob('*')):
+        for p in sorted(pkg.rglob('*.lean')):
+            if '.lake' not in p.relative_to(pkg).parts:
+                decls |= scan(p.read_text(errors='replace'))[0]
+    return frozenset(decls)
+
+
+def card_names(text: str):
+    """The line and the fully qualified name of every backticked span of a card's body (after its
+    front matter) that begins with one."""
+    front = FRONT.match(text)
+    start = front.end() if front else 0
+    line = text.count('\n', 0, start) + 1
+    pos = start
+    for s in SPAN.finditer(text, start):
+        line += text.count('\n', pos, s.start())
+        pos = s.start()
+        if q := QUAL.match(s.group(1)):
+            yield line, q.group(1)
+
+
 def main() -> int:
     files = [p for d in ('MojoProof', 'MojoProofTest') for p in sorted(pathlib.Path(d).rglob('*.lean'))]
     texts = {p: p.read_text() for p in files}
@@ -149,12 +202,19 @@ def main() -> int:
                 if t in fields:
                     continue
                 if t.startswith('_root_.'):
-                    found = t.removeprefix('_root_.') in decls
+                    full = [t.removeprefix('_root_.')]
                 else:
-                    found = any((f'{a}.{t}' if a else t) in decls for a in prefixes)
+                    full = [f'{a}.{t}' if a else t for a in prefixes]
+                found = any(n in decls for n in full) or any(n in package_decls() for n in full)
                 if not found:
                     print(f'{p}: `{t}` names no declaration it can mean')
                     missing += 1
+    modules = {'.'.join(p.with_suffix('').parts) for p in files}
+    for c in sorted(pathlib.Path('roadmap').glob('**/cards/*.md')):
+        for line, t in card_names(c.read_text()):
+            if t not in decls and t not in modules:
+                print(f'{c}:{line}: `{t}` names no declaration')
+                missing += 1
     print(f'cited names missing: {missing}')
     return 1 if missing else 0
 

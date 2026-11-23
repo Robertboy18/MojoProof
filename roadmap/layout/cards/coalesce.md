@@ -4,12 +4,12 @@ title: `coalesce` keeps the offsets and merges contiguous modes
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:2475
 quote: "The result is the simplest layout that maps coordinates to the same"
-lean: not stated yet
+lean: MojoProof.Layout.Lay.coalesce, MojoProof.Layout.coalesceStep, MojoProof.Layout.Lay.coalesce_call, MojoProof.Layout.Lay.coalesce_size
 corpus: none
-tests: none
+tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 depends: crd2idx
-level: L0
+level: L1
 ---
 # `coalesce` keeps the offsets and merges contiguous modes
 
@@ -25,6 +25,10 @@ Equality of offsets on every index of the flattened layout.
 
 "Simplest" as a minimality claim: no Lean statement is planned for it.
 
+## In MojoProof
+
+`Lay.coalesce` and `coalesceStep` transcribe `coalesce` and its reducer. `Lay.coalesce_call`: on every layout whose shape and stride have the same nesting, the coalesced layout and the original give the same offset to every scalar below the size; `Lay.coalesce_size`: the sizes are equal. For every such shape, nested or flat.
+
 ## Open
 
-A Lean statement that the coalesced layout and the original agree on every index. MojoProof states no layout law yet.
+Coordinates other than scalars: the coalesced layout has another rank.

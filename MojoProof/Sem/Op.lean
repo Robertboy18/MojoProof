@@ -19,7 +19,9 @@ it was made from (`Val.float?_ofFloat`), and only that scalar reads as that valu
 real value of its IEEE 754 result, which is finite (`toReal_withFlags`); so an `fmul` result is a
 rounded product of its operands (`isProd_withFlags`), as `contract_error` assumes; and a finite
 value of a contracted `fadd` / `fsub` has the real value of its finite `contract` result
-(`floatBin_contract`), so `contract_error` bounds it.
+(`floatBin_contract`), so `contract_error` bounds it. For every width and word, the scalar
+`ofBitList` reads from a run of a word's bits is that slice of the word
+(`ofBitList.scalar_slice`).
 -/
 
 namespace MojoProof.Sem
@@ -280,5 +282,37 @@ def bitcast (l : Layout) (s t : Ty) (x : Val) : Except Fault Val := do
       | t => l.scalarBits t
     if bs.length = width then return ofBitList l t bs
     else throw (.unsupported "bitcast between types of different sizes")
+
+/-- **A scalar read from bits of a word is the word's slice**: for every width `w`, word `x` of
+every width `v` and offset `o`, the scalar of width `w` whose bits, least significant first, are
+`x`'s bits `o` to `o + w - 1` (none poison) is `x.extractLsb' o w`; at `o = 0` and `v = w`, it is
+`x` itself. For every word. -/
+theorem ofBitList.scalar_slice (w : Nat) {v : Nat} (x : BitVec v) (o : Nat) :
+    ofBitList.scalar w ((List.range w).map fun j => some (x.getLsbD (o + j))) =
+      .bits w (x.extractLsb' o w) := by
+  have hsum : ∀ n k : Nat, (((List.range k).map n.testBit).zipIdx.map
+      fun (b, i) => if b then 2 ^ i else 0).sum = n % 2 ^ k := by
+    intro n k
+    induction k with
+    | zero => simp [Nat.mod_one]
+    | succ k ih =>
+      rw [List.range_succ, List.map_append, List.zipIdx_append, List.map_append, List.sum_append,
+        ih, Nat.mod_pow_succ]
+      rcases Nat.mod_two_eq_zero_or_one (n / 2 ^ k) with h | h <;>
+        simp [Nat.testBit_eq_decide_div_mod_eq, h]
+  have hm : ∀ bs : List Bool, (bs.map some).mapM id = some bs := fun bs => by
+    induction bs with
+    | nil => rfl
+    | cons b bs ih => simp only [List.map_cons, List.mapM_cons, ih]; rfl
+  have he : (List.range w).map (fun j => some (x.getLsbD (o + j))) =
+      ((List.range w).map (x.toNat >>> o).testBit).map some := by
+    simp only [List.map_map]
+    refine List.map_congr_left fun j _ => ?_
+    simp only [Function.comp, Nat.testBit_shiftRight]
+    rfl
+  simp only [ofBitList.scalar, he, hm, hsum]
+  congr 1
+  apply BitVec.eq_of_toNat_eq
+  simp
 
 end MojoProof.Sem

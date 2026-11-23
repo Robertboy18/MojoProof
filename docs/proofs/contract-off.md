@@ -23,15 +23,34 @@ So every run of the contraction-off kernel under the oracle family `ω` is, step
 `fn` in `P` under the rows `neverFuse (ω n)`, with the same memory at every step: the same faults,
 trace, races and final memory, hence the same observation.
 
+**Theorem (`Kernel.Sound.contractOff_iff`, the converse).** For the same `P`, `fn`, `Q`, launch,
+arguments, memory, admissibility `adm`, observation and relation `R`:
+
+    Kernel.Sound Q fn.contractOff L args m adm obs R ↔
+      Kernel.Sound P fn L args m (fun ch ω' => ∃ ω, adm ch ω ∧ ω' = fun n => neverFuse (ω n)) obs R
+
+The contraction-off kernel is sound for `adm` exactly when `fn` is sound at the never-fusing rows
+of the families `adm` admits. The right-to-left direction is `Kernel.Sound.contractOff` (an
+admitted `ω` gives its own rows); left to right, every run of `P` under the rows `neverFuse (ω n)`
+is, mapped, a run of `Q` under `ω`.
+
+**Theorem (`Kernel.Obs.contractOff_iff`, MojoProof/Sym/ContractOff.lean).** For the same `P`,
+`fn`, `Q`, launch, arguments, memory, observation, address choices `ch` and oracle family `ω`, and
+every value `y`: `y` is the observation of a complete run (`Kernel.Obs`) of `fn.contractOff` in
+`Q` under `ω` exactly when it is one of `fn` in `P` under the rows `neverFuse (ω n)`.
+`Kernel.Obs.contractOff` is its left-to-right direction.
+
 **Corollary (`NaiveOff.correct`, MojoProofTest/NaiveOff.lean).** For the corpus kernel
 `16826c8c` of the directory mgemm_nocontract, the naive matmul kernel compiled with contraction
 off, at every oracle family `ω`, launch valid with `z` sides 1, sizes, blocks, tensors and memory of
-`Mat.Pre` (the premises of `NaiveKernel.correct`): the kernel is sound for `Elem.Out` of the bytes
-that put at every cell in bounds the binary32 encoding of `dotLoop false (o (ω k))` from `+0` over
-its pairs, the unfused fold. It is `NaiveKernel.correct` at the rows `neverFuse (ω k)`, moved by
-`Kernel.Sound.contractOff`, with `dotLoop_neverFuse` (MojoProof/Sem/Dot.lean): `dotLoop true` at
-the numbers `3 * (n / 3)` is `dotLoop false` at the numbers `n`. By evaluation in the kernel
-(`rfl`), the corpus program's module is `naive.prog.module.contractOff` (`module_eq`), its kernel
+`Mat.Pre` (the premises of `NaiveKernel.correct`): the kernel is sound for `Elem.Out` of `naive`'s
+bytes at the rows `neverFuse (ω k)` (`bytes fun k => neverFuse (ω k)`). It is
+`NaiveKernel.correct` at those rows, moved by `Kernel.Sound.contractOff`. By `dotLoop_neverFuse`
+(MojoProof/Sem/Dot.lean: `dotLoop true` at the numbers `3 * (n / 3)` is `dotLoop false` at the
+numbers `n`), those bytes put at every cell in bounds the binary32 encoding of
+`dotLoop false (o (ω k))` from `+0` over its pairs, the unfused fold (`bytes_neverFuse`), and
+`correct_unfused` is `NaiveOff.correct` with these bytes. By evaluation in the kernel (`rfl`), the
+corpus program's module is `naive.prog.module.contractOff` (`module_eq`), its kernel
 `naive.fn_0.contractOff` (`fn_eq`), and its layout and intrinsics are `naive`'s (`layout_eq`,
 `intrinsics_eq`); by `decide +kernel`, `naive` and its kernel are of the fragment
 (`naive_fbinOracle`, `fn_fbinOracle`).
@@ -43,17 +62,22 @@ the launch's window holds the binary32 encoding of a word `v` that is `NaNEq` to
 of TorchLean's `Tensor.matmul` of the first `K` columns of `A` and the transpose of the first `K`
 columns of `B`, with no premise on the oracle; when `v` is finite, it is within `dotBound` of the
 real product on those columns. Every such observation is one of `naive` under the rows
-`neverFuse (ω n)` (`NaiveOff.obs_contractOff`: the start by `Grid.start_contractOff`, the run by
-`Grid.lockstep_contractOff` flipped), whose `fadd` numbers are multiples of 3 and fuse no round,
-so `NaiveSound.naive_matmul` at `NaiveKernel.correct` applies with its premise met.
+`neverFuse (ω n)` (`Kernel.Obs.contractOff`), whose `fadd` numbers are multiples of 3 and fuse no
+round, so `NaiveKernel.matmul_nanEq` and `NaiveKernel.matmul_error` at those rows apply, the first
+with its premise met.
 
 ## Scope
 
 The transport is proved for every program of the fragment `Program.fbinOracle` and every kernel of
-`Func.fbinOracle`, in one direction: from `P` to the contraction-off program. The runs are moved
-the other way (`NaiveOff.obs_contractOff`): a complete run of the contraction-off program is one
-of `P`. The corollaries are for one program (the float32 naive kernel compiled with contraction
-off), at every launch and memory of `Mat.Pre` and every oracle family.
+`Func.fbinOracle`, in both directions: `Kernel.Sound` and the observations of complete runs move
+from `P` to the contraction-off program and back, at the never-fusing rows. The converse holds
+exactly at the image of `neverFuse`: by `Kernel.Obs.contractOff_iff`, the observations of `Q`
+under `ω` are those of `P` under the rows `neverFuse (ω n)`. At a family with a fusing number it
+fails: the twin `ContractOff.twin` (one program pair, one start) has an observation of `P` under
+such a family that no complete run of `Q` under it has. The corollaries are for one program (the
+float32 naive kernel compiled with contraction off), at every launch valid with `z` sides 1 and
+memory of `Mat.Pre` and every oracle family; `matmul_nanEq` and `matmul_error` cover the cells in
+the launch's window.
 
 ## The choice of the oracle
 
@@ -115,24 +139,60 @@ clears it, and the contraction-off program records none.
    with the second's grid mapped and its contexts with program `Q` and rows `ω n`
    (`Thread.start_contractOff`). The start grid of a kernel of the fragment meets
    `Grid.FbinOracle` (`Grid.start_fbinOracle`).
-6. `Kernel.Sound.contractOff`: an admitted `ω` gives the admitted rows `neverFuse (ω n)` for `P`,
-   whose start is sound; 5 gives `Q`'s start and `CtxOff` (with `Grid.start_ctx`), and 4 its
-   soundness.
+6. The start with the contexts (`Grid.start_ctxOff`): 5 with the start grid of `P` in the
+   fragment (`Grid.start_fbinOracle`) and the two context families related by `CtxOff`
+   (`Grid.start_ctx`): the two starts are related by the lockstep relation of 4.
+   `Except.Rel.ok_left` and `Except.Rel.ok_right` take one side's success to the other's.
+7. `Kernel.Sound.contractOff`: an admitted `ω` gives the admitted rows `neverFuse (ω n)` for `P`,
+   whose start is sound; 6 gives `Q`'s start and `CtxOff`, and 4 its soundness.
+8. The converse (`Kernel.Sound.contractOff_iff`): an oracle family of the right side is
+   `neverFuse (ω n)` for an `ω` that `adm` admits, at which `Q`'s start is sound; 6 gives `P`'s
+   start, related to it, and 4 flipped (`Grid.Lockstep.symm`) moves `Grid.Sound` back.
+9. The observations (`Kernel.Obs.contractOff_iff`): 6 relates the two starts whichever succeeds;
+   `Grid.Lockstep.reach` (or its flip) takes a run of one to a run of the other ending in the
+   related grid, which is done exactly when the first is (`Grid.done_contractOff`) and has the same
+   memory.
 
 ## Instances and twins
 
-- `NaiveOff.correct` (MojoProofTest/NaiveOff.lean), with `module_eq`, `fn_eq`, `layout_eq`,
-  `intrinsics_eq`, `naive_fbinOracle` and `fn_fbinOracle`.
-- `NaiveOff.matmul_nanEq` and `NaiveOff.matmul_error`, through `NaiveOff.obs_contractOff`.
+- `NaiveOff.correct` and `NaiveOff.correct_unfused` (MojoProofTest/NaiveOff.lean), with
+  `module_eq`, `fn_eq`, `layout_eq`, `intrinsics_eq`, `naive_fbinOracle`, `fn_fbinOracle` and
+  `bytes_neverFuse`.
+- `NaiveOff.matmul_nanEq` and `NaiveOff.matmul_error`, through `Kernel.Obs.contractOff`.
+- `NaiveStart.soundOff12` and `NaiveStart.obsOff12` (MojoProofTest/NaiveStart.lean):
+  `NaiveOff.correct` at the concrete launch and memory of `NaiveKernel.sound12` (one block of
+  2 × 2 threads, `m = 1`, `n = 2`, `K = 768`, `mem12 A B` for every `A` and `B`, `Mat.Pre` by
+  `NaiveKernel.pre12`), and an observation of it at every address choice and oracle family
+  (`Kernel.Sound.exists_obs`, by `Grid.Sound.result`).
 - Twin of the fragment premise: the bfloat16 naive kernel of the corpus (`ba3789d9`) widens its
   words with `fpext`, whose result reads the whole oracle number, and fails `Program.fbinOracle`
   (`bf16_fbinOracle`).
+- Twin of the converse at a fusing family (`ContractOff.twin`, MojoProofTest/ContractOff.lean, a
+  test of one example). The kernel `fmaK` stores `%1 = fmul contract float 1 + 2^-23, 1 - 2^-23`,
+  `%2 = fadd contract float %1, -1.0` to a buffer of 4 bytes; its program `fmaP` is of the fragment
+  and `fmaQ` has its module with the flags removed (both by evaluation). On `Launch.one`, at the
+  address choice 0 and the family with every number 1 (each flagged `fadd` fuses with its first
+  operand's product), observed by the buffer's 4 bytes: a complete run of `fmaK` observes the
+  binary32 word `-2^-46` (`0xa8800000`, the product and the sum rounded once); `fmaK.contractOff`
+  is sound for the word `+0` (the product rounds to 1.0), by `Grid.start_sound` from one evaluated
+  run, so none of its complete runs observes `-2^-46`, and `fmaK` is not sound for the same
+  admission and relation. The family is `neverFuse (ω n)` for no `ω`, so the admission of
+  `Kernel.Sound.contractOff`'s conclusion at this admission is empty, the contraction-off kernel
+  is sound for it with nothing to check, and the converse in that form fails here too. At the rows
+  `neverFuse` of the family (every number 0) `fmaK` observes `+0` and never `-2^-46`, by
+  `Kernel.Obs.contractOff_iff`. The words are evaluated through FloatLib in the kernel (`rfl`,
+  `decide +kernel`).
 
 ## Not proved
 
-- The converse (`Kernel.Sound` of the contraction-off program gives that of `P`).
+- The converse at every admissibility is false, not only unproved: `Kernel.Sound` of the
+  contraction-off kernel for `adm`, or for `fun ch ω => adm ch fun n => neverFuse (ω n)` (the
+  conclusion of `Kernel.Sound.contractOff`), does not give `Kernel.Sound` of `fn` for `adm` when
+  `adm` admits a family with a fusing row. Under such a row a flagged `fadd` of `P` rounds the
+  product and the sum once, the contraction-off program rounds each, and the run of `P` is no run
+  of `Q`; the twin `ContractOff.twin` shows both forms at one start (the second with an empty
+  admission, since its family is `neverFuse (ω n)` for no `ω`). Which programs and fusing
+  families keep the observations (a program whose flagged `fadd`s have no recorded product, or
+  whose fused and unfused results agree) is not characterized.
 - Programs outside the fragment: with `fpext`, `fptrunc`, `maxnum`, `minnum` or `rsqrt.approx`,
   `neverFuse` changes the numbers these read, and the transport does not apply.
-- An instance of `NaiveOff.correct` at a concrete start: as for `NaiveKernel.correct`, the theorem
-  is proved for every launch and memory of `Mat.Pre`, and `NaiveKernel.sound12`'s instance is not
-  repeated for the contraction-off program.

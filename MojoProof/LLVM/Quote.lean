@@ -16,7 +16,10 @@ elaborated and adds, in the current namespace,
 * `<name>.module : Module` over the functions, and `<name>.prog : Program`.
 
 Each added definition gets a docstring that names the file it comes from (and, for a block or a
-function, its index and its LLVM name).
+function, its index and its LLVM name), and once the checks below pass, `<name>.prog` is recorded
+with that file (`progFiles`), so that a later reader of the environment can tell the program
+constants `mojo_import` added, and their files, from any other term of type `Program` (one that
+keeps an imported program's digest with another module, `Mutant.program`, included).
 
 Nobody writes the program term or the digest: the term is quoted from the importer's result
 (`MojoProof.LLVM.importBytes`) by core's derived `ToExpr` instances (`deriving instance ToExpr`, the
@@ -81,6 +84,17 @@ initialize defs : SimplePersistentEnvExtension (Expr × Name) (Std.HashMap Expr 
     addEntryFn := fun m (e, n) => m.insert e n
     addImportedFn := fun as => as.foldl (fun m a => a.foldl (fun m (e, n) => m.insert e n) m) {} }
 
+/-- The program constants `mojo_import`'s core added (`<name>.prog`, `quoteProgram`), each with
+the file it read: its path under the directory `mojo_import.root`, with that directory
+(`tests/corpus/<path>` by default). An entry is added only after the constant's evaluation and
+printed-token checks pass, and only by the core (`mojo_import`, and `mojo_corpus` without `#`;
+`#mojo_corpus` discards its definitions, and so its entries). `scripts/L3Programs.lean` reads it to
+bind a theorem's program to its corpus file. -/
+initialize progFiles : SimplePersistentEnvExtension (Name × String) (NameMap String) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun m (n, f) => m.insert n f
+    addImportedFn := fun as => as.foldl (fun m a => a.foldl (fun m (n, f) => m.insert n f) m) {} }
+
 /-- Add the definition `name : type := value`, compiled, with its equation lemmas enabled
 (`enableRealizationsForConst`), so that `simp only [name]` and `rw [name]` unfold it in the module
 that adds it too, not only in the modules that import it. -/
@@ -140,11 +154,24 @@ syntax (name := mojoImport) "mojo_import " str " as " ident : command
 functions through `share`, then `name.module` and `name.prog`), then check that `name.prog`
 evaluates to `prog` and that the evaluated module, printed, has the tokens of `bytes`, the file
 `path` (for the messages); `unsafe` because it evaluates the term it adds. Each definition it
-adds gets a docstring naming the file (under the directory `mojo_import.root`). -/
+adds gets a docstring naming the file (under the directory `mojo_import.root`), and when both
+checks pass it records `name.prog` with that file in `progFiles`. The definitions are added with
+the recursion limit raised to eight times the length of the module's longest list plus 512 (the
+terms of the multistage GEMM kernels' functions, with several thousand statements, need it). -/
 unsafe def quoteProgram (name : Name) (path : String) (bytes : ByteArray) (prog : Program) :
     CommandElabM Unit := do
   let file := s!"{mojo_import.root.get (← getOptions)}/{path}"
-  liftTermElabM do
+  -- The term of a list nests as deep as the list is long, and compiling it recurses about as
+  -- deep: the recursion limit covers eight times the longest list of the module (its functions,
+  -- globals, attribute groups and metadata; a function's blocks and value names; a block's
+  -- statements), plus the default, and never goes below the current limit.
+  let m := prog.module
+  let longest := m.funcs.foldl (fun a f => f.blocks.foldl (fun a b => max a b.stmts.size)
+      (max a (max f.names.size f.blocks.size)))
+    (max (max m.funcs.size m.globals.size) (max m.attrGroups.size (max m.namedMD.size m.mds.size)))
+  let depth := max (← get).maxRecDepth (8 * longest + 512)
+  liftTermElabM <| withTheReader Core.Context
+      (fun c => { c.setOptions (maxRecDepth.set c.options depth) with maxRecDepth := depth }) do
     -- The docstring of `c` when `e`, the constant `share` returned, is `c` itself, newly added in
     -- this module (not an earlier import's constant of the same term).
     let doc (c : Name) (e : Expr) (d : String) : TermElabM Unit := do
@@ -167,7 +194,6 @@ unsafe def quoteProgram (name : Name) (path : String) (bytes : ByteArray) (prog 
         as the importer parsed it (added by `mojo_import`'s core; a later import with the same \
         function names this definition)."
       return e
-    let m := prog.module
     let modE := mkAppN (mkConst ``Module.mk) #[toExpr m.sourceFilename, toExpr m.datalayout,
       toExpr m.triple, toExpr m.globals, quoteArray (mkConst ``Func) fns, toExpr m.attrGroups,
       toExpr m.namedMD, toExpr m.mds]
@@ -188,6 +214,7 @@ unsafe def quoteProgram (name : Name) (path : String) (bytes : ByteArray) (prog 
     throwError "mojo_import: the term of {path} does not evaluate to the imported program: {diff}"
   if let some l := printDiff bytes back.module then
     throwError "mojo_import: the printed term of {path} differs from the file at line {l}"
+  modifyEnv (progFiles.addEntry · (name ++ `prog, file))
 
 /-- Elaborates `mojo_import`: the manifest's digest, the importer, the digest check, then
 `quoteProgram`; `unsafe` because it evaluates the program term it adds. -/

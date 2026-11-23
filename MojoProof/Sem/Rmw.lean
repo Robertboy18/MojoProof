@@ -24,6 +24,13 @@ operation on words is right-commutative. Its instances are `intBin` with `add`, 
 `xor` (`intBin_lifts`) and `intMinMax` (`intMinMax_lifts`), whose right-commutativity is
 `select_comm` for every strict order that an injective map to `Int` reads (`minmax_comm`, signed
 and unsigned); `rmw_lifts` gives one for every operation `Stmt.checkAtomic` admits.
+
+For a list of updates (docs/proofs/reduction.md): for every admitted operation, width and scalar,
+two lists of scalar operands that are permutations of each other give the same fault or the same
+value (`rmw_perm`, by `rmw_comm` and `rmw_scalar`). For `add` on words of width `w`, every order of
+the words `xs` updates the word `a` to `a + xs.sum` (`rmw_add_perm`): the output word of an atomic
+sum does not depend on the order in which the blocks of threads reach it, for every number of
+blocks and every word of each. Instances: MojoProofTest/Shared.lean.
 -/
 
 namespace MojoProof.Sem
@@ -253,5 +260,47 @@ theorem rmw_comm_of_ok {w : Nat} {op : RmwOp} {v x y r r' : Val} (hv : v.Scalar 
     ∃ u, rmw w op r y = .ok u ∧ rmw w op r' x = .ok u := by
   obtain ⟨g, hl, hg⟩ := rmw_lifts (w := w) (rmw_commutes hx)
   exact hl.comm_of_ok hg hv hx hy
+
+
+/-- **Updates in any order give one value** (L10 for a list of updates). For every operation
+`Stmt.checkAtomic` admits, every width `w`, every scalar `v` of width `w` and all lists `xs` and
+`ys` of scalars of width `w` that are permutations of each other: updating `v` by `rmw w op` with
+the operands in the order of `xs` gives the same fault or the same value as in the order of `ys`.
+By induction on the permutation: a swap of two neighbours is `rmw_comm`, and an update of a scalar
+that succeeds gives a scalar (`rmw_scalar`). -/
+theorem rmw_perm {w : Nat} {op : RmwOp} (hop : op.commutes) {xs ys : List Val}
+    (hp : xs.Perm ys) (hs : ∀ x ∈ xs, x.Scalar w) {v : Val} (hv : v.Scalar w) :
+    xs.foldlM (rmw w op) v = ys.foldlM (rmw w op) v := by
+  induction hp generalizing v with
+  | nil => rfl
+  | cons x _ ih =>
+    simp only [List.foldlM_cons]
+    cases e : rmw w op v x with
+    | error => rfl
+    | ok r => exact ih (fun y hy => hs y (.tail _ hy)) (rmw_scalar hv e)
+  | swap x y l =>
+    simp only [List.foldlM_cons, ← bind_assoc]
+    rw [rmw_comm hop hv (hs y (by simp)) (hs x (by simp))]
+  | trans h₁ _ ih₁ ih₂ => exact (ih₁ hs hv).trans (ih₂ (fun y hy => hs y (h₁.mem_iff.2 hy)) hv)
+
+/-- **The words of an atomic sum in any order** (`atomicrmw add`). For every width `w`, word `a`
+and lists `xs` and `ys` of words of width `w` that are permutations of each other: updating the
+word `a` by `rmw w .add` with the words of `ys`, in that order, gives the word `a + xs.sum`. So a
+reduction whose blocks of threads each add their word to one output word, in whatever order they
+reach it, leaves the same word, for every number of blocks and every value of each. `rmw_perm`,
+then the sum in the order of `xs`. -/
+theorem rmw_add_perm {w : Nat} {xs ys : List (BitVec w)} (hp : ys.Perm xs) (a : BitVec w) :
+    (ys.map (Val.bits w)).foldlM (rmw w .add) (.bits w a) = .ok (.bits w (a + xs.sum)) := by
+  rw [rmw_perm rfl (hp.map _) (fun x hx => by
+    obtain ⟨b, -, rfl⟩ := List.mem_map.1 hx
+    exact .inl ⟨b, rfl⟩) (.inl ⟨a, rfl⟩)]
+  clear hp
+  induction xs generalizing a with
+  | nil => simp [pure, Except.pure]
+  | cons b xs ih =>
+    have hab : rmw w .add (.bits w a) (.bits w b) = .ok (.bits w (a + b)) :=
+      (intBin_lifts (g := (· + ·)) rfl fun _ _ => rfl).bits a b
+    simp only [List.map_cons, List.foldlM_cons, List.sum_cons, hab, ← BitVec.add_assoc]
+    exact ih (a + b)
 
 end MojoProof.Sem
