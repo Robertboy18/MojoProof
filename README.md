@@ -79,6 +79,8 @@ To prove your own kernel, follow [docs/new-kernel.md](docs/new-kernel.md), or ha
 
 ## Contributing
 
+The bugs we've found and filed in Mojo and MAX are listed in [docs/found-bugs.md](docs/found-bugs.md).
+
 Contributions are welcome! Pick a card on the [roadmap](roadmap/STATUS.md) whose level can go up;
 [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and check a change. The website is
 rebuilt from main on every merge. More: [the repository's layout](docs/layout.md) and

@@ -81,7 +81,7 @@ FIGURES = [
 ]
 BIG = 500_000
 # The order of docs/*.md on the Docs page; other files follow by name.
-DOC_ORDER = ['docs/proved.md', 'docs/TRUST.md', 'docs/kernel.md', 'docs/tactics.md', 'docs/automation.md',
+DOC_ORDER = ['docs/proved.md', 'docs/found-bugs.md', 'docs/TRUST.md', 'docs/kernel.md', 'docs/tactics.md', 'docs/automation.md',
              'docs/BUGS.md', 'docs/DEPENDENCIES.md']
 NAV = [('home', 'Home', 'index.html'), ('roadmap', 'Roadmap', 'roadmap/index.html'),
        ('guide', 'Guide', 'guide/index.html'), ('docs', 'Docs', 'docs/index.html')]

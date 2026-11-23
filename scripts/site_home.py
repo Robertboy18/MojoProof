@@ -172,10 +172,14 @@ def stats(site) -> list[tuple[int, str, str]]:
     # a kernel theorem is L2 evidence: count it whether the card has reached L2 or holds it above its level
     proved = [c for c in kernels if int(str(c.get('level', 'L0'))[1:] or 0) >= 2
               or any(lv in c.get('evidence_present', []) for lv in ('L2', 'L3', 'L4'))]
+    found = site.root / 'docs' / 'found-bugs.md'
+    filed = len(re.findall(r'^\| \[#\d+\]\(https://github\.com/modular/modular/issues/\d+\)', found.read_text(), re.M)) \
+        if found.is_file() else 0
     return [(len(ll), 'compiled kernels in the corpus', f'{site.tree}tests/corpus'),
             (len(lean), 'Lean modules in the library', f'{site.tree}MojoProof'),
             (len(proved), 'kernels with a kernel theorem', 'roadmap/kernels/index.html'),
-            (cards, 'roadmap cards', 'roadmap/index.html')]
+            (cards, 'roadmap cards', 'roadmap/index.html')] + \
+           ([(filed, 'Mojo and MAX bugs filed', 'docs/found-bugs.html')] if filed else [])
 
 
 def readme_section(site, heading: str) -> str:
