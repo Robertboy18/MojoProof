@@ -149,13 +149,14 @@ theorem start4 :
 /-- **`Grid.run_ub` on the short buffer**: the evaluator's run of `mem4`'s start grid ends in
 undefined behavior, so the start grid reaches a grid with a faulting step or a deadlock. -/
 theorem short_reach : ∃ g', Relation.ReflTransGen (Grid.Step L23 run4.2) run4.1 g' ∧
-    (g'.Faults L23 run4.2 ∨ ¬ g'.Done ∧ ∀ g'', ¬ Grid.Step L23 run4.2 g' g'') := by
+    (GPUProof.Faults sig (g', L23, run4.2) ∨
+      ¬ GPUProof.Done sig (g', L23, run4.2) ∧ ∀ g'', ¬ Grid.Step L23 run4.2 g' g'') := by
   have h : (match run4.1.run L23 run4.2 100 3 with
       | .error (.ub _) => true
       | _ => false) = true := by
     decide +kernel
   split at h
-  next msg hr => exact Grid.run_ub hr
+  next msg hr => exact Grid.run_ub (Grid.start_size start4).le hr
   next => cases h
 
 /-- `race?`: two writes of one cell by threads 0 and 2 of a block race; the later is first. -/

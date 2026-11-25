@@ -1,0 +1,64 @@
+GPU run record: a conformance test, not a proof.
+
+instruction: mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32, one warp, the library's mma (llvm.nvvm.mma.m16n8k16.row.col.bf16)
+program: tests/gpu/mma/test_wmma.mojo
+program sha256: 7af02430b24a676c74b51c3bd8d053dfbfae252b27726999b6493219998453fd
+program origin: modular/modular@bbc13a71:max/kernels/test/gpu/basics/test_wmma.mojo (sha256 5d69c6b27ebe81f1b08653fb780e83fb42caf37bb7ebeba2c182cc4fe40102bc), its header and imports kept, its kernels, runners and main replaced by the kernel mma_lanes, the input generators and a main that writes the dump
+mojo: Mojo 1.3.0.dev2026112105 (f23ed0af)
+build: mojo build -o mma tests/gpu/mma/test_wmma.mojo
+ir: mojo build --emit llvm --target-accelerator sm_80 of the program, with this Mojo, emits the kernel test_wmma_test_wmma_mma_lanes_LITMutOrigi6A6AcB_08c03d411fc63422.nvptx.ll (sha256 2b957c98c99cde79e051f29f8669515498f4bec74e3cb9d9211421397121c32e) with one call of @llvm.nvvm.mma.m16n8k16.row.col.bf16 on the lane's 4 A, 2 B and 4 C registers, as read from the buffers
+gpu: NVIDIA A100-SXM4-80GB (compute capability 8.0, sm_80), NVIDIA driver 580.167.08, one GPU selected with CUDA_VISIBLE_DEVICES
+run: mma 20261123 dump.txt 2
+seed: 20261123
+inputs: for each launch, lane l's A registers at words 4 l to 4 l + 3 of the a buffer (two bfloat16 to a word, element 0 in the low 16 bits), its B registers at 2 l, 2 l + 1 of b and its C registers at 4 l to 4 l + 3 of c (binary32), from the program's xorshift64* generator (next_word; the state starts at the seed and continues across launches), by kind: 0, integers in [-8, 8] (A, B) and [-1024, 1024] (C), so every partial sum is exact; 1, normal numbers of exponent -16 to 15; 2, any finite words; 3, subnormal A elements, B of exponent 90 to 121 and C of exponent -30 to -15; 4, A and B of exponent -75 to -60, so the products lie between 2^-150 and 2^-118, about binary32's least normal number 2^-126, and subnormal C; 5, the alignment probe (probe_half, no random word): A[i][0] = B[0][n] = 1, A[i][k] = (2 - 2^-7) 2^-(21 + i) and B[k][n] = 2^-n for k > 0, C = 0, so D[i][n] = 1 + 15 (2 - 2^-7) 2^-(21 + i + n); 6, cancelling pairs: A and B elements as kind 1, the two elements of each A register equal but for the low fraction bits of the second (flipped by random bits, none one time in four) and those of each B register negatives of each other, so the two products of each pair k = 2 m, 2 m + 1 nearly cancel, and C as kind 3; 7, a wide exponent spread: A and B of exponent -63 to 63 and C of exponent -100 to 100; 8, subnormal and mixed products: each A and B element by two random bits subnormal or of exponent -126 to -111, -8 to 7 or 50 to 65, and C subnormal or of exponent -126 to -111 or -8 to 7; 9, near overflow: A and B of exponent 60 to 63 and C of exponent 120 to 127; 10, the overflow-threshold probe (thr_half, no random word): A[i][0] = 2^52, B[0][n] = (-1)^n 2^51 (1 + n / 8), every other A and B element 0 and C the largest finite binary32 (2 - 2^-23) 2^127, so D[i][n] = (2 - 2^-23) 2^127 + (-1)^n (1 + n / 8) 2^103, between the largest finite magnitude and 2^128 for even n; D's buffer starts with every word 0x7FBADBAD
+launches: 20, kinds 0 0 1 1 2 2 3 3 4 4 5 6 6 7 7 8 8 9 9 10, each one warp (grid 1, block 32)
+dump: tests/gpu/mma/dump.txt, sha256 3593fcdebbd96c6a161d91ef700de733967819fdf3758ed1db6f7ef29bd69dec: for each launch its kind, the A, B and C words, the initial D word and the D words after the launch, on the GPU
+compare: lake env lean --run tests/gpu/mma/Compare.lean tests/gpu/mma/dump.txt 20
+evaluator: case 0 kind 0: 128 words, 128 equal to fuseAcc's, 128 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 0.000
+evaluator: case 1 kind 0: 128 words, 128 equal to fuseAcc's, 128 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 0.000
+evaluator: case 2 kind 1: 128 words, 128 equal to fuseAcc's, 53 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 4.537
+evaluator: case 3 kind 1: 128 words, 128 equal to fuseAcc's, 50 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 3.448
+evaluator: case 4 kind 2: 128 words, 128 equal to fuseAcc's, 78 equal to bfAcc's, 21 finite, 21 within dotBound, worst |D - exact| / (u T) 1.452
+evaluator: case 5 kind 2: 128 words, 128 equal to fuseAcc's, 75 equal to bfAcc's, 22 finite, 22 within dotBound, worst |D - exact| / (u T) 1.460
+evaluator: case 6 kind 3: 128 words, 128 equal to fuseAcc's, 36 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 4.335
+evaluator: case 7 kind 3: 128 words, 128 equal to fuseAcc's, 36 equal to bfAcc's, 128 finite, 127 within dotBound, worst |D - exact| / (u T) 18.937
+evaluator: case 7 kind 3 lane 12 register 2 cell (11, 0): D word 954914944, model word 954915202, |D - exact| / dotBound 1.113, |D - exact| / (u T) 18.937
+evaluator: case 8 kind 4: 128 words, 128 equal to fuseAcc's, 39 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 9.101
+evaluator: case 9 kind 4: 128 words, 128 equal to fuseAcc's, 45 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 3.342
+evaluator: case 10 kind 5: 128 words, 128 equal to fuseAcc's, 118 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 15.882
+evaluator: probe distance 21: D - 1 = 112.000, exact - 1 = 119.531 (units of 2^-23)
+evaluator: probe distance 22: D - 1 = 52.000, exact - 1 = 59.765 (units of 2^-23)
+evaluator: probe distance 23: D - 1 = 22.000, exact - 1 = 29.882 (units of 2^-23)
+evaluator: probe distance 24: D - 1 = 7.000, exact - 1 = 14.941 (units of 2^-23)
+evaluator: probe distance 25: D - 1 = 0.000, exact - 1 = 7.470 (units of 2^-23)
+evaluator: probe distance 26: D - 1 = 0.000, exact - 1 = 3.735 (units of 2^-23)
+evaluator: probe distance 27: D - 1 = 0.000, exact - 1 = 1.867 (units of 2^-23)
+evaluator: probe distance 28: D - 1 = 0.000, exact - 1 = 0.933 (units of 2^-23)
+evaluator: probe distance 29: D - 1 = 0.000, exact - 1 = 0.466 (units of 2^-23)
+evaluator: probe distance 30: D - 1 = 0.000, exact - 1 = 0.233 (units of 2^-23)
+evaluator: probe distance 31: D - 1 = 0.000, exact - 1 = 0.116 (units of 2^-23)
+evaluator: probe distance 32: D - 1 = 0.000, exact - 1 = 0.058 (units of 2^-23)
+evaluator: probe distance 33: D - 1 = 0.000, exact - 1 = 0.029 (units of 2^-23)
+evaluator: probe distance 34: D - 1 = 0.000, exact - 1 = 0.014 (units of 2^-23)
+evaluator: probe distance 35: D - 1 = 0.000, exact - 1 = 0.007 (units of 2^-23)
+evaluator: probe distance 36: D - 1 = 0.000, exact - 1 = 0.003 (units of 2^-23)
+evaluator: probe distance 37: D - 1 = 0.000, exact - 1 = 0.001 (units of 2^-23)
+evaluator: probe distance 38: D - 1 = 0.000, exact - 1 = 0.000 (units of 2^-23)
+evaluator: probe distance 39: D - 1 = 0.000, exact - 1 = 0.000 (units of 2^-23)
+evaluator: probe distance 40: D - 1 = 0.000, exact - 1 = 0.000 (units of 2^-23)
+evaluator: probe distance 41: D - 1 = 0.000, exact - 1 = 0.000 (units of 2^-23)
+evaluator: probe distance 42: D - 1 = 0.000, exact - 1 = 0.000 (units of 2^-23)
+evaluator: probe distance 43: D - 1 = 0.000, exact - 1 = 0.000 (units of 2^-23)
+evaluator: case 11 kind 6: 128 words, 128 equal to fuseAcc's, 43 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 0.462
+evaluator: case 12 kind 6: 128 words, 128 equal to fuseAcc's, 40 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 0.775
+evaluator: case 13 kind 7: 128 words, 128 equal to fuseAcc's, 94 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 1.816
+evaluator: case 14 kind 7: 128 words, 128 equal to fuseAcc's, 101 equal to bfAcc's, 127 finite, 127 within dotBound, worst |D - exact| / (u T) 1.578
+evaluator: case 15 kind 8: 128 words, 128 equal to fuseAcc's, 119 equal to bfAcc's, 127 finite, 127 within dotBound, worst |D - exact| / (u T) 1.213
+evaluator: case 16 kind 8: 128 words, 128 equal to fuseAcc's, 122 equal to bfAcc's, 123 finite, 123 within dotBound, worst |D - exact| / (u T) 1.238
+evaluator: case 17 kind 9: 128 words, 128 equal to fuseAcc's, 76 equal to bfAcc's, 100 finite, 100 within dotBound, worst |D - exact| / (u T) 0.701
+evaluator: case 18 kind 9: 128 words, 128 equal to fuseAcc's, 89 equal to bfAcc's, 97 finite, 97 within dotBound, worst |D - exact| / (u T) 0.596
+evaluator: case 19 kind 10: 128 words, 128 equal to fuseAcc's, 64 equal to bfAcc's, 128 finite, 128 within dotBound, worst |D - exact| / (u T) 0.875
+evaluator: 20 launches: 0 words differ from fuseAcc's, 0 kind-0 words differ from bfAcc's, 1 finite words outside dotBound, 0 words unwritten
+exit: 0
+result: every D word is fuseAcc's, the layouts agree, and dotBound does not hold. All 2,560 D words of the 20 launches, finite or not, are bit for bit the words of mmaStep (fragA 2 2 2) (fragB 2 2) (fragC 2 1) with fuseAcc .bfloat16 .binary32 8 24 (MojoProof/Sem/TensorCoreAcc.lean): the 16 products in two blocks of 8, in order, C in the first; in each block every addend truncated toward zero to a multiple of 2^-24 times the largest nonzero addend's power of two (exponents raised to -126, a product's the sum of its factors'), the exact sum truncated toward zero to binary32, the largest finite magnitude with the sum's sign between it and 2^128 and an infinity from 2^128 on. The launches of kinds 6 to 9 test it on cancelling pairs, wide exponent spreads, subnormal and mixed products and sums near overflow, and kind 10 fixes the overflow threshold: its 64 sums between the largest finite magnitude and 2^128 give the largest finite word (0x7F7FFFFF), not an infinity. On the two launches of kind 0, where every order of the additions gives the same word, all 256 D words are also the words of mmaStep with bfAcc, so the GPU pairs each A element with each B element and C cell where the library's layouts put them. Of the 2,025 finite D words of the other launches, 2,024 are within dotBound .binary32 16 T of the exact sum (T the sum of the |a_k b_k| and |c|), the bound castDot_ok proves of bfAcc; one is not: case 7, cell (11, 0), where |D - exact| is 18.9 u T (u = 2^-24), 1.11 times dotBound, and the word is fuseAcc's. So no fold from C over the 16 products in some order, each addition rounded to nearest binary32 (fused or not), gives that word. fuseAcc_ok proves for every input format, IEEE accumulator, block size and number of products that fuseAcc meets the contract AccBy with the magnitudes wt a_k wt b_k and |c| + 2^-126 and the bound fuseBound; it is a theorem about the model, and that the GPU computes the model is this measurement. The probe of kind 5 is the model's: at distance 21 each small product, (2 - 2^-7) 2^-21 or 7.97 units of 2^-23, counts as 7.5 units, and 15 of them give 112.5 units, truncated to 112.
+scope: a conformance test, not a proof. One instruction, these 20 launches and these inputs, on one GPU, compiled by this Mojo. The evaluator ran the library's mmaStep at m16n8k16 with fuseAcc .bfloat16 .binary32 8 24 (MojoProof/Sem/TensorCoreAcc.lean), with bfAcc (MojoProofTest/TensorCore.lean) and with the exact rational accumulation ratAcc, and the bound dotBoundQ, equal to dotBound .binary32 by dotBoundQ_eq (MojoProofTest/TensorCoreGpu.lean). The word comparison with fuseAcc covers every D word, infinities included; the dotBound count covers the finite ones (AccBy asks for a finite result). The launches do not separate fuseAcc from every other accumulation: a different block size, truncation width or exponent rule that gives the same words on these inputs is not excluded. It says nothing about other inputs, shapes, types, GPUs or Mojo versions.

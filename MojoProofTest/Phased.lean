@@ -3,13 +3,14 @@ import MojoProof.Sem.Trace
 /-!
 # An instance of `racy_eq_false_of_phased`, and its negative twin
 
-The trace `tr`: two threads of block of threads 0 and a shared block 0 of 2 bytes. In phase 0
-thread `k` writes byte `k`; then a barrier of block of threads 0; in phase 1 each thread reads
-both bytes. The discipline that tiles block 0 by thread in phase 0 and leaves it untiled in
-phase 1 meets the premises of `racy_eq_false_of_phased`, so `tr` has no race. No discipline for
-the whole run meets those of `racy_eq_false_of_owned` (`not_owned`). Without the barrier the
-trace is racy (`twin`), so no phased discipline meets the premises either. One trace, not a
-kernel.
+The trace `tr`: two threads of block of threads 0 and a shared block 0 of 2 bytes. In phase 0 thread
+`k` writes byte `k`; then a barrier of block of threads 0; in phase 1 each thread reads both bytes.
+Its accesses are by threads of the launch `launch2 1 1 2 1` (one block of two threads), so it has
+the premises of `racy_iff` (`Trace.fits_of_check`). The discipline that tiles block 0 by thread in
+phase 0 and leaves it untiled in phase 1 meets the premises of `racy_eq_false_of_phased`, so `tr`
+has no race at `launch2 1 1 2 1`. No discipline for the whole run meets those of
+`racy_eq_false_of_owned` (`not_owned`). Without the barrier the trace is racy (`twin`), so no phased
+discipline meets the premises either. One trace, not a kernel.
 -/
 
 namespace MojoProofTest.Phased
@@ -47,8 +48,9 @@ theorem phases_tr : (phases tr).1 =
     [(acc 1 0 2 false, 1), (acc 0 0 2 false, 1), (acc 1 1 1 true, 0), (acc 0 0 1 true, 0)] := by
   decide +kernel
 
-example : racy tr = false := by
-  refine racy_eq_false_of_phased (T := T) (own := fun _ => id) (fun x hx => ?_)
+example : GPUProof.racy sig (tr.map (Event.toCore (launch2 1 1 2 1))).reverse = false := by
+  obtain ⟨hU, hs⟩ := Trace.fits_of_check (L := launch2 1 1 2 1) (tr := tr) (by decide +kernel)
+  refine racy_eq_false_of_phased (T := T) (own := fun _ => id) hU hs (fun x hx => ?_)
     (fun x hx y hy hne => ?_) fun _ _ _ _ _ _ _ ho => ho
   · rw [phases_tr] at hx
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
@@ -81,6 +83,8 @@ theorem not_owned {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι
     exact absurd (hi _ _ mw mr rfl (by simp [acc, hT]) ho) (by simp [acc])
 
 /-- The twin without the barrier is racy. -/
-example : racy (reads ++ writes) = true := by decide
+example :
+    GPUProof.racy sig ((reads ++ writes).map (Event.toCore (launch2 1 1 2 1))).reverse = true := by
+  decide +kernel
 
 end MojoProofTest.Phased

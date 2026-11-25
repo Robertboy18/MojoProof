@@ -9,9 +9,10 @@ For the one program `naive` (MojoProofTest/SymPhi.lean), compiled with `fmul con
 
 * `correct`: `Kernel.Sound` of `naive` with `Elem.Out` of the naive bytes (`NaiveSpec.bytes`),
   for every oracle family, launch valid with `z` sides 1, sizes, blocks, tensors and memory that
-  meets the matmul precondition `Mat.Pre` (Sem/Precond.lean). It is `NaiveSound.naive_sound`, the
-  instance of `Kernel.sound_mat`, with the run of a thread in bounds `NaiveIn.runIn` (a thread
-  out of bounds is `naive.out`'s, generated); its only premises are the launch's and `Mat.Pre`.
+  meets the matmul precondition `Mat.Pre` (Sem/Precond.lean). It is `NaiveFam.sound`, the naive
+  family's theorem at every row stride (MojoProofTest/NaiveFamRun.lean), at the corpus strides
+  `768`, `768`, `50257` (`NaiveFam.prog_corpus`); its only premises are the launch's and
+  `Mat.Pre`, whose bounds give the sizes below `2 ^ 31`.
   `NaiveSound.naive_read` and `NaiveSound.naive_matmul` read its cells against TorchLean's
   `Tensor.matmul`.
 * `L12`, `in12`, `mem12`, `pre12`, `sound12`: the instance at one block of 2 × 2 threads
@@ -19,13 +20,14 @@ For the one program `naive` (MojoProofTest/SymPhi.lean), compiled with `fmul con
   on the memory `Mat.mem` builds, which meets `Mat.Pre` at every `K ≤ 768` by `Mat.pre_mem`
   (`pre12`), for every `A`, `B` and oracles.
 * The corollaries of `correct`, for `naive` at every launch and memory of its family, on every
-  observation of a complete run: `read_cover`, every cell of `C` holds its contracted dot loop
-  when the launch's window covers `m × n` (its instance `read12` at `L12`, its twin `keep11` at
-  the one-thread launch `Launch.one`, which leaves `C[0, 1]` the caller's); `matmul_nanEq`, each
-  cell in the window against TorchLean's `Tensor.matmul` of the first `K` columns up to NaNs at a
-  thread that fuses no round (its instance `nanEq_zero` at an oracle family that fuses nothing);
-  `matmul_error`, each finite cell in the window within `dotBound` of the real product, for every
-  oracle family.
+  observation of a complete run, each the theorem of MojoProofTest/NaiveFam.lean of the same name
+  (`NaiveFam.cover` for `read_cover`) at the corpus strides, one line: `read_cover`, every cell
+  of `C` holds its contracted dot loop when the launch's window covers `m × n` (its instance
+  `read12` at `L12`, its twin `keep11` at the one-thread launch `Launch.one`, which leaves
+  `C[0, 1]` the caller's); `matmul_nanEq`, each cell in the window against TorchLean's
+  `Tensor.matmul` of the first `K` columns up to NaNs at a thread that fuses no round (its
+  instance `nanEq_zero` at an oracle family that fuses nothing); `matmul_error`, each finite cell
+  in the window within `dotBound` of the real product, for every oracle family.
 -/
 
 namespace MojoProofTest.NaiveKernel
@@ -37,8 +39,8 @@ open FloatLib.Floats.Formats.BinaryInterchange TorchLean
 /-- **The naive matmul kernel's theorem**: `naive` is sound for `Elem.Out` of its bytes, for every
 oracle family, launch valid with `z` sides 1, sizes, blocks, tensors and memory that meets the
 matmul precondition `Mat.Pre` (Sem/Precond.lean) at naive's layout, binary32, alignment 4 and row
-strides 768, 768 and 50257. It is `naive_sound` with the run of a thread in bounds
-`NaiveIn.runIn`; a thread out of bounds is `naive.out`'s, inside `naive_sound`. -/
+strides 768, 768 and 50257. It is `NaiveFam.sound` at those strides (`NaiveFam.prog_corpus`),
+with `m`, `n`, `K` below `2 ^ 31` from `Mat.Pre`'s bounds (`dims_lt`). -/
 theorem correct {ω : Nat → Nat → Nat} {L : Launch} (hL : L.Valid)
     (hz : L.grid .z = 1 ∧ L.block .z = 1) {m n K bC bA bB : Nat}
     {A : Tensor (Model FloatTy.float.fmt) [m, 768]} {B : Tensor (Model FloatTy.float.fmt) [n, 768]}
@@ -47,8 +49,7 @@ theorem correct {ω : Nat → Nat → Nat} {L : Launch} (hL : L.Valid)
     Kernel.Sound naive.prog naive.fn_0 L (Mat.args z bC bA bB m n K) mem (fun _ ω' => ω' = ω)
       (fun m => some m.blocks)
       (Elem.Out mem bC (cell L) (bytes ω L K A B) (volume L.grid * volume L.block)) :=
-  naive_sound hL hz h.closed ⟨h.ne.1.symm, h.ne.2.1.symm⟩ h.bufs h.x h.y ⟨h.le.1, h.le.2.1, h.lt⟩
-    h.fits (NaiveIn.runIn ω L K bC bA bB A B)
+  NaiveFam.sound hL hz h (dims_lt ⟨h.le.1, h.le.2.1, h.lt⟩)
 
 /-- The launch of one block of 2 × 2 threads (`x` side 2, `y` side 2). -/
 abbrev L12 : Launch := launch2 1 1 2 2
@@ -107,8 +108,8 @@ oracle family `ω`, launch `L` valid with `z` sides 1 whose window covers the re
 `Mat.Pre`: in every observation `Bk` of a complete run of `naive` at every address choice under
 `ω`, block `bC` is some `y` and every cell `(r, c)` with `r < m` and `c < n` is computed by one
 thread `k`, of row `r` and column `c`, whose 4 bytes at offset `(r * 50257 + c) * 4` encode
-`dotLoop` with `fmul contract` under `o (ω k)` from `+0` over `pairs A B r c K` (`naive_read` at
-`correct`, the window premises by `hm` and `hn`). The other bytes and blocks are `naive_read`'s.
+`dotLoop` with `fmul contract` under `o (ω k)` from `+0` over `pairs A B r c K` (`NaiveFam.cover`
+at the corpus strides and `correct`). The other bytes and blocks are `naive_read`'s.
 It covers the one program `naive`, at every launch and memory of its family whose window covers
 `m × n`; `read12` is its instance, `keep11` the twin at a launch that does not cover it. -/
 theorem read_cover (hm : m ≤ L.grid .x * L.block .x) (hn : n ≤ L.grid .y * L.block .y) :
@@ -119,8 +120,7 @@ theorem read_cover (hm : m ≤ L.grid .x * L.block .x) (hn : n ≤ L.grid .y * L
         naive.prog.layout.encode (.fp .float) (.ofFloat .float
           (dotLoop true (o (ω k)) (Model.zero _ false) (pairs A B ⟨r, hr⟩ ⟨c, hc⟩ K))) =
           some (y.read ((r * 50257 + c) * 4) 4) :=
-  let ⟨y, hy, hc, _⟩ := naive_read hL hz h.le.1 (correct hL hz h) h.bufs.2.2.choose_spec.1 hB
-  ⟨y, hy, fun r c hr hc' => hc r c hr hc' (hr.trans_le hm) (hc'.trans_le hn)⟩
+  NaiveFam.cover (A := A) (B := B) hL hz h.le.1 (correct hL hz h) h.bufs.2.2.choose_spec.1 hB hm hn
 
 /-- **naive's cells against TorchLean's product, up to NaNs, at a thread that fuses no round.**
 For every oracle family `ω`, launch `L` valid with `z` sides 1, sizes, `K ≤ 768`, blocks,
@@ -130,10 +130,10 @@ and in the launch's window (`r < grid.x * block.x`, `c < grid.y * block.y`) is c
 thread `k` and holds the binary32 encoding of a word `v`; if no `fadd` oracle number of thread `k`
 is `2` modulo `3` (it fuses no round), `v` and entry `(r, c)` of TorchLean's `Tensor.matmul` of
 the first `K` columns of `A` and the transpose of the first `K` columns of `B` (`cols`) are the
-same word or both NaNs (`NaNEq`; `naive_matmul` at `correct`). The equality needs that premise:
-a fused round rounds the product and the sum once, TorchLean's product rounds each. Its instance
-`nanEq_zero` is at the oracle family `fun _ _ => 0`, which fuses nothing. It covers the one
-program `naive`, at every launch and memory of its family. -/
+same word or both NaNs (`NaNEq`; `NaiveFam.matmul_nanEq` at the corpus strides and `correct`).
+The equality needs that premise: a fused round rounds the product and the sum once, TorchLean's
+product rounds each. Its instance `nanEq_zero` is at the oracle family `fun _ _ => 0`, which fuses
+nothing. It covers the one program `naive`, at every launch and memory of its family. -/
 theorem matmul_nanEq (hK : K ≤ 768) :
     ∃ y, Bk bC = some y ∧ ∀ r c (hr : r < m) (hc : c < n), r < L.grid .x * L.block .x →
       c < L.grid .y * L.block .y →
@@ -143,10 +143,7 @@ theorem matmul_nanEq (hK : K ≤ 768) :
         ((∀ j, (o (ω k) j).2 % 3 ≠ 2) → NaNEq v (Tensor.get2 (Tensor.matmul (cols K hK A)
           (Tensor.permute (cols K hK B) (Shape.adjacentSwap [n, K] 0) [K, n])) ⟨r, hr⟩
             ⟨c, hc⟩)) :=
-  let ⟨y, hy, hc⟩ := naive_matmul hL hz h.le.1 hK (correct hL hz h) h.bufs.2.2.choose_spec.1 hB
-  ⟨y, hy, fun r c hr hc' hX hY =>
-    let ⟨k, hk, ex, ey, v, he, hu, _⟩ := hc r c hr hc' hX hY
-    ⟨k, hk, ex, ey, v, he, hu⟩⟩
+  NaiveFam.matmul_nanEq hL hz h.le.1 hK hK (correct hL hz h) h.bufs.2.2.choose_spec.1 hB
 
 /-- **naive's finite cells are within `dotBound` of the real product.** For every oracle family
 `ω`, launch `L` valid with `z` sides 1, sizes, `K ≤ 768`, blocks, tensors and memory of
@@ -155,8 +152,8 @@ theorem matmul_nanEq (hK : K ≤ 768) :
 window is computed by one thread `k` and holds the binary32 encoding of a word `v`; when `v` is
 finite, `|v - (A Bᵀ)ᵣ꜀|` over the reals on the first `K` columns (`cols`, mapped by
 `Model.toReal`) is at most `dotBound` of binary32 at `K` and `Σⱼ<K |aᵣⱼ b꜀ⱼ|`, whichever rounds
-the oracle fuses (`naive_matmul` at `correct`). It covers the one program `naive`, at every
-launch and memory of its family. -/
+the oracle fuses (`NaiveFam.matmul_error` at the corpus strides and `correct`). It covers the one
+program `naive`, at every launch and memory of its family. -/
 theorem matmul_error (hK : K ≤ 768) :
     ∃ y, Bk bC = some y ∧ ∀ r c (hr : r < m) (hc : c < n), r < L.grid .x * L.block .x →
       c < L.grid .y * L.block .y →
@@ -168,10 +165,7 @@ theorem matmul_error (hK : K ≤ 768) :
             (Tensor.permute (cols K hK B) (Shape.adjacentSwap [n, K] 0) [K, n])))
               ⟨r, hr⟩ ⟨c, hc⟩| ≤ dotBound FloatTy.float.fmt K ((pairs A B ⟨r, hr⟩ ⟨c, hc⟩
                 K).map fun ab => |ab.1.toReal * ab.2.toReal|).sum) :=
-  let ⟨y, hy, hc⟩ := naive_matmul hL hz h.le.1 hK (correct hL hz h) h.bufs.2.2.choose_spec.1 hB
-  ⟨y, hy, fun r c hr hc' hX hY =>
-    let ⟨k, hk, ex, ey, v, he, _, hf⟩ := hc r c hr hc' hX hY
-    ⟨k, hk, ex, ey, v, he, hf⟩⟩
+  NaiveFam.matmul_error hL hz h.le.1 hK hK (correct hL hz h) h.bufs.2.2.choose_spec.1 hB
 
 end Read
 
@@ -181,8 +175,9 @@ launch `L` valid with `z` sides 1, sizes, `K ≤ 768`, blocks, tensors and memor
 every observation `Bk` of a complete run of `naive` at every address choice under it, every cell
 `(r, c)` with `r < m`, `c < n` and in the launch's window holds the binary32 encoding of a word
 `NaNEq` to entry `(r, c)` of TorchLean's `Tensor.matmul` of the first `K` columns of `A` and the
-transpose of the first `K` columns of `B`. It covers the one program `naive` and this one oracle
-family, at every launch and memory of its family. -/
+transpose of the first `K` columns of `B` (`NaiveFam.nanEq_zero` at the corpus strides and
+`correct`). It covers the one program `naive` and this one oracle family, at every launch and
+memory of its family. -/
 theorem nanEq_zero {L : Launch} (hL : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1)
     {m n K bC bA bB : Nat} {A : Tensor (Model FloatTy.float.fmt) [m, 768]}
     {B : Tensor (Model FloatTy.float.fmt) [n, 768]} {mem : Mem}
@@ -196,10 +191,7 @@ theorem nanEq_zero {L : Launch} (hL : L.Valid) (hz : L.grid .z = 1 ∧ L.block .
           some (y.read ((r * 50257 + c) * 4) 4) ∧
         NaNEq v (Tensor.get2 (Tensor.matmul (cols K hK A)
           (Tensor.permute (cols K hK B) (Shape.adjacentSwap [n, K] 0) [K, n])) ⟨r, hr⟩ ⟨c, hc⟩) :=
-  let ⟨y, hy, hc⟩ := matmul_nanEq hL hz h hB hK
-  ⟨y, hy, fun r c hr hc' hX hY =>
-    let ⟨_, _, _, _, v, he, hu⟩ := hc r c hr hc' hX hY
-    ⟨v, he, hu fun _ => by simp [o]⟩⟩
+  NaiveFam.nanEq_zero hL hz h.le.1 hK hK (correct hL hz h) h.bufs.2.2.choose_spec.1 hB
 
 /-- **`read_cover` at `sound12`**: for every `A` (`1 × 768`), `B` (`2 × 768`) and oracles `ω`,
 every observation of `naive` on `L12` at `mem12 A B` has a

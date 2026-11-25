@@ -1,4 +1,4 @@
-import MojoProof.Sem.Thread
+import MojoProof.Sem.TensorCoreDef
 import Mathlib.Logic.Relation
 
 /-!
@@ -42,7 +42,13 @@ by 32 (indices in x, y, z order, x fastest). A thread's special registers come f
   as poison or `undef`) is undefined behavior; another lane's such mask counts as another mask.
   A shuffle orders no memory access: the trace records no completion of it, so accesses on both
   sides of it race (test "shuffle in a warp").
-* `ldmatrix` and `mma` have no grid semantics yet (unsupported).
+* At an `mma` the participants are the 32 lanes of `n`'s warp, which must lie whole in its block
+  of threads and wait at the same `mma` at the same instruction (`mmaRes`; another collective
+  or a returned lane is unsupported). The lanes' results are `mmaGrid`'s on their arguments,
+  with the launch's accumulation policy `L.acc` (bf16 and f16 inputs with an f32 accumulator,
+  finite words; every other `mma` is unsupported); the memory does not change and the trace
+  records nothing.
+  `ldmatrix` has no grid semantics yet (unsupported): its rows are reads of shared memory.
 
 `Grid.run` is the evaluator: phases in which every thread runs until it waits or returns, then
 every collective call that can complete does; no progress is a deadlock (undefined behavior).
@@ -60,23 +66,28 @@ position), and its contexts give thread `n` the program, the number
 program, kernel, launch, memory and choices; a fold in `Except` over elements of a predicate,
 from a state of an invariant, succeeds with a state of the invariant when every step on such an
 element does (`Sym.foldlM_res`), and an invariant indexed by the next number of a fold over
-consecutive numbers that succeeds holds at its end (`Sym.foldlM_range'_inv`); on a memory with
+consecutive numbers that succeeds holds at its end (`Sym.foldlM_range'_inv`); `foldlM_idx_inv`
+and `Sym.foldlM_res` are cases of `foldlM_idx`, a fold whose every step from a state of an
+invariant indexed by the position gives a state of the invariant or an error of a property `E`
+(with `E` true, and with `E` false); on a memory with
 no block from its `next` on (`Mem.FreeAbove`), a launch allocation succeeds and keeps it
 (`Sym.allocNext_res`), and so does the shared memory of a block of threads whose globals `shared`
 supports (`Sym.shared_res`), and so does the start's fold of the blocks' shared memories
 (`Sym.sharedFold_res`); the four moved from MojoProof/Sym/Start.lean keep their names in
-`MojoProof.Sym`, whose start results use them; every state `Grid.run` reaches is reachable by
-`Grid.Step` (`Grid.run_reach`), for every program.
+`MojoProof.Sym`, whose start results use them; `resumeAll` sets each of distinct waiting
+threads running on its result under its callee's return attributes (`Sym.resumeAll_eq`, moved
+from MojoProof/Sym/SchedWait.lean with its name, for the schedule and `Grid.fire_mma`); every
+state `Grid.run` reaches is reachable by `Grid.Step` (`Grid.run_reach`), for every program.
 -/
 
 namespace MojoProof.Sem
 
 open LLVM
 
-/-- A launch: the grid size in blocks and the block size in threads, by dimension, and the bytes
-of dynamic shared memory. -/
+/-- A launch: the grid size in blocks and the block size in threads, by dimension, the bytes
+of dynamic shared memory and the accumulation policy of `mma`. -/
 structure Launch where
-  /-- Builds a launch from its grid, block and dynamic shared memory sizes. -/
+  /-- Builds a launch from its grid, block and dynamic shared memory sizes and its `mma` policy. -/
   mk ::
   /-- The grid's size in blocks, by dimension. -/
   grid : Dim → Nat
@@ -84,6 +95,9 @@ structure Launch where
   block : Dim → Nat
   /-- The bytes of dynamic shared memory (0 by default). -/
   dynShared : Nat := 0
+  /-- The accumulation policy of the device's `mma`, which the PTX ISA leaves open (`MmaAcc`;
+  `gridAcc` by default). -/
+  acc : MmaAcc := gridAcc
 
 /-- The number of points of a box of sides `d`. -/
 def volume (d : Dim → Nat) : Nat := d .x * d .y * d .z
@@ -328,28 +342,44 @@ def Grid.start (prog : Program) (fn : Func) (L : Launch) (args : List Val) (m : 
                                globals := fun s => (tabs.getD (n / size) []).lookup s }
   return ({ threads := ts, mem := { m.compact with trace := [] } }, ctx)
 
+/-- **A fold in `Except`, indexed by the position.** For every step function `f`, list `xs`,
+invariant `P` indexed by the number of elements folded and property `E` of errors: if every step
+on entry `i` of `xs` from a state of `P i` succeeds with a state of `P (i + 1)` or fails with an
+error of `E`, then the fold over `xs` from a state of `P 0` succeeds with a state of
+`P xs.length` or fails with an error of `E`. With `E` true it is `foldlM_idx_inv`, an invariant
+of a fold that succeeds; with `E` false, `Sym.foldlM_res`, a fold that succeeds. -/
+theorem foldlM_idx {α β ε : Type} {f : β → α → Except ε β} {E : ε → Prop} :
+    ∀ {P : Nat → β → Prop} (xs : List α),
+      (∀ i a b, xs[i]? = some a → P i b →
+        (∃ b', f b a = .ok b' ∧ P (i + 1) b') ∨ ∃ e, f b a = .error e ∧ E e) →
+      ∀ {b : β}, P 0 b →
+        (∃ r, xs.foldlM f b = .ok r ∧ P xs.length r) ∨ ∃ e, xs.foldlM f b = .error e ∧ E e
+  | _, [], _, b, hb => .inl ⟨b, rfl, hb⟩
+  | P, a :: xs, hP, b, hb => by
+    rw [List.foldlM_cons]
+    rcases hP 0 a b rfl hb with ⟨b1, h1, hb1⟩ | ⟨e, h1, he⟩
+    · rw [h1]
+      exact foldlM_idx (P := fun i => P (i + 1)) xs (fun i a' c ha => hP (i + 1) a' c ha) hb1
+    · rw [h1]
+      exact .inr ⟨e, rfl, he⟩
+
 /-- **An invariant of a fold in `Except` that succeeds, indexed by the position.** For every step
 function `f`, list `xs` and invariant `P` indexed by the number of elements folded: if every step
 on entry `i` of `xs` that succeeds from a state of `P i` gives a state of `P (i + 1)`, then a fold
-over `xs` that succeeds from a state of `P 0` gives a state of `P xs.length`. `foldlM_mem_inv`,
-`Sym.foldlM_range'_inv` and `Sym.foldlM_zipIdx_inv` are its cases. -/
+over `xs` that succeeds from a state of `P 0` gives a state of `P xs.length` (`foldlM_idx` with
+every error allowed). `foldlM_mem_inv`, `Sym.foldlM_range'_inv` and `Sym.foldlM_zipIdx_inv` are
+its cases. -/
 theorem foldlM_idx_inv {α β ε : Type} {f : β → α → Except ε β} :
     ∀ {P : Nat → β → Prop} (xs : List α),
       (∀ i a b b', xs[i]? = some a → f b a = .ok b' → P i b → P (i + 1) b') →
-      ∀ {b r : β}, xs.foldlM f b = .ok r → P 0 b → P xs.length r
-  | _, [], _, b, r, h, hb => by
-    obtain rfl : b = r := Except.ok.inj h
-    exact hb
-  | P, a :: xs, hP, b, r, h, hb => by
-    rw [List.foldlM_cons] at h
-    cases h1 : f b a with
-    | error e =>
-      rw [h1] at h
-      cases h
-    | ok b1 =>
-      rw [h1] at h
-      exact foldlM_idx_inv (P := fun i => P (i + 1)) xs
-        (fun i a' c c' ha => hP (i + 1) a' c c' ha) h (hP 0 a b b1 rfl h1 hb)
+      ∀ {b r : β}, xs.foldlM f b = .ok r → P 0 b → P xs.length r := by
+  intro P xs hP b r h hb
+  rcases foldlM_idx (f := f) (E := fun _ => True) xs (fun i a c ha hc => by
+    cases h1 : f c a with
+    | error e => exact .inr ⟨e, rfl, trivial⟩
+    | ok c' => exact .inl ⟨c', rfl, hP i a c c' ha h1 hc⟩) hb with ⟨r', h', hr⟩ | ⟨e, h', -⟩ <;>
+    rw [h] at h' <;> cases h'
+  exact hr
 
 /-- An invariant of a fold in `Except` that succeeds: one that every step that succeeds on an
 element of `Q` keeps, if every element of the list is of `Q` (`foldlM_idx_inv` at an invariant
@@ -387,19 +417,19 @@ def Mem.FreeAbove (m : Mem) : Prop := ∀ c, m.next ≤ c → m.blocks c = none
 /-- **A fold in `Except` that succeeds.** For every step function `f`, invariant `P` and
 predicate `Q`: if every step from a state of `P`, on an element of `Q`, succeeds (`.ok`) with a
 state of `P`, then the fold over a list of elements of `Q` from a state of `P` succeeds with a
-state of `P`. Stated for every result `x` of the fold, so that a hypothesis `fold = .error e`
+state of `P` (`foldlM_idx` with no error allowed, at an invariant that does not depend on the
+position). Stated for every result `x` of the fold, so that a hypothesis `fold = .error e`
 refutes itself. -/
 theorem _root_.MojoProof.Sym.foldlM_res {α β ε : Type} {f : β → α → Except ε β} {P : β → Prop}
     {Q : α → Prop}
     (hf : ∀ b a x, Q a → P b → f b a = x → ∃ b', x = .ok b' ∧ P b') :
     ∀ (xs : List α) (b : β) (x : Except ε β), (∀ a ∈ xs, Q a) → P b → xs.foldlM f b = x →
-      ∃ r, x = .ok r ∧ P r
-  | [], b, _, _, hb, hx => ⟨b, hx.symm, hb⟩
-  | a :: xs, b, x, hq, hb, hx => by
-    rw [List.foldlM_cons] at hx
-    obtain ⟨b', h1, hb'⟩ := hf b a _ (hq a List.mem_cons_self) hb rfl
-    rw [h1] at hx
-    exact Sym.foldlM_res hf xs b' x (fun y hy => hq y (List.mem_cons_of_mem a hy)) hb' hx
+      ∃ r, x = .ok r ∧ P r := by
+  rintro xs b _ hq hb rfl
+  rcases foldlM_idx (E := fun _ => False) (P := fun _ => P) xs
+    (fun _ a c ha hc => .inl (hf c a _ (hq a (List.mem_of_getElem? ha)) hc rfl)) hb with
+    h | ⟨_, _, ⟨⟩⟩
+  exact h
 
 /-- **A launch allocation succeeds.** For every layout, memory `m` with `Mem.FreeAbove`, space,
 size, alignment, liveness, owner, addresses and initial bytes: `Mem.allocNext` returns `.ok`, and
@@ -671,6 +701,52 @@ def resumeAll (l : Layout) (m : Mem) (ts : Array Status) (ns : List Nat) (v : Na
       return ts.set! n (.run (t.resume (← (v n).mapM (withAttrs l m fn.ret fn.retAttrs))))
     | _ => pure ts
 
+/-- **The waiting threads resumed.** For every layout `l`, memory `m`, results `v` and array of
+statuses `ts` in which each of the distinct threads `ns` waits, from thread `u k`, at a call whose
+callee's return attributes take `v k` to `r k` in `m` (`withAttrs`): `resumeAll` sets each
+thread `k` of `ns` running `(u k).resume (r k)` (`Thread.resume`), in turn. -/
+theorem _root_.MojoProof.Sym.resumeAll_eq {l : Layout} {m : Mem} {v : Nat → Option Val}
+    {u : Nat → Thread} {r : Nat → Option Val} :
+    ∀ {ns : List Nat} {ts : Array Status}, ns.Nodup →
+      (∀ k ∈ ns, ∃ i as d, ts[k]? = some (.wait (u k) i as d) ∧
+        (v k).mapM (withAttrs l m d.ret d.retAttrs) = .ok (r k)) →
+      resumeAll l m ts ns v =
+        .ok (ns.foldl (fun ts k => ts.set! k (.run ((u k).resume (r k)))) ts)
+  | [], _, _, _ => rfl
+  | n :: ns, ts, hd, h => by
+    obtain ⟨i, as, d, hn, hv⟩ := h n List.mem_cons_self
+    have hd' := List.nodup_cons.1 hd
+    have e := Sym.resumeAll_eq (ns := ns) (ts := ts.set! n (.run ((u n).resume (r n)))) hd'.2
+      fun k hk => by
+        obtain ⟨i, as, d, hk', hv⟩ := h k (List.mem_cons_of_mem _ hk)
+        refine ⟨i, as, d, ?_, hv⟩
+        rw [Array.set!_eq_setIfInBounds,
+          Array.getElem?_setIfInBounds_ne (fun e => hd'.1 (by subst e; exact hk))]
+        exact hk'
+    unfold resumeAll at e ⊢
+    rw [List.foldlM_cons, hn]
+    simp only [bind, Except.bind, hv, pure, Except.pure]
+    exact e
+
+/-- The results of the `mma` of the importer's value `v` with the accumulation policy `A` that
+the 32 lanes of a warp, with statuses `sts` in order, wait at at the instruction `p`: lane `l`'s
+result `y l` is `mmaGrid A`'s on the lanes' arguments; `none` while a lane runs. Unsupported: a
+lane that waits at another collective or instruction or has returned, and operands `mmaGrid`
+rejects. -/
+def mmaRes (A : MmaAcc) (sts : List (Option Status)) (p : Option (String × Nat × Nat)) (v : Mma) :
+    Except Fault (Option (Nat → Val)) := do
+  let xs : List (Option (List Val)) ← sts.mapM fun
+    | some (Status.wait t' (.mma v') args _) =>
+      if v' = v ∧ t'.at = p then pure (some args)
+      else throw (.unsupported "lanes of a warp at different collectives")
+    | some (Status.wait ..) => throw (.unsupported "lanes of a warp at different collectives")
+    | some .done => throw (.unsupported "mma in a warp with a returned lane")
+    | _ => pure none
+  let some xs := xs.mapM id | return none
+  let some y := mmaGrid A v fun l => xs.getD l [] |
+    throw (.unsupported "mma operands the grid does not model")
+  return some y
+
 /-- The collective call thread `n` waits at, completed for all its participants (their results
 under the callee's return attributes, in thread `n`'s context), or `none`; `none` if thread `n`
 does not wait. Every participant is looked at, so a fault at one is the result even when another
@@ -686,7 +762,12 @@ still runs.
   is another mask). An undefined member mask of `n`, and an undefined lane or clamp operand of a
   lane that waits here, are undefined behavior. If no lane faults and one runs, the result is
   `none`; if all wait here, it completes.
-- `ldmatrix` and `mma`, and a collective call with ill-typed arguments, are unsupported. -/
+- At an `mma` the participants are the 32 lanes of `n`'s warp: a warp not whole in its block of
+  threads, a lane that waits at another collective or instruction or has returned (`mmaRes`),
+  and operands `mmaGrid` does not model are unsupported. If no lane faults and one runs, the
+  result is `none`; if all wait here, each lane resumes with its aggregate of D registers, from
+  the launch's accumulation policy `L.acc`.
+- `ldmatrix`, and a collective call with ill-typed arguments, are unsupported. -/
 def Grid.fire (L : Launch) (c : Nat → Ctx) (g : Grid) (n : Nat) :
     Except Fault (Option Grid) := do
   let some (.wait t i args _) := g.threads[n]? | return none
@@ -729,8 +810,81 @@ def Grid.fire (L : Launch) (c : Nat → Ctx) (g : Grid) (n : Nat) :
     let res (k : Nat) : Option Val :=
       (parts.find? (base + ·.1 = k)).map fun (j, _, b, c) => src (shflSource mode j b c)
     return some { g with threads := ← resumeAll l g.mem g.threads (parts.map (base + ·.1)) res }
-  | .ldmatrix _, _ | .mma _, _ => throw (.unsupported "ldmatrix and mma in a grid")
+  | .mma v, _ =>
+    let lane := n % size % 32
+    let base := n - lane
+    unless n % size - lane + 32 ≤ size do
+      throw (.unsupported "mma in a warp cut by its block of threads")
+    let some y ← mmaRes L.acc ((List.range 32).map fun j => g.threads[base + j]?) t.at v |
+      return none
+    let res (k : Nat) : Option Val := some (y (k - base))
+    let lanes := (List.range 32).map (base + ·)
+    return some { g with threads := ← resumeAll l g.mem g.threads lanes res }
+  | .ldmatrix _, _ => throw (.unsupported "ldmatrix in a grid")
   | _, _ => throw (.unsupported "collective call with ill-typed arguments")
+
+/-- **The `mma` results come from lanes that all wait at it**, for every policy, statuses,
+instruction and `Mma` value: when `mmaRes A sts p v` gives results `y`, the `i`-th status of
+`sts` is a wait at that `mma` at the instruction `p` with arguments `x i`, for some `x` on which
+`mmaGrid A v` gives `y`. -/
+theorem mmaRes_ok {A : MmaAcc} {sts : List (Option Status)} {p : Option (String × Nat × Nat)}
+    {v : Mma} {y : Nat → Val} (h : mmaRes A sts p v = .ok (some y)) :
+    ∃ x : Nat → List Val, mmaGrid A v x = some y ∧
+      ∀ i (hi : i < sts.length), ∃ t fn, sts[i] = some (.wait t (.mma v) (x i) fn) ∧ t.at = p := by
+  have key : ∀ {F : Option Status → Except Fault (Option (List Val))} (l : List (Option Status))
+      {xs : List (Option (List Val))} {ys : List (List Val)},
+      l.mapM F = .ok xs → xs.mapM id = some ys →
+        ∀ i (hi : i < l.length), F l[i] = .ok (some (ys.getD i [])) := by
+    intro F l
+    induction l with
+    | nil => intro _ _ _ _ i hi; exact absurd hi (Nat.not_lt_zero _)
+    | cons a l ih =>
+      intro xs ys h1 h2 i hi
+      simp only [List.mapM_cons, bind, Except.bind, pure, Except.pure] at h1
+      split at h1
+      · cases h1
+      rename_i b hb
+      split at h1
+      · cases h1
+      rename_i bs hbs
+      cases h1
+      cases b with
+      | none => simp at h2
+      | some c =>
+        cases hcs : bs.mapM id with
+        | none => simp [hcs] at h2
+        | some cs =>
+          have e : ys = c :: cs := by simpa [hcs] using h2.symm
+          subst e
+          cases i with
+          | zero => simpa using hb
+          | succ i => simpa using ih hbs hcs i (by simpa using hi)
+  unfold mmaRes at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  rename_i xs hxs
+  split at h
+  · rename_i ys hys
+    split at h
+    · rename_i y' hy
+      cases h
+      refine ⟨fun l => ys.getD l [], hy, fun i hi => ?_⟩
+      have e := key _ hxs hys i hi
+      revert e
+      split
+      · rename_i t' v' args fn hs
+        split
+        · rename_i hc
+          intro e
+          cases e
+          obtain ⟨rfl, hat⟩ := hc
+          exact ⟨t', fn, hs, hat⟩
+        · intro e
+          cases e
+      all_goals intro e; cases e
+    · cases h
+  · cases h
 
 /-- One step of any schedule: a running thread takes a step, or a collective call completes. -/
 def Grid.Step (L : Launch) (c : Nat → Ctx) (g g' : Grid) : Prop :=

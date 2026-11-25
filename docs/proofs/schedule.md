@@ -1,19 +1,21 @@
 # Schedule independence (T2, `Grid.confluent`)
 
-Lean, in MojoProof/Sem/Schedule.lean unless named: changes S1 and S2 are made; `Trace.Same` and
-`Grid.Same` are defined, with `refl`, `symm` and `trans`; `Thread.pending` is defined and L1a for
-steps is proved (`step_pending`, for every context, thread and memory, and `Grid.advance_pending`,
-for every grid), and for fires (`Grid.fire_trace`, for every grid), and no step or fire reads the
+Lean, in MojoProof/Sem/Schedule.lean unless named: changes S1 and S2 are made; `Trace.Same`,
+`Grid.Same` and `Thread.pending` are defined (in MojoProof/Sem/SigDef.lean, since `sig` reaches
+them); `Trace.Same` and `Grid.Same` have `refl`, `symm` and `trans`; L1a for steps is proved
+(`step_pending`, for every context, thread and memory, and `Grid.advance_pending`, for every
+grid), and for fires (`Grid.fire_trace`, for every grid), and no step or fire reads the
 trace (`exec_retrace`, `step_retrace`, `Grid.advance_retrace`, `Grid.fire_retrace`), with its
 corollaries `bisim` (`Grid.Same.step`) and the fault part of `bad_eqv` (`Grid.Same.faults`); L1c
 for the memory (`Thread.pending_shape`; with C1, a running thread of a closed grid has the same
 pending accesses in every reachable grid, `Grid.pending_reach`), and W5 (`Grid.reach_keeps`:
 reachable grids keep every block; `Grid.start_reach_atCalls`: a waiting thread of a grid reachable
-from the start is at its call); L9 (`racy_iff`, Race.lean), L11 (`Trace.Same.append`,
-`Trace.Same.swap`), L12 (`Trace.Same.racy`, `Trace.Same.kept`), L13 (`racy_insert`) and L10
+from the start is at its call); L9 (`racy_iff`, RaceSig.lean), L11 (`Trace.Same.append`,
+`Trace.Same.swap`), L12 (`Trace.Same.clash`, `Trace.Same.kept`), L13 (`racy_insert`) and L10
 (`rmw_comm` on values, `Mem.update_comm` on memory) are proved, each for every trace, list,
-operation and width it names. In MojoProof/Sem/Bad.lean: `Grid.RaceEnabled` and `Grid.Bad` are
-defined, `bad_eqv` is proved (`Grid.Same.bad`, for every launch, contexts and grids), and
+operation and width it names. In MojoProof/Sem/Bad.lean, at the core's `Bad` at `sig`
+(`Grid.raceEnabled_iff` reads its `RaceEnabled`): `bad_eqv` is proved (`Grid.Same.bad`, for
+every launch, contexts and grids), and
 `bad_step` (`Grid.Step.bad`, for every launch, contexts with one layout and closed grid whose
 threads own their allocas and have different thread numbers, in which no collective call that
 completes logs a barrier of a running thread's block of threads; a fault at a collective call
@@ -33,8 +35,8 @@ MojoProof/Sem/ScheduleOwned.lean, by the route of item 4 below.
 The semantics this proof uses: an `alloca`'s block number is `Mem.fresh` (so no renaming of
 blocks), the start checks the caller's memory (`Mem.checkClosed`) and every reachable grid is
 closed (`Grid.Closed`, schedule-owned.md), `lifetime.start` resets the bytes of a block (L1b), and
-two `atomicrmw`s are exempt from `Access.conflict` only if they have one operation, pointer and
-size.
+two `atomicrmw`s are exempt from `Access.conflict` only if they have one commuting operation
+(`RmwOp.commutes`), pointer and size.
 
 **Scope.** Every program, launch, start memory, argument values, skeleton choice and oracle. The
 hypotheses are that `Grid.start` succeeds and that the caller's memory is closed for the arguments
@@ -51,8 +53,9 @@ property of one run, which T2 transfers to all runs.
 **Design choices.**
 - No renaming of block numbers (`Mem.fresh`), so the equivalence `Grid.Same` is equality up to the
   order of independent trace events.
-- The race predicate is `racy` itself, with its exemption of two atomics of one operation, pointer
-  and size: such atomics commute (L10 below).
+- The race predicate is `racy` itself, with its exemption of two atomics of one commuting operation
+  (`RmwOp.commutes`), pointer and size: such atomics commute (L10 below). Two `xchg`s of the same
+  bytes conflict.
 - W1 is `Grid.Closed` (schedule-owned.md, section "The closed-grid invariant").
 - `Confluent` needs one more alternative in its diamond (change S1 below).
 - One change to the semantics (change S2 below): an admitted `atomicrmw` leaves its result register
@@ -60,7 +63,7 @@ property of one run, which T2 transfers to all runs.
 
 ## Changes it needs first
 
-- **S1 (`Confluent`, MojoProof/Sem/OneRun.lean).** `diamond` gains the alternative `Bad b ∧ Bad c`:
+- **S1 (`Confluent`, GPUProof/OneRun.lean).** `diamond` gains the alternative `Bad b ∧ Bad c`:
 
       diamond : ∀ {a b c}, r a b → r a c →
         e b c ∨ (Bad b ∧ Bad c) ∨ ∃ d d', r b d ∧ r c d' ∧ (e d d' ∨ (Bad d ∧ Bad d'))
@@ -68,9 +71,10 @@ property of one run, which T2 transfers to all runs.
   Two conflicting steps from one grid give grids that are both bad at once (a race is enabled in each),
   but the second step need not be possible from either: it can fault. `one_run` still holds. In `key`, the
   third case has `Bad a₁'` for the second step's target `a₁'`; `path_eqv` carries the run `a₁ → … → z` to
-  `a₁'`, and `bad_path` makes its end bad, against `¬ Bad z`. This is two lines in `key`. Of the instances
-  in MojoProof/Sem/Trace.lean, `Grid.sound_returning` takes the third alternative (one-run.md) and
-  `Grid.sound_one` the first. (Lean: `Confluent.diamond`, `Confluent.key`.)
+  `a₁'`, and `bad_path` makes its end bad, against `¬ Bad z`. This is two lines in `key`. Of the instances,
+  the one in `Grid.sound_returning` (MojoProof/Sem/Trace.lean) takes the third alternative (one-run.md) and
+  `Grid.confluent` (MojoProof/Sem/Determinism.lean) all three. (Lean: `Confluent.diamond`,
+  `Confluent.key`.)
 - **S2 (`exec`, MojoProof/Sem/Thread.lean).** An admitted `atomicrmw` sets its result register to the
   old value, which depends on the order of the atomics. `Stmt.checkAtomic` refuses a used result, so no
   instruction reads that register, but the two orders give threads that differ in it, and `Grid.Same`
@@ -92,16 +96,19 @@ property of one run, which T2 transfers to all runs.
   null, whose step faults with its access pending.)
 - `Trace.Same tr tr'`: `(phases tr).1` is a permutation of `(phases tr').1`, and
   `(phases tr).2.getD k 0 = (phases tr').2.getD k 0` for every block of threads `k`. It is the order of the
-  trace forgotten up to the phase of each access (`phases`, MojoProof/Sem/Race.lean). (Proved as stated.)
+  trace forgotten up to the phase of each access (`phases`, MojoProof/Sem/SigDef.lean). (Proved as stated.)
 - `Grid.Same g g'`: `g.threads = g'.threads`, `g.mem.blocks = g'.mem.blocks`, `g.mem.next = g'.mem.next`,
   and `Trace.Same g.mem.trace g'.mem.trace`. It replaces schedule-owned.md's `List.Perm` (which `Trace.Same`
   implies for the accesses), so T2 and T2′ share it. (Proved as stated, with `Grid.Same.refl`, `symm`,
   `trans`; instance and twin MojoProofTest/Same.lean `grids`, `grid_twin`.)
-- `Grid.RaceEnabled g`: some thread `n` runs, `g.threads[n]? = some (.run t)`, and
-  `racy (Thread.pending (c n) t g.mem ++ g.mem.trace) = true`. (Proved as stated, MojoProof/Sem/Bad.lean;
-  instance MojoProofTest/Bad.lean `race_enabled`.)
-- `Grid.Bad g := g.Faults L c ∨ racy g.mem.trace = true ∨ kept g.mem.trace = false ∨ g.RaceEnabled c`.
-  (Proved as stated.)
+- A race is enabled in `g`, `GPUProof.RaceEnabled sig (g, L, c)`, when some thread `n` runs,
+  `g.threads[n]? = some (.run t)`, and `racy (Thread.pending (c n) t g.mem ++ g.mem.trace) = true`,
+  or some fire of `n` completes and `racy g.mem.trace = true` (`Grid.raceEnabled_iff`,
+  MojoProof/Sem/Bad.lean; instance MojoProofTest/Bad.lean `race_enabled`).
+- `g` is bad, `GPUProof.Bad sig (g, L, c)`, when `GPUProof.Faults sig (g, L, c)`,
+  `racy g.mem.trace = true`, `GPUProof.kept sig ((g.mem.trace.map (Event.toCore L)).reverse) =
+  false` or a race is enabled in `g`: the core's `Bad` at `sig`, with its faults and `kept`
+  (`Grid.faults_iff`, `kept_sig_iff`).
 
 ## Statement
 
@@ -110,14 +117,17 @@ property of one run, which T2 transfers to all runs.
 
 **Conclusions.**
 
-1. `Grid.confluent hs : Confluent rc (fun x y => Grid.Same x.1 y.1) (fun x => Grid.Bad L c x.1)`.
+1. `Grid.confluent hs : Confluent rc (fun x y => Grid.Same x.1 y.1)
+   (fun x => GPUProof.Bad sig (x.1, L, c))`.
    (Proved, with the caller's hypothesis `hm : m.BytesIn m.Known`; instance `confluent2`.)
 2. Through `Confluent.one_run` and `Grid.sound_of_one_run`: if one run from `g₀` reaches a done grid `z`
    with a race-free trace that keeps `!invariant.load` (a done grid does not fault, `done_not_faults`, and
-   has no running thread, so no enabled race), then `Grid.Sound L c g₀ obs R` for every `obs` that reads only
+   has no running thread and no fire that completes, so no enabled race), then
+   `Grid.Sound L c g₀ obs R` for every `obs` that reads only
    `Mem.blocks`, with `R` the property of `obs z.mem`. This is a statement about every schedule from one
    run; whether the run exists is a fact about one kernel and one input. (Lean: `Grid.start_sound`,
-   taking the run as a `Path` with `¬ z.Bad`; instances `sound2` and `final2` on `start2`, two
+   taking the run as a `Path` with `¬ GPUProof.Bad sig (z, L, c)`; instances `sound2` and
+   `final2` on `start2`, two
    threads' `alloca` and store; twins `racy_twin`, a done grid with a racy trace, so sound for no
    observation, and `trace_twin`, an observation of the trace's newest event, for which two
    schedules differ, so sound for no relation.)
@@ -129,8 +139,8 @@ property of one run, which T2 transfers to all runs.
    trace, a broken promise or an enabled race (schedule-owned.md, conclusion 2, applied to the trace with
    the pending accesses in front), so on the states `γ` `Bad` is `Faults`, and `Confluent` with
    `Bad := Faults` follows by a general lemma: `Confluent r e B` and `∀ a, B a ↔ B' a` give
-   `Confluent r e B'`. (Lean: `Confluent.of_iff`, `Grid.owned_bad`, `Grid.confluent_owned`, in
-   MojoProof/Sem/ScheduleOwned.lean; `hX` there is `own` injective on the start grid's thread
+   `Confluent r e B'`. (Lean: `Confluent.transfer` along the identity, GPUProof/Transfer.lean;
+   `Grid.owned_bad`, `Grid.confluent_owned`, in MojoProof/Sem/ScheduleOwned.lean; `hX` there is `own` injective on the start grid's thread
    numbers, and the caller's memory meets T2's `Mem.BytesIn Mem.Known`.)
 
 ## Lemmas used
@@ -188,9 +198,13 @@ not use ownership). New:
   `Thread.AtCall`: its current statement calls the function whose intrinsic it waits at).
   `Scope.NamesIn` asks for `S 0`, and number 0 is below `next` (at least 1, `Mem.Closed`), so
   the premise holds at 0.)
-- L9 (`racy_iff`, proved for every trace, MojoProof/Sem/Race.lean, with `races_iff` for one access
-  and `phase_le`; it replaces `racy_clash` and `races_phases`, its forward directions):
-  `racy tr = true ↔ ∃ x ∈ (phases tr).1, ∃ y ∈ (phases tr).1, clash x y = true`. Backward: of two
+- L9 (`racy_iff`, proved for every launch and every trace by its threads in their blocks of
+  threads that is shaped, MojoProof/Sem/RaceSig.lean, with `races_iff` for one access and
+  `phase_le`; it replaces `racy_clash` and `races_phases`, its forward directions): the core's
+  `racy` at `sig` of `tr`'s core events, oldest first, holds exactly when
+  `∃ x ∈ (phases tr).1, ∃ y ∈ (phases tr).1, clash x y = true` (`racy_sig_rev` to positions,
+  then `pos_iff_phases`). MojoProof has no `racy` of its own; in the rest of this file `racy tr`
+  stands for the core's at `sig`. Backward: of two
   clashing accesses take the newer one; it is by another thread, they conflict, and they are by
   different blocks of threads or in one phase, in which case no barrier of their block lies between
   them (a phase is at most the final count, `phase_le`), so `Access.races` finds the older one.
@@ -201,13 +215,14 @@ not use ownership). New:
   `phases tr` that commutes with permuting the first part). And `Trace.Same (E ++ F ++ tr) (F ++ E ++ tr)`
   when no event of one of `E`, `F` is a barrier of the block of threads of an access of the other: such a
   swap moves no access past a barrier of its own block, so it keeps every access's phase and every count.
-- L12 (invariance; `Trace.Same.racy`, `Trace.Same.kept`, proved for every trace, with `phases_mem`
-  for `kept`): `racy` and `kept` are invariant under `Trace.Same`. For `racy` by L9. For `kept`, it
-  reads only the accesses of the trace, as a set (`kept_iff`), and `Trace.Same` permutes them.
-- L13 (inserting events; `racy_insert`, proved for all lists): if `racy (P ++ tr) = true`, `P`
-  consists of accesses of one thread `w`, and `Q` contains no `.barrier w.cta`, then
-  `racy (P ++ Q ++ tr) = true`. By induction on `P`, through `Access.races` rather than L9. If the
-  race is in `tr`, it stays (`racy_append`). If an access `a` of `P` races with the rest, then it
+- L12 (invariance; `Trace.Same.clash`, `Trace.Same.kept`, proved for every trace, with
+  `phases_mem` for `kept`): clashes by phases and `kept` (the core's at `sig`, at every launch)
+  are invariant under `Trace.Same`, and so is `racy` at two traces with L9's premises. For `kept`, it reads only the accesses of the trace, as a set
+  (`kept_sig_iff`), and `Trace.Same` permutes them.
+- L13 (inserting events; `racy_insert`, proved for all lists, as clashes by phases): if
+  `P ++ tr` has two accesses that clash, `P` consists of accesses of one thread `w`, and `Q`
+  contains no `.barrier w.cta`, then `P ++ Q ++ tr` has two. By induction on `P`, through
+  `Access.races` (`clash_access`). If the clash is in `tr`, it stays (`clash_append`). If an access `a` of `P` races with the rest, then it
   skips the other accesses of `P`, which are by its own thread (`races_skip`), so it races with
   `tr`, and events with no barrier of its block of threads keep that race (`races_insert`).
   Instance: MojoProofTest/Same.lean `insert`; the twin there shows a barrier of the access's block
@@ -302,7 +317,8 @@ events `E` and makes the same changes. So `b'` has the threads, blocks and `next
 context map; a grid the same as `a` is `a` with its trace replaced, `Grid.Same.eq_retrace`.)
 
 **`bad_eqv`.** `Faults` reads the threads and the memory without its trace (L1a; done:
-`Grid.Same.faults`). `racy` and `kept` are invariant by L12. For `RaceEnabled`, the pending accesses are the same in `a` and `a'` (same threads, same
+`Grid.Same.faults`). `racy` and the core's `kept` at `sig` are invariant by L12. For
+`RaceEnabled`, the pending accesses are the same in `a` and `a'` (same threads, same
 blocks), and `Trace.Same (P ++ tr) (P ++ tr')` by L11, so L12 applies. (Lean: `Grid.Same.raceEnabled`,
 with `Thread.pending_retrace`: the pending accesses read no trace; `Grid.Same.bad`, for every launch,
 contexts and grids; instance MojoProofTest/Bad.lean `same_bad`.)
@@ -316,7 +332,7 @@ contexts and grids; instance MojoProofTest/Bad.lean `same_bad`.)
   `Eₘ ++ Eₙ ++ g.mem.trace`, `aₘ` races with `aₙ`: different threads, a conflict, and only accesses between
   them. So `RaceEnabled b`, and symmetrically `RaceEnabled c`. This is the alternative `Bad b ∧ Bad c` of S1.
 - *Two threads `n ≠ m` whose logged accesses do not conflict.* Then `n`'s writes miss `m`'s reads and writes,
-  except where both are by exempt `atomicrmw`s (one operation, pointer and size); and conversely.
+  except where both are by exempt `atomicrmw`s (one commuting operation, pointer and size); and conversely.
   - If no access pair is exempt, `n`'s step leaves `m`'s footprint unchanged, as in schedule-owned.md's
     diamond with "disjointness" replaced by "no conflict": bytes are the pending reads; liveness, and the
     bytes that `lifetime.start` resets (L1b), change only for `n`'s own blocks (W2), and `m`'s access to one
@@ -325,7 +341,7 @@ contexts and grids; instance MojoProofTest/Bad.lean `same_bad`.)
     changes as from `g`, and symmetrically `n` from `c` to `d'`. The blocks of `d` and `d'` are equal (the
     changes touch disjoint bytes, flags and numbers), so are the threads and `next`, and the traces are
     `Eₘ ++ Eₙ ++ tr` and `Eₙ ++ Eₘ ++ tr`, `Trace.Same` by L11 (accesses only).
-  - If an access pair is exempt, both steps are `atomicrmw`s with one operation on the same bytes (an
+  - If an access pair is exempt, both steps are `atomicrmw`s with one commuting operation on the same bytes (an
     `atomicrmw`'s two accesses have its own pointer and size). Every other byte, flag and number is as in the
     previous case. By L10 the second step succeeds from either side and the final bytes agree; by S2 the
     threads agree. The traces are as before. (Lean: `Grid.advance_atomic_comm`, and `Grid.advance_comm`
@@ -350,11 +366,16 @@ contexts and grids; instance MojoProofTest/Bad.lean `same_bad`.)
   (L1a), so `racy g'.mem.trace`. Otherwise `n` still runs with the same state and the same `P` (L1c), and
   the trace is `Q ++ tr` where `Q` is another thread's accesses, or a `.barrier k` of a block of threads all
   of whose threads wait, so not `n`'s. By L13, `racy (P ++ Q ++ tr)`: `RaceEnabled g'`. (Lean:
-  `Grid.Step.raceEnabled`, for every closed grid in which no collective call that completes logs a barrier
-  of a running thread's block of threads; in a grid reachable from the start that holds
-  (`Grid.start_reach_fired`), so `Grid.start_reach_bad_trace` gives the three parts but faults. Instances
-  MojoProofTest/Bad.lean `fire_race` and `start_bad`; twin `fire_race_twin`: in contexts that put both
-  threads in one block of threads the barrier is the racing thread's, and after it no race is enabled.)
+  `Grid.Step.raceEnabled`, for every closed grid in which no collective call that completes logs a
+  barrier of a running thread's block of threads; that holds when the blocks of threads are not
+  empty and the contexts put each running thread `k` in block of threads `k / volume L.block`
+  (`Grid.fired_run`), so in a grid reachable from the start (`Grid.start_reach_fired`), and
+  `Grid.start_reach_bad_trace` gives the three parts but faults. `Grid.Step.raceEnabled_of_ctx` takes
+  the premise on contexts in place of the one on barriers: under `Grid.Fits` a running thread's racing
+  accesses are by threads of the launch, so its blocks of threads are not empty. Instances
+  MojoProofTest/Bad.lean `fire_race` (of `Grid.Step.raceEnabled_of_ctx`) and `start_bad`; twin
+  `fire_race_twin`: in contexts that number a running thread as a thread of a waiting block of threads
+  the barrier is the racing thread's, and after it no race is enabled.)
 - *`Faults g`, at thread `n`'s advance.* Then `n` runs, and the step is by another thread `m` or a fire.
   - A fire: `n` is not a participant, and the fire changes no block. (Lean: `Grid.advance_fault_fire`,
     for every launch, contexts and grid.)
@@ -370,7 +391,7 @@ contexts and grids; instance MojoProofTest/Bad.lean `same_bad`.)
     no write of `m`'s overlaps an access of `n`'s; with the two cases above `Grid.Step.advance_fault`,
     and so `Grid.Step.bad` and `Grid.start_reach_bad`. Instances MojoProofTest/Bad.lean `fault_stays`,
     `fault_race`, `fault_bad`, `start_fault`.)
-  - Thread `m`, with an exempt pair: both are `atomicrmw`s with one operation on the same bytes, and `m`'s
+  - Thread `m`, with an exempt pair: both are `atomicrmw`s with one commuting operation on the same bytes, and `m`'s
     succeeded from `g`, so the bytes decode to a value that is not undef, and `m`'s result is not undef
     either (L10). `n`'s `atomicrmw` checks the same pointer (its own alignment and its own thread, which do
     not change) and reads a value that is not undef in both grids. So by L10 it faults from `g'` exactly when
@@ -433,13 +454,15 @@ returns, for every program, and are checked on `vadd` on a launch of 2 blocks of
 
 ## Dependencies
 
-- `Confluent`, `Confluent.one_run` (MojoProof/Sem/OneRun.lean), with S1;
+- `Confluent`, `Confluent.one_run` (GPUProof/OneRun.lean), with S1;
 - `Grid.start`, `Mem.checkClosed`, `Mem.allocNext`, `Grid.Step`, `Grid.advance`, `Grid.fire`, `step`,
   `exec` (with S2), `rmw`, `Stmt.checkAtomic`, `Mem.check`, `Mem.fresh`, `Layout.Codec.int`
   (MojoProof/Sem/Grid.lean, Thread.lean, Value.lean, Buffer.lean);
-- `phases`, `clash`, `racy_iff` (MojoProof/Sem/Race.lean); `racy`, `kept`, `Access.conflict`, `Grid.Faults`,
-  `Grid.Done` (MojoProof/Sem/Spec.lean); `racy_cons`, `kept_cons`, `kept_iff`, `done_not_faults`,
-  `Grid.sound_of_one_run` (MojoProof/Sem/Trace.lean);
+- `phases` (MojoProof/Sem/SigDef.lean); `clash` (MojoProof/Sem/Race.lean); `racy_iff`,
+  `racy_cons` (MojoProof/Sem/RaceSig.lean); `Access.conflict`, `Grid.faults_iff`, `Grid.done_iff`
+  (MojoProof/Sem/Spec.lean); `kept_cons`, `kept_sig_iff`, `done_not_faults`,
+  `Grid.sound_of_one_run` (MojoProof/Sem/Trace.lean); `GPUProof.racy` and `GPUProof.kept`
+  (GPUProof/Race.lean) at `sig`;
 - schedule-owned.md: `Thread.pending`, L1a, L1b, L2, L3, W2, W5, `Grid.Closed`, C1, C2;
 - `BitVec` commutativity and associativity of `+`, `&&&`, `|||`, `^^^`, and of `max`/`min` in both orders
   (Lean core, Mathlib).

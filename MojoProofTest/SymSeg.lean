@@ -32,6 +32,9 @@ memory effects and obligations.
   shuffle, and the resumed thread's frame is at statement 3, where the second segment starts
   (`Seg.resume`). `gevm_after_barrier_wait`: the segment of `%59` after the barrier on a thread:
   four steps to the `.wait` of the first shuffle, and the resumed frame is at statement 12.
+* `gevm_barrier_regs`: the segment of `%59` to the barrier on a thread: the resumed frame has at
+  every register the value of the segment's summary, since the barrier has no result
+  (`Seg.resume_regs`); `gevm_barrier_regs_twin`: the shuffle at 11 has one, the barrier none.
 * `gevm_through`: `%59` from statement 1 with its collectives at 6, 11, 15, 19, 23 and 27
   (`summarizeSegs`): six segments of 5, 4, 3, 3, 3 and 3 statements, then 11 statements to the
   conditional branch; and on a thread at statement 1, whatever values the collectives deliver,
@@ -67,6 +70,13 @@ A `load` after a `store` (`SNode.loadAfter`, MojoProof/Sym/LoadAfter.lean), at t
   `SNode.eval_loadAfter_log`).
 * `ln_reload`: the twin of the block whose statement 3 is the `load` of the global again: after the
   `store`, the global's pointer and the `load` on it from the memory the effects before it make.
+* `ln_after_rel`: two runs of `ln_after`'s statements. Under the labelling whose one payload
+  register is the triple loaded from the global (`lnLab`), the table passes (O3) (`SNode.payOk`
+  on each payload node): the four loads after stores have skeleton pointers and effects with
+  skeleton pointers. So for every payload blocks and two valuations related by `Valuation.Rel`
+  whose skeleton loads read outside them, each node has related values in the two runs
+  (`vals_rel`). The open twin: with the stack slot `%12` payload too (`lnLab12`), the table fails
+  (O3), since the loads' effects store through a payload pointer.
 
 Segments that end at a lifetime marker (`summarizeLife`, `Seg.lifetime`):
 
@@ -75,13 +85,38 @@ Segments that end at a lifetime marker (`summarizeLife`, `Seg.lifetime`):
   statements 11 to 15 and first refuses statement 16, the `rsqrt.approx` call.
 * `ln_life_twin`: block `%151` (ln.fn_0.b_30) ends and starts the lifetimes of `%12` and `%11`
   (statements 6, 7, 9 and 10), each the end of a segment, the one from 8 with the `store` to
-  `%12`; the checker refuses statement 11, the `store` of `zeroinitializer` to `%11`.
+  `%12`; from 11 the checker takes statements to the shuffle at 13.
+* `ln_zero`: from statement 11 of `%151`, the `store` of `zeroinitializer` to `%11`, the `load`
+  of `%12` after it and the shuffle at 13 are a segment (`summarizeTo`), with the constant's node
+  (`SNode.constAt`).
+* `ln_after_store`: from statement 14 of `%151`, the `store` of the shuffled word, the two
+  `getelementptr`s after it and the `load` through the second are a segment to the shuffle at 18;
+  the open twin: from statement 27, a `getelementptr` with two indices that the checker takes,
+  it refuses statement 31, the call of `llvm.maxnum.f32`.
 * `ln_life_end`: on a thread at statement 1 of `%453`, the segment's steps to the `lifetime.end`
   and the step past it, on the memory with `%12`'s block's lifetime ended (`Seg.lifetime_ptr`).
 
-Tests of five blocks of three kernels; `Seg.sound`, `Seg.resume`, `Seg.through` and
-`Seg.lifetime` cover every program, `SNode.eval_globalAt` every valuation and statement, and the
-lemmas of MojoProof/Sym/LoadAfter.lean every valuation, statements and effects.
+A block through its lifetime markers (`summarizePieces`, `Piece.through`):
+
+* `gemv_segs`: gemv_kernel's entry block `%6` (gemv.fn_0.b_0) from statement 3, after its
+  `alloca`s, with its two shuffles and nine lifetime markers as stops (`gemvStops`), is eleven
+  segments and the summary of statements 41 to 47 to the conditional branch; the segments hold
+  the `extractelement`s, the `store`s of the shuffled words, the `insertvalue`s into `undef`,
+  the `store` of the `[2 x ptr]`, the `getelementptr` with two indices, the `load`s after the
+  `store`s and the `insertelement`s. On a thread at statement 3, the thread runs the block
+  through the segments to the branch (`Piece.Through`).
+* `gemv_segs_twin`: the open twin: the checker refuses statement 0, the first `alloca`, so there
+  is no summary from 0; and with the marker at 28 missing from the stops, none from 3.
+* `gemv_segs_alloca`: with the `alloca` flag, the whole of `%6` from statement 0: the same eleven
+  segments, the first with the three `alloca`s' effects, and the summary to the branch; on a
+  thread at statement 0, the thread runs the block through them (`Piece.Through`).
+  `gemv_segs_alloca_mutant`: with the flag, the stops without the shuffle at 17 or the marker at
+  28 give none, and without the flag the first segment has none.
+
+Tests of six blocks of three kernels; `Seg.sound`, `Seg.resume`, `Seg.resume_regs`,
+`Seg.through`, `Seg.lifetime` and `Piece.through` cover every program, `SNode.eval_globalAt` and
+`SNode.eval_constAt` every valuation and statement, and the lemmas of
+MojoProof/Sym/LoadAfter.lean every valuation, statements and effects.
 -/
 
 namespace MojoProofTest.SymSeg
@@ -234,6 +269,41 @@ theorem gevm_after_barrier_wait {S : SegSummary}
         fr.fn = gevm.fn_0 ∧ fr.label = gevm.fn_0.b_5.label ∧ fr.pc = 12 :=
   Seg.resume (cl := .shfl .bfly) (n := 4) hS (by decide +kernel) hP ht hfn hl hp hds
 
+/-- **The registers after gevm_kernel's barrier**: for every summary `S` that `summarizeTo` gives
+for statements 1 to 6 of `%59` (`b_5`), every context of gevm_kernel's program and thread whose
+innermost frame `f` (above frames `rest`) runs `gevm_kernel` at `b_5`, statement 1, with memory
+`m`: if `S`'s obligations hold under `f`'s entry valuation, the thread's steps reach a frame `fe`,
+and for every value of the barrier the resumed thread's frame has at every register the value
+`S`'s registers give it (`regVal`): the barrier has no result (`Seg.resume_regs`). -/
+theorem gevm_barrier_regs {S : SegSummary}
+    (hS : summarizeTo gevm.prog gevm.fn_0 gevm.fn_0.b_5.label 1 6 = some S) {c : Ctx}
+    (hP : c.prog = gevm.prog) {t : Thread} {m : Mem} {f : Frame} {rest : List Frame}
+    (ht : t.frames = f :: rest) (hfn : f.fn = gevm.fn_0) (hl : f.label = gevm.fn_0.b_5.label)
+    (hp : f.pc = 1)
+    (hds : ∀ d ∈ S.obls, d.Holds (Valuation.entry c t.k m f)
+      (vals (Valuation.entry c t.k m f) S.nodes)) :
+    ∃ fe me, Steps c t m ⟨fe :: rest, t.k + S.len⟩ me ∧
+      ∀ v, ∃ fr, Thread.resume ⟨fe :: rest, t.k + S.len⟩ v = ⟨fr :: rest, t.k + S.len + 1⟩ ∧
+        ∀ r, fr.regs r = regVal (Valuation.entry c t.k m f)
+          (vals (Valuation.entry c t.k m f) S.nodes) S.regs r := by
+  obtain ⟨fe, me, hSt, h⟩ := Seg.resume_regs hS hP ht hfn hl hp hds
+  have hn : ((gevm.fn_0.blocks.find? (·.label == gevm.fn_0.b_5.label)).bind
+      fun b => b.stmts[6]?.bind (·.res)) = none := by
+    decide +kernel
+  refine ⟨fe, me, hSt, fun v => ?_⟩
+  obtain ⟨fr, hr, hfr⟩ := h v
+  exact ⟨fr, hr, fun r => hfr r (by rw [hn]; simp)⟩
+
+/-- **The open twin, a shuffle's result**: the shuffle at statement 11 of `%59` (`b_5`) has a
+result register, which the call's value sets, so `Seg.resume_regs` gives no value of `S` there;
+the barrier at 6 has none. -/
+theorem gevm_barrier_regs_twin :
+    ((gevm.fn_0.blocks.find? (·.label == gevm.fn_0.b_5.label)).bind
+      fun b => b.stmts[11]?.bind (·.res)).isSome ∧
+    ((gevm.fn_0.blocks.find? (·.label == gevm.fn_0.b_5.label)).bind
+      fun b => b.stmts[6]?.bind (·.res)).isNone := by
+  decide +kernel
+
 /-- **gevm_kernel's `%59` on one thread, through its collectives**: `summarizeSegs` gives, from
 statement 1 of `b_5` with the collective calls at 6, 11, 15, 19, 23 and 27, six segments of 5, 4,
 3, 3, 3 and 3 statements and the rest, 11 statements to the conditional branch on node 10; and
@@ -305,7 +375,7 @@ shared-memory global after the barrier, from a state with no node: the global's 
 `SNode.globalAt`), then the `load` on it, whose effect is the one memory effect. -/
 theorem ln_load :
     (SState.run false ln.prog ln.fn_0.b_42.label 1 ((ln.fn_0.b_42.stmts.toList.drop 1).take 1) 0
-        ⟨[], [], [], [], false⟩).map (fun σ => (σ.nodes, σ.effs)) =
+        ⟨[], [], [], [], false, false⟩).map (fun σ => (σ.nodes, σ.effs)) =
       some ([.globalAt ln.fn_0.b_42.label 1 0, .load ln.fn_0.b_42.label 1 (.node 0)],
         [.load ln.fn_0.b_42.label 1 (.node 0)]) := by
   decide +kernel
@@ -328,7 +398,7 @@ the effects are `lnEffs` and the last `load`'s. The first statement it refuses f
 `lifetime.end` call of statement 10 (`refusal`). -/
 theorem ln_after :
     (SState.run false ln.prog ln.fn_0.b_42.label 1 ((ln.fn_0.b_42.stmts.toList.drop 1).take 9) 0
-        ⟨[], [], [], [], false⟩).map (fun σ => (σ.nodes.drop 2, σ.effs)) =
+        ⟨[], [], [], [], false, false⟩).map (fun σ => (σ.nodes.drop 2, σ.effs)) =
       some ([.loadAfter ln.fn_0.b_42.label 3 (.reg 177) (lnEffs.take 2),
         .loadAfter ln.fn_0.b_42.label 5 (.reg 181) (lnEffs.take 4),
         .loadAfter ln.fn_0.b_42.label 7 (.reg 171) (lnEffs.take 6),
@@ -385,11 +455,49 @@ operand 0) and the `load` on that node from the memory the two effects before it
 theorem ln_reload :
     (SState.run false ln.prog ln.fn_0.b_42.label 1
         ((ln.fn_0.b_42.stmts.toList.drop 1).take 2 ++ (ln.fn_0.b_42.stmts.toList.drop 1).take 1) 0
-        ⟨[], [], [], [], false⟩).map (fun σ => (σ.nodes.drop 2, σ.effs.drop 2)) =
+        ⟨[], [], [], [], false, false⟩).map (fun σ => (σ.nodes.drop 2, σ.effs.drop 2)) =
       some ([.globalAt ln.fn_0.b_42.label 3 0,
         .loadAfter ln.fn_0.b_42.label 3 (.node 2) (lnEffs.take 2)],
         [.load ln.fn_0.b_42.label 3 (.node 2)]) := by
   decide +kernel
+
+/-- The labelling of layernorm's kernel whose one payload register is the result of statement 1
+of block `%453` (`b_42`), the triple loaded from the shared-memory global. -/
+def lnLab : Labels :=
+  ⟨fun _ r => resReg ln.fn_0 ln.fn_0.b_42.label 1 == some r, fun _ => false⟩
+
+/-- `lnLab` with the stack slot `%12` (entry register 12) payload too. -/
+def lnLab12 : Labels :=
+  ⟨fun _ r => r == 12 || resReg ln.fn_0 ln.fn_0.b_42.label 1 == some r, fun _ => false⟩
+
+/-- **Loads after a store in two runs**: the state `σ` the checker gives from statement 1 of
+layernorm's block `%453` (`b_42`) through statement 9 (`ln_after`) has a table that passes (O3)
+under `lnLab` (`Summary.payOk` on it): the `load` of the global reads a data type through a
+skeleton pointer, and the four `load`s after `store`s (`SNode.loadAfter`) have skeleton pointers
+and carry effects with skeleton pointers. So for every payload blocks `pay` and valuations of the
+kernel related by `Valuation.Rel lnLab pay` whose skeleton loads read outside `pay` under the
+first (`Valuation.LoadsOk`), each node of the table has related values under both (`Val.Skel` at
+a payload role, equal at a skeleton one; `vals_rel`). The open twin: under `lnLab12`, with `%12`
+payload, the table fails (O3). -/
+theorem ln_after_rel : ∃ σ, SState.run false ln.prog ln.fn_0.b_42.label 1
+      ((ln.fn_0.b_42.stmts.toList.drop 1).take 9) 0 ⟨[], [], [], [], false, false⟩ = some σ ∧
+    (∀ {pay : Nat → Prop} {V₁ V₂ : Valuation}, V₁.Rel lnLab pay V₂ → V₁.fn = ln.fn_0 →
+      V₁.LoadsOk lnLab pay σ.nodes →
+      ∀ j, Option.Rel (Except.Rel (Labels.Rel ((roles lnLab ln.fn_0 σ.nodes).getD j false)
+        Val.Skel)) (vals V₁ σ.nodes)[j]? (vals V₂ σ.nodes)[j]?) ∧
+    Summary.payOk lnLab12 ln.fn_0 ⟨σ.nodes, [], [], [], .ret, 0⟩ = false := by
+  have ho : (SState.run false ln.prog ln.fn_0.b_42.label 1
+      ((ln.fn_0.b_42.stmts.toList.drop 1).take 9) 0 ⟨[], [], [], [], false, false⟩).map (fun σ =>
+        (Summary.payOk lnLab ln.fn_0 ⟨σ.nodes, [], [], [], .ret, 0⟩,
+          Summary.payOk lnLab12 ln.fn_0 ⟨σ.nodes, [], [], [], .ret, 0⟩)) = some (true, false) := by
+    decide +kernel
+  obtain ⟨σ, hσ, he⟩ := Option.map_eq_some_iff.1 ho
+  simp only [Prod.mk.injEq] at he
+  refine ⟨σ, hσ, fun {pay V₁ V₂} h hf hl => ?_, he.2⟩
+  have := vals_rel h hl (Summary.payOk_getElem? (S := ⟨σ.nodes, [], [], [], .ret, 0⟩)
+    (by rw [hf]; exact he.1))
+  rw [hf] at this
+  exact this
 
 /-- **The shared array's pointer at layernorm**: for every valuation `V` of the layernorm kernel
 (`V.fn = ln.fn_0`), node values `vs` and address `p` that `V`'s context gives the shared-memory
@@ -421,13 +529,48 @@ the lifetimes of `%12` and `%11` (entry registers 12 and 11) before it stores to
 from statement 6 to the `lifetime.end` on `%12` there, from 7 to the `lifetime.start` on `%12`
 there, from 8 (the `store` to `%12`) to the `lifetime.end` on `%11` of 9, and from 10 to the
 `lifetime.start` on `%11` there are `summarizeLife`'s; the first statement the checker refuses
-from 11 is 11, the `store` of `zeroinitializer` to `%11` (`refusal`). -/
+from 11 is 13, the shuffle (`refusal`), where `ln_zero`'s segment ends. -/
 theorem ln_life_twin :
     (summarizeLife ln.prog ln.fn_0 ln.fn_0.b_30.label 6 6).map (·.2) = some (false, .reg 12) ∧
     (summarizeLife ln.prog ln.fn_0 ln.fn_0.b_30.label 7 7).map (·.2) = some (true, .reg 12) ∧
     (summarizeLife ln.prog ln.fn_0 ln.fn_0.b_30.label 8 9).map (·.2) = some (false, .reg 11) ∧
     (summarizeLife ln.prog ln.fn_0 ln.fn_0.b_30.label 10 10).map (·.2) = some (true, .reg 11) ∧
-    refusal ln.prog ln.fn_0 ln.fn_0.b_30 11 = some 11 := by
+    refusal ln.prog ln.fn_0 ln.fn_0.b_30 11 = some 13 := by
+  decide +kernel
+
+/-- **A `store` of `zeroinitializer`**: from statement 11 of layernorm's block `%151` (`b_30`),
+the `store` of `zeroinitializer` to `%11` (entry register 11), the `load` of `%12` (entry register
+12) after it and the shuffle at 13 of the loaded word are a segment (`summarizeTo`). Its table has
+the block's float constant, the node of the stored constant (`SNode.constAt`) and the node of the
+load from the memory the `store`'s effect makes (`SNode.loadAfter`); its effects are the `store`
+of the constant's node and the `load`. Its open twin is `ln_after_store`'s. -/
+theorem ln_zero :
+    (summarizeTo ln.prog ln.fn_0 ln.fn_0.b_30.label 11 13).map (fun S => (S.nodes, S.effs)) =
+      some ([.flit .float (.dec false "1" "000000" 0), .constAt ln.fn_0.b_30.label 11 0,
+          .loadAfter ln.fn_0.b_30.label 12 (.reg 12)
+            [.store ln.fn_0.b_30.label 11 (.node 1) (.reg 11)]],
+        [.store ln.fn_0.b_30.label 11 (.node 1) (.reg 11),
+          .load ln.fn_0.b_30.label 12 (.reg 12)]) := by
+  decide +kernel
+
+/-- **Addresses after a `store`**: from statement 14 of layernorm's block `%151` (`b_30`), the
+`store` of the shuffled word (entry register 161) to `%11` (entry register 11), the
+`getelementptr`s at 15 and 16 on `%11` and `%12` (entry register 12) after it, and the `load` at
+17 through the second, from the memory the `store`'s effect makes (`SNode.loadAfter`), are a
+segment to the shuffle at 18 (`summarizeTo`): a `getelementptr` reads only the blocks' addresses
+and sizes, which a `store` keeps (`SEff.run_shape`). The open twin: from statement 27, a
+`getelementptr` with two indices (`SNode.gepN`), the checker refuses statement 31, the call of
+`llvm.maxnum.f32` (`refusal`). -/
+theorem ln_after_store :
+    (summarizeTo ln.prog ln.fn_0 ln.fn_0.b_30.label 14 18).map (fun S => (S.nodes, S.effs)) =
+      some ([.flit .float (.dec false "1" "000000" 0),
+          .gep ln.fn_0.b_30.label 15 (.reg 11) (.int 32 1),
+          .gep ln.fn_0.b_30.label 16 (.reg 12) (.int 32 1),
+          .loadAfter ln.fn_0.b_30.label 17 (.node 2)
+            [.store ln.fn_0.b_30.label 14 (.reg 161) (.reg 11)]],
+        [.store ln.fn_0.b_30.label 14 (.reg 161) (.reg 11),
+          .load ln.fn_0.b_30.label 17 (.node 2)]) ∧
+    refusal ln.prog ln.fn_0 ln.fn_0.b_30 27 = some 31 := by
   decide +kernel
 
 /-- **The step at `%453`'s `lifetime.end`**: the segment of `ln_life` has a state `σ`, and for
@@ -455,5 +598,106 @@ theorem ln_life_end : ∃ σ, summarizeLife ln.prog ln.fn_0 ln.fn_0.b_42.label 1
   refine ⟨σ, hS, fun hP _ _ _ _ ht hfn hl hp hds => ?_⟩
   obtain ⟨fe, me, w, hSt, -, -, hpc, -, hw, hq, -⟩ := Seg.lifetime_ptr hS hP ht hfn hl hp hds
   exact ⟨fe, me, w, hSt, hpc, hw, fun q h ho => (hq q h ho).imp fun _ ⟨hs, _, _, h3⟩ => ⟨hs, h3⟩⟩
+
+/-- The flag, pointer term and number of statements of a lifetime marker's segment; `none` for a
+collective's. -/
+def lifeShape : Piece → Option (Bool × SVal × Nat)
+  | .life _ s x n => some (s, x, n)
+  | .coll _ => none
+
+/-- The stops of gemv_kernel's entry block `%6` (`gemv.fn_0.b_0`) from statement 3: the shuffles
+at 17 and 18 and the lifetime markers on `%9`, `%8` and `%7` at 19, 20, 22, 23, 25, 28, 38, 39
+and 40. -/
+def gemvStops : List Nat := [17, 18, 19, 20, 22, 23, 25, 28, 38, 39, 40]
+
+/-- **gemv_kernel's `%6` after its `alloca`s**: `summarizePieces` gives, from statement 3 of the
+entry block `%6` (`gemv.fn_0.b_0`) with the stops `gemvStops`, eleven segments, then the summary
+of statements 41 to 47 (the `bitcast`, `getelementptr`, `mul`, `laneid` call, `sext` and two
+`icmp`s) to the conditional branch on node 6. The segments: to the shuffles at 17 and 18, the
+first with the two `extractelement`s at 15 and 16 of the vector the `bitcast` at 14 makes; the
+`lifetime.end` and `lifetime.start` on `%9` (entry register 9) at 19 and 20; the `store` to `%9`
+and the `lifetime.end` on `%8` at 21 and 22; its `lifetime.start` at 23; the `store` to `%8` and
+the `lifetime.end` on `%7` at 24 and 25; the two `insertvalue`s of `%9` and `%8` into an `undef`
+`[2 x ptr]` and the `lifetime.start` on `%7` at 26 to 28; the `store` of that pair to `%7`, the
+`getelementptr` with two indices on `%7`, four `load`s, a `getelementptr` with one index and two
+`insertelement`s (the first into `undef`), then the `lifetime.end` on `%7`, at 29 to 38; and the
+`lifetime.end` calls on `%8` and `%9` at 39 and 40. For every context of gemv_kernel's program,
+deliveries `w` and thread whose innermost frame `f` (above frames `rest`) runs the kernel at
+statement 3 of `%6`, with memory `m`, the thread runs the block through the segments to the
+branch (`Piece.Through`, by `Piece.through`), each segment's obligations a premise at its start
+frame. -/
+theorem gemv_segs :
+    (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 3 gemvStops).map
+        (fun r => (r.1.map lifeShape, r.2.len, r.2.exit)) =
+      some ([none, none, some (false, .reg 9, 0), some (true, .reg 9, 0), some (false, .reg 8, 1),
+          some (true, .reg 8, 0), some (false, .reg 7, 1), some (true, .reg 7, 2),
+          some (false, .reg 7, 9), some (false, .reg 8, 0), some (false, .reg 9, 0)], 7,
+        .cond (.node 6) 43 44) ∧
+    ∀ {c : Ctx}, c.prog = gemv.prog → ∀ (w : Nat → Option Val × Mem) {t : Thread} {m : Mem}
+      {f : Frame} {rest : List Frame}, t.frames = f :: rest → f.fn = gemv.fn_0 →
+      f.label = gemv.fn_0.b_0.label → f.pc = 3 →
+      ∃ Ss L, summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 3 gemvStops =
+        some (Ss, L) ∧ Piece.Through c gemv.fn_0.b_0.label rest L Ss w t m f := by
+  have h : (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 3 gemvStops).isSome =
+      true := by
+    decide +kernel
+  obtain ⟨⟨Ss, L⟩, hx⟩ := Option.isSome_iff_exists.1 h
+  refine ⟨by decide +kernel, ?_⟩
+  intro c hP w t m f rest ht hfn hl hp
+  exact ⟨Ss, L, hx, Piece.through hP hx w ht hfn hl hp⟩
+
+/-- **The open twin, `%6` from its first statement**: the checker refuses statement 0, the first
+`alloca` (`refusal`), so the block has no summary from 0 with the `alloca` flag off and the stops
+`gemvStops` (`summarizePieces` is `none`). And the stops must name every marker: from statement 26
+the checker takes the two `insertvalue`s and stops at the `lifetime.start` at 28 (`refusal`), so
+from 3 without 28 among the stops there is no summary either. -/
+theorem gemv_segs_twin :
+    refusal gemv.prog gemv.fn_0 gemv.fn_0.b_0 0 = some 0 ∧
+    (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 gemvStops).isNone ∧
+    refusal gemv.prog gemv.fn_0 gemv.fn_0.b_0 26 = some 28 ∧
+    (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 3 (gemvStops.erase 28)).isNone := by
+  decide +kernel
+
+/-- **gemv_kernel's whole `%6`, its `alloca`s included**: with the `alloca` flag on,
+`summarizePieces` gives, from statement 0 of the entry block `%6` (`gemv.fn_0.b_0`) with the
+stops `gemvStops`, the eleven segments of `gemv_segs` and the summary of statements 41 to 47 to
+the conditional branch on node 6. The first segment, to the shuffle at 17, has 17 statements and
+the effects of the three `alloca`s at 0, 1 and 2 (one cell of `i64` each). For every context of
+gemv_kernel's program, deliveries `w` and thread whose innermost frame `f` (above frames `rest`)
+runs the kernel at statement 0 of `%6`, with memory `m`, the thread runs the whole block through
+the segments to the branch (`Piece.Through`, by `Piece.through`), the frames after the first
+segment with the three blocks in front of `f`'s `alloca` blocks. -/
+theorem gemv_segs_alloca :
+    (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 gemvStops true).map
+        (fun r => (r.1.map lifeShape, r.2.len, r.2.exit)) =
+      some ([none, none, some (false, .reg 9, 0), some (true, .reg 9, 0), some (false, .reg 8, 1),
+          some (true, .reg 8, 0), some (false, .reg 7, 1), some (true, .reg 7, 2),
+          some (false, .reg 7, 9), some (false, .reg 8, 0), some (false, .reg 9, 0)], 7,
+        .cond (.node 6) 43 44) ∧
+    (summarizeTo gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 17 true).map (fun S => (S.effs, S.len)) =
+      some ([.alloca 6 0 0 (some (.int 64 1)), .alloca 6 1 1 (some (.int 64 1)),
+        .alloca 6 2 2 (some (.int 64 1))], 17) ∧
+    ∀ {c : Ctx}, c.prog = gemv.prog → ∀ (w : Nat → Option Val × Mem) {t : Thread} {m : Mem}
+      {f : Frame} {rest : List Frame}, t.frames = f :: rest → f.fn = gemv.fn_0 →
+      f.label = gemv.fn_0.b_0.label → f.pc = 0 →
+      ∃ Ss L, summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 gemvStops true =
+        some (Ss, L) ∧ Piece.Through c gemv.fn_0.b_0.label rest L Ss w t m f := by
+  have h : (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 gemvStops true).isSome =
+      true := by
+    decide +kernel
+  obtain ⟨⟨Ss, L⟩, hx⟩ := Option.isSome_iff_exists.1 h
+  refine ⟨by decide +kernel, by decide +kernel, ?_⟩
+  intro c hP w t m f rest ht hfn hl hp
+  exact ⟨Ss, L, hx, Piece.through hP hx w ht hfn hl hp⟩
+
+/-- **The mutants of `gemv_segs_alloca`**: with the flag on, the stops without the shuffle at 17
+give no summary (the checker refuses the shuffle inside a segment), nor do the stops without the
+`lifetime.start` at 28; and with the flag off the first segment, to the shuffle at 17, has no
+summary (the `alloca` at 0 is refused). -/
+theorem gemv_segs_alloca_mutant :
+    (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 (gemvStops.erase 17) true).isNone ∧
+    (summarizePieces gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 (gemvStops.erase 28) true).isNone ∧
+    (summarizeTo gemv.prog gemv.fn_0 gemv.fn_0.b_0.label 0 17).isNone := by
+  decide +kernel
 
 end MojoProofTest.SymSeg

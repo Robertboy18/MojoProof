@@ -103,7 +103,8 @@ theorem sound : Grid.Sound Confluence.two c g0 (fun _ => some ()) fun _ => True 
     (d := fun _ => Launch.barrierDecl) (bar := fun _ => 0) start_eq
     (fun _ _ _ _ _ hc => by cases hc) (fun _ _ _ => rfl)
     (by decide) (by rw [hsz]; exact .cons t0 h0 (.cons t1 h1 (.nil _))) (fun n hn => ?_)
-    (by rw [hsz]; exact .cons r0 k0 (.cons r1 k1 (.nil _))) rfl rfl rfl trivial
+    (by rw [hsz]; exact .cons r0 k0 (.cons r1 k1 (.nil _))) (fun _ _ => by decide +kernel)
+    (by decide +kernel) rfl trivial
   rw [hsz] at hn
   rcases (by omega : n = 0 ∨ n = 1) with rfl | rfl
   · exact ⟨rfl, by decide, rfl⟩
@@ -150,15 +151,15 @@ def out (j : Nat) : Val := if j = 0 then .bits 32 6 else .bits 32 5
 /-- **A warp's shuffle, by `Grid.fire_shfl`**: in a launch of one block of two threads, lanes 0
 and 1 of `Confluence.shfl2` wait at a butterfly shuffle with lane mask `1`, and the shuffle
 resumes lane 0 with lane 1's `6` and lane 1 with lane 0's `5` (`out`). -/
-theorem shfl2_fire : Confluence.shfl2.fire (Pending.launch 2) Confluence.ctxOf 0 =
-    .ok (some ⟨(warpLanes (Pending.launch 2) 0).foldl
-      (fun ts j => ts.set! (0 - 0 % volume (Pending.launch 2).block % 32 + j)
+theorem shfl2_fire : Confluence.shfl2.fire (launch2 1 1 2 1) Confluence.ctxOf 0 =
+    .ok (some ⟨(warpLanes (launch2 1 1 2 1) 0).foldl
+      (fun ts j => ts.set! (0 - 0 % volume (launch2 1 1 2 1).block % 32 + j)
         (.run (Confluence.regT.resume (some (out j))))) Confluence.shfl2.threads,
       Confluence.shfl2.mem⟩) :=
   Grid.fire_shfl (u := fun _ => Confluence.regT) (M := fun _ => .bits 32 (-1)) (A := offer)
     (B := fun _ => .bits 32 1) (C := fun _ => .bits 32 31) (b := fun _ => 1) (cl := fun _ => 31)
     (d := fun _ => Confluence.shflFn) (by decide) fun j hj => by
-      have e : warpLanes (Pending.launch 2) 0 = [0, 1] := by decide
+      have e : warpLanes (launch2 1 1 2 1) 0 = [0, 1] := by decide
       rw [e] at hj
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hj
       rcases hj with rfl | rfl
@@ -172,7 +173,7 @@ def shflMix : Grid :=
     Confluence.shfl2.mem⟩
 
 /-- **The twin**: with lane 1 at a shuffle of another mode, the shuffle fired by lane 0 faults. -/
-theorem shfl_twin : ∃ e, shflMix.fire (Pending.launch 2) Confluence.ctxOf 0 = .error e :=
+theorem shfl_twin : ∃ e, shflMix.fire (launch2 1 1 2 1) Confluence.ctxOf 0 = .error e :=
   ⟨_, rfl⟩
 
 /-- **gemv's first segment is a run to a wait**: for every summary `S` that `summarizeTo` gives

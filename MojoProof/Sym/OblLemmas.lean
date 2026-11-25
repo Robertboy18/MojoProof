@@ -5,16 +5,17 @@ import MojoProof.Sem.Index
 import MojoProof.Sem.Precond
 import MojoProof.Sem.Buffer
 import MojoProof.Sem.FloatRel
+import MojoProof.Sym.LoadAfter
 
 /-!
 # The obligations of a block summary, node by node
 
 A block summary (`Summary`, MojoProof/Sym/Checker.lean) carries obligations (`Cond`) on the values
 of its node table (`vals V S.nodes`): a node evaluates without a fault, a branch condition is a
-word, the memory effects run. A path of summaries is walked (`Walk`) when each block's
+word, the memory effects run. A path of summaries has its premises (`WalkWith`) when each block's
 obligations hold and each exit goes to the next block. The lemmas here reduce these, for every
-valuation, program and table, to the semantics' operations on the operands' values, one lemma
-per node kind; the tactic mojo_obl (MojoProof/Sym/Obl.lean) chains them over concrete
+valuation, program and table, to the semantics' operations on the operands' values, one lemma per
+node kind; the tactic mojo_obl (MojoProof/Sym/Obl.lean) chains them over concrete
 summaries.
 
 The table, for every valuation `V` and table `ns`:
@@ -115,7 +116,7 @@ The effects, the exits and the path, for every valuation:
 * `Exit.target_br`, `Exit.target_cond_true`, `Exit.target_cond_false`: a branch goes to its
   target; a conditional branch on `Val.ofBool b` goes where `b` says.
 * `Cond.holds_ok`, `Cond.holds_bool`, `Cond.holds_ofBool`, `Cond.holds_mem`: the obligations from
-  the values; `Walk.nil'`, `Walk.one`, `Walk.cons2`: a path from its blocks' obligations and exits.
+  the values.
 
 The edges into blocks with `phi`s (`Exit.phi`, `Valuation.into`), for every program, valuation,
 label and summary:
@@ -148,8 +149,9 @@ label and summary:
   edge (`_phi_ne` by `Valuation.intoWith_phi_of`); `Valuation.intoWith_prods_phi_none` (by
   `Valuation.intoWith_phi_of` and `foldl_set_prods_of_none`): none stays none through an edge
   into blocks with `phi`s, with no operand evaluated.
-* `WalkI.nil'`, `WalkI.one`, `WalkI.cons2`, `WalkWith.nil'`, `WalkWith.one`, `WalkWith.cons2`:
-  a path with `phi`s, without or with `fmul contract`, from its blocks' obligations and exits;
+* `WalkWith.nil'`, `WalkWith.one`, `WalkWith.cons2`: a path with or without `phi`s, with or
+  without `fmul contract`, from its blocks' obligations and exits (an exit with a target by
+  `Exit.dest_of_target`);
   `forall_lt_zero'`, `forall_lt_succ'`: a statement for every number below a literal from each
   of them (a loop's rounds).
 
@@ -940,21 +942,6 @@ theorem forall_mem_cons' {P : Cond → Prop} {d : Cond} {ds : List Cond} (h : P 
     (t : ∀ x ∈ ds, P x) : ∀ x ∈ d :: ds, P x :=
   List.forall_mem_cons.2 ⟨h, t⟩
 
-/-- The empty path walks from every valuation. -/
-theorem Walk.nil' (V : Valuation) : Walk V [] := trivial
-
-/-- A path of one block walks if its obligations hold. -/
-theorem Walk.one {V : Valuation} {l : Nat} {ds : List Cond} {S : Summary}
-    (h : ∀ d ∈ ds, d.Holds V (vals V S.nodes)) : Walk V [(l, ds, S)] := h
-
-/-- A path of two blocks or more walks if the first block's obligations hold, its exit goes to
-the second block's label, and the rest walks from the valuation after the first block. -/
-theorem Walk.cons2 {V : Valuation} {l l' : Nat} {ds ds' : List Cond} {S S' : Summary}
-    {ps : List (Nat × List Cond × Summary)} (h1 : ∀ d ∈ ds, d.Holds V (vals V S.nodes))
-    (h2 : S.exit.target V (vals V S.nodes) = some l')
-    (h3 : Walk (V.after S) ((l', ds', S') :: ps)) :
-    Walk V ((l, ds, S) :: (l', ds', S') :: ps) := ⟨h1, h2, h3⟩
-
 /-! ## Runs of effects -/
 
 /-- Effects whose fold from the valuation's memory succeeds run. -/
@@ -999,6 +986,98 @@ theorem SEff.apply_store_ex {V : Valuation} {vs : List (Except Fault Val)} {m : 
   subst hP
   simp only [SEff.apply, Valuation.stmt_of_fn hF hs, hv, hp]
   exact h
+
+/-- **The memory one `store` effect makes from a valuation's memory**: for every valuation `V`
+whose function is `F` and program is `P`, node values `vs`, statement `pc` of block `lbl` storing
+a value of type `t` through a pointer of space `a` with alignment `al`, value term `v` of value
+`x`, pointer term `p` of pointer `q` and memory `M`: if the run of that one effect from `V.mem`
+gives `M`, the semantics' store of `x` at `q` on `V.mem`, at the statement's type and alignment,
+gives `M`. -/
+theorem SEff.run_store_one {V : Valuation} {vs : List (Except Fault Val)} {P : Program}
+    {F : Func} {lbl pc : Nat} {v p : SVal} {dst : Option Nat} {vol : Bool} {t : Ty} {pv : Value}
+    {a : Nat} {pv' : Value} {al : Option Nat} {md : List (String × Nat)} {x : Val} {q : Ptr}
+    {M : Mem} (hF : V.fn = F) (hP : V.ctx.prog = P)
+    (hs : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
+      some ⟨dst, .store vol (.mk t pv) (.mk (.ptr a) pv') al, md⟩)
+    (hv : v.eval V vs = .ok x) (hp : p.eval V vs = .ok (.ptr q))
+    (h : SEff.run V vs [.store lbl pc v p] = .ok M) :
+    V.mem.store P.layout V.ctx.who a t x q (some (al.getD (P.layout.align t))) = .ok M := by
+  subst hP
+  refine Eq.trans ?_ h
+  simp only [SEff.run, List.foldlM_cons, List.foldlM_nil, bind_pure, SEff.apply,
+    Valuation.stmt_of_fn hF hs, hv, hp]
+  rfl
+
+/-! ## Loads after a store, at a known program
+
+The node lemmas of MojoProof/Sym/LoadAfter.lean, with the run of the effects as an existence (as
+`mojo_obl` proves it) and the statements read from the function. -/
+
+/-- **A `load` effect leaves a load after it as it is**: for every valuation, node values,
+statements, pointer terms, effects `es` and value `v`, if `es` and then the `load` effect of
+statement `pc'` of block `lbl'` through `y` run to some memory and the `load` node after `es`
+is `v`, so is the node after `es` and the `load` effect (`SNode.eval_loadAfter_log`). -/
+theorem SNode.eval_loadAfter_log_ex {V : Valuation} {vs : List (Except Fault Val)}
+    {lbl pc lbl' pc' : Nat} {p y : SVal} {es : List SEff} {v : Val}
+    (hr : ∃ m, SEff.run V vs (es ++ [.load lbl' pc' y]) = .ok m)
+    (h : (SNode.loadAfter lbl pc p es).eval V vs = .ok v) :
+    (SNode.loadAfter lbl pc p (es ++ [.load lbl' pc' y])).eval V vs = .ok v := by
+  obtain ⟨m, hm⟩ := hr
+  rw [SNode.eval_loadAfter_log hm, h]
+
+/-- **A `load` after a `store` at the same pointer of a codec's value**: for every valuation `V`
+whose function is `F` and program is `P`, node values `vs`, effects `es`, codec `enc` of type `t`
+(`Layout.Codec`: integers and floats) and `u`, the `load` at position `pc` of block `lbl` of type
+`t` through a pointer of space `a` and the `store` at position `pc'` of block `lbl'` of a value
+of type `t` through a pointer of the same space with the same alignment: if `es` and then the
+`store` of `x` at `y` run to some memory, `y` has the value of the load's pointer term `p` and
+`x` the value `enc u`, the node after them is `enc u` (`SNode.eval_loadAfter_store`,
+`Layout.Codec.round`). -/
+theorem SNode.eval_loadAfter_store_codec {V : Valuation} {vs : List (Except Fault Val)}
+    {P : Program} {F : Func} {lbl pc lbl' pc' a : Nat} {d d' : Option Nat} {vol vol' : Bool}
+    {t : Ty} {o o' w : Value} {al al' : Option Nat} {md md' : List (String × Nat)}
+    {p x y : SVal} {es : List SEff} {α : Type} {enc : α → Val} {u : α}
+    (hF : V.fn = F) (hP : V.ctx.prog = P) (hc : P.layout.Codec t enc)
+    (hl : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
+      some ⟨d, .load vol t (.mk (.ptr a) o) al, md⟩)
+    (hs : (F.blocks.find? (·.label == lbl')).bind (·.stmts[pc']?) =
+      some ⟨d', .store vol' (.mk t w) (.mk (.ptr a) o') al', md'⟩)
+    (hal : al'.getD (P.layout.align t) = al.getD (P.layout.align t))
+    (hr : ∃ m, SEff.run V vs (es ++ [.store lbl' pc' x y]) = .ok m)
+    (hy : y.eval V vs = p.eval V vs) (hx : x.eval V vs = .ok (enc u)) :
+    (SNode.loadAfter lbl pc p (es ++ [.store lbl' pc' x y])).eval V vs = .ok (enc u) := by
+  subst hP
+  obtain ⟨m, hm⟩ := hr
+  obtain ⟨bs, hbs, -, hd⟩ := hc.round u
+  exact SNode.eval_loadAfter_store (Valuation.stmt_of_fn hF hl) (Valuation.stmt_of_fn hF hs) hal
+    hm hy hx hbs hd (by rw [hc.defined u, Bool.not_true, Bool.and_false])
+
+/-- **A `load` after a `store` apart from it**: for every valuation `V` whose function is `F`
+and program is `P`, node values `vs`, effects `es`, value `v`, the `load` at position `pc` of
+block `lbl` of type `t` and the `store` at position `pc'` of block `lbl'` of a value of type
+`t'`: if `es` and then the `store` of `x` at `y` run to some memory, the load's pointer term `p`
+is the pointer `⟨b, i⟩` and `y` the pointer `⟨b', i'⟩`, apart (`b ≠ b'`, or the `stored t` bytes
+from `i` before or after the `stored t'` bytes from `i'`), and the node after `es` is `v`, so is
+the node after `es` and the `store` (`SNode.eval_loadAfter_apart`). -/
+theorem SNode.eval_loadAfter_apart_at {V : Valuation} {vs : List (Except Fault Val)}
+    {P : Program} {F : Func} {lbl pc lbl' pc' a a' : Nat} {d d' : Option Nat} {vol vol' : Bool}
+    {t t' : Ty} {o o' w : Value} {al al' : Option Nat} {md md' : List (String × Nat)}
+    {p x y : SVal} {es : List SEff} {v : Val} {b b' : Nat} {i i' : Int}
+    (hF : V.fn = F) (hP : V.ctx.prog = P)
+    (hl : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
+      some ⟨d, .load vol t (.mk (.ptr a) o) al, md⟩)
+    (hs : (F.blocks.find? (·.label == lbl')).bind (·.stmts[pc']?) =
+      some ⟨d', .store vol' (.mk t' w) (.mk (.ptr a') o') al', md'⟩)
+    (hr : ∃ m, SEff.run V vs (es ++ [.store lbl' pc' x y]) = .ok m)
+    (hp : p.eval V vs = .ok (.ptr ⟨b, i⟩)) (hy : y.eval V vs = .ok (.ptr ⟨b', i'⟩))
+    (hap : b ≠ b' ∨ i.toNat + P.layout.stored t ≤ i'.toNat ∨
+      i'.toNat + P.layout.stored t' ≤ i.toNat)
+    (hv : (SNode.loadAfter lbl pc p es).eval V vs = .ok v) :
+    (SNode.loadAfter lbl pc p (es ++ [.store lbl' pc' x y])).eval V vs = .ok v := by
+  subst hP
+  obtain ⟨m, hm⟩ := hr
+  exact SNode.eval_loadAfter_apart (Valuation.stmt_of_fn hF hl) (Valuation.stmt_of_fn hF hs) hm
+    hp hy hap hv
 
 /-! ## Node kinds at a known program -/
 
@@ -1234,6 +1313,31 @@ theorem SNode.eval_icmp_eq_mod {V : Valuation} {vs : List (Except Fault Val)} {w
     (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) :
     (SNode.icmp .eq w a b).eval V vs = .ok (.ofBool (decide (x % 2 ^ w = y % 2 ^ w))) := by
   rw [SNode.eval_icmp ha hb, ICmp.eq_ofNat_mod]
+
+/-- `icmp ne` of the words of `a` and `b` below `2 ^ w` is `a ≠ b`. -/
+theorem ICmp.ne_ofNat {w a b : Nat} (ha : a < 2 ^ w) (hb : b < 2 ^ w) :
+    ICmp.ne.holds (BitVec.ofNat w a) (BitVec.ofNat w b) = decide (a ≠ b) := by
+  have e := ICmp.eq_ofNat ha hb
+  simp only [ICmp.holds] at e ⊢
+  rw [bne, e, decide_not]
+
+/-- An `icmp ne` node on the words of `x` and `y` below `2 ^ w` is the boolean `x ≠ y`, for every
+valuation and node values. -/
+theorem SNode.eval_icmp_ne_ofNat {V : Valuation} {vs : List (Except Fault Val)} {w : Nat}
+    {a b : SVal} {x y : Nat} (ha : a.eval V vs = .ok (.bits w (BitVec.ofNat w x)))
+    (hb : b.eval V vs = .ok (.bits w (BitVec.ofNat w y))) (hx : x < 2 ^ w) (hy : y < 2 ^ w) :
+    (SNode.icmp .ne w a b).eval V vs = .ok (.ofBool (decide (x ≠ y))) := by
+  rw [SNode.eval_icmp ha hb, ICmp.ne_ofNat hx hy]
+
+/-- **An `and` node on two booleans** `decide p` and `decide q` (`i1` words) is the boolean
+`decide (p ∧ q)`, for every valuation, node values, flags and propositions. -/
+theorem SNode.eval_and_decide {V : Valuation} {vs : List (Except Fault Val)} {fl : IntFlags}
+    {a b : SVal} {p q : Prop} [Decidable p] [Decidable q]
+    (ha : a.eval V vs = .ok (.ofBool (decide p))) (hb : b.eval V vs = .ok (.ofBool (decide q))) :
+    (SNode.bin .and fl 1 a b).eval V vs = .ok (.ofBool (decide (p ∧ q))) := by
+  refine SNode.eval_bin ha hb ?_
+  rw [Bool.decide_and]
+  cases decide p <;> cases decide q <;> rfl
 
 /-! ## Selections, maxima and contracted sums -/
 
@@ -1475,22 +1579,6 @@ theorem Exit.dest_phi_ofBool_false {V : Valuation} {vs : List (Except Fault Val)
 theorem Exit.pc_of_fn {x : Exit} {fn F : Func} {d p : Nat} (hF : fn = F) (h : x.pc F d = p) :
     x.pc fn d = p := hF ▸ h
 
-/-- The empty path with `phi`s has its premises. -/
-theorem WalkI.nil' (V : Valuation) : WalkI V [] := trivial
-
-/-- A path with `phi`s of one block has its premises if the block's obligations hold. -/
-theorem WalkI.one {V : Valuation} {l : Nat} {ds : List Cond} {S : Summary}
-    (h : ∀ d ∈ ds, d.Holds V (vals V S.nodes)) : WalkI V [(l, ds, S)] := h
-
-/-- A path with `phi`s of two blocks or more has its premises if the first block's obligations
-hold, its exit goes to the second block's label (`Exit.dest`), and the rest has them from the
-valuation the edge gives (`Valuation.into`). -/
-theorem WalkI.cons2 {V : Valuation} {l l' : Nat} {ds ds' : List Cond} {S S' : Summary}
-    {ps : List (Nat × List Cond × Summary)} (h1 : ∀ d ∈ ds, d.Holds V (vals V S.nodes))
-    (h2 : S.exit.dest V (vals V S.nodes) = some l')
-    (h3 : WalkI (V.into l S) ((l', ds', S') :: ps)) :
-    WalkI V ((l, ds, S) :: (l', ds', S') :: ps) := ⟨h1, h2, h3⟩
-
 /-- The empty path has its premises, with or without `fmul contract` (`WalkWith`). -/
 theorem WalkWith.nil' (c : Bool) (V : Valuation) : WalkWith c V [] := trivial
 
@@ -1516,15 +1604,6 @@ theorem forall_lt_zero' (P : Nat → Prop) : ∀ i < 0, P i := fun _ h => absurd
 theorem forall_lt_succ' {P : Nat → Prop} {n : Nat} (h : ∀ i < n, P i) (hn : P n) :
     ∀ i < n + 1, P i := fun i hi =>
   (Nat.lt_succ_iff_lt_or_eq.1 hi).elim (h i) fun e => e ▸ hn
-
-/-- The memory at the entry of the block an edge goes to, with or without `fmul contract`, is
-`Valuation.afterWith`'s, for every flag, valuation, label and summary. -/
-theorem Valuation.intoWith_mem (c : Bool) (V : Valuation) (l : Nat) (S : Summary) :
-    (V.intoWith c l S).mem = (V.afterWith c S).mem := by
-  unfold Valuation.intoWith
-  split
-  · split <;> rfl
-  · rfl
 
 /-- The memory at the entry of the block an edge goes to is `Valuation.after`'s, for every
 valuation, label and summary (`Valuation.intoWith_mem` without `fmul contract`). -/
@@ -2032,5 +2111,74 @@ theorem Valuation.intoWith_prods_phi_none {c : Bool} {V : Valuation} {l : Nat} {
     (V.intoWith c l S).prods r = none :=
   Valuation.intoWith_phi_of hx hd hF hops (fun W => W.prods r = none) h fun _ xs _ =>
     foldl_set_prods_of_none r _ xs _ h
+
+/-! ## The valuation after a collective call -/
+
+/-- **The valuation a thread resumes at after a collective call**: from valuation `V` at the
+start of a segment with summary `S`, the entry valuation (`Valuation.entry`, in `V`'s context, at
+the step count after the call, as after a block, on the memory `d.2` the collective delivers) of
+the frame `Thread.resume` makes from the frame at the call: `V`'s function with the registers and
+`fmul contract` operands after the statements (`Valuation.frameAtWith true`, the frame
+`Seg.sound` gives at the call; its label, position, `alloca` blocks and caller's register are not
+read), with the call's register `r` set to the delivered value `d.1` and its operands none
+(`Frame.set`); with no register or no value, the registers and operands after the statements. -/
+def Valuation.resume (V : Valuation) (S : Summary) (r : Option Nat) (d : Option Val × Mem) :
+    Valuation :=
+  Valuation.entry V.ctx (V.k + S.len + 1) d.2
+    { (V.frameAtWith true 0 S).set r d.1 none with fn := V.fn }
+
+/-- After a collective call whose register is `r`, register `r` holds the delivered value, for
+every valuation, summary and delivery whose value is some `v`. -/
+theorem Valuation.resume_regs_self {V : Valuation} {S : Summary} {r : Nat}
+    {d : Option Val × Mem} {v : Val} (h : d.1 = some v) :
+    (V.resume S (some r) d).regs r = some v := by
+  obtain ⟨x, m⟩ := d
+  cases h
+  show (if r = r then some v else _) = _
+  rw [ite_eq_left rfl]
+
+/-- After a collective call, a register other than the call's has its value after the segment's
+statements (`Valuation.afterWith true`), for every valuation, summary, call register and
+delivery. -/
+theorem Valuation.resume_regs_ne {V : Valuation} {S : Summary} {r : Option Nat} {s : Nat}
+    {d : Option Val × Mem} {v : Val} (hne : r ≠ some s)
+    (h : (V.afterWith true S).regs s = some v) : (V.resume S r d).regs s = some v := by
+  obtain ⟨x, m⟩ := d
+  cases r with
+  | none => exact h
+  | some r =>
+    cases x with
+    | none => exact h
+    | some x =>
+      show (if s = r then some x else _) = _
+      rw [ite_eq_right fun e => hne (by rw [e])]
+      exact h
+
+/-- After a collective call whose register is `r`, register `r` carries no `fmul contract`
+operands, for every valuation, summary and delivery whose value is some `v`. -/
+theorem Valuation.resume_prods_self {V : Valuation} {S : Summary} {r : Nat}
+    {d : Option Val × Mem} {v : Val} (h : d.1 = some v) :
+    (V.resume S (some r) d).prods r = none := by
+  obtain ⟨x, m⟩ := d
+  cases h
+  show (if r = r then none else _) = _
+  rw [ite_eq_left rfl]
+
+/-- After a collective call, a register other than the call's has the `fmul contract` operands
+it has after the segment's statements (`Valuation.afterWith true`), for every valuation, summary,
+call register and delivery. -/
+theorem Valuation.resume_prods_ne {V : Valuation} {S : Summary} {r : Option Nat} {s : Nat}
+    {d : Option Val × Mem} {p : Option (Val × Val)} (hne : r ≠ some s)
+    (h : (V.afterWith true S).prods s = p) : (V.resume S r d).prods s = p := by
+  obtain ⟨x, m⟩ := d
+  cases r with
+  | none => exact h
+  | some r =>
+    cases x with
+    | none => exact h
+    | some x =>
+      show (if s = r then none else _) = _
+      rw [ite_eq_right fun e => hne (by rw [e])]
+      exact h
 
 end MojoProof.Sym

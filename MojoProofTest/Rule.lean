@@ -55,32 +55,37 @@ element type, fmul contract included, with coversC); refused (fmul contract with
 non-float element type): SState.stmt takes a contracted fmul only with its contract flag and no fbin
 on a non-float element type
 Inst.fneg: refused: SState.stmt has no case for it
-Inst.icmp: Sym.exec_icmp (on an integer type, before any store); refused (on a non-integer type, or
-after a store): SState.stmt takes icmp on an integer type before the block's first store only
+Inst.icmp: Sym.exec_icmp (on an integer type; after an alloca, on the memory the effects before it
+make (SNode.icmpAfter)); refused (on a non-integer type): SState.stmt takes icmp on an integer type
+only
 Inst.fcmp: refused: SState.stmt has no case for it
 Inst.cast: Sym.exec_cast (the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr;
-ptrtoint before any store); refused (fptoui, fptosi, inttoptr, an ill-typed cast, or ptrtoint after
-a store): SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates), and
-ptrtoint before the block's first store only
+ptrtoint after an alloca on the memory the effects before it make (SNode.castAfter)); refused
+(fptoui, fptosi, inttoptr or an ill-typed cast): SState.stmt takes the casts castOk admits
+(castOk_iff: those castV evaluates)
 Inst.select: Sym.exec_select (of integers); refused (of floats, pointers or vectors): SState.stmt
 takes select of integers only
 Inst.phi: refused: set on the edge into its block (SState.phiConds), not by SState.stmt
-Inst.alloca: refused: SState.stmt has no case for it
+Inst.alloca: Sym.exec_alloca (with SState.alloca on: the new block's pointer (SNode.fresh) and its
+effect (SEff.alloca), at a number no block has); refused (without SState.alloca): SState.stmt takes
+alloca only with SState.alloca on, which SState.start leaves off
 Inst.load: Sym.exec_load (before or after a store; after one, the load from the memory the effects
 before it make (SNode.loadAfter))
 Inst.store: Sym.exec_store
-Inst.gep: Sym.exec_gep (one index, before any store); refused (not one index, or after a store):
-SState.stmt takes a gep with one index before the block's first store only
+Inst.gep: Sym.exec_gep (one index, or another number on a base that is not a global; after an
+alloca, on the memory the effects before it make (SNode.gepAfter, SNode.gepNAfter)); refused (other
+than one index on a global): SState.stmt takes a gep on a global with one index only
 Inst.extractvalue: Sym.exec_extract
-Inst.insertvalue: refused: SState.stmt has no case for it
-Inst.extractelement: refused: SState.stmt has no case for it
-Inst.insertelement: refused: SState.stmt has no case for it
+Inst.insertvalue: Sym.exec_insertvalue (into an operand or a constant its type gives
+(zeroinitializer, undef or poison))
+Inst.extractelement: Sym.exec_extractelement
+Inst.insertelement: Sym.exec_insertelement (into an operand or a constant its type gives
+(zeroinitializer, undef or poison))
 Inst.shufflevector: refused: SState.stmt has no case for it
-Inst.call: Sym.exec_sreg (a special register: no arguments, no fast-math flags, before any store);
-Sym.exec_laneid (the lane number: no arguments, no fast-math flags, before any store);
-Sym.exec_minmax (two arguments, no flags or attributes, before or after a store); refused (another
-callee, arguments, fast-math flags, or after a store): SState.stmt takes calls of special registers
-and of minmax only
+Inst.call: Sym.exec_sreg (a special register: no arguments, no fast-math flags); Sym.exec_laneid
+(the lane number: no arguments, no fast-math flags); Sym.exec_minmax (two arguments, no flags or
+attributes); refused (another callee, arguments or fast-math flags): SState.stmt takes calls of
+special registers and of minmax only
 Inst.atomicrmw: refused: SState.stmt has no case for it
 Term.ret: Sym.SState.exit_sound (ret void); refused (ret with a value): SState.exit takes ret void
 only
@@ -92,15 +97,13 @@ Term.condBr: Sym.SState.exit_sound (into blocks that start without a phi); Sym.S
 SState.exitAt gives none
 Term.switch: refused: SState.exitAt has no case for it
 Term.unreachable: refused: SState.exitAt has no case for it
-Intrinsic.sreg: Sym.exec_sreg (a special register: no arguments, no fast-math flags, before any
-store)
-Intrinsic.laneid: Sym.exec_laneid (the lane number: no arguments, no fast-math flags, before any
-store)
+Intrinsic.sreg: Sym.exec_sreg (a special register: no arguments, no fast-math flags)
+Intrinsic.laneid: Sym.exec_laneid (the lane number: no arguments, no fast-math flags)
 Intrinsic.barrier: refused: SState.stmt takes calls of special registers and of minmax only
 Intrinsic.shfl: refused: SState.stmt takes calls of special registers and of minmax only
-Intrinsic.minmax: Sym.exec_minmax (two arguments, no flags or attributes, before or after a store);
-refused (with other arguments, flags or attributes): SState.stmt takes minmax with two arguments and
-no flags or attributes only
+Intrinsic.minmax: Sym.exec_minmax (two arguments, no flags or attributes); refused (with other
+arguments, flags or attributes): SState.stmt takes minmax with two arguments and no flags or
+attributes only
 Intrinsic.fminmax: refused: SState.stmt takes calls of special registers and of minmax only
 Intrinsic.rsqrtApprox: refused: SState.stmt takes calls of special registers and of minmax only
 Intrinsic.lifetime: refused: SState.stmt takes calls of special registers and of minmax only

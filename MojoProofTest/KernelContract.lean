@@ -382,10 +382,14 @@ six threads of `L23` has a trace with no data race that keeps the promise of `!i
 `outF`'s with the threads' bytes put in turn, every other block of `outF` unchanged), since its
 start memory has `outF`'s blocks. -/
 theorem memF_end (m' : Mem) (h : memF (volume L23.grid * volume L23.block) m') :
-    racy m'.trace = false ∧ kept m'.trace = true ∧ ∃ y, some m'.blocks = some y ∧
+    ((∀ a, Event.access a ∈ m'.trace → a.who.thread < volume L23.grid * volume L23.block ∧
+        a.who.cta = a.who.thread / volume L23.block) → Trace.Shaped m'.trace.reverse →
+      GPUProof.racy sig (m'.trace.map (Event.toCore L23)).reverse = false) ∧
+      GPUProof.kept sig (m'.trace.map (Event.toCore L23)).reverse = true ∧
+      ∃ y, some m'.blocks = some y ∧
       Elem.Out outF.1 outF.2 cell bsF (volume L23.grid * volume L23.block) y := by
   obtain ⟨m₀, hb, hE, hO⟩ := h
-  refine ⟨(Elem.safe_on apartF hE hO).1, (Elem.safe_on apartF hE hO).2, _, rfl,
+  refine ⟨(Elem.safe_on (L := L23) apartF hE hO).1, (Elem.safe_on apartF hE hO).2, _, rfl,
     fun x hx => ?_, fun b x hne hx => ?_⟩
   · rw [hE.cells, hb _ _ hx]
     rfl

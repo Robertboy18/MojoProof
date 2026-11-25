@@ -12,8 +12,11 @@ input, squares each difference, sums the squares along a tree `t₂` and divides
 `Model.div`; the trees are any trees whose leaves are the `n` indices, each once, so a loop, a
 butterfly or a block's halving tree (MojoProof/Float/Halve.lean) is a case.
 
-Definitions: `mean`, `variance`, the words; `meanErr`, `devErr`, `varErr`, the absolute errors of
-the mean, of each difference and of the variance.
+The mean of squares of RMS norm is a third statistic of the same shape (`msq`): each input squared
+by `Model.mul`, the squares summed along a tree and the sum divided by `N`.
+
+Definitions: `mean`, `variance`, `msq`, the words; `meanErr`, `devErr`, `varErr`, `msqErr`, the
+absolute errors of the mean, of each difference, of the variance and of the mean of squares.
 
 Proved, in every IEEE format, for every `n`, trees and inputs:
 * `mean_error`: if the mean word is finite, every input is finite and the mean is within FloatLib's
@@ -22,6 +25,8 @@ Proved, in every IEEE format, for every `n`, trees and inputs:
 * `var_error`: if the variance word is finite, it is within `MixedError` with relative error `u`
   and absolute error `varErr` of TorchLean's population variance `TorchLean.var` of the inputs'
   real values.
+* `msq_error`: if the mean of squares word is finite, it is within `MixedError` with relative
+  error `u` and absolute error `msqErr` of the exact mean of squares `𝔼 j, x j ^ 2`.
 
 `𝔼` and `TorchLean.var` are the statistics of TorchLean's real layer norm
 `TorchLean.TransformerBlock.layerNorm`. TorchLean's own two-pass analysis
@@ -150,6 +155,42 @@ theorem var_error (hfmt : fmt.isIEEE = true) (t₁ t₂ : ReductionTree (Fin n))
   have hd := Model.mixedError_toReal_div hfmt hN h hs (MixedError.of_eq hNn) zero_lt_one
   simp only [add_zero, zero_div, mul_zero, zero_add, sub_zero, one_mul, Nat.abs_cast, add_div,
     mul_div_assoc, sum_div_eq_expect, abs_mul_self] at hd
+  exact hd
+
+/-- The mean of squares word of RMS norm: each `x j` squared by `Model.mul`, the squares summed by
+`Model.add` along the tree `t`, then divided by `N` with `Model.div`. -/
+def msq (t : ReductionTree (Fin n)) (x : Fin n → Model fmt) (N : Model fmt) : Model fmt :=
+  Model.div (t.eval (fun a b => Model.add a b) fun j => Model.mul (x j) (x j)) N
+
+/-- The absolute error of `msq_error`: `(1 + u) · (((1 + u) ^ d - 1) · 𝔼 j, x j ^ 2 +
+(1 + u) ^ d · 𝔼 j, (u · x j ^ 2 + η)) + η` for a sum along a tree of depth `d`. -/
+noncomputable def msqErr (u η : ℝ) (d : Nat) (x : Fin n → ℝ) : ℝ :=
+  (1 + u) * (((1 + u) ^ d - 1) * 𝔼 j, x j ^ 2 + (1 + u) ^ d * 𝔼 j, (u * x j ^ 2 + η)) + η
+
+/-- **The mean of squares.** In every IEEE format, for every `n`, tree `t` whose leaves are the
+indices `0, …, n - 1` up to order, words `x` and finite word `N` whose real value is `n`: if the
+mean of squares word `msq t x N` is finite, it approximates the exact mean of squares
+`𝔼 j, x j ^ 2` of the real values with FloatLib's mixed error `(u, msqErr u η t.depth x)`, `u` and
+`η` FloatLib's unit roundoff and underflow allowance. Each square has FloatLib's rounding error
+`Model.mixedError_toReal_of_eq_roundAt`, the tree `sum_mixedError` and the division
+`Model.mixedError_toReal_div`. It is RMS norm's statistic; a square fused into the addition that
+consumes it (a contracted `fmul` / `fadd` pair) is not covered. Nothing is claimed when the word is
+infinite or a NaN. -/
+theorem msq_error (hfmt : fmt.isIEEE = true) (t : ReductionTree (Fin n))
+    (ht : t.leaves.Perm (List.finRange n)) (x : Fin n → Model fmt) {N : Model fmt}
+    (hN : N.isFinite = true) (hNn : N.toReal = n) (h : (msq t x N).isFinite = true) :
+    MixedError (msq t x N).toReal (𝔼 j, (x j).toReal ^ 2) (Model.unitRoundoffAt fmt)
+      (msqErr (Model.unitRoundoffAt fmt) (Model.underflowErrorAt fmt) t.depth
+        fun j => (x j).toReal) := by
+  have hterm : ∀ j ∈ List.finRange n, (Model.mul (x j) (x j)).isFinite = true →
+      MixedError (Model.mul (x j) (x j)).toReal ((x j).toReal ^ 2) (Model.unitRoundoffAt fmt)
+        (Model.underflowErrorAt fmt) := fun j _ hj =>
+    Model.mixedError_toReal_of_eq_roundAt
+      (by rw [sq]; exact Model.toReal_mul_eq_roundAt _ _ hfmt hj)
+  have hs := sum_mixedError hfmt t _ ht hterm (Model.isFinite_left_of_isFinite_div hfmt h)
+  have hd := Model.mixedError_toReal_div hfmt hN h hs (MixedError.of_eq hNn) zero_lt_one
+  simp only [add_zero, zero_div, mul_zero, zero_add, sub_zero, one_mul, Nat.abs_cast, add_div,
+    mul_div_assoc, sum_div_eq_expect, abs_sq] at hd
   exact hd
 
 end MojoProof.Float

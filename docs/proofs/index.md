@@ -58,7 +58,13 @@ Write `t`, `c`, `k` for `tid d`, `ctaid d`, `ntid d` of thread `n` (`(L.env n).s
    (`BitVec.toInt_ofNat_of_lt`). For `add`, `[a]_w + [b]_w = [a + b]_w`; the `nuw` test
    `a + b ≥ 2^w` fails, and the `nsw` test asks whether the signed sum `a + b` lies outside
    `[-2^(w-1), 2^(w-1))`, which `2(a + b) < 2^w` excludes (`outS_of_lt`). `mul` is the same with
-   the product; its `toInt`s need `2a, 2b < 2^w`.
+   the product; its `toInt`s need `2a, 2b < 2^w`. The facts at `2x < 2^w` are the core's
+   `GPUProof.WordFit` (GPUProof/MixedRadix.lean, [mixed-radix.md](mixed-radix.md)), proved once
+   at `x < 2^(w-1)` (`GPUProof.WordFit.of_lt`, with `GPUProof.WordFit.two_mul_lt_iff` for the
+   premise): `BitVec.toInt_ofNat_of_lt` is its field `toInt`, `intCast_sext_ofNat` its field
+   `signExtend`, and the two tests of `intBin_add_ofNat` its field `add` (no unsigned and no
+   signed overflow); `outS_of_lt` is `x < 2^(w-1)`. `trunc` and `zext` (at `x < 2^w`, which
+   `WordFit` does not cover) and `mul` are proved here.
 2. On a valid launch `Launch.sreg_bound` gives `t < maxBlock d ≤ 1024`,
    `c < maxGrid d ≤ 2^31 - 1` and `k < maxBlock d + 1 ≤ 1025`, so `ck ≤ 2^31 · 1024 = 2^41` and
    `ck + t < 2^42`. Every premise of 1 holds with `w = 64` (and `w = 32` for the operands of the
@@ -142,8 +148,9 @@ needs: two in-bounds threads with one cell are one thread. Write `Launch.index L
    `row n * s + col n < row n' * s ≤ row n' * s + col n'` as `col n < s`; symmetrically, so the
    rows are equal, then the columns, and 7 (`Launch.xy_inj`) gives `n = n'`.
 9. `apart_stride b` (`w ≤ w`) at the two cell numbers, which differ by 8.
-10. With `Y = p y + d y * p z`: `p y < d y` and `p z + 1 ≤ d z` give `Y < d y (p z + 1) ≤ d y d z`,
-    and then `a = p x + d x Y < d x (Y + 1) ≤ d x d y d z`. `a mod d x = p x` (as `p x < d x`),
+10. With `Y = p y + d y * p z`: `a = p x + d x Y` is the mixed-radix value of the digits `p x`,
+    `p y`, `p z` with radices `d x`, `d y`, `d z`, so `a < d x d y d z` is the core's
+    `GPUProof.MixedRadix.lt_prod` at those three digits. `a mod d x = p x` (as `p x < d x`),
     `a / d x = Y` and `Y mod d y = p y`, and `a / (d x d y) = Y / d y = p z` with
     `p z mod d z = p z`.
 11. Every side is positive, as `r d < L.grid d * L.block d`. Take the block point
@@ -158,19 +165,19 @@ needs: two in-bounds threads with one cell are one thread. Write `Launch.index L
 
 ### Instances and twins
 
-- Instance: grid (2, 2, 1) and block (2, 2, 1) (`L2222`), valid, 16 threads. The cells
+- Instance: grid (2, 2, 1) and block (2, 2, 1) (`launch2 2 2 2 2`), valid, 16 threads. The cells
   `row * 4 + col` of its 16 threads are `0, ..., 15` each once (`cells2222`, by evaluation), and
   `Launch.cell_apart` gives the 4-byte cells at stride 4 apart on all of them (`apart2222`); equal
   `x` and `y` index words are one thread (`inj2222`, `Launch.xy_inj`).
 - Twin of the `z` premise: grid (1, 1, 1) and block (1, 1, 2) (`L112`), valid, 2 threads with
   `row = col = 0` and different `tid z` (`twin112`): `Launch.xy_inj` needs side 1 in `z`.
-- Twin of `col < s`: on `L2222` with stride 1, thread 1 (row 1, column 0) and thread 2 (row 0,
+- Twin of `col < s`: on `launch2 2 2 2 2` with stride 1, thread 1 (row 1, column 0) and thread 2 (row 0,
   column 1) have cell 1 (`twin_stride`): `Launch.cell_inj` needs the columns below the stride.
-- Instance of 12: on `L2222`, every cell `(r, c)` with `r, c < 4` is some thread's below 16
+- Instance of 12: on `launch2 2 2 2 2`, every cell `(r, c)` with `r, c < 4` is some thread's below 16
   (`onto2222`, `Launch.cell_onto`); the thread of cell `(3, 2)` is the proof's
   `B · volume L.block + T` with block point `(1, 1, 0)`, `B = 3`, and thread point `(1, 0, 0)`,
   `T = 1`: thread 13 (`cell32`, by evaluation).
-- Twin of the bound: no thread of `L2222`, below 16 or not, has row 4 or column 4 (`twin_onto`,
+- Twin of the bound: no thread of `launch2 2 2 2 2`, below 16 or not, has row 4 or column 4 (`twin_onto`,
   `Launch.index_lt_mul`), so `Launch.cell_onto` needs `r < L.grid x * L.block x` and
   `c < L.grid y * L.block y`.
 

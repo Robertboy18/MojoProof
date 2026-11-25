@@ -52,15 +52,15 @@ by its blocks and edges, each after a hypothesis with the goal's left side. A me
 with `V.mem` the memory `M₀` before `V`'s blocks with the events they log (a hypothesis
 `V.mem = M`, as `obl_have` gives, or `Obl.memOf`): a buffer fact is its hypothesis at `M₀`, the
 kernel checking that `V.mem` has `M₀`'s blocks; `Elem` and `Elem.Only` are their hypotheses at
-`M₀` through each event, which must be a read (`Elem.log_read`) or an access (`Elem.Only.log_other`)
-of a block other than the output block, the inequality by `omega`. On a memory `m` an effect
-gives (a hypothesis `SEff.apply V vs M e = .ok m`, or a block's run of one effect, as a path's
-last block's in `RetWith`; `SEff.run_one`), `Elem.Only` is its fact at `M` through the effect,
-the thread in the set by a hypothesis (`Elem.Only.apply`), and `Elem` after `k + 1` threads is
-`Elem` after `k` threads at `M` through a store (`Elem.apply_store`): the store's statement from
-`V`'s function, its operands' values as mojo_obl evaluates them, `V`'s thread from the hypotheses
-on its context, and on `V`'s program the value's encoding by a hypothesis and the store's width
-by the kernel.
+`M₀` through each event, which must be a read that is not an `atomicrmw`'s (`Elem.log_read`) or
+an access (`Elem.Only.log_other`) of a block other than the output block, the inequality by
+`omega`. On a memory `m` an effect gives (a hypothesis `SEff.apply V vs M e = .ok m`, or a block's
+run of one effect, as a path's last block's in `RetWith`; `SEff.run_one`), `Elem.Only` is its fact
+at `M` through the effect, the thread in the set by a hypothesis (`Elem.Only.apply`), and `Elem`
+after `k + 1` threads is `Elem` after `k` threads at `M` through a store (`Elem.apply_store`): the
+store's statement from `V`'s function, its operands' values as mojo_obl evaluates them, `V`'s thread
+from the hypotheses on its context, and on `V`'s program the value's encoding by a hypothesis and
+the store's width by the kernel.
 
 The proof is first built unchecked, and the kernel checks it once; when a goal is left open or
 the kernel rejects it, each goal's proof is built again and checked on its own (`attemptIf`), so
@@ -71,10 +71,10 @@ MojoProofTest/Inv.lean (`cnt`'s counter and bound after rounds, the naive matrix
 `%47` after a round and along the path to its latch with the latch's comparison `%49`, its bound
 `%16` after any number of rounds, its `phi`s `%47` and `%48` (a float constant) at the loop's
 entry, the buffers, `Elem` and `Elem.Only` after a round and after its last block's store, and
-open-goal twins); MojoProofTest/NaiveIn.lean (`head_in`'s and `round_in`'s `%48` operands, and
-`exit_in`'s `%40` and its `Elem` and `Elem.Only` after the store); MojoProof/Sym/KernelCmd.lean
-(`mat … inv`'s `Mat.Head` at the loop head, a structure of the function and the memory facts
-above, and the function at the loop head in `n.kept`).
+open-goal twins); MojoProofTest/NaiveFamRun.lean (`head_inF`'s and `round_inF`'s `%48` operands,
+and `exit_inF`'s `%40` and its `Elem` and `Elem.Only` after the store, at every row stride);
+MojoProof/Sym/KernelCmd.lean (`mat … inv`'s `Mat.Head` at the loop head, a structure of the
+function and the memory facts above, and the function at the loop head in `n.kept`).
 -/
 
 namespace MojoProof.Sym
@@ -162,14 +162,15 @@ theorem Valuation.iterate_regs_keep {c : Bool} {h : Nat} {S : Summary}
   | succ i ih =>
     exact ih ((Valuation.roundWith_k c h S B 1 V).2.1.trans hF) ((round B h S V hF hS).trans hv)
 
-/-- **A read of another block keeps `Elem`**: logging a read (`a.write = false`) of a block other
-than `out` on a memory of `Elem` after `k` threads gives a memory of `Elem` after `k` threads, for
-every memory, output block, cell width, cells, bytes and access (`Elem.log`). -/
+/-- **A read of another block keeps `Elem`**: logging a read that is not an `atomicrmw`'s
+(`a.write = false`, `a.atomic = none`) of a block other than `out` on a memory of `Elem` after
+`k` threads gives a memory of `Elem` after `k` threads, for every memory, output block, cell
+width, cells, bytes and access (`Elem.log`). -/
 theorem Elem.log_read {m₀ : Mem} {out w : Nat} {cell : Nat → Nat}
     {bs : Nat → Option (List MemByte)} {k : Nat} {m : Mem} {a : Access}
-    (h : Elem m₀ out w cell bs k m) (hq : a.ptr.block ≠ out) (hw : a.write = false) :
-    Elem m₀ out w cell bs k (m.log (.access a)) :=
-  h.log ⟨fun e => absurd e hq, fun _ => hw, fun _ => hq⟩
+    (h : Elem m₀ out w cell bs k m) (hq : a.ptr.block ≠ out) (hw : a.write = false)
+    (hx : a.atomic = none) : Elem m₀ out w cell bs k (m.log (.access a)) :=
+  h.log ⟨fun e => absurd e hq, fun _ => ⟨hw, hx⟩, fun _ => hq⟩
 
 /-- **An access to another block keeps `Elem.Only`**: logging an access to a block other than
 `out` keeps `Elem.Only out S`, for every output block, set of threads, memory and access
@@ -196,7 +197,7 @@ namespace Inv
 open Lean Meta Elab Tactic Obl
 
 /-- `f` as a round: `(c, h, S, B)` for `Valuation.roundWith c h S B`, and `(false, h, S, B)` for
-`Valuation.round h S B` (definitionally `Valuation.roundWith false h S B`), after unfolding the
+`Valuation.round h S B` (by definition `Valuation.roundWith false h S B`), after unfolding the
 constants at its head (as `NaiveThread.round`); `none` for another function. -/
 partial def roundOf? (f : Expr) : MetaM (Option (Expr × Expr × Expr × Expr)) := do
   let f := f.eta
@@ -215,17 +216,15 @@ def heads : List Name :=
     ``Valuation.entry, ``Valuation.round, ``Valuation.roundWith, ``Nat.iterate]
 
 /-- Valuation `V` by its blocks and edges, for `Obl.regOf`: a path's last block
-`(Valuation.lastWith c W l S ps).1` (or `(W.lastI l S ps).1`) as `Valuation.intoWith c` (or
-`Valuation.into`) along the path (`Obl.lastIOf`); a constant at the head other than those of
-`heads` unfolded (as `NaiveThread.latchAt`); otherwise `Obl.normV`. The kernel checks the result
-equal to `V`. -/
+`(Valuation.lastWith c W l S ps).1` as `Valuation.intoWith c` along the path (`Obl.lastIOf`); a
+constant at the head other than those of `heads` unfolded (as `NaiveThread.latchAt`); otherwise
+`Obl.normV`. The kernel checks the result equal to `V`. -/
 partial def pathV (V : Expr) : MetaM Expr := do
   match V.getAppFnArgs with
   | (``Prod.fst, #[_, _, p]) =>
     match p.getAppFnArgs with
     | (``Valuation.lastWith, #[c, W, l, S, ps]) =>
       return (← lastIOf (some c) (← normV W) l S ps).1
-    | (``Valuation.lastI, #[W, l, S, ps]) => return (← lastIOf none (← normV W) l S ps).1
     | _ => return V
   | (n, _) =>
     if n.isAnonymous || heads.contains n then return ← normV V
@@ -351,17 +350,17 @@ def memHead (n : Name) : Bool :=
 `Mem.Holds`, `Elem` and `Elem.Only` (`memHead`), with `V.mem = M` (`memEq`) and `M` the memory
 `M₀` under logged events (`logs`). A buffer fact is its hypothesis at `M₀` moved by `blockLemmas`
 (the kernel checks that `M` has `M₀`'s blocks; `Mem.blocks_keep`); `Elem` and `Elem.Only` are
-their hypotheses at `M₀` through each event, a read of a block other than the output block
-(`Elem.log_read`, `Elem.Only.log_other`, the block's inequality by `omega`, the block read off
-the access's pointer). On a memory `m` an effect gives (`effHyp?`: `SEff.apply V vs M e = .ok m`,
-or a block's run of one effect), `Elem.Only` is its fact at `M` (`memFact` at `V.mem`, else a
-hypothesis) through the effect, a thread `y` of the set by a hypothesis (`Elem.Only.apply`,
-`threadEq`), and `Elem` after `k + 1` threads, through a store, is `Elem` after `k` threads at `M`
-through it (`Elem.apply_store`): the store's statement from `V`'s function
-(`Valuation.stmt_of_fn`), its operands' values (`Obl.opnd`, on the nodes `vals V S.nodes` of
-`vs`), the thread `k` (`threadEq`), and on `V.ctx.prog` (`viaProg`) the value's encoding `bs k`
-by a hypothesis and the store's width at most `w` by the kernel or a hypothesis. An error when it
-does not prove the goal. For every program. -/
+their hypotheses at `M₀` through each event, a read that is not an `atomicrmw`'s (for `Elem`)
+or an access of a block other than the output block (`Elem.log_read`, `Elem.Only.log_other`,
+the block's inequality by `omega`, the block read off the access's pointer). On a memory `m` an
+effect gives (`effHyp?`: `SEff.apply V vs M e = .ok m`, or a block's run of one effect), `Elem.Only`
+is its fact at `M` (`memFact` at `V.mem`, else a hypothesis) through the effect, a thread `y` of the
+set by a hypothesis (`Elem.Only.apply`, `threadEq`), and `Elem` after `k + 1` threads, through a
+store, is `Elem` after `k` threads at `M` through it (`Elem.apply_store`): the store's statement
+from `V`'s function (`Valuation.stmt_of_fn`), its operands' values (`Obl.opnd`, on the nodes
+`vals V S.nodes` of `vs`), the thread `k` (`threadEq`), and on `V.ctx.prog` (`viaProg`) the
+value's encoding `bs k` by a hypothesis and the store's width at most `w` by the kernel or a
+hypothesis. An error when it does not prove the goal. For every program. -/
 partial def memFact (ty : Expr) : M Expr := do
   let f := ty.getAppFn
   let args := ty.getAppArgs
@@ -438,7 +437,8 @@ partial def memFact (ty : Expr) : M Expr := do
       (← mkAppM ``Ne #[mkApp (mkConst ``Ptr.block) (mkApp (mkConst ``Access.ptr) a), out])
     p ← if n == ``Elem then
         mkAppM ``Elem.log_read #[p, hq, ← krfl (mkApp (mkConst ``Access.write) a)
-          (mkConst ``Bool.false)]
+          (mkConst ``Bool.false), ← krfl (mkApp (mkConst ``Access.atomic) a)
+          (mkApp (mkConst ``Option.none [Level.zero]) (mkConst ``RmwOp))]
       else mkAppM ``Elem.Only.log_other #[p, hq]
   let motive := Expr.lam `M (mkConst ``Mem) (mkAppN f (args.set! i (.bvar 0))) .default
   return hint (← mkEqMPR (← mkCongrArg motive hM) p) ty

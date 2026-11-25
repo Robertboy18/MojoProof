@@ -3,9 +3,10 @@
 Lean: conclusions 1 and 2 proved, for every program, kernel, launch, arguments, address choice,
 oracle and discipline, in MojoProof/Sem/ScheduleOwned.lean (`Grid.confluent_owned`,
 `Grid.owned_clean`, `Grid.owned_race`, `Grid.owned_bad`), by the route of section "Route in Lean"
-below: T2 (`Grid.confluent`, schedule.md) with its bad set replaced by `Grid.Faults`
-(`Confluent.of_iff`), which conclusion 2 allows. Conclusion 3 is proved in a stronger form, for
-every program, kernel, launch, arguments, address choice, oracle and discipline
+below: T2 (`Grid.confluent`, schedule.md) with its bad set replaced by the faults (`GPUProof.Faults`
+at `sig`)
+(`Confluent.transfer` along the identity), which conclusion 2 allows. Conclusion 3 is proved in a
+stronger form, for every program, kernel, launch, arguments, address choice, oracle and discipline
 (`Grid.owned_sound`, with the trace lemma `racy_kept_of_local` and `Grid.Done.bad_iff`,
 MojoProof/Sem/Determinism.lean): its premises are on the trace of the done grid of the one run,
 not on every reachable grid (section "Conclusion 3 in Lean"). This document's own route, below the
@@ -54,7 +55,7 @@ below. The hypotheses hold for kernels whose memory accesses follow one tiling f
 (`vector_addition`). They fail for kernels whose shared-memory tiles change hands at a barrier
 (`tiled_matmul`, which needs race freedom per barrier interval, barrier-owned.md) and for kernels
 with atomics on one location (`reduction`, which needs L10: two `atomicrmw`s that
-`Access.conflict` exempts, of one operation on the same bytes, commute). The hypotheses constrain
+`Access.conflict` exempts, of one commuting operation on the same bytes, commute). The hypotheses constrain
 where accesses go, not whether steps fault. Faults are the bad states. An out-of-bounds access lies
 in no tile, so a kernel with one is not covered.
 
@@ -97,13 +98,15 @@ that needs no atomic commutation.
 
 **Conclusions.**
 
-1. `Confluent rc (fun x y => Grid.Same x.1 y.1) (fun x => x.1.Faults L c)`.
-2. For every reachable `g`: `racy g.mem.trace = false` and `kept g.mem.trace = true`; and if a race
-   is enabled in `g` (`Grid.RaceEnabled`), `g` faults (the racing thread's step is a fault). So on
-   reachable grids `Grid.Bad` is `Grid.Faults`: no reachable grid has a racy trace or a broken
-   promise of `!invariant.load`. An enabled race is not excluded, only one whose step succeeds:
-   `Stmt.pending` lists an access before the step checks it, so a thread's pending access may
-   conflict with another's and still be one the memory refuses.
+1. `Confluent rc (fun x y => Grid.Same x.1 y.1) (fun x => GPUProof.Faults sig (x.1, L, c))`.
+2. For every reachable `g`: `racy g.mem.trace = false` and
+   `GPUProof.kept sig ((g.mem.trace.map (Event.toCore L)).reverse) = true`; and if a race is
+   enabled in `g` (the core's `RaceEnabled` at `sig`), `g` faults (the racing thread's step is a
+   fault; a fire that completes at a reachable grid adds no race, since the trace is not racy).
+   So on reachable grids the core's `Bad` at `sig` is `GPUProof.Faults` at `sig`: no reachable
+   grid has a racy trace or a broken promise of `!invariant.load`. An enabled race is not excluded, only one whose step succeeds: `Stmt.pending`
+   lists an access before the step checks it, so a thread's pending access may conflict with
+   another's and still be one the memory refuses.
 3. Corollary through `Grid.sound_of_one_run` (adapter.md): if one run reaches a done grid `z` and
    `obs` depends only on `Mem.blocks`, then `Grid.Sound L c g₀ obs R` with `R` the property of `obs z.mem`.
    `hT` and `hK` come from conclusion 2. `hF` holds because `Bad` is `Faults`. `hD` and `hO` hold because
@@ -114,7 +117,7 @@ that needs no atomic commutation.
 **Why the bad set is `Faults`.** `Bad := False` would make the adapter's `hF` say that no reachable
 grid faults, which the hypotheses do not give: a kernel can fault in every schedule. `Bad := Faults`
 needs `bad_step`, which says that faults persist. Under `hH` this is a frame argument (case P
-below). It needs neither `Grid.RaceEnabled` nor L7.
+below). It needs neither the core's `RaceEnabled` nor L7.
 
 ## Lemmas used
 
@@ -183,7 +186,8 @@ below). It needs neither `Grid.RaceEnabled` nor L7.
   `alloca`'s number, so it does not see the blocks it does not name. The same holds of a fire and the
   names of its participants.
 
-  In Lean (MojoProof/Sem/Frame.lean), for steps. `Mem.Agree w S P m₁ m₂`: `m₁` and `m₂` have the
+  In Lean (MojoProof/Sem/Frame.lean; the definitions in MojoProof/Sem/SigDef.lean), for steps.
+  `Mem.Agree w S P m₁ m₂`: `m₁` and `m₂` have the
   same `next`, and at every number `b` of `S` both have no block, or blocks with the same shape,
   `readOnly` and owner which, if the owner admits thread `w` (`Owner.admits`), have the same
   liveness and the same bytes where a read access of `P` reads (`Reads P b`; `Block.Agree`). `S`
@@ -252,7 +256,8 @@ globals table of a context, or as a pointer byte `.ptr p i` below the size of a 
   poison. No operation makes a pointer from an integer (`inttoptr` is unsupported), and no intrinsic
   returns a pointer it was not given.
 
-In Lean (MojoProof/Sem/Names.lean and Closed.lean), a number is *known* to `m` (`Mem.Known`) if it
+In Lean (MojoProof/Sem/Names.lean and Closed.lean; `Mem.Known` in SigDef.lean), a number is *known* to
+`m` (`Mem.Known`) if it
 is below `m.next` or has a block, and `Grid.Closed c g` has four fields: `null` (0 is known),
 `threads` (`Status.NamesIn`: every value in a register of a frame of a thread, and every argument of
 a waiting thread, names only known numbers, `Val.NamesIn`), `bytes` (`Mem.BytesIn`: every pointer
@@ -449,7 +454,7 @@ all done:
    For every grid, every context map and all threads `n`, `k`. `n ≠ k` follows from `hw`. The
    premise `hW` asks that no pending access of either conflict with one of the other
    (`Access.conflict`). If some write of one overlaps an access of the other, the two are an
-   exempt pair, two `atomicrmw`s of one operation at one pointer and size, and
+   exempt pair, two `atomicrmw`s of one commuting operation at one pointer and size, and
    `Grid.advance_atomic_comm` gives the conclusion (L10, below). Otherwise no write of either
    overlaps any access of the other (not only the other's writes), as the agreement of L2 needs,
    and the argument above applies.
@@ -660,7 +665,7 @@ The twins (`apart_twins`), on `stores 0`, where `hW` and the conclusion fail (`d
 - of `hX`: with every thread in tile 0 both stores follow the discipline;
 - of `hH`: with `tileOf` thread 1's store is neither in its tile nor to a block it owns.
 
-Two `atomicrmw`s of one operation on the same bytes (L10, done): `Access.conflict` exempts them,
+Two `atomicrmw`s of one commuting operation on the same bytes (L10, done): `Access.conflict` exempts them,
 so `Grid.advance_comm` covers them, but they follow no discipline with different tiles, so
 `Grid.start_reach_comm_of_owned` does not. The steps, in Lean: `Mem.load_store` (Confluence.lean), for every layout, memory, two threads, type,
 value, pointer and two alignments, gives that a load after a store that succeeds, at the same
@@ -743,9 +748,12 @@ fire logs no access (`Grid.fire_trace`), changes no block (`Grid.fire_blocks`) a
 From the invariant: a clash of the trace (`racy_iff`) is of two accesses of different threads to one
 block. If the block's owner is a `.thread w`, both threads are `w` (the owner admits them); otherwise
 both accesses are owned, and `Owned.apart` with `hX` makes both reads, which do not conflict
-(`racy_eq_false_of_local`, with "local to `w`" being `g.mem.Owned w`). For `kept`, `kept_of_split` with
-`W b := T b ≠ none ∨ ∃ w, g.mem.Owned w b`: a write is owned, so to a tiled block (`Owned.read`), or
-thread-local; an invariant load is to an untiled block with no thread owner.
+(`racy_eq_false_of_local`, with "local to `w`" being `g.mem.Owned w`). For `kept` (the core's at
+`sig`), `kept_of_split` with `W b := T b ≠ none ∨ ∃ w, g.mem.Owned w b`: an access that writes for
+the core (a write or an `atomicrmw`'s read) has a write with its pointer in the trace, which is
+shaped (`Trace.Shaped.writes`, `Grid.start_reach_shaped`); that write is owned, so to a tiled
+block (`Owned.read`), or thread-local; an invariant load is to an untiled block with no thread
+owner.
 
 The enabled race: if `g` has a running thread `n` with `racy (Thread.pending (c n) t g.mem ++
 g.mem.trace) = true` and `n`'s step succeeds, the grid after is reachable and its trace is that list
@@ -757,7 +765,7 @@ g.mem.trace) = true` and `n`'s step succeeds, the grid after is reachable and it
 **Statement** (`Grid.owned_sound`, MojoProof/Sem/ScheduleOwned.lean). For every program, kernel,
 launch, arguments, address choice, oracle and discipline `(T, own)`, given `hs`, T2's `hm`, an
 observation `obs` with `obs m = obs m'` whenever `m.blocks = m'.blocks`, a run
-`Path (Grid.Step L c) n g₀ z` with `z.Done`, a predicate `loc b w` ("block `b` is local to thread
+`Path (Grid.Step L c) n g₀ z` with `GPUProof.Done sig (z, L, c)`, a predicate `loc b w` ("block `b` is local to thread
 `w`"), and `obs z.mem = some y` with `R y`, if the trace `tr := z.mem.trace` meets
 
 - `hO`: every access of `tr` to a block local to no thread follows the discipline (`Owned T own a`);
@@ -770,17 +778,22 @@ then `Grid.Sound L c g₀ obs R`.
 
 **Proof.**
 
-1. A done grid is bad only by its trace (`Grid.Done.bad_iff`, every launch, contexts and grid).
-   `Grid.Bad` is `Faults ∨ racy ∨ ¬ kept ∨ RaceEnabled`. A fault is a thread's step or fire that
-   errs, and in a done grid every thread is `.done` or absent, so `Grid.advance` and `Grid.fire`
-   return `.ok none` (`done_not_faults`). An enabled race needs a thread `.run t`, which a done grid
-   has not (`Grid.Done.not_raceEnabled`).
-2. The trace lemma (`racy_kept_of_local`, every trace). `racy tr = false` is
-   `racy_eq_false_of_local` from `hO`, `hL` and `hX`. For `kept`, let `W b` say that some write of
-   `tr` is to block `b`. Every write is to a block of `W` by definition, and every access with
+1. A done grid is bad only by its trace (`Grid.Done.bad_iff`, every launch, contexts and grid
+   with at most the launch's number of threads; `Grid.start_reach_size` gives `z` exactly that
+   many).
+   The core's `Bad` at `sig` is `Faults ∨ racy ∨ ¬ kept ∨ RaceEnabled`. A fault is a thread's step
+   or fire that errs, and in a done grid every thread is `.done` or absent, so `Grid.advance` and
+   `Grid.fire` return `.ok none` (`done_not_faults`). An enabled race needs a thread `.run t` or a
+   fire that completes (`Grid.raceEnabled_iff`), which a done grid has not
+   (`Grid.Done.not_raceEnabled`).
+2. The trace lemma (`racy_kept_of_local`, every launch and every trace whose oldest-first form is
+   shaped, `Trace.Shaped tr.reverse`). `racy tr = false` is `racy_eq_false_of_local` from `hO`,
+   `hL` and `hX`. For the core's `kept` at `sig`, let `W b` say that some write of `tr` is to
+   block `b`. Every access that writes for the core is to a block of `W`: a write by definition,
+   an `atomicrmw`'s read by the write right after it (`Trace.Shaped.writes`); every access with
    `!invariant.load` is to a block not in `W` by `hI`; that is `kept_of_split`.
-3. So `z` is not bad: by 1, a bad `z` has `racy tr = true` or `kept tr = false`, and 2 refutes
-   both. `Grid.start_sound` (T2's conclusion 2) then gives `Grid.Sound` from the run, `hs`, `hm` and
+3. So `z` is not bad: by 1, a bad `z` has `racy tr = true` or a broken promise, and 2 refutes
+   both, its shape from `Grid.start_reach_shaped`. `Grid.start_sound` (T2's conclusion 2) then gives `Grid.Sound` from the run, `hs`, `hm` and
    the observation's premises.
 
 **Relation to the statement above.** The hypotheses `hH`, `hI` and `hX` of T2′ give the trace
@@ -805,11 +818,17 @@ block `out`, width `w` and cell map `cell : Nat → Nat` with `Apart cell w`, th
 
 - `hc`: every access `a` of `tr` to `out` lies in its thread's cell:
   `cell a.who.thread ≤ a.ptr.off` and `a.ptr.off + a.len ≤ cell a.who.thread + w`;
-- `hr`: every access of `tr` to another block is a read;
+- `hr`: every access of `tr` to another block is a read that is not an `atomicrmw`'s
+  (`a.write = false ∧ a.atomic = none`);
 - `hi`: no access of `tr` with `!invariant.load` is to `out`,
 
-then `racy tr = false` and `kept tr = true`. This is the premise `racy m'.trace = false ∧
-kept m'.trace = true` of a sequential run's soundness, for a kernel in which each thread writes
+then, at every launch `L`, `tr` has no race when it is by threads of `L` in their blocks of
+threads and shaped (the core's `racy` at `sig`, `racy_iff`'s premises), and the core's `kept` at
+`sig` keeps the trace's core events (`GPUProof.kept sig ((tr.map (Event.toCore L)).reverse) =
+true`). This is the premise `(hU → Trace.Shaped m'.trace.reverse →
+GPUProof.racy sig ((m'.trace.map (Event.toCore L)).reverse) = false) ∧
+GPUProof.kept sig ((m'.trace.map (Event.toCore L)).reverse) = true` of a sequential run's
+soundness, for a kernel in which each thread writes
 only its own cells of one output block and reads blocks that nobody writes. It covers cells at
 any offsets `w` bytes apart (a row-major tensor from any base offset) and accesses inside a cell
 (a narrower load or store of it). `racy_kept_pointwise` (same file: cells `k * w`, each access the
@@ -817,8 +836,8 @@ whole cell, threads below a bound) is its corollary, with `Apart` from `apart_st
 
 **Proof.**
 
-1. `kept`. Let `W b` say `b = out`. Every write is to `out`: a write to another block contradicts
-   `hr`. Every access with `!invariant.load` is to a block other than `out` by `hi`. That is
+1. `kept`. Let `W b` say `b = out`. Every access that writes for the core (a write or an
+   `atomicrmw`'s read, `Access.kind_writes`) is to `out`: one to another block contradicts `hr`. Every access with `!invariant.load` is to a block other than `out` by `hi`. That is
    `kept_of_split`.
 2. `racy`. Suppose `racy tr = true`. By `racy_iff` there are two accesses `x`, `y` of the phases of
    `tr`, so of `tr` (`mem_phases`), that clash, which needs (among its conditions) different
@@ -831,7 +850,7 @@ whole cell, threads below a bound) is its corollary, with `Apart` from `apart_st
 
 **Instance and twins** (MojoProofTest/ScheduleOwned.lean, statements about one trace). `elemTr o`:
 two threads, each an `!invariant.load` of its 4 bytes of block 2 and a store of 4 bytes at offset
-`o n` of block 1. `elem_clean`: with `o n = 4 n + 8` and cells `4 n + 8` of width 4 (apart by
+`o n` of block 1. `elem_clean` (every launch): with `o n = 4 n + 8` and cells `4 n + 8` of width 4 (apart by
 linear arithmetic, an offset `racy_kept_pointwise` does not cover), the premises hold for each of
 the four accesses by evaluation, so the trace is not racy and keeps the promise. `elem_owned`:
 the same trace follows the tiling `elemCells` (block 1 in two cells of 4 bytes from 8), so
@@ -842,20 +861,21 @@ the same trace follows the tiling `elemCells` (block 1 in two cells of 4 bytes f
 
 ## Route in Lean
 
-T2 (`Grid.confluent`) gives `Confluent rc Same Grid.Bad` on `γ` from the start alone. A general
-lemma, `Confluent.of_iff`, replaces the bad set of a confluent system by one with the same members:
-`refl`, `symm`, `trans` and `bisim` do not mention it, and `bad_eqv`, `bad_step` and `diamond` go
-through the equivalence. Conclusion 2 makes `Grid.Bad` and `Grid.Faults` agree on `γ`
-(`Grid.owned_bad`), so conclusion 1 is `Grid.confluent` with `Confluent.of_iff`
+T2 (`Grid.confluent`) gives `Confluent rc Same Bad` on `γ` from the start alone, with the core's
+`Bad` at `sig`. A general lemma of the core, `Confluent.transfer` (GPUProof/Transfer.lean), moves
+confluence along a surjection that maps the steps, the equivalence and the bad set; along the
+identity it replaces the bad set of a confluent system by one with the same members. Conclusion 2
+makes the core's `Bad` and the faults (`GPUProof.Faults` at `sig`) agree on `γ` (`Grid.owned_bad`),
+so conclusion 1 is `Grid.confluent` with `Confluent.transfer` along the identity
 (`Grid.confluent_owned`). This route needs `hm : m.BytesIn m.Known` (T2's hypothesis) and none of
 the lemmas of the sections above that T2 does not already use.
 
 ## Dependencies
 
-- `Confluent`, `Confluent.one_run` (MojoProof/Sem/OneRun.lean);
+- `Confluent`, `Confluent.one_run` (GPUProof/OneRun.lean);
 - `Grid.start`, `Mem.checkClosed`, `Mem.allocNext`, `Grid.start_blocks`, `Val.bounds`, `Grid.Step`,
   `Grid.advance`, `Grid.fire`, `step`, `Mem.check`, `Mem.fresh` (MojoProof/Sem/Grid.lean, Thread.lean,
-  Value.lean); `Mem.Known` (MojoProof/Sem/Names.lean); `Grid.Closed`, `Thread.AtCall`,
+  Value.lean); `Mem.Known` (MojoProof/Sem/SigDef.lean); `Grid.Closed`, `Thread.AtCall`,
   `Grid.AtCalls` (MojoProof/Sem/Closed.lean);
   `Access.Writes`, `Mem.Changes`, `Mem.Owned`, `Status.AllocasIn`, `Grid.Owns`
   (MojoProof/Sem/Writes.lean);
@@ -863,7 +883,11 @@ the lemmas of the sections above that T2 does not already use.
 - `Tiling`, `Owned`, `racy_eq_false_of_owned`, `kept_of_split`, `Grid.sound_of_one_run`,
   `done_not_faults` (MojoProof/Sem/Trace.lean); `Grid.start_sound`, `Grid.Done.bad_iff`
   (MojoProof/Sem/Determinism.lean);
-- `Grid.Faults`, `Grid.Done`, `racy`, `kept` (MojoProof/Sem/Spec.lean);
+- `Grid.faults_iff`, `Grid.done_iff` (MojoProof/Sem/Spec.lean); `Trace.Shaped`, `racy_iff`
+  (MojoProof/Sem/RaceSig.lean); `Grid.start_reach_size`, `Grid.start_reach_shaped`,
+  `Grid.start_reach_fits` (MojoProof/Sem/Bad.lean); `Trace.Shaped.writes`
+  (MojoProof/Sem/ScheduleOwned.lean); `GPUProof.Faults` and `GPUProof.Done` (GPUProof/Run.lean)
+  and `GPUProof.racy` and `GPUProof.kept` (GPUProof/Race.lean) at `sig`;
 - `List.Perm`, `Relation.ReflTransGen` (Lean core, Mathlib).
 
 ## Instances and twins

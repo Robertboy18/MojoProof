@@ -15,8 +15,9 @@ the same value (`rmw_comm_of_ok`); an update that succeeds is by an operation `S
 admits (`rmw_commutes`), of a value and by an operand neither undef (`rmw_undef`), and from a scalar
 gives a scalar of the same width (`rmw_scalar`); an update of a scalar by a scalar of width `w`,
 neither undef, succeeds (`rmw_ok`). This is what `Access.conflict` relies on when it exempts two
-`atomicrmw`s of one operation on the same bytes from racing. The part about memory (two updates at
-one pointer, in either order, give the same blocks) is in MojoProof/Sem/Confluence.lean.
+`atomicrmw`s of one commuting operation (`RmwOp.commutes`) on the same bytes from racing. The
+part about memory (two updates at one pointer, in either order, give the same blocks) is in
+MojoProof/Sem/Confluence.lean.
 
 The proof is done once for every operator that propagates undef and poison as LLVM's integer
 operators do (`Lifts`, `Lifts.comm`, `Lifts.scalar`, `Lifts.ok`, `Lifts.comm_of_ok`) and whose

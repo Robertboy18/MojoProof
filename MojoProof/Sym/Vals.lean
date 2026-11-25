@@ -5,7 +5,7 @@ import MojoProof.Sym.Obl
 
 A block summary's node values `vals V S.nodes` (MojoProof/Sym/Term.lean) are what the lemmas about a
 block's effects and exit take: the `Elem` steps (`Elem.Steps`, MojoProof/Sym/Ops.lean) and `Ret`
-(MojoProof/Sym/Block.lean) read the loaded values, the addresses and the stored value from them.
+(MojoProof/Sym/Path.lean) read the loaded values, the addresses and the stored value from them.
 mojo_vals proves a goal `vals V S.nodes = [r₀, …, rₙ₋₁]` for a concrete summary `S`, entry by entry,
 with mojo_obl's node evaluation (MojoProof/Sym/Obl.lean), so with no hand step.
 

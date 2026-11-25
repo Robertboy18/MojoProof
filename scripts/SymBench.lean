@@ -242,8 +242,8 @@ def sn52 : Summary := (summarizeC naive.prog naive.fn_0 naive.fn_0.b_6.label 0).
     s21.obls s21 = true := by rfl
 #etime theorem s21' : covers Kernels.vadd.prog Kernels.vadd.fn_0 Kernels.vadd.fn_0.b_1.label 0
     s21.obls s21 = true := by
-  simp (config := { decide := true }) [covers, coversWith, summarize, summarizeWith, SState.run,
-    SState.stmt, SState.exit, SState.exitAt, entersAt]
+  simp (config := { decide := true }) [covers, coversWith, coversAt, summarize, summarizeWith,
+    summarizeAt, SState.run, SState.stmt, SState.exit, SState.exitAt, entersAt]
 #etime theorem dw10 : covers Kernels.vadd.prog (wide 10) 0 0 w10.obls w10 = true := by decide
 #etime theorem dw25 : covers Kernels.vadd.prog (wide 25) 0 0 w25.obls w25 = true := by decide
 #etime theorem dw50 : covers Kernels.vadd.prog (wide 50) 0 0 w50.obls w50 = true := by decide
@@ -258,11 +258,11 @@ use `set_option diagnostics true` to get diagnostic information
 #guard_msgs in
 theorem rw100 : covers Kernels.vadd.prog (wide 100) 0 0 w100.obls w100 = true := by rfl
 #etime theorem sw10 : covers Kernels.vadd.prog (wide 10) 0 0 w10.obls w10 = true := by
-  simp (config := { decide := true }) [covers, coversWith, summarize, summarizeWith, SState.run,
-    SState.stmt, SState.exit, SState.exitAt, entersAt]
+  simp (config := { decide := true }) [covers, coversWith, coversAt, summarize, summarizeWith,
+    summarizeAt, SState.run, SState.stmt, SState.exit, SState.exitAt, entersAt]
 #etime theorem sw25 : covers Kernels.vadd.prog (wide 25) 0 0 w25.obls w25 = true := by
-  simp (config := { decide := true }) [covers, coversWith, summarize, summarizeWith, SState.run,
-    SState.stmt, SState.exit, SState.exitAt, entersAt]
+  simp (config := { decide := true }) [covers, coversWith, coversAt, summarize, summarizeWith,
+    summarizeAt, SState.run, SState.stmt, SState.exit, SState.exitAt, entersAt]
 #etime theorem rm67 : covers Kernels.matmul.prog mm67 0 0 sm67.obls sm67 = true := by
   fail_if_success rfl
   exact km67

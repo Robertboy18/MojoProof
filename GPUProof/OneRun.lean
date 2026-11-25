@@ -20,11 +20,10 @@ state reachable from `a₀` is a run, of the same length, of the steps between s
 from `a₀` (`Path.lift`).
 
 This is Newman's random descent with an equivalence and a bad set, not a new principle. The proof
-is in docs/proofs/one-run.md; `Grid.sound_of_one_run` (MojoProof/Sem/Trace.lean) applies it to
-grids.
+is in docs/proofs/one-run.md.
 -/
 
-namespace MojoProof.Sem
+namespace GPUProof
 
 open Relation
 
@@ -198,4 +197,4 @@ end Confluent
 
 end OneRun
 
-end MojoProof.Sem
+end GPUProof

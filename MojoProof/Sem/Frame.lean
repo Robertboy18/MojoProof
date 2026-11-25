@@ -45,6 +45,9 @@ MojoProof/Sem/Confluence.lean: a thread's step from grids whose memories agree f
 (`Grid.advance_agree`), a step of one thread that leaves the memory agreeing for a thread with
 another number (`Grid.advance_agree_other`), and the diamond of docs/proofs/schedule.md
 (`Grid.advance_comm`).
+
+`Reads`, `Block.Agree`, `Mem.Agree`, `Mem.Op`, `Mem.apply` and `Mem.run` are defined in
+MojoProof/Sem/SigDef.lean, with `sig`, which reaches them.
 -/
 
 namespace MojoProof.Sem
@@ -54,39 +57,6 @@ open LLVM
 variable {S : Nat → Prop}
 
 section Agree
-
-/-- A read of `P` reads byte `i` of block `b`: a read access of `P` covers it. -/
-def Reads (P : List Event) (b i : Nat) : Prop :=
-  ∃ a, .access a ∈ P ∧ a.write = false ∧ a.ptr.block = b ∧ a.ptr.off ≤ (i : Int) ∧
-    (i : Int) < a.ptr.off + a.len
-
-/-- Blocks `x` and `y` agree for thread `w` at the bytes of `R`: the same shape, read-only flag
-and owner, and, if the owner admits `w`, the same liveness and the same bytes at `R`. -/
-structure Block.Agree (w : Who) (R : Nat → Prop) (x y : Block) : Prop where
-  /-- The agreement from its five parts. -/
-  mk ::
-  /-- The same space, size and addresses (`Block.shape`). -/
-  shape : x.shape = y.shape
-  /-- The same read-only flag. -/
-  readOnly : x.readOnly = y.readOnly
-  /-- The same owner. -/
-  owner : x.owner = y.owner
-  /-- If the owner admits `w`, the same liveness. -/
-  live : x.owner.admits w → x.live = y.live
-  /-- If the owner admits `w`, the same byte at every offset of `R`. -/
-  bytes : x.owner.admits w → ∀ i, R i → x.bytes i = y.bytes i
-
-/-- The frame lemma's hypothesis: memories `m₁` and `m₂` have the same `next`, and at every number
-of `S` both have no block or both have blocks that agree for thread `w` (`Block.Agree`) at the bytes
-the reads of `P` read there. -/
-structure Mem.Agree (w : Who) (S : Nat → Prop) (P : List Event) (m₁ m₂ : Mem) : Prop where
-  /-- The agreement from `next` and `blocks`. -/
-  mk ::
-  /-- The same `next`. -/
-  next : m₁.next = m₂.next
-  /-- At every number of `S`, both memories have no block, or blocks that agree for `w`
-  (`Block.Agree`) at the bytes that the reads of `P` read there. -/
-  blocks : ∀ b, S b → Option.Rel (Block.Agree w (Reads P b)) (m₁.blocks b) (m₂.blocks b)
 
 /-- Agreement of blocks is symmetric. -/
 theorem Block.Agree.symm {w : Who} {R : Nat → Prop} {x y : Block} (h : x.Agree w R y) :
@@ -129,30 +99,6 @@ theorem Mem.Agree.isSome {w : Who} {P : List Event} {m₁ m₂ : Mem} (h : m₁.
 end Agree
 
 section Ops
-
-/-- A change of memory: bytes `bs` written into block `b` from offset `o` (if it exists), block
-`b` set to `x`, block `b` made live or dead (`Mem.setLive`), or event `e` logged. -/
-inductive Mem.Op
-  /-- Bytes `bs` written into block `b` from offset `o`, if `b` has a block. -/
-  | put (b o : Nat) (bs : List MemByte)
-  /-- Block `b` set to `x`. -/
-  | set (b : Nat) (x : Block)
-  /-- Block `b` made live (`v = true`) or dead (`Mem.setLive`). -/
-  | live (b : Nat) (v : Bool)
-  /-- Event `e` logged. -/
-  | log (e : Event)
-
-/-- Memory `m` with change `op` applied. -/
-def Mem.apply (m : Mem) : Mem.Op → Mem
-  | .put b o bs => match m.blocks b with
-    | some x => m.set b (x.put o bs)
-    | none => m
-  | .set b x => m.set b x
-  | .live b v => m.setLive b v
-  | .log e => m.log e
-
-/-- Memory `m` with changes `ops` applied, first to last. -/
-def Mem.run (m : Mem) (ops : List Mem.Op) : Mem := ops.foldl Mem.apply m
 
 /-- The event op `o` logs, if any. -/
 def Mem.Op.event : Mem.Op → Option Event

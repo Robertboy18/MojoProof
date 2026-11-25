@@ -4,7 +4,7 @@ from layout import Idx, Coord, coord, row_major, TileTensor
 from layout.layout import Layout, coalesce, composition, zipped_divide, blocked_product, upcast
 from layout.swizzle import Swizzle
 
-comptime N = 323
+comptime N = 351
 comptime olayout = row_major[N]()
 
 
@@ -378,6 +378,40 @@ def kern(out_tensor: TileTensor[DType.int64, type_of(olayout), MutAnyOrigin]):
     out_tensor[320] = Int64(l36(Idx[0]))
     out_tensor[321] = Int64(l36(Idx[1]))
     out_tensor[322] = Int64(l36(Idx[2]))
+    var l37 = composition(Layout(coord[4, 8], coord[8, 1]), Layout(shape=Coord(Idx[2], Coord(Idx[2], Idx[2])), stride=Coord(Idx[1], Coord(Idx[8], Idx[16]))))
+    out_tensor[323] = Int64(l37(Idx[0]))
+    out_tensor[324] = Int64(l37(Idx[1]))
+    out_tensor[325] = Int64(l37(Idx[2]))
+    out_tensor[326] = Int64(l37(Idx[3]))
+    out_tensor[327] = Int64(l37(Idx[4]))
+    out_tensor[328] = Int64(l37(Idx[5]))
+    out_tensor[329] = Int64(l37(Idx[6]))
+    out_tensor[330] = Int64(l37(Idx[7]))
+    var l38 = composition(Layout(coord[2, 2], coord[1, 10]), Layout(coord[2, 2], coord[1, 1]))
+    out_tensor[331] = Int64(l38(Idx[0]))
+    out_tensor[332] = Int64(l38(Idx[1]))
+    out_tensor[333] = Int64(l38(Idx[2]))
+    out_tensor[334] = Int64(l38(Idx[3]))
+    var l39 = composition(Layout(coord[6, 2], coord[1, 100]), Layout(coord[3, 2], coord[2, 3]))
+    out_tensor[335] = Int64(l39(Idx[0]))
+    out_tensor[336] = Int64(l39(Idx[1]))
+    out_tensor[337] = Int64(l39(Idx[2]))
+    out_tensor[338] = Int64(l39(Idx[3]))
+    out_tensor[339] = Int64(l39(Idx[4]))
+    out_tensor[340] = Int64(l39(Idx[5]))
+    var l40 = upcast[factor=2](Layout(coord[4, 8], coord[8, 1]))
+    out_tensor[341] = Int64(l40.shape_coord()[0].value())
+    out_tensor[342] = Int64(l40.stride_coord()[0].value())
+    out_tensor[343] = Int64(l40.shape_coord()[1].value())
+    out_tensor[344] = Int64(l40.stride_coord()[1].value())
+    var l41 = upcast[factor=2](Layout(coord[3], coord[1]))
+    out_tensor[345] = Int64(l41.shape_coord()[0].value())
+    out_tensor[346] = Int64(l41.stride_coord()[0].value())
+    var l42 = Layout(shape=Coord(Idx[2], Coord(Idx[2], Idx[3])), stride=Coord(Idx[1], Coord(Idx[2], Idx[4])))
+    out_tensor[347] = Int64(l42(Coord(Idx[1], Idx[5])))
+    out_tensor[348] = Int64(l42(Coord(Idx[1], Coord(Idx[1], Idx[2]))))
+    out_tensor[349] = Int64(l42(Coord(Idx[0], Idx[4])))
+    out_tensor[350] = Int64(l42(Coord(Idx[1], Idx[0])))
 
 def main() raises:
     var ctx = DeviceContext()

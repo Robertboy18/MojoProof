@@ -24,8 +24,9 @@ which `Grid.Step` advances threads and fires collective calls. The two theorems 
    set `A` of address choices such that for every `ch` in `A` there are an oracle `o₁`, a start
    `Grid.start prog fn L args m₁ ch o₁ = .ok (g₁, c₁)` with `lab.MemOk pay L c₁ g₁`, and one run
    `ReflTransGen (Grid.Step L c₁) g₁ z₁` to a grid `z₁` in which every thread has returned
-   (`z₁.Done`) and that is not bad (`¬ z₁.Bad L c₁`: no thread faults, no race is enabled, its
-   trace has no data race and keeps the promise of `!invariant.load`); and `m₁.SkelEq pay m₂`.
+   (`GPUProof.Done sig (z₁, L, c₁)`) and that is not bad (`¬ GPUProof.Bad sig (z₁, L, c₁)`: no
+   thread faults, no race is enabled, its trace has no data race and keeps the promise of
+   `!invariant.load`); and `m₁.SkelEq pay m₂`.
    Conclusion: `Kernel.Sound prog fn L args m₂ (fun ch _ => A ch) (fun m => some m.blocks)
    (fun _ => True)`: at every address choice in `A` and every oracle, the launch on `m₂` starts,
    and its grid is safe, race free, keeps the promise of `!invariant.load`, makes progress,

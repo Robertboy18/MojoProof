@@ -16,7 +16,7 @@ the corpus, and graphviz 2.44.0 (`dot`) only to regenerate or check the dependen
 
 ```
 lake exe cache get        # prebuilt Mathlib files
-lake build                # the default targets: the library MojoProof and the kernels MojoProofKernels
+lake build                # the default targets: GPUProof, MojoProof and MojoProofKernels
 lake build MojoProofTest  # every test module
 lake test                 # the test runner mojoproof_test
 lake env lean --run scripts/Audit.lean
@@ -33,15 +33,21 @@ What each one checks:
   `tests/corpus/MANIFEST.tsv` row, it parses, `parse (print m) = m`, and the importer accepts it or
   refuses it with exactly the reason `tests/corpus/REFUSALS.tsv` lists.
   It also runs the evaluator on `vector_addition` and `tiled_matmul` against FloatLib's arithmetic.
-- `scripts/Audit.lean` imports every module of `MojoProof/` and `MojoProofTest/` and checks the
-  environment. Every declaration (theorems and definitions, private ones included) must depend on no
-  axiom beyond `propext`, `Classical.choice` and `Quot.sound`. A `sorry` shows as `sorryAx` and a
-  `native_decide` as an auxiliary axiom. It also prints these counts:
+- `scripts/Audit.lean` imports every module of `GPUProof/`, `MojoProof/` and `MojoProofTest/` and
+  checks the environment; the library it counts is `GPUProof/` with `MojoProof/`. Every declaration
+  (theorems and definitions, private ones included) must depend on no axiom beyond `propext`,
+  `Classical.choice` and `Quot.sound`. A `sorry` shows as `sorryAx` and a `native_decide` as an
+  auxiliary axiom. It also prints these counts:
   - `DUPDEF` and `DUPTHM`: definitions or theorems of the library that repeat an earlier one.
   - `DUPDEF_tests` and `DUPTHM_tests`: the same for test declarations.
   - `unused`: library declarations nothing mentions, except the targets in `scripts/targets.txt`.
   - `equivalences`: theorems `f as ↔ g bs` or `f as = g bs` whose two sides are headed by two
-    different definitions of the library.
+    different definitions or inductive types of the library, as the conclusion or as a conjunct
+    of it, except the pairs of definitions that a row of `scripts/laws.tsv` exempts in the one
+    statement it records (by its fingerprint). A further pair in an exempted statement is
+    counted.
+  - `laws` and `laws_stale`: the theorems that a row of `scripts/laws.tsv` exempts, and the rows
+    that exempt nothing (the theorem is gone, its statement changed, a listed pair is not in it).
   - `instances` and `instances_tests`: theorems of the library (of the tests) whose statement is
     an instance of a library theorem's, with that theorem's binders as metavariables and
     reducible unfolding, by a proof that does not reach it: a specialization proved again.
@@ -49,28 +55,34 @@ What each one checks:
   With `--deps <file>` it also writes the facts that `scripts/deps.py` turns into
   `docs/DEPENDENCIES.md` and `docs/deps/`.
 - `scripts/cited.py`: every name in backticks whose last component is snake_case (`addr_twin`,
-  `Mem.load_skel`), in a module docstring of `MojoProof/` or `MojoProofTest/`, must be a declaration
-  that resolves from the citing file. A library lemma of the same last name does not count, and
-  neither does a field name standing in for a qualified name. In the body of every roadmap card
-  (`roadmap/**/cards/*.md`), every backticked span that begins with a fully qualified name
-  (`MojoProofTest.NaiveOff.correct`, or the head of a term) must begin with a declaration or a
-  module of the library or its tests. A name that none of our files declares resolves also against
-  the Lean files under `.lake/packages/` (Mathlib, Batteries); Lean's own library is not read.
+  `Mem.load_skel`), in a module docstring of `GPUProof/`, `MojoProof/` or `MojoProofTest/`, must be
+  a declaration that resolves from the citing file. A library lemma of the same last name does not
+  count, and neither does a field name standing in for a qualified name. In the body of every
+  roadmap card (`roadmap/**/cards/*.md`), every backticked span that begins with a fully qualified
+  name (`MojoProofTest.NaiveOff.correct`, or the head of a term) must begin with a declaration or a
+  module of the core, the library or its tests. A name that none of our files declares resolves
+  also against the Lean files under `.lake/packages/` (Mathlib, Batteries); Lean's own library is
+  not read.
 - `scripts/corpus.py check`: every corpus file matches its manifest row (sha256, line count, kernel
   name, arch, PTX version), and no `.ll` file under `tests/corpus/` is missing from the manifest.
   A row whose source lacks the Apache-LLVM line is flagged `UNLICENSED`, and a row whose `lib` is
   not a comma-separated list of `.mojo` paths (or `-`) is flagged `BADLIB`.
-- `python3 scripts/near_dups.py . --lib MojoProof --list 5`: the theorems of `MojoProof/` whose text
-  is identical once widths and types are replaced (`width families`), and the clusters of theorems
-  of 15 or more lines that share at least 70% of their 5-token shingles (`near-duplicate
-  clusters`), with the five largest clusters listed.
+- `python3 scripts/near_dups.py . --lib GPUProof --lib MojoProof --list 5`: the theorems of
+  `GPUProof/` and `MojoProof/` whose text is identical once widths and types are replaced (`width
+  families`), and the clusters of theorems of 15 or more lines that share at least 70% of their
+  5-token shingles (`near-duplicate clusters`), with the five largest clusters listed.
 
 The audit exits with an error only for an axiom or when one of its probes fails: the
 equivalences probe (it must count the public `@[csimp]` equality of `MojoProofTest.AuditProbe`
-and not the one whose right-hand side is private), the duplicates probe (the two statements that
+and the `iff` between its two inductive predicates, and not the equality whose right-hand side is
+private), the laws probe (with rows that exempt the pair
+`(double, twice)`, it must count `double_and`, the law with a further equation, and not
+`double_twice`, and a row with another statement's fingerprint or pair must be stale), the
+duplicates probe (the two statements that
 differ through an `abbrev` must pair) and the instances probe (`outS_eight` must be reported and
 `outS_eight_of_lt` not). The counts it prints have limits in `scripts/counts.tsv`, which are all
-0 except `instances_tests`, at 1; if a count drops below its limit, lower the limit.
+0 except `laws`, at 7, and `instances_tests`, at 1; if a count drops below its limit, lower the
+limit.
 `near_dups` and `width_families` in that file are the `near-duplicate clusters` and `width families`
 counts that `scripts/near_dups.py` prints. `python3 scripts/counts.py <audit output> <near_dups
 output>` checks every limit and exits 1 if a count exceeds its limit or is missing; CI saves the
@@ -139,7 +151,7 @@ python3 scripts/deps.py check /tmp/facts.json
 
 - The build, the tests, the audit (with every count within its limit), `cited.py` and
   `corpus.py check` pass. There is no `sorry`, `admit`, `native_decide`, `axiom`,
-  `implemented_by` or `extern` in `MojoProof/`.
+  `implemented_by` or `extern` in `GPUProof/` or `MojoProof/`.
 - Prove each family of statements once. A variant is a one-line corollary or is not added. Generate
   instances with commands or tactics instead of copying proofs.
 - Every abstraction and every premise of a headline theorem has a concrete instance, and a premise
@@ -177,6 +189,8 @@ request, and rebuilds and publishes it from main when the pull request is merged
 
 ## Where things live
 
+- `GPUProof/`: the core, definitions for every machine with no front end (it imports only
+  Mathlib and FloatLib): the signature `Sig`, runs, races, `Clean` and the one-run theorem.
 - `MojoProof/LLVM/`: the LLVM IR AST, lexer, parser, printer, intrinsic table, the importer's checks,
   and the `mojo_import` and `mojo_corpus` commands.
 - `MojoProof/Sem/`: the semantics (values, memory, one thread, the grid of threads), what a kernel

@@ -4,9 +4,9 @@ title: layer_norm_gpu, the 34 row-wise layer norm specializations (TorchLean.Ten
 kind: kernel
 ref: modular/modular@bbc13a71:max/kernels/test/gpu/nn/test_layer_norm.mojo:27
 quote: "def run_layer_norm_gpu["
-lean: TorchLean.Tensor.layerNorm
+lean: TorchLean.Tensor.layerNorm, TorchLean.TransformerBlock.layerNorm, MojoProof.Float.welford, MojoProof.Float.welford_error, MojoProof.Float.wvar_error, MojoProof.Float.lnorm, MojoProof.Float.lnorm_error
 corpus: tests/corpus/layernorm
-tests: MojoProofTest.Corpus, MojoProofTest.SymSeg
+tests: MojoProofTest.Corpus, MojoProofTest.SymSeg, MojoProofTest.FloatWelford, MojoProofTest.FloatNorm
 upstream:
 depends: warp-shuffles, shared-memory, barriers, rsqrt-approx, launch
 level: L0
@@ -26,11 +26,17 @@ shuffle and `rsqrt.approx` calls (MojoProof/Sym/Rules.lean); it takes a `load` o
 shared-memory global (`MojoProof.Sym.SNode.eval_globalAt`; MojoProofTest/SymSeg.lean: `ln_store`,
 `ln_load`), and refuses a `load` after a `store`.
 
-**Float bounds.** For the two-pass mean and variance along any two trees, in every IEEE format,
-`MojoProof.Float.mean_error` and `MojoProof.Float.var_error` (docs/proofs/float-reductions.md)
-bound the words against the exact mean and `TorchLean.var`, the statistics of
-`TorchLean.TransformerBlock.layerNorm`, which `TorchLean.TransformerBlock.get2_layerNorm_forward`
-links to TorchLean's op table. They are not the corpus kernels' bound: those merge Welford
-statistics (mean, sum of squared deviations and the count) across lanes by butterfly shuffles.
+**Float bounds.** The corpus kernels merge Welford statistics (count, mean and sum of squared
+deviations) across lanes by butterfly shuffles
+(ln_rowwise_warp_t1_r1_ax0_w1_bs128_1a9a768a.nvptx.ll:250-268). Along any reduction tree, in
+every IEEE format, `MojoProof.Float.welford_error`, `MojoProof.Float.wmean_error` and
+`MojoProof.Float.wvar_error` (docs/proofs/float-welford.md) bound the merged words against the
+inputs' mean and `TorchLean.var`. In binary32, with the `rsqrt.approx` contract,
+`MojoProof.Float.lnorm_error` (docs/proofs/float-norm.md) bounds each output
+`((x - mean) * r) * gamma + beta`, fused or not, against `TorchLean.TransformerBlock.layerNorm`,
+which `TorchLean.TransformerBlock.get2_layerNorm_forward` links to TorchLean's op table. The
+two-pass `MojoProof.Float.mean_error` and `MojoProof.Float.var_error`
+(docs/proofs/float-reductions.md) bound another algorithm. That a grid run computes these words
+is not proved.
 
 **Open.** Every level above L0, first for one specialization, then for the family.

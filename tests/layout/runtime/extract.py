@@ -1,0 +1,138 @@
+"""extract.py: the runtime-leaf conformance test's Lean file from a run's dump.
+
+python3 tests/layout/runtime/extract.py tests/layout/runtime/dump.txt \
+    MojoProofTest/LayoutRuntime.lean --mojo <version>
+
+The dump is the output of tests/layout/runtime/runtime.mojo, run with the argument 0: lines
+`<case> <v> <offset>` for each scalar v the program evaluates (every scalar below the layout's
+size, except where CASES says otherwise), then `<case> size <n>` and `<case> cosize <n>`. CASES
+gives each case's layout in the model, with the same leaves runtime (`false`) and static (`true`)
+as the program. For each case the Lean file states, by `decide`, that the model's offsets of
+those scalars (each a runtime leaf), its size and its cosize are the run's. DIFFER gives, for a
+case where the model and the run differ, the model's values; there the Lean file states them by
+`decide` and quotes the run's in a comment.
+The script refuses a dump whose cases or keys differ from CASES, and a DIFFER case whose run
+agrees with the model's values (exit code 1).
+"""
+import sys
+
+# case: (what the program builds, the model's layout)
+CASES = {
+    'c0': ('(3, 4):(1, 3)',
+           '⟨[leaf 3 false, leaf 4 false], [leaf 1 false, leaf 3 false]⟩'),
+    'c1': ('(2, 3, 2):(6, 1, 0), a stride 0',
+           '⟨[leaf 2 false, leaf 3 false, leaf 2 false], '
+           '[leaf 6 false, leaf 1 false, leaf 0 false]⟩'),
+    'c2': ('(2, (2, 3)):(1, (2, 4)), nested',
+           '⟨[leaf 2 false, tup [leaf 2 false, leaf 3 false]], '
+           '[leaf 1 false, tup [leaf 2 false, leaf 4 false]]⟩'),
+    'c3': ('(2, 3):(3, 1), the extent 2 and the stride 1 static',
+           '⟨[leaf 2 true, leaf 3 false], [leaf 3 false, leaf 1 true]⟩'),
+    'c4': ("upcast[2] of (4, 8):(8, 1), the docstring's row_major[4, 8]",
+           'Lay.upcast 2 ⟨[leaf 4 false, leaf 8 false], [leaf 8 false, leaf 1 false]⟩'),
+    'c5': ('upcast[2] of (3):(1), whose extent 3 the factor 2 does not divide',
+           'Lay.upcast 2 ⟨[leaf 3 false], [leaf 1 false]⟩'),
+    'c6': ('upcast[2] of (4, 3):(3, 1), whose stride 3 and the factor 2 do not divide each other',
+           'Lay.upcast 2 ⟨[leaf 4 false, leaf 3 false], [leaf 3 false, leaf 1 false]⟩'),
+    'c7': ('upcast[2] of (4):(0), a stride 0, where shape_div(2, 0) divides by 0',
+           'Lay.upcast 2 ⟨[leaf 4 false], [leaf 0 false]⟩'),
+    'c8': ('(0, 2):(1, 10) at the scalars 1 and 5, past the size 0',
+           '⟨[leaf 0 false, leaf 2 false], [leaf 1 false, leaf 10 false]⟩'),
+}
+
+# case: (the model's values, why they differ from the run's)
+DIFFER = {
+    'c8': ([1, 5, 0, 1],
+           "splitting a scalar against the extent 0, the model's remainder `v % 0` is v "
+           "(`Nat.mod_zero`) where Mojo's `divmod(v, 0)` is (0, 0) (std/simd.mojo:1321-1352), "
+           "so the model's offset is v * 1 and Mojo's 0; the size is 0, so no law covers these "
+           "scalars"),
+}
+
+
+def wrap(text, width=100, indent='    '):
+    """Breaks `text` at spaces into lines of at most `width` characters, the later ones indented."""
+    lines, cur = [], ''
+    for word in text.split(' '):
+        cand = word if not cur else cur + ' ' + word
+        if len(cand) > width and cur:
+            lines.append(cur)
+            cur = indent + word
+        else:
+            cur = cand
+    lines.append(cur)
+    return '\n'.join(lines)
+
+
+def main():
+    if len(sys.argv) != 5 or sys.argv[3] != '--mojo':
+        print(__doc__)
+        return 1
+    dump, out, mojo = sys.argv[1], sys.argv[2], sys.argv[4]
+    vals = {}
+    for line in open(dump):
+        case, key, value = line.split()
+        vals.setdefault(case, []).append((key, int(value)))
+    if list(vals) != list(CASES):
+        print(f'cases {list(vals)} are not {list(CASES)}')
+        return 1
+    body, total = [], 0
+    for case, (what, lay) in CASES.items():
+        rows = vals[case]
+        keys = [k for k, _ in rows]
+        if keys[-2:] != ['size', 'cosize'] or not all(k.isdigit() for k in keys[:-2]):
+            print(f'{case}: keys {keys}')
+            return 1
+        pts = [int(k) for k in keys[:-2]]
+        pts_lean = f'List.range {len(pts)}' if pts == list(range(len(pts))) else str(pts)
+        got = [v for _, v in rows]
+        total += len(got)
+        body.append(f'-- {case}: {what}')
+        if case in DIFFER:
+            model, why = DIFFER[case]
+            if model == got:
+                print(f'{case}: the run agrees with the model')
+                return 1
+            body.append(wrap(f'-- The run printed {got}; the model differs: {why}.',
+                             indent='-- '))
+            got = model
+        stmt = (f'example : (fun L : Lay => ({pts_lean}).map '
+                f'(fun i => L.call (leaf i false)) ++ [L.size, L.cosize]) ({lay}) = {got} := '
+                'by decide')
+        body.append(wrap(stmt))
+        body.append('')
+    para = ('Generated by tests/layout/runtime/extract.py from '
+            'tests/layout/runtime/dump.txt, the output of tests/layout/runtime/runtime.mojo, '
+            'which Mojo ' + mojo + ' compiled for the CPU and the CPU ran; do not edit. The '
+            'layouts\' extents and strides are runtime values in the program, so Mojo computes '
+            'them with its runtime code (`_runtime_shape_div` for `upcast`). For '
+            f'{len(CASES) - len(DIFFER)} cases, the example states, by `decide`, that the '
+            'offsets the model of MojoProof/Layout computes for the scalars the program '
+            'evaluates (each scalar below the layout\'s size), its size and its cosize equal the '
+            'values the run printed. On '
+            f'{" and ".join(DIFFER)}, the model and the run differ: the example states the '
+            'model\'s values by `decide` and its comment quotes the run\'s and says why. This is '
+            'a test, not a proof: it covers these '
+            f'{len(CASES)} cases ({total} values) and says nothing about other shapes. '
+            'tests/layout/runtime/record.txt records the run.')
+    head = f'''import MojoProof.Layout.Algebra
+
+/-!
+# The layout model against a run of Mojo's code: layouts with runtime leaves
+
+{wrap(para, indent='')}
+-/
+
+namespace MojoProofTest.LayoutRuntime
+
+open MojoProof.Layout MojoProof.Layout.Tup
+
+'''
+    with open(out, 'w') as f:
+        f.write(head + '\n'.join(body).rstrip('\n') + '\n\nend MojoProofTest.LayoutRuntime\n')
+    print(f'{len(CASES)} cases, {total} values')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -132,8 +132,9 @@ def generate(facts, out):
             if i not in ours:
                 ext.setdefault(p, set()).add(i)
     w("## Modules\n")
-    w("Every module of `MojoProof/` and `MojoProofTest/` with its direct imports; external imports are")
-    w("grouped by package. Every module also imports `Init`, Lean's prelude, which is not listed.\n")
+    w("Every module of `GPUProof/`, `MojoProof/` and `MojoProofTest/` with its direct imports; external")
+    w("imports are grouped by package. Every module also imports `Init`, Lean's prelude, which is not")
+    w("listed.\n")
     w("| Module | Lines | Imports of ours | External imports |")
     w("|---|---|---|---|")
     for m in mods:
@@ -148,7 +149,7 @@ def generate(facts, out):
         w(f"| {m['name']} | {lines} | {mine} | {other} |")
     w("")
     dot = ["digraph modules {", "  rankdir=LR;", '  node [shape=box, fontname="Helvetica"];']
-    for lib in ("MojoProof", "MojoProofTest"):
+    for lib in ("GPUProof", "MojoProof", "MojoProofTest"):
         dot.append(f"  subgraph {q('cluster_' + lib)} {{ label={q(lib)};")
         for m in mods:
             if m["name"].split(".")[0] == lib:
@@ -171,11 +172,12 @@ def generate(facts, out):
     w("The claims are the theorems among the audit targets (`scripts/targets.txt`). Each claim is")
     w("walked by `closure` (scripts/Audit.lean): the constants its statement and proof mention,")
     w("then those of every declaration of ours they reach (type and body), stopping at the first")
-    w("external constant. Ours: the declarations of `MojoProof/` reached, auto-generated ones")
-    w("(matchers, equation lemmas, constructors, projections) not listed. External: the external")
-    w("constants reached, by package. Axioms: every axiom reached through the whole environment.")
-    w("TRUST: the ids of docs/TRUST.md whose anchor in `scripts/trust.tsv` the walk reaches. The")
-    w("complete lists are in `docs/deps/claims.tsv` (claim, kind, module or package, name).\n")
+    w("external constant. Ours: the declarations of `GPUProof/` and `MojoProof/` reached,")
+    w("auto-generated ones (matchers, equation lemmas, constructors, projections) not listed.")
+    w("External: the external constants reached, by package. Axioms: every axiom reached through the")
+    w("whole environment. TRUST: the ids of docs/TRUST.md whose anchor in `scripts/trust.tsv` the walk")
+    w("reaches. The complete lists are in `docs/deps/claims.tsv` (claim, kind, module or package,")
+    w("name).\n")
     w("TRUST anchors (`scripts/trust.tsv`): " + "; ".join(
         f"{a[0]} {a[1]}" + (f" `{a[2]}`" if len(a) > 2 and a[2] else "") for a in anchors) + ".\n")
     w("| Claim | Ours | External, by package | Axioms | TRUST |")

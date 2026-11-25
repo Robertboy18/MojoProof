@@ -4,9 +4,9 @@ title: ldmatrix, a warp's load of 8x8 matrices from shared memory
 kind: construct
 ref: PTX ISA 9.5 #9.7.16.5.15
 quote: ""
-lean: MojoProof.Sem.ldm, MojoProof.Sem.ldm_inv, MojoProof.Sem.ldmatrix, MojoProof.Sem.ldmatrix_gather, MojoProof.Sem.ldmatrix_fragA, MojoProof.Sem.ldmatrix_fragB_cols, MojoProof.Sem.ldmatrix_fragB, MojoProof.Sem.ldmatrix_fragBt
+lean: MojoProof.Sem.ldm, MojoProof.Sem.ldm_inv, MojoProof.Sem.ldmatrix, MojoProof.Sem.ldmatrix_gather, MojoProof.Sem.ldmatrix_fragA, MojoProof.Sem.ldmatrix_fragB_cols, MojoProof.Sem.ldmatrix_fragB, MojoProof.Sem.ldmatrix_fragBt, MojoProof.Sem.ldmWarp, MojoProof.Sem.ldmWarp_spec
 corpus: none
-tests: MojoProofTest.TensorCore.isa_inv, MojoProofTest.TensorCore.mixed_not_inv, MojoProofTest.TensorCore.rows16, MojoProofTest.TensorCore.loads16, MojoProofTest.TensorCore.loadsB2
+tests: MojoProofTest.TensorCore.isa_inv, MojoProofTest.TensorCore.mixed_not_inv, MojoProofTest.TensorCore.rows16, MojoProofTest.TensorCore.loads16, MojoProofTest.TensorCore.loadsB2, MojoProofTest.TensorCoreGpu.ldmModel, MojoProofTest.TensorCoreWarp.ldm4Warp, MojoProofTest.TensorCoreWarp.ldm2Warp
 upstream:
 depends: shared-memory
 level: L1
@@ -25,10 +25,22 @@ layouts `mma` reads, `ldmatrix.x<2c>` and `ldmatrix.x<c>.trans` load the A and B
 16-bit `mma` (`MojoProof.Sem.ldmatrix_fragA`, `MojoProof.Sem.ldmatrix_fragB`), and
 `ldmatrix.x<c>` loads B from its transpose (`MojoProof.Sem.ldmatrix_fragBt`), for every count;
 `ldmatrix.x<ch>.trans` loads `h` B operands side by side
-(`MojoProof.Sem.ldmatrix_fragB_cols`). The grid does not dispatch `ldmatrix` to it yet (a run
-reaching it is unsupported), and the importer recognises only `.x4`.
+(`MojoProof.Sem.ldmatrix_fragB_cols`). On run-time values, `MojoProof.Sem.ldmWarp` takes the
+lanes' row pointers to their registers, and for every count and flag its results, read in
+`ldm q t`, are the rows' elements (`MojoProof.Sem.ldmWarp_spec`). The grid does not dispatch
+`ldmatrix` to it (a run reaching it is unsupported): its rows are reads of shared memory, and
+the grid's statements about collective calls say that a completed one reads and changes no
+memory (docs/proofs/tensor-core.md, "Not proved"). The importer recognises only `.x4`.
+
+**On a GPU.** tests/gpu/ldmatrix/record.txt, a conformance test and not a proof: on an A100,
+8 launches of one warp's `ldmatrix.x4` and `ldmatrix.x4.trans` from random shared words at
+random row addresses; every one of the 4,096 loaded 16-bit elements is the one
+`MojoProof.Sem.ldmatrix 4` gives (`MojoProofTest.TensorCoreGpu.ldmModel`).
 
 **Out of scope.** `.m16n16` and `.b8` shapes, and the `stmatrix` store.
 
-**Open.** The grid's dispatch under `MojoProof.Sem.Grid.warpReady`, and the importer's `.x1`
-and `.x2`. L2: no recorded GPU run. L3: no proved kernel uses it. Ref: quote to be added.
+**Open.** The grid's dispatch under `MojoProof.Sem.Grid.warpReady`, which needs those
+statements to allow a collective call's reads, and the importer's `.x1`
+and `.x2`. L2: the recorded GPU run agrees, but it ran a driver of the instruction, not a
+corpus kernel, and the level counts only records of corpus kernels. L3: no proved kernel uses
+it. Ref: quote to be added.

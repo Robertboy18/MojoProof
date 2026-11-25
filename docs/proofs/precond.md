@@ -6,7 +6,8 @@ Lean: MojoProof/Sem/Precond.lean; instances and twins in MojoProofTest/Precond.l
 type with a codec, length, inputs, element count, alignment and address choice the pointer widths
 admit. `pre_starts` (the precondition gives the start and W1) is for one program, `vector_addition`
 (`Kernels.vadd`), and every memory meeting the precondition, launch, address choice and oracle.
-`byval_codec` and `pre5` are one layout (`vadd`'s) and one memory. `Mem.three`, `Mem.three_spec`,
+`byval_codec` and `pre5` are one layout (`vadd`'s) and one memory. `Mem.allocs` and
+`Mem.allocs_spec` are for every number of blocks; `Mem.three`, `Mem.three_spec`,
 `Mat.Pre` and `Mat.pre_mem` (the matmul precondition) and the store forms `Mem.store_blocks`,
 `Mem.Buffer.store`, `Mem.Fits.store` and `Mem.Holds.store` are for every layout, element type,
 size, stride and store; `preN` and its twins are one layout (the naive matmul kernel's) and one
@@ -137,15 +138,18 @@ the buffer facts and `dims` of `NaiveSpec.At` on the caller's memory.
 one i32 count, and `Map2.Pre`'s tensors are vectors read at the same index. The two share their
 three allocations, `Mem.three_spec` below.
 
-**Satisfiability.** `Mem.three l al S R I A G` is the memory of three live global allocations
-owned by all threads from `{}`: block `i + 1` of `S i` bytes, read-only exactly if `R i`, whose
-first bytes are `I i`, at addresses `A i * al` and `G i * al`. `Mem.three_spec`: if no `I i` holds
-a pointer byte, `n i ≤ S i`, `A i * al < 2 ^ w₁` and `G i * al + n i ≤ 2 ^ w₀`, then the memory is
-closed under every list of values naming numbers up to 3 (`Val.bounds vs ≤ 4`), and block `i + 1`
-is a `Mem.Buffer` of `n i` bytes, writable exactly if not `R i`, that fits (`Mem.Fits`). Proof:
-`Mem.Closed.alloc` three times from `Mem.closed_empty`; the buffer and fit fields as in
-`Map2.pre_mem` above, one block at a time. `Map2.pre_mem` is `Mem.three_spec` at `Map2.mem`
-(which is `Mem.three` by unfolding) plus `Mem.holds_alloc` twice.
+**Satisfiability.** `Mem.allocs l al k S R I A G` is the memory of `k` live global allocations
+owned by all threads from `{}`, for every `k`: block `i + 1` (`i : Fin k`) of `S i` bytes,
+read-only exactly if `R i`, whose first bytes are `I i`, at addresses `A i * al` and `G i * al`.
+`Mem.allocs_spec`: if no `I i` holds a pointer byte, `n i ≤ S i`, `A i * al < 2 ^ w₁` and
+`G i * al + n i ≤ 2 ^ w₀`, then the memory is closed under every list of values naming numbers
+up to `k` (`Val.bounds vs ≤ k + 1`), and block `i + 1` is a `Mem.Buffer` of `n i` bytes, writable
+exactly if not `R i`, that fits (`Mem.Fits`). Proof: by induction on `k`; the memory's `next` is
+`k + 1`, so `Mem.Closed.alloc` extends the closed memory and the last block is the new one, while
+the earlier blocks carry over (`Mem.Buffer.of_block`, `Mem.Fits.of_block`). `Mem.three` is
+`Mem.allocs` at `k = 3` unrolled, and `Mem.three_spec` is `Mem.allocs_spec` at 3. `Map2.pre_mem`
+is `Mem.three_spec` at `Map2.mem` (which is `Mem.three` by unfolding) plus `Mem.holds_alloc`
+twice. A second size: `allocs5` (MojoProofTest/Precond.lean), five blocks of 20 bytes.
 
 `Mat.mem l t enc al x y sC A G` is `Mem.three` with block 1 the output (`m * sC` undefined
 elements, writable), blocks 2 and 3 the bytes of `x` and `y` (read-only). `Mat.pre_mem`: if the

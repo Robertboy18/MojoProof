@@ -18,7 +18,7 @@ LangRef's section on `lshr` (the quote is the first sentence of its overview). T
 
 ## Corpus
 
-20 of the 114 corpus files use it (150 uses); `corpus` lists the first 5 in path order.
+20 of the 116 corpus files use it (150 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

@@ -24,11 +24,12 @@ inline assembly, the e4m3 conversions of the float8 kernels included.
 
 Accepting a call does not give it a meaning: the semantics has none for inline assembly (`exec`,
 MojoProof/Sem/Thread.lean, refuses the instruction form with an unsupported fault), so a grid in
-which a thread reaches such a call faults (`Grid.Faults`, MojoProof/Sem/Spec.lean), no launch
-that reaches one is `Kernel.Sound` (its `Grid.Sound` requires `Grid.Safe`), and nothing proved
-here says what the copy does. For the same reason no copy is ever in flight in a run without a
-fault, which is what lets the semantics run `cp.async.commit.group` and `cp.async.wait.group n`
-(`Intrinsic.cpAsyncCommit`, `Intrinsic.cpAsyncWait`) as no-ops.
+which a thread reaches such a call faults (the core's `GPUProof.Faults` at `sig`,
+`Grid.faults_iff` in MojoProof/Sem/Spec.lean), no launch that reaches one is `Kernel.Sound` (its
+`Grid.Sound` requires `Grid.Safe`), and nothing proved here says what the copy does. For the same
+reason no copy is ever in flight in a run without a fault, which is what lets the semantics run
+`cp.async.commit.group` and `cp.async.wait.group n` (`Intrinsic.cpAsyncCommit`,
+`Intrinsic.cpAsyncWait`) as no-ops.
 
 What the strings mean, from PTX ISA 9.5 §9.7.10.28.3.1 (`cp.async`; the number follows the one
 the repository gives the commit and wait groups, §9.7.10.28.3.2-3): an asynchronous copy of

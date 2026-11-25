@@ -7,7 +7,7 @@ import MojoProof.Sym.Info
 The checker takes a cast other than `trunc`, `zext` and `sext` only when `castOk` admits its
 operator and types (`SState.stmt`, MojoProof/Sym/Checker.lean), which is exactly where `castV`
 does not fault with its unsupported-cast message on every operand (`castOk_iff`,
-MojoProof/Sym/Block.lean). Tests on hand-built blocks: block `%30` of `vector_addition`
+MojoProof/Sym/Exec.lean). Tests on hand-built blocks: block `%30` of `vector_addition`
 (Kernels.vadd.fn_0.b_2, no statements, a branch to `%31`) with one cast statement on the
 kernel's registers `%25` (a `float`, register number 26) and `%19` (an `i64`, number 19), into
 register number 28 (printed `%27`):

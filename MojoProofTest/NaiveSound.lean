@@ -1,4 +1,4 @@
-import MojoProofTest.NaiveSpec
+import MojoProofTest.NaiveFam
 import MojoProof.Sym.KernelCmd
 
 /-!
@@ -30,7 +30,8 @@ sides 1 and every memory of its family:
   binary32 word of its one thread, the other bytes and blocks are the caller's.
   `naive_matmul`: for every `K ≤ 768`, each cell against TorchLean's `Tensor.matmul` of the
   first `K` columns of `A` and of `B`ᵀ (`cols`), up to NaNs with no round fused, and within
-  `dotBound` when finite.
+  `dotBound` when finite. Both are `NaiveFam.read` and `NaiveFam.matmul` (every stride,
+  MojoProofTest/NaiveFam.lean) at the corpus strides.
 -/
 
 namespace MojoProofTest.NaiveSound
@@ -103,7 +104,8 @@ observation `Bk` of a run under `ω` (`Kernel.Obs`) has a block `y` at `bC` with
 * `x`'s bytes at every offset outside the cells of the threads in bounds (`Elem.put_out`);
 * every other block of the caller's memory unchanged.
 
-It covers every launch and memory of the family; for `naive` its premise is `naive_sound`'s. -/
+It is `NaiveFam.read` at the corpus strides 768, 768 and 50257, for every launch and memory of the
+family; for `naive` its premise is `naive_sound`'s. -/
 theorem naive_read {prog : Program} {fn : Func} {args : List Val} {ω : Nat → Nat → Nat}
     {L : Launch} (hL : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1) {m n K : Nat}
     (hn : n ≤ 50257) {bC : Nat} {A : Tensor (Model FloatTy.float.fmt) [m, 768]}
@@ -123,38 +125,8 @@ theorem naive_read {prog : Program} {fn : Func} {args : List Val} {ω : Nat → 
             (dotLoop true (o (ω k)) (Model.zero _ false) (pairs A B ⟨r, hr⟩ ⟨c, hc⟩ K))) =
             some (y.read ((r * 50257 + c) * 4) 4)) ∧
       (∀ i, (∀ k, S L m n k → i < cell L k ∨ cell L k + 4 ≤ i) → y.bytes i = x.bytes i) ∧
-      ∀ b x', b ≠ bC → mem.blocks b = some x' → Bk b = some x' := by
-  have hO := Kernel.Sound.obs h rfl hB
-  have hS : ∀ k l, bytes ω L K A B k = some l → S L m n k ∧ l.length = 4 := fun k l hb => by
-    unfold bytes at hb
-    split at hb
-    · exact ⟨by assumption, (Elem.encode_float hb).1⟩
-    · cases hb
-  refine ⟨_, hO.1 x hx, fun r c hr hc hX hY => ?_,
-    fun i hi => Elem.put_out x fun k _ l hl => ?_, hO.2⟩
-  · obtain ⟨k, hk, rfl, rfl⟩ := Launch.cell_onto hL hX hY
-    refine ⟨k, hk, rfl, rfl, fun k' hk' ex ey => Launch.xy_inj hL hz hk' hk (by rw [ex])
-      (by rw [ey]), ?_⟩
-    have hap : Apart (fun i : {i // bytes ω L K A B i ≠ none} => cell L i) 4 := fun i j hij => by
-      have hs : ∀ i : {i // bytes ω L K A B i ≠ none}, S L m n i.1 := fun i => by
-        obtain ⟨l, hl⟩ := Option.ne_none_iff_exists'.1 i.2
-        exact (hS _ _ hl).1
-      exact Launch.apart_xy (s := 50257) (m := m) hL hz hn 4 ⟨i.1, hs i⟩ ⟨j.1, hs j⟩
-        fun e => hij (Subtype.ext (congrArg (fun x : {k // S L m n k} => x.1) e))
-    obtain ⟨e, he, -, -⟩ := (Layout.Codec.float naive.prog.layout .float).round
-      (dotLoop true (o (ω k)) (Model.zero _ false) (pairs A B ⟨_, hr⟩ ⟨_, hc⟩ K))
-    have hb : bytes ω L K A B k = some e := by
-      unfold bytes
-      rw [dite_eq_left ⟨hk, hr, hc⟩]
-      exact he
-    have := Elem.put_read hap (fun k l h => (hS k l h).2) x (k := k) (by simp [hb])
-      (volume L.grid * volume L.block)
-    rw [ite_eq_left hk, hb, Option.getD_some] at this
-    rw [he]
-    exact congrArg some this.symm
-  · obtain ⟨h1, h2⟩ := hS k l hl
-    rw [h2]
-    exact hi k h1
+      ∀ b x', b ≠ bC → mem.blocks b = some x' → Bk b = some x' :=
+  NaiveFam.read (sA := 768) (sB := 768) (sC := 50257) hL hz hn h hx hB
 
 /-- **The cells of `C` after the naive kernel against TorchLean's product**, for every `K ≤ 768`.
 Under the premises of `naive_read` (every program, launch valid with `z` sides 1, sizes with
@@ -164,12 +136,12 @@ is computed by one thread `k` and holds the binary32 encoding of a word `v` with
 
 * `v` and entry `(r, c)` of TorchLean's `Tensor.matmul` of the first `K` columns of `A` and the
   transpose of the first `K` columns of `B` (`cols`) `NaNEq` (the same word or both NaNs) when no
-  `fadd` oracle number of thread `k` is `2` modulo `3` (no round fused; `matmul_take_nanEq`);
+  `fadd` oracle number of thread `k` is `2` modulo `3` (no round fused; `matmul_cols_nanEq`);
 * when `v` is finite, `|v - (A Bᵀ)ᵣ꜀|` over the reals on those columns at most `dotBound` of
-  binary32 at `K` and `Σⱼ<K |aᵣⱼ b꜀ⱼ|`, for every choice of fused rounds (`matmul_take_error`).
+  binary32 at `K` and `Σⱼ<K |aᵣⱼ b꜀ⱼ|`, for every choice of fused rounds (`matmul_cols_error`).
 
-It covers every launch and memory of the family and every `K ≤ 768`; at `K = 768` the columns are
-all of `A` and of `B`. -/
+It is `NaiveFam.matmul` at the corpus strides 768, 768 and 50257, for every launch and memory of
+the family and every `K ≤ 768`; at `K = 768` the columns are all of `A` and of `B`. -/
 theorem naive_matmul {prog : Program} {fn : Func} {args : List Val} {ω : Nat → Nat → Nat}
     {L : Launch} (hL : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1) {m n K : Nat}
     (hn : n ≤ 50257) (hK : K ≤ 768) {bC : Nat} {A : Tensor (Model FloatTy.float.fmt) [m, 768]}
@@ -192,12 +164,8 @@ theorem naive_matmul {prog : Program} {fn : Func} {args : List Val} {ω : Nat �
             (Tensor.map Model.toReal (cols K hK A)) (Tensor.map Model.toReal
               (Tensor.permute (cols K hK B) (Shape.adjacentSwap [n, K] 0) [K, n])))
                 ⟨r, hr⟩ ⟨c, hc⟩| ≤ dotBound FloatTy.float.fmt K ((pairs A B ⟨r, hr⟩ ⟨c, hc⟩
-                  K).map fun ab => |ab.1.toReal * ab.2.toReal|).sum) := by
-  obtain ⟨y, hy, hc, -, -⟩ := naive_read hL hz hn h hx hB
-  refine ⟨y, hy, fun r c hr hc' hX hY => ?_⟩
-  obtain ⟨k, hk, ex, ey, -, he⟩ := hc r c hr hc' hX hY
-  exact ⟨k, hk, ex, ey, _, he, fun hu => matmul_take_nanEq true _ A B hK _ _ fun j _ => hu j,
-    matmul_take_error (isIEEE_fmt _) true _ A B hK _ _⟩
+                  K).map fun ab => |ab.1.toReal * ab.2.toReal|).sum) :=
+  NaiveFam.matmul (sA := 768) (sB := 768) (sC := 50257) hL hz hn hK hK h hx hB
 
 
 section Clause
@@ -285,10 +253,6 @@ I :
   Mat.Thread naive.prog naive.fn_0 L T z 8 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B
       (fun x ω' => ω' = ω) 4 (bytes ω L K A B) →
     ℕ → Valuation → Prop
-N :
-  Mat.Thread naive.prog naive.fn_0 L T z 8 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B
-      (fun x ω' => ω' = ω) 4 (bytes ω L K A B) →
-    ℕ
 th :
   Mat.Thread naive.prog naive.fn_0 L
     (Ty.struct [Ty.ptr 0, Ty.struct [Ty.struct [Ty.struct [], Ty.struct []], Ty.struct [Ty.struct [], Ty.struct []]]])
@@ -310,16 +274,12 @@ I :
   Mat.Thread naive.prog naive.fn_0 L T z 8 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B
       (fun x ω' => ω' = ω) 4 (bytes ω L K A B) →
     ℕ → Valuation → Prop
-N :
-  Mat.Thread naive.prog naive.fn_0 L T z 8 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B
-      (fun x ω' => ω' = ω) 4 (bytes ω L K A B) →
-    ℕ
 th :
   Mat.Thread naive.prog naive.fn_0 L
     (Ty.struct [Ty.ptr 0, Ty.struct [Ty.struct [Ty.struct [], Ty.struct []], Ty.struct [Ty.struct [], Ty.struct []]]])
     (Val.agg [Val.agg [Val.agg [], Val.agg []], Val.agg [Val.agg [], Val.agg []]]) 8 (Ty.fp FloatTy.float)
     (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B (fun x ω' => ω' = ω) 4 (bytes ω L K A B)
-⊢ ∀ i < N th,
+⊢ ∀ i < max K 0,
     ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[i]
             (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f))).ctx =
         (Valuation.entry th.c 0 th.m' th.f).ctx →
@@ -357,32 +317,28 @@ I :
   Mat.Thread naive.prog naive.fn_0 L T z 8 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B
       (fun x ω' => ω' = ω) 4 (bytes ω L K A B) →
     ℕ → Valuation → Prop
-N :
-  Mat.Thread naive.prog naive.fn_0 L T z 8 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B
-      (fun x ω' => ω' = ω) 4 (bytes ω L K A B) →
-    ℕ
 th :
   Mat.Thread naive.prog naive.fn_0 L
     (Ty.struct [Ty.ptr 0, Ty.struct [Ty.struct [Ty.struct [], Ty.struct []], Ty.struct [Ty.struct [], Ty.struct []]]])
     (Val.agg [Val.agg [Val.agg [], Val.agg []], Val.agg [Val.agg [], Val.agg []]]) 8 (Ty.fp FloatTy.float)
     (Val.ofFloat FloatTy.float) 4 bC bA bB K 50257 A B (fun x ω' => ω' = ω) 4 (bytes ω L K A B)
-⊢ ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[N th]
+⊢ ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[max K 0]
           (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f))).ctx =
       (Valuation.entry th.c 0 th.m' th.f).ctx →
-    ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[N th]
+    ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[max K 0]
             (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f))).k =
         (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f)).k +
-          N th * (pathLen SymNaive.naiveL.H SymNaive.naiveL.B + 1) →
+          max K 0 * (pathLen SymNaive.naiveL.H SymNaive.naiveL.B + 1) →
       Mat.Head naive.prog naive.fn_0 (Ty.fp FloatTy.float) (Val.ofFloat FloatTy.float) 4 bC bA bB 50257 A B 4
           (fun k => (L.index k Dim.x * 50257 + L.index k Dim.y) * 4) (bytes ω L K A B) th.k th.m₀
           (fun k => k < volume L.grid * volume L.block ∧ L.index k Dim.x < m ∧ L.index k Dim.y < n)
-          ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[N th]
+          ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[max K 0]
             (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f))) →
-        I th (N th)
-            ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[N th]
+        I th (max K 0)
+            ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[max K 0]
               (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f))) →
           RetWith true
-            ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[N th]
+            ((Valuation.roundWith true SymNaive.naiveL.h SymNaive.naiveL.H SymNaive.naiveL.B)^[max K 0]
               (Valuation.roundWith true chainN.l chainN.S chainN.E (Valuation.entry th.c 0 th.m' th.f)))
             (fun me =>
               Elem th.m₀ bC 4 (fun k => (L.index k Dim.x * 50257 + L.index k Dim.y) * 4) (bytes ω L K A B) (th.k + 1)
@@ -394,30 +350,28 @@ th :
 #guard_msgs in
 /-- The premise of `naive.sound_inv` that the `mat … inv` clause leaves to the user, as three
 open goals at a thread in bounds `th`, a `Mat.Thread` (the thread's oracles, index, entry facts
-and bounds as one structure), at an invariant `I` and a trip count `N` of the caller's (both of
-`th`) and the launch, sizes, blocks, tensors, memory and oracles of the test above: the three
-fields of `LoopIterWith`, at the heads of the rounds, the iterates of the round
-`Valuation.roundWith true naiveL.h naiveL.H naiveL.B` from the loop head's entry valuation after
-`chainN`'s path in: `head`, `I th 0` at that entry valuation; `round`, at the head of every round
-`i < N th` with the thread's context and round `i`'s step count where `Mat.Head` (the function,
-the three buffers, `Elem` and `Elem.Only`) and `I th i` hold, the round's premises
-(`RoundWith`) and `I th (i + 1)` after the round; `exit`, at the head of round `N th` with the
-same facts and `I th (N th)`, the path out of the loop to `ret` with `Elem` after one more thread
-and `Elem.Only` (`RetWith`). The edge into the loop is `mojo_obl`'s and `Mat.Head` at every head
-is mojo_inv's and `Mat.Head.iterate`'s, inside `naive.runInv`, so there is no goal for them. An
-`example`, so that no declaration with the open goals enters the environment. -/
+and bounds as one structure), at an invariant `I` of the caller's (of `th`) and the launch,
+sizes, blocks, tensors, memory and oracles of the test above: the three fields of
+`LoopIterWith` for the trip count `max K 0` (`%16`, `smax(K, 0)`), at the heads of the rounds, the
+iterates of the round `Valuation.roundWith true naiveL.h naiveL.H naiveL.B` from the loop head's
+entry valuation after `chainN`'s path in: `head`, `I th 0` at that entry valuation; `round`, at the
+head of every round `i < max K 0` with the thread's context and round `i`'s step count where
+`Mat.Head` (the function, the three buffers, `Elem` and `Elem.Only`) and `I th i` hold, the round's
+premises (`RoundWith`) and `I th (i + 1)` after the round; `exit`, at the head of round `max K 0`
+with the same facts and `I th (max K 0)`, the path out of the loop to `ret` with `Elem` after one
+more thread and `Elem.Only` (`RetWith`). The edge into the loop is `mojo_obl`'s and `Mat.Head` at
+every head is mojo_inv's and `Mat.Head.iterate`'s, inside `naive.runInv`, so there is no goal for
+them. An `example`, so that no declaration with the open goals enters the environment. -/
 example {L : Launch} (hL : L.Valid) (hz : L.grid .z = 1 ∧ L.block .z = 1) {m n K bC bA bB : Nat}
     {A : Tensor (Model FloatTy.float.fmt) [m, 768]} {B : Tensor (Model FloatTy.float.fmt) [n, 768]}
     {mem : Mem} (h : Mat.Pre naive.prog.layout (.fp .float) (Val.ofFloat .float) 4 z mem bC bA bB
       m n K 768 768 50257 A B) {ω : Nat → Nat → Nat}
     {I : Mat.Thread naive.prog naive.fn_0 L T z 8 (.fp .float) (Val.ofFloat .float) 4 bC bA bB K
-      50257 A B (fun _ ω' => ω' = ω) 4 (bytes ω L K A B) → Nat → Valuation → Prop}
-    {N : Mat.Thread naive.prog naive.fn_0 L T z 8 (.fp .float) (Val.ofFloat .float) 4 bC bA bB K
-      50257 A B (fun _ ω' => ω' = ω) 4 (bytes ω L K A B) → Nat} :
+      50257 A B (fun _ ω' => ω' = ω) 4 (bytes ω L K A B) → Nat → Valuation → Prop} :
     Kernel.Sound naive.prog naive.fn_0 L (Mat.args z bC bA bB m n K) mem (fun _ ω' => ω' = ω)
       (fun m => some m.blocks)
       (Elem.Out mem bC (cell L) (bytes ω L K A B) (volume L.grid * volume L.block)) := by
-  refine naive.sound_inv (t := .fp .float) (w := 4) (I := I) (N := N) hL hz h.closed
+  refine naive.sound_inv (t := .fp .float) (w := 4) (I := I) hL hz h.closed
     ⟨h.ne.1.symm, h.ne.2.1.symm⟩ h.bufs h.x h.y h.le.1 h.fits (dims_lt ⟨h.le.1, h.le.2.1, h.lt⟩)
     (bytes_out ω L K A B) fun th => ⟨?head, ?round, ?exit⟩
 

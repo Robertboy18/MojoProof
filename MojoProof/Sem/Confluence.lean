@@ -64,10 +64,12 @@ contexts and every launch:
 - `Grid.fire_threads`: after a fire, a thread is at a number that has one before it; so
   `Grid.start_reach_block`: in every grid reachable from the start's there is a thread only if the
   blocks of threads are not empty.
-- `Grid.start_reach_fired`: in every grid reachable from the start's, for every program, kernel,
-  launch, arguments, caller's memory and choices, a collective call that completes logs no barrier
-  of a running thread's block of threads: a barrier with a running participant does not complete.
-  So `Grid.start_reach_fire_comm`: the case of a thread and a collective call in every grid
+- `Grid.fired_run`: for every launch with blocks of threads that are not empty, contexts and grid,
+  a collective call that completes logs no barrier of the block of threads of a running thread
+  `k` whose context puts it in block of threads `k / volume L.block`: a barrier with a running
+  participant does not complete. So `Grid.start_reach_fired`: the same in every grid reachable
+  from the start's, for every program, kernel, launch, arguments, caller's memory and choices,
+  and `Grid.start_reach_fire_comm`: the case of a thread and a collective call in every grid
   reachable from the start's, with no premise on blocks of threads.
 - `Grid.fire_fire_comm` (the case of two collective calls): for every launch, grid and contexts in
   which the two threads have one layout, two collective calls that complete give the same grid, or
@@ -946,6 +948,67 @@ theorem Grid.fire_frame {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n : Nat}
           · cases h
       · simp only [h32, ↓reduceIte] at h
         cases h
+  · rename_i v
+    have hfd : g.fired L n = [] := by simp only [Grid.fired, hn]
+    by_cases hw : n % volume L.block - n % volume L.block % 32 + 32 ≤ volume L.block
+    · simp only [hw, ↓reduceIte, bind, Except.bind, pure, Except.pure] at h
+      split at h
+      · cases h
+      rename_i r hr
+      rcases r with _ | y
+      · cases h
+      dsimp only at h
+      split at h
+      · cases h
+      rename_i ts hts
+      cases h
+      obtain ⟨x, -, hx⟩ := mmaRes_ok hr
+      have e0 : n % volume L.block % 32 ≤ n % volume L.block := Nat.mod_le _ _
+      have e1 := Nat.div_add_mod' n (volume L.block)
+      have hl : ∀ j < 32, ∃ t' fn', g.threads[n - n % volume L.block % 32 + j]? =
+          some (.wait t' (.mma v) (x j) fn') ∧ t'.at = t.at := by
+        intro j hj
+        obtain ⟨t', fn', e, ht'⟩ := hx j (by simpa using hj)
+        exact ⟨t', fn', by simpa using e, ht'⟩
+      refine ⟨_, _, fun p hp => ?_, fun hne => absurd hfd hne, hts, by rw [hfd]; rfl,
+        fun p hp c' hc => ?_, fun g₂ hn₂ hP => ?_, fun q hq => ?_⟩
+      · obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hp
+        obtain ⟨t', fn', hp', -⟩ := hl j (List.mem_range.1 hj)
+        exact ⟨_, _, _, _, hp'⟩
+      · obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hp
+        have hj := List.mem_range.1 hj
+        obtain ⟨t', fn', hp', ht'⟩ := hl j hj
+        have hmod : (n - n % volume L.block % 32 + j) % volume L.block =
+            n % volume L.block - n % volume L.block % 32 + j := by
+          rw [show n - n % volume L.block % 32 + j =
+              (n % volume L.block - n % volume L.block % 32 + j) +
+                n / volume L.block * volume L.block by omega,
+            Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt (by omega)]
+        have k1 : n - n % volume L.block % 32 + j -
+            (n - n % volume L.block % 32 + j) % volume L.block % 32 =
+              n - n % volume L.block % 32 := by
+          rw [hmod]
+          omega
+        have k2 : (n - n % volume L.block % 32 + j) % volume L.block -
+            (n - n % volume L.block % 32 + j) % volume L.block % 32 =
+              n % volume L.block - n % volume L.block % 32 := by
+          rw [hmod]
+          omega
+        unfold Grid.fire
+        simp only [hp', k1, k2, hw, ↓reduceIte, ht', hc, bind, Except.bind, pure,
+          Except.pure, hr, hts]
+      · have e3 : (List.range 32).map (fun j => g₂.threads[n - n % volume L.block % 32 + j]?) =
+            (List.range 32).map (fun j => g.threads[n - n % volume L.block % 32 + j]?) :=
+          List.map_congr_left fun j hj => hP _ (List.mem_map.2 ⟨j, hj, rfl⟩)
+        unfold Grid.fire
+        simp only [hn₂, hn, hw, ↓reduceIte, bind, Except.bind, pure, Except.pure]
+        rw [e3, hr]
+        simp only [hfd]
+        rfl
+      · simp only [List.mem_filter, List.mem_range, decide_eq_true_eq] at hq
+        exact List.mem_map.2 ⟨q, List.mem_range.2 hq.1, rfl⟩
+    · simp only [hw, ↓reduceIte] at h
+      cases h
   all_goals cases h
 
 /-- **The diamond's case of a thread and a collective call** (T2, docs/proofs/schedule.md). For
@@ -1098,30 +1161,40 @@ theorem Grid.start_reach_block {prog : Program} {fn : Func} {L : Launch} {args :
   · obtain ⟨_, hs⟩ := Grid.fire_threads hf j s hj
     exact hg _ _ hs
 
+/-- **A barrier with a running participant does not complete.** For every launch whose blocks of
+threads are not empty, contexts and grid: a collective call that completes logs no barrier of the
+block of threads of a running thread `k`'s context, if that context puts `k` in block of threads
+`k / volume L.block`, as the start's do (`Grid.start_ctx`). At a barrier every thread of the
+waiting thread's block of threads waits (`Grid.fire_frame`), and `k` is one of them. The premise
+on `k`'s context is needed (MojoProofTest/Bad.lean `fire_race_twin`). -/
+theorem Grid.fired_run {L : Launch} {c : Nat → Ctx} {g gf : Grid} {n k : Nat} {t : Thread}
+    (hpos : 0 < volume L.block) (hc : (c k).who.cta = k / volume L.block)
+    (htk : g.threads[k]? = some (.run t)) (hf : g.fire L c n = .ok (some gf)) :
+    .barrier (c k).who.cta ∉ g.fired L n := fun hb => by
+  obtain ⟨P, -, hPw, hPb, -⟩ := Grid.fire_frame hf
+  obtain ⟨_, _, _, _, e⟩ := hPw k (by
+    rw [hPb (List.ne_nil_of_mem hb)]
+    refine List.mem_map.2 ⟨k % volume L.block, List.mem_range.2 (Nat.mod_lt _ hpos), ?_⟩
+    have e := Grid.mem_fired hb
+    simp only [Event.barrier.injEq, hc] at e
+    rw [← e]
+    exact Nat.div_add_mod' k _)
+  rw [htk] at e
+  cases e
+
 /-- In every grid reachable from the start's, for every program, kernel, launch, arguments,
 caller's memory, address choice and oracle, a collective call that completes logs no barrier of
-the block of threads of a running thread `k`'s context: at a barrier every thread of `n`'s block
-of threads waits (`Grid.fire_frame`), and the start puts `k` in block of threads
-`k / volume L.block` (`Grid.start_ctx`; the block of threads is not empty,
-`Grid.start_reach_block`). -/
+the block of threads of a running thread `k`'s context: `Grid.fired_run`, as the start puts `k`
+in block of threads `k / volume L.block` (`Grid.start_ctx`) and the block of threads is not empty
+(`Grid.start_reach_block`). -/
 theorem Grid.start_reach_fired {prog : Program} {fn : Func} {L : Launch} {args : List Val}
     {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g gf : Grid} {c : Nat → Ctx}
     {n k : Nat} {t : Thread}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
     (hr : Relation.ReflTransGen (Grid.Step L c) g₀ g)
     (htk : g.threads[k]? = some (.run t)) (hf : g.fire L c n = .ok (some gf)) :
-    .barrier (c k).who.cta ∉ g.fired L n := fun hb => by
-  obtain ⟨P, -, hPw, hPb, -⟩ := Grid.fire_frame hf
-  have hpos := Grid.start_reach_block h hr k _ htk
-  obtain ⟨_, _, _, _, e⟩ := hPw k (by
-    rw [hPb (List.ne_nil_of_mem hb)]
-    refine List.mem_map.2 ⟨k % volume L.block, List.mem_range.2 (Nat.mod_lt _ hpos), ?_⟩
-    have e := Grid.mem_fired hb
-    simp only [Event.barrier.injEq, (Grid.start_ctx h k).2.1] at e
-    rw [← e]
-    exact Nat.div_add_mod' k _)
-  rw [htk] at e
-  cases e
+    .barrier (c k).who.cta ∉ g.fired L n :=
+  Grid.fired_run (Grid.start_reach_block h hr k _ htk) (by rw [(Grid.start_ctx h k).2.1]) htk hf
 
 /-- **The diamond's case of a thread and a collective call from the start** (T2,
 docs/proofs/schedule.md). For every program, kernel, launch, arguments, caller's memory, address
@@ -1746,10 +1819,10 @@ theorem Grid.advance_atomic {c : Nat → Ctx} {g g' : Grid} {n : Nat} {e : Acces
 
 /-- **The diamond's case of two exempt atomics.** For every closed grid, contexts and threads
 `n ≠ k` whose steps from `g` give `gₙ` and `gₖ`: if a pending access of `n` and one of `k` are by
-`atomicrmw`s of one operation at the same pointer and size (the pair `Access.conflict` exempts),
-then `k`'s step from `gₙ` and `n`'s step from `gₖ` succeed and give grids that are the same
-(`Grid.Same`). Both steps are updates (`Grid.advance_atomic`) of one type at one pointer, which
-commute (`Mem.update_comm`). -/
+`atomicrmw`s of one operation at the same pointer and size (which includes every pair
+`Access.conflict` exempts), then `k`'s step from `gₙ` and `n`'s step from `gₖ` succeed and give
+grids that are the same (`Grid.Same`). Both steps are updates (`Grid.advance_atomic`) of one type at
+one pointer, which commute (`Mem.update_comm`). -/
 theorem Grid.advance_atomic_comm {c : Nat → Ctx} {g gn gk : Grid} {n k : Nat} (hg : g.Closed c)
     (hnk : n ≠ k) (hn : g.advance c n = .ok (some gn)) (hk : g.advance c k = .ok (some gk))
     {a a' : Access} (ha : .access a ∈ g.pending c n) (ha' : .access a' ∈ g.pending c k)
@@ -1773,6 +1846,19 @@ theorem Grid.advance_atomic_comm {c : Nat → Ctx} {g gn gk : Grid} {n k : Nat} 
       ((Grid.advance_keeps hk).sameShape fun _ hb hn => hb.below hn)).trans (by rw [h₂₁]; rfl),
     Array.setIfInBounds_comm _ _ hnk, hb, hnx, htr⟩
 
+/-- **A step's atomics commute.** For every closed grid, contexts and thread `n` whose step from
+`g` gives a grid: every operation of an `atomicrmw` among `n`'s pending accesses commutes
+(`RmwOp.commutes`). The step is that operation's update (`Grid.advance_atomic`), and an update
+that succeeds is by a commuting operation (`rmw_commutes`). -/
+theorem Grid.advance_commutes {c : Nat → Ctx} {g g' : Grid} {n : Nat} {e : Access} {op : RmwOp}
+    (hg : g.Closed c) (h : g.advance c n = .ok (some g')) (he : .access e ∈ g.pending c n)
+    (ho : e.atomic = some op) : op.commutes = true := by
+  obtain ⟨op', sp, x, al, t', hop, -, -, hX⟩ := Grid.advance_atomic hg h he (by rw [ho]; rfl)
+  obtain rfl : op' = op := Option.some.inj (hop.symm.trans ho)
+  obtain ⟨m', hm, -⟩ := Except.bind_eq_ok.1 ((hX g rfl fun _ _ => rfl).symm.trans h)
+  obtain ⟨_, _, _, _, -, -, -, hr, -⟩ := Mem.update_eq_ok.1 hm
+  exact rmw_commutes hr
+
 /-! ## The two-thread case of the diamond -/
 
 /-- Accesses that overlap only if neither writes do not conflict. -/
@@ -1792,7 +1878,7 @@ other's (`Access.conflict`), then `k`'s step from `gₙ` and `n`'s step from `g�
 are the same (`Grid.Same`): the same threads, blocks and `next`, and traces the same up to the
 order of independent events. Either no write of one overlaps an access of the other, and the two
 steps' changes are apart (`Mem.run_comm`), or two of the accesses are by `atomicrmw`s of one
-operation on the same bytes (`Grid.advance_atomic_comm`). -/
+commuting operation on the same bytes (`Grid.advance_atomic_comm`). -/
 theorem Grid.advance_comm {c : Nat → Ctx} {g gn gk : Grid} {n k : Nat} (hg : g.Closed c)
     (ho : g.Owns c) (hw : (c n).who.thread ≠ (c k).who.thread)
     (hn : g.advance c n = .ok (some gn)) (hk : g.advance c k = .ok (some gk))
@@ -1803,16 +1889,17 @@ theorem Grid.advance_comm {c : Nat → Ctx} {g gn gk : Grid} {n k : Nat} (hg : g
   by_cases hx : ∃ a a', .access a ∈ g.pending c n ∧ .access a' ∈ g.pending c k ∧
       a.overlaps a' = true ∧ (a.write || a'.write) = true
   · obtain ⟨a, a', ha, ha', hov, hwr⟩ := hx
-    have hE : (a.atomic.isSome && a.atomic == a'.atomic && a.ptr == a'.ptr && a.len == a'.len) =
-        true := by
+    have hE : (a.atomic.any RmwOp.commutes && a.atomic == a'.atomic && a.ptr == a'.ptr &&
+        a.len == a'.len) = true := by
       have hc := hW a a' ha ha'
       revert hc
       unfold Access.conflict
       rw [hov, hwr]
-      cases (a.atomic.isSome && a.atomic == a'.atomic && a.ptr == a'.ptr && a.len == a'.len) <;>
-        decide
+      cases (a.atomic.any RmwOp.commutes && a.atomic == a'.atomic && a.ptr == a'.ptr &&
+        a.len == a'.len) <;> decide
     simp only [Bool.and_eq_true, beq_iff_eq] at hE
-    exact Grid.advance_atomic_comm hg hnk hn hk ha ha' hE.1.1.1 hE.1.1.2 hE.1.2 hE.2
+    exact Grid.advance_atomic_comm hg hnk hn hk ha ha' (Option.isSome_of_any hE.1.1.1) hE.1.1.2
+      hE.1.2 hE.2
   replace hW : ∀ a a', .access a ∈ g.pending c n → .access a' ∈ g.pending c k →
       a.overlaps a' = true → a.write = false ∧ a'.write = false := fun a a' ha ha' hov => by
     simpa using fun h => hx ⟨a, a', ha, ha', hov, h⟩

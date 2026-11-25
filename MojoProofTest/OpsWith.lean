@@ -5,7 +5,7 @@ import MojoProofTest.KernelContract
 
 mojo_ret proves a goal `∃ ps ∈ paths, RetWith c V (Elem m₀ out w cell bs K) ps` for every flag
 `c` directly: each block of the path after the first is entered through `Valuation.intoWith c`
-(`Obl.walkI`, `Elem.intoWith`) and the last block's effects are steps by `Elem.retWith`, with no
+(`Obl.walk`, `Elem.intoWith`) and the last block's effects are steps by `Elem.retWith`, with no
 detour through `Ret`.
 
 * The first `example` states `map2_contract.ret` by `type_of%` (MojoProofTest/KernelContract.lean,

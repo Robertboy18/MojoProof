@@ -5,7 +5,7 @@ kind: construct
 ref: LLVM LangRef 24.0.0git #call-instruction
 quote: "The ‘call’ instruction represents a simple function call."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_sreg, MojoProof.Sym.exec_laneid, MojoProof.Sym.exec_minmax
-corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs256_762bdc07.nvptx.ll
+corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll
 tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L3
@@ -15,11 +15,11 @@ evidence: L2: tests/gpu/naive/record.txt, tests/gpu/vadd/record.txt, tests/gpu/v
 
 ## Rule
 
-LangRef's section on `call` (the quote is the first sentence of its overview). The importer reads `call` as `Inst.call` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`. MojoProofTest/Modelled.lean runs a kernel of it (its row `call`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_sreg` (a special register: no arguments, no fast-math flags, before any store); `Sym.exec_laneid` (the lane number: no arguments, no fast-math flags, before any store); `Sym.exec_minmax` (two arguments, no flags or attributes, before or after a store); refused (another callee, arguments, fast-math flags, or after a store): SState.stmt takes calls of special registers and of minmax only.
+LangRef's section on `call` (the quote is the first sentence of its overview). The importer reads `call` as `Inst.call` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`. MojoProofTest/Modelled.lean runs a kernel of it (its row `call`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_sreg` (a special register: no arguments, no fast-math flags); `Sym.exec_laneid` (the lane number: no arguments, no fast-math flags); `Sym.exec_minmax` (two arguments, no flags or attributes); refused (another callee, arguments or fast-math flags): SState.stmt takes calls of special registers and of minmax only.
 
 ## Corpus
 
-114 of the 114 corpus files use it (48489 uses); `corpus` lists the first 5 in path order.
+116 of the 116 corpus files use it (48506 uses); `corpus` lists the first 5 in path order.
 
 The programs of the library's `mojo_kernel` theorems use it (`tests/corpus/vadd/vadd_vector_addition_vector_addition6A6A_793e5fe36a195e73.nvptx.ll`, `tests/corpus/vmul/vector_multiply_vector_multiply_vector_multiply6A6A_227fc544da3deaff.nvptx.ll`, `tests/corpus/vsub/vector_subtraction_vector_subtraction_vector_subtr6A6A_a0b4d9d2b6e652e1.nvptx.ll`).
 

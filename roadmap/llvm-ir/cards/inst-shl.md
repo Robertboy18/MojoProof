@@ -18,7 +18,7 @@ LangRef's section on `shl` (the quote is the first sentence of its overview). Th
 
 ## Corpus
 
-9 of the 114 corpus files use it (27 uses); `corpus` lists the first 5 in path order.
+9 of the 116 corpus files use it (27 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

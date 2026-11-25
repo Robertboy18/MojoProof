@@ -91,9 +91,7 @@ def runCase (prog : Program) (L : Launch) (bufs : List (List Nat)) (scalars : Li
     | throw "no kernel"
   let (m, bs) := bufs.zipIdx.foldl (init := (({} : Mem), ([] : List Nat)))
     fun (m, acc) (ws, j) => let (m, b) := allocWords l m ws j; (m, acc ++ [b])
-  let tys := fn.params.map fun p => (p.attrs.findSome? fun | .ty "byval" t => some t | _ => none)
-  let args := (bs.zip tys).map (fun (b, t) => bufArg ⟨b, 0⟩ (t.getD (.ptr 0))) ++
-    scalars.map fun s => .bits 32 (BitVec.ofNat 32 s)
+  let args := kernelArgs fn bs (scalars.map fun s => .bits 32 (BitVec.ofNat 32 s))
   let (g, ctx) ← (Grid.start prog fn L args m (fun _ => 0) fun _ _ => o).mapError err
   let g ← (g.run L ctx 100000 100).mapError err
   let some blk := g.mem.blocks (bs.getD out 0) | throw "no output block"

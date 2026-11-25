@@ -1,5 +1,6 @@
 import MojoProof.Sem.Spec
 import MojoProof.Sem.Buffer
+import GPUProof.MixedRadix
 
 /-!
 # The global thread index
@@ -16,7 +17,12 @@ has the informal argument. Proved here:
   when twice the result is below `2 ^ w`, and, for `mul`, twice each operand
   (`intBin_add_ofNat`, `intBin_mul_ofNat`): neither `nuw` nor `nsw` makes them poison. So `trunc`
   to `w'` and then `sext` back of the word of `k` with `2 k < 2 ^ w'` is the word of `k`
-  (`intCast_trunc_sext`; the vector kernel's `%22`, `%23` with `w' = 32`).
+  (`intCast_trunc_sext`; the vector kernel's `%22`, `%23` with `w' = 32`). The facts of a word of
+  `k` with `2 k < 2 ^ w` are the core's `GPUProof.WordFit` (GPUProof/MixedRadix.lean, through
+  `GPUProof.WordFit.two_mul_lt_iff`): the signed value (`BitVec.toInt_ofNat_of_lt`), `sext`
+  (`intCast_sext_ofNat`) and the two overflow tests of `add` (`intBin_add_ofNat`) are its fields
+  `toInt`, `signExtend` and `add`. `trunc` and `zext` of a word of `k < 2 ^ w` and `mul` are
+  proved here.
 - `Launch.index_ops`, for every valid launch (`Launch.Valid`), thread number and dimension, and
   all flags: each of the five operations on the special registers' words gives the word of its
   natural-number result, so the IR's index is the i64 word of
@@ -32,7 +38,8 @@ On 2-D launches, with `Launch.index L n d` for `ctaid d * ntid d + tid d` of thr
 
 - `coord_linear`, `coord_inj`, for every box: a number below the box's volume is its coordinates'
   linear combination, so it is determined by its three coordinates; `coord_onto`: every point of
-  the box is the coordinates of its linear combination, which is below the volume.
+  the box is the coordinates of its linear combination, which is below the volume (the core's
+  `GPUProof.MixedRadix.lt_prod` at the three digits).
 - `Launch.env_inj`, for every launch: a thread below the thread count is determined by its six
   special registers (`ctaid` and `tid` in `x`, `y`, `z`).
 - `Launch.thread_inj`, for every valid launch: threads below the thread count with equal i64 index
@@ -62,23 +69,18 @@ namespace MojoProof.Sem
 open LLVM
 
 /-- The word of `k` has `k` as its signed value when `2 k < 2 ^ w` (its sign bit is clear), for
-every width. -/
+every width: the field `toInt` of the core's `GPUProof.WordFit`. -/
 theorem _root_.BitVec.toInt_ofNat_of_lt {w k : Nat} (hk : 2 * k < 2 ^ w) :
-    (BitVec.ofNat w k).toInt = k := by
-  rw [BitVec.toInt_eq_toNat_cond, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega)]
-  simp [hk]
+    (BitVec.ofNat w k).toInt = k :=
+  (GPUProof.WordFit.of_lt (GPUProof.WordFit.two_mul_lt_iff.1 hk)).toInt
 
 /-- The natural number `k` with `2 k < 2 ^ w` is in the signed range of `w` bits, for every
-width. -/
+width: `k < 2 ^ (w - 1)` (`GPUProof.WordFit.two_mul_lt_iff`). -/
 theorem outS_of_lt {w k : Nat} (hk : 2 * k < 2 ^ w) : outS w k = false := by
-  unfold outS
-  rcases w with _ | w
-  · simp at hk
-    simp [hk]
-  · rw [Nat.pow_succ] at hk
-    zify at hk
-    simp only [Nat.add_sub_cancel, Bool.not_eq_false', decide_eq_true_eq]
-    constructor <;> omega
+  have hI : (k : Int) < 2 ^ (w - 1) := by exact_mod_cast GPUProof.WordFit.two_mul_lt_iff.1 hk
+  have hP : (0 : Int) ≤ 2 ^ (w - 1) := by exact_mod_cast Nat.zero_le (2 ^ (w - 1))
+  simp only [outS, Bool.not_eq_false', decide_eq_true_eq]
+  constructor <;> omega
 
 /-- `trunc` and `zext` to `w'` bits of the word of `k < 2 ^ w` give the word of `k`, for every
 pair of widths. -/
@@ -91,21 +93,10 @@ theorem intCast_ofNat {op : CastOp} (hop : op = .trunc ∨ op = .zext) {w k : Na
   rcases hop with rfl | rfl <;> simp only [intCast, e] <;> rfl
 
 /-- `sext` to `w'` bits of the word of `k` with `2 k < 2 ^ w` gives the word of `k`, for every
-pair of widths: the sign bit is clear. -/
+pair of widths: the sign bit is clear (the field `signExtend` of the core's `GPUProof.WordFit`). -/
 theorem intCast_sext_ofNat {w k : Nat} (w' : Nat) (hk : 2 * k < 2 ^ w) :
     intCast .sext w' (.bits w (BitVec.ofNat w k)) = .ok (.bits w' (BitVec.ofNat w' k)) := by
-  have hk' : k < 2 ^ w := by omega
-  have e : (BitVec.ofNat w k).signExtend w' = BitVec.ofNat w' k := by
-    rw [BitVec.signExtend_eq_setWidth_of_msb_false]
-    · apply BitVec.eq_of_toNat_eq
-      simp [BitVec.toNat_setWidth, Nat.mod_eq_of_lt hk']
-    · rw [BitVec.msb_eq_decide, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hk']
-      rcases w with _ | w
-      · simpa using hk'
-      · simp only [Nat.add_sub_cancel, decide_eq_false_iff_not, not_le]
-        rw [Nat.pow_succ] at hk
-        omega
-  simp only [intCast, e]
+  simp only [intCast, (GPUProof.WordFit.of_lt (GPUProof.WordFit.two_mul_lt_iff.1 hk)).signExtend w']
   rfl
 
 /-- **`trunc`, then `sext` back, is the identity on small words.** For widths `w' ≤ w` and `k`
@@ -119,20 +110,19 @@ theorem intCast_trunc_sext {w w' k : Nat} (hw : w' ≤ w) (hk : 2 * k < 2 ^ w') 
     omega), intCast_sext_ofNat w hk⟩
 
 /-- `add` of the words of `a` and `b` with `2 (a + b) < 2 ^ w` is the word of `a + b`, for every
-width and all flags: neither `nuw` nor `nsw` makes it poison. -/
+width and all flags: neither `nuw` nor `nsw` makes it poison (the field `add` of the core's
+`GPUProof.WordFit`: no unsigned and no signed overflow). -/
 theorem intBin_add_ofNat {w a b : Nat} (fl : IntFlags) (h : 2 * (a + b) < 2 ^ w) :
     intBin w .add fl (.bits w (BitVec.ofNat w a)) (.bits w (BitVec.ofNat w b)) =
       .ok (.bits w (BitVec.ofNat w (a + b))) := by
-  have ha : 2 * a < 2 ^ w := by omega
-  have hb : 2 * b < 2 ^ w := by omega
-  have h1 : decide ((BitVec.ofNat w a).toNat + (BitVec.ofNat w b).toNat ≥ 2 ^ w) = false := by
-    simp only [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega : a < 2 ^ w),
-      Nat.mod_eq_of_lt (by omega : b < 2 ^ w), decide_eq_false_iff_not]
+  obtain ⟨hu, hs, e⟩ := (GPUProof.WordFit.of_lt (GPUProof.WordFit.two_mul_lt_iff.1 h)).add a b rfl
+  have h2 : outS w ((BitVec.ofNat w a).toInt + (BitVec.ofNat w b).toInt) = false := by
+    simp only [BitVec.saddOverflow, Bool.or_eq_false_iff, decide_eq_false_iff_not] at hs
+    simp only [outS, Bool.not_eq_false', decide_eq_true_eq]
     omega
-  have h2 := outS_of_lt h
-  push_cast at h2
-  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, BitVec.toInt_ofNat_of_lt ha,
-    BitVec.toInt_ofNat_of_lt hb, h1, h2, Bool.and_false, Bool.or_false, BitVec.ofNat_add_ofNat]
+  simp only [intBin, and_self, dite_true, BitVec.cast_eq, intBits, show
+    decide ((BitVec.ofNat w a).toNat + (BitVec.ofNat w b).toNat ≥ 2 ^ w) = false from hu, h2, e,
+    Bool.and_false, Bool.or_false]
   rfl
 
 /-- `mul` of the words of `a` and `b` with `2 a`, `2 b` and `2 a b` below `2 ^ w` is the word of
@@ -259,23 +249,23 @@ theorem coord_inj {d : Dim → Nat} {a b : Nat} (ha : a < volume d) (hb : b < vo
 
 /-- **Every point of a box is a number's coordinates** (the converse of `coord_linear`). For every
 box `d` and point `p` with `p k < d k` in each dimension: `p x + d x * (p y + d y * p z)` is below
-`volume d` and has coordinates `p`. -/
+`volume d` (`GPUProof.MixedRadix.lt_prod`, the digits `p k` with radices `d k`) and has
+coordinates `p`. -/
 theorem coord_onto {d p : Dim → Nat} (hp : ∀ k, p k < d k) :
     p .x + d .x * (p .y + d .y * p .z) < volume d ∧
       ∀ k, coord d (p .x + d .x * (p .y + d .y * p .z)) k = p k := by
   have hx : 0 < d .x := Nat.lt_of_le_of_lt (Nat.zero_le _) (hp .x)
   have hy : 0 < d .y := Nat.lt_of_le_of_lt (Nat.zero_le _) (hp .y)
-  have e1 : d .y * p .z + d .y ≤ d .y * d .z := by
-    simpa only [Nat.mul_succ] using Nat.mul_le_mul_left (d .y) (hp .z)
-  have e2 : d .x * (p .y + d .y * p .z) + d .x ≤ d .x * (d .y * d .z) := by
-    simpa only [Nat.mul_add, Nat.mul_one] using
-      Nat.mul_le_mul_left (d .x) (show p .y + d .y * p .z + 1 ≤ d .y * d .z by have := hp .y; omega)
   have q : (p .x + d .x * (p .y + d .y * p .z)) / d .x = p .y + d .y * p .z := by
     rw [Nat.add_mul_div_left _ _ hx, Nat.div_eq_of_lt (hp .x), Nat.zero_add]
   refine ⟨?_, fun k => ?_⟩
-  · simp only [volume, Nat.mul_assoc]
-    have := hp .x
-    omega
+  · have := GPUProof.MixedRadix.lt_prod
+      (σ := fun v => [p .x, p .y, p .z, d .x, d .y, d .z].getD v 0)
+      (x := ⟨[(.var 0, .var 3), (.var 1, .var 4), (.var 2, .var 5)]⟩) fun c hc => by
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+        rcases hc with rfl | rfl | rfl <;> exact hp _
+    simpa [GPUProof.MixedRadix.val, GPUProof.MixedRadix.radixProd, GPUProof.SizeExpr.eval, volume,
+      Nat.mul_assoc] using this
   · cases k with
     | x => simp only [coord]; rw [Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt (hp .x)]
     | y => simp only [coord]; rw [q, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt (hp .y)]

@@ -25,6 +25,14 @@ lane 5, whose leaves are the lanes below 8; with eight binary32 lanes holding `1
 The instance of `bfly_warp_error` away from a warp (`exact4`): the offsets `2, 1`, lane 3, whose
 leaves are the lanes below 4 (by `decide +kernel`), and exact addition of reals (`u = 0`): lane
 3's value is the sum of the 4 lanes' values, for every family of values.
+
+A group of 8 lanes, beside the warp's 32 (`leaves_warp`, `shflSource_bfly`): the offsets
+`bflyOffsets 3` are `4, 2, 1` and lane 0's leaves `0, 4, 2, 6, 1, 5, 3, 7` (`offsets8`, by
+`decide`); `leaves8`, the instance of `leaves_offsets` at `k = 3`; `shfl8`, the instance of
+`shflSource_group` at width 8, whose clamp is `24 · 256 + 31 = 6175`: lane 13 with offset 5 reads
+lane 8; and its twin `shfl8_twin`: with offset 8, outside the group, lane 5 reads itself, not
+lane `5 ^^^ 8 = 13` (by `decide`). `shfl32`, the instance of `shflSource_group` at width 32,
+whose clamp is `0 · 256 + 31 = 31`: lane 13 with offset 21 reads lane 24.
 -/
 
 namespace MojoProofTest.Bfly
@@ -97,5 +105,35 @@ theorem exact4 (v : Nat → ℝ) : bflyRounds (· + ·) [2, 1] v 3 = ((List.rang
     (by decide +kernel) (.of_forall _ _ _ fun x y => by simp)
   rw [add_zero, one_pow, sub_self, zero_mul] at e
   exact sub_eq_zero.1 (abs_nonpos_iff.1 e)
+
+/-- The offsets of a group of 8 lanes are `4, 2, 1`, and lane 0's leaves after them are the lanes
+in bit-reversed order, a test of one example, by `decide`. -/
+theorem offsets8 : bflyOffsets 3 = [4, 2, 1] ∧
+    (bflyTree (bflyOffsets 3) 0).leaves = [0, 4, 2, 6, 1, 5, 3, 7] := by
+  decide
+
+/-- **The instance of `leaves_offsets` at a group of 8 lanes**: every lane below 8 has the lanes
+below 8 as leaves, each once. -/
+theorem leaves8 : ∀ l < 8, (bflyTree (bflyOffsets 3) l).leaves.Perm (List.range 8) :=
+  leaves_offsets 3
+
+/-- **The instance of `shflSource_group` at width 8**, a test of one example: with the clamp
+`(32 - 8) · 256 + 31 = 6175`, lane 13's butterfly shuffle with offset 5 reads lane `13 ^^^ 5 = 8`
+(the general theorem, then `decide` for the numbers). -/
+theorem shfl8 : shflSource .bfly 13 5 6175 = 8 := by
+  have h := shflSource_group (k := 3) (l := 13) (m := 5) (by decide) (by decide) (by decide)
+  exact h.trans (by decide)
+
+/-- **The instance of `shflSource_group` at width 32**, a test of one example: with the warp's
+clamp `(32 - 32) · 256 + 31 = 31`, lane 13's butterfly shuffle with offset 21 reads lane
+`13 ^^^ 21 = 24` (the general theorem, then `decide` for the numbers). -/
+theorem shfl32 : shflSource .bfly 13 21 31 = 24 := by
+  have h := shflSource_group (k := 5) (l := 13) (m := 21) (by decide) (by decide) (by decide)
+  exact h.trans (by decide)
+
+/-- **Twin of `shfl8`**: with the width-8 clamp `6175` and the offset 8, outside the group, lane
+5 reads itself, not lane `5 ^^^ 8 = 13`, so `shflSource_group` needs `m < 2 ^ k`; by `decide`. -/
+theorem shfl8_twin : shflSource .bfly 5 8 6175 = 5 ∧ 5 ^^^ 8 = 13 := by
+  decide
 
 end MojoProofTest.Bfly

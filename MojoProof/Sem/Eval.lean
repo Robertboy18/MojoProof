@@ -37,7 +37,9 @@ The module defines functions; it proves that `digits` reads every string of the 
 digits has the value of its `String.toNat?` reading (`floatLit_dec`); and, for every layout,
 lane count `n`, lane width `w` and `n * w`-bit word, that `bitcast` to `<n x iw>` gives the
 word's slices, low first (`castV_split`), and `bitcast` of them back gives the word
-(`castV_join`; at `<2 x i32>` and `i64`, `castV_halves`).
+(`castV_join`; at `<2 x i32>` and `i64`, `castV_halves`). `fill`, the `poison` or `undef` value
+of a type, is by structural recursion, so the kernel reduces it too; `fillAll_eq`: its struct
+case is `fill` on each field.
 -/
 
 namespace MojoProof.Sem
@@ -49,12 +51,28 @@ def _root_.MojoProof.LLVM.Ty.elt : Ty → Ty
   | .vec _ t => t
   | t => t
 
-/-- The value of type `t` all of whose scalars are `x` (`poison` or `undef`). -/
-def fill (x : Val) : Ty → Val
-  | .vec n _ => .vec (List.replicate n x)
-  | .arr n t => .agg (List.replicate n (fill x t))
-  | .struct fs => .agg (fs.map fun t => fill x t)
-  | _ => x
+mutual
+  /-- The value of type `t` all of whose scalars are `x` (`poison` or `undef`). By structural
+  recursion on `t`, with `fillAll` on the fields of a struct, so the kernel evaluates it
+  (well-founded recursion would not unfold under `decide +kernel`). -/
+  def fill (x : Val) : Ty → Val
+    | .vec n _ => .vec (List.replicate n x)
+    | .arr n t => .agg (List.replicate n (fill x t))
+    | .struct fs => .agg (fillAll x fs)
+    | _ => x
+  termination_by structural t => t
+
+  /-- `fill x` at each of the types `fs`. By structural recursion on `fs`. -/
+  def fillAll (x : Val) : List Ty → List Val
+    | [] => []
+    | t :: ts => fill x t :: fillAll x ts
+  termination_by structural fs => fs
+end
+
+/-- `fillAll x` is `fill x` mapped over the types, for every value and list of types. -/
+theorem fillAll_eq (x : Val) : ∀ fs : List Ty, fillAll x fs = fs.map (fill x)
+  | [] => rfl
+  | t :: ts => congrArg (fill x t :: ·) (fillAll_eq x ts)
 
 mutual
   /-- No scalar of the value is `poison` or `undef` (LangRef's `noundef`). -/

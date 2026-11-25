@@ -72,10 +72,8 @@ def runNaive (oracle : Nat → Nat → Nat) : Except String (List Val) := do
   let (m, c) := ({} : Mem).alloc l 1 (4 * (50257 + 2)) 16 true false .all 0x10000 0x10000
   let (m, a) := buf m (rows aw) 0x100
   let (m, b) := buf m (rows bw) 0x200
-  let tys := fn.params.map fun p => (p.attrs.findSome? fun | .ty "byval" t => some t | _ => none)
   let i32 (v : Nat) : Val := .bits 32 (BitVec.ofNat 32 v)
-  let args := ([c, a, b].zip tys).map (fun (b, t) => bufArg ⟨b, 0⟩ (t.getD (.ptr 0))) ++
-    [i32 2, i32 2, i32 3]
+  let args := kernelArgs fn [c, a, b] [i32 2, i32 2, i32 3]
   let L := launch2 1 1 2 2
   let (g, ctx) ← (Grid.start prog fn L args m (oracle 0) oracle).mapError err
   let g ← (g.run L ctx 100000 100).mapError err

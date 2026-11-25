@@ -40,31 +40,47 @@ every value `y`: `y` is the observation of a complete run (`Kernel.Obs`) of `fn.
 `Q` under `ω` exactly when it is one of `fn` in `P` under the rows `neverFuse (ω n)`.
 `Kernel.Obs.contractOff` is its left-to-right direction.
 
-**Corollary (`NaiveOff.correct`, MojoProofTest/NaiveOff.lean).** For the corpus kernel
-`16826c8c` of the directory mgemm_nocontract, the naive matmul kernel compiled with contraction
-off, at every oracle family `ω`, launch valid with `z` sides 1, sizes, blocks, tensors and memory of
-`Mat.Pre` (the premises of `NaiveKernel.correct`): the kernel is sound for `Elem.Out` of `naive`'s
-bytes at the rows `neverFuse (ω k)` (`bytes fun k => neverFuse (ω k)`). It is
-`NaiveKernel.correct` at those rows, moved by `Kernel.Sound.contractOff`. By `dotLoop_neverFuse`
-(MojoProof/Sem/Dot.lean: `dotLoop true` at the numbers `3 * (n / 3)` is `dotLoop false` at the
-numbers `n`), those bytes put at every cell in bounds the binary32 encoding of
-`dotLoop false (o (ω k))` from `+0` over its pairs, the unfused fold (`bytes_neverFuse`), and
-`correct_unfused` is `NaiveOff.correct` with these bytes. By evaluation in the kernel (`rfl`), the
-corpus program's module is `naive.prog.module.contractOff` (`module_eq`), its kernel
-`naive.fn_0.contractOff` (`fn_eq`), and its layout and intrinsics are `naive`'s (`layout_eq`,
-`intrinsics_eq`); by `decide +kernel`, `naive` and its kernel are of the fragment
-(`naive_fbinOracle`, `fn_fbinOracle`).
+**Corollary at every row stride (`NaiveOff.soundF`, MojoProofTest/NaiveOff.lean).** For every
+row strides `sA`, `sB`, `sC` of the naive family (`NaiveFam.prog sA sB sC`,
+MojoProofTest/Family.lean), every program `Q` and kernel `F` that are the family's compiled with
+contraction off (`Q`'s module is `(NaiveFam.prog sA sB sC).module.contractOff`, its layout and
+intrinsics are the family's, and `F` is `(NaiveFam.fn sA sB sC).contractOff`), every oracle
+family `ω`, launch valid with `z` sides 1, sizes `m`, `n`, `K` below `2 ^ 31`, blocks, tensors
+`A` (`m × sA`), `B` (`n × sB`) and memory of `Mat.Pre` at those strides (the premises of
+`NaiveFam.sound`): `F` in `Q` is sound for `Elem.Out` of the family's bytes at the rows
+`neverFuse (ω k)`, at the cells `NaiveFam.cell sC`. It is `NaiveFam.sound` at those rows, moved by
+`Kernel.Sound.contractOff`. The family's program and kernel are of the fragment at every stride
+(`progF_fbinOracle`, `fnF_fbinOracle`), by the kernel's evaluation under the binders
+(`kernel_rfl`): the strides are the constants of three `mul` instructions, which the check does
+not read. By `dotLoop_neverFuse` (MojoProof/Sem/Dot.lean: `dotLoop true` at the numbers
+`3 * (n / 3)` is `dotLoop false` at the numbers `n`), those bytes put at every cell in bounds the
+binary32 encoding of `dotLoop false (o (ω k))` from `+0` over its pairs, the unfused fold
+(`bytes_neverFuseF`).
 
-**Corollary (`NaiveOff.matmul_nanEq`, `NaiveOff.matmul_error`).** For the same kernel, every
-oracle family `ω`, launch valid with `z` sides 1, `K ≤ 768`, sizes, blocks, tensors and memory of
-`Mat.Pre`: in every observation of a complete run under `ω`, every cell `(r, c)` in bounds and in
-the launch's window holds the binary32 encoding of a word `v` that is `NaNEq` to entry `(r, c)`
-of TorchLean's `Tensor.matmul` of the first `K` columns of `A` and the transpose of the first `K`
-columns of `B`, with no premise on the oracle; when `v` is finite, it is within `dotBound` of the
-real product on those columns. Every such observation is one of `naive` under the rows
-`neverFuse (ω n)` (`Kernel.Obs.contractOff`), whose `fadd` numbers are multiples of 3 and fuse no
-round, so `NaiveKernel.matmul_nanEq` and `NaiveKernel.matmul_error` at those rows apply, the first
-with its premise met.
+**Corollary at every row stride (`NaiveOff.matmul_nanEqF`, `NaiveOff.matmul_errorF`).** For the
+same strides, `Q`, `F`, oracle family `ω`, launch, sizes, `K ≤ sA`, `K ≤ sB`, blocks, tensors and
+memory: in every observation of a complete run of `F` in `Q` under `ω`, every cell `(r, c)` in
+bounds and in the launch's window holds, at offset `(r * sC + c) * 4`, the binary32 encoding of a
+word `v` that is `NaNEq` to entry `(r, c)` of TorchLean's `Tensor.matmul` of the first `K`
+columns of `A` and the transpose of the first `K` columns of `B`, with no premise on the oracle;
+when `v` is finite, it is within `dotBound` of the real product on those columns. Every such
+observation is one of `NaiveFam.fn sA sB sC` under the rows `neverFuse (ω n)`
+(`Kernel.Obs.contractOff`), whose `fadd` numbers are multiples of 3 and fuse no round, so
+`NaiveFam.matmul_nanEq` and `NaiveFam.matmul_error` at those rows apply, the first with its
+premise met.
+
+**The corpus kernel (`NaiveOff.correct`, `NaiveOff.bytes_neverFuse`, `NaiveOff.matmul_nanEq`,
+`NaiveOff.matmul_error`).** The corpus kernel `16826c8c` of the directory mgemm_nocontract is the
+family's at `768`, `768`, `50257` compiled with contraction off (`corpus_off`): by evaluation in
+the kernel (`rfl`), its module is `naive.prog.module.contractOff` (`module_eq`), its kernel
+`naive.fn_0.contractOff` (`fn_eq`), and its layout and intrinsics are `naive`'s (`layout_eq`,
+`intrinsics_eq`), `naive` being the family's at those strides (`NaiveFam.prog_corpus`). Each of
+the four is the corollary above at those strides, at every oracle family, launch valid with `z`
+sides 1, sizes, blocks, tensors and memory of `Mat.Pre` (the premises of `NaiveKernel.correct`,
+whose bounds give the sizes below `2 ^ 31`, `NaiveSpec.dims_lt`), `K ≤ 768` for the last two;
+`correct_unfused` is `NaiveOff.correct` with the bytes of `bytes_neverFuse`. By
+`decide +kernel`, `naive` and its kernel are of the fragment (`naive_fbinOracle`,
+`fn_fbinOracle`).
 
 ## Scope
 
@@ -74,10 +90,12 @@ from `P` to the contraction-off program and back, at the never-fusing rows. The 
 exactly at the image of `neverFuse`: by `Kernel.Obs.contractOff_iff`, the observations of `Q`
 under `ω` are those of `P` under the rows `neverFuse (ω n)`. At a family with a fusing number it
 fails: the twin `ContractOff.twin` (one program pair, one start) has an observation of `P` under
-such a family that no complete run of `Q` under it has. The corollaries are for one program (the
-float32 naive kernel compiled with contraction off), at every launch valid with `z` sides 1 and
-memory of `Mat.Pre` and every oracle family; `matmul_nanEq` and `matmul_error` cover the cells in
-the launch's window.
+such a family that no complete run of `Q` under it has. The corollaries `soundF`, `bytes_neverFuseF`,
+`matmul_nanEqF` and `matmul_errorF` are for every program and kernel that are the naive family's
+at some row strides compiled with contraction off, at every launch valid with `z` sides 1, memory
+of `Mat.Pre` at those strides with sizes below `2 ^ 31` and every oracle family; the corpus has one
+such program, at `768`, `768`, `50257` (`NaiveOff.correct` and the others). `matmul_nanEqF` and
+`matmul_errorF` and their instances cover the cells in the launch's window.
 
 ## The choice of the oracle
 

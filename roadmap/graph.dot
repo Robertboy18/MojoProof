@@ -7,6 +7,7 @@ digraph roadmap {
     "floats/binary-op-rounding" [label="binary-op-rounding L3"];
     "floats/contract" [label="contract L3"];
     "floats/deliver" [label="deliver L3"];
+    "floats/ex2-approx" [label="ex2-approx L1"];
     "floats/maxnum-minnum" [label="maxnum-minnum L1"];
     "floats/nan-payloads" [label="nan-payloads L1"];
     "floats/rsqrt-approx" [label="rsqrt-approx L1"];
@@ -53,7 +54,7 @@ digraph roadmap {
     "layout/reverse-transpose" [label="reverse-transpose L1"];
     "layout/row-major-views" [label="row-major-views L1"];
     "layout/swizzle" [label="swizzle L1"];
-    "layout/two-level-swizzle" [label="two-level-swizzle L0"];
+    "layout/two-level-swizzle" [label="two-level-swizzle L1"];
     "layout/upcast" [label="upcast L1"];
     "layout/zipped-divide" [label="zipped-divide L1"];
   }
@@ -132,6 +133,7 @@ digraph roadmap {
   }
   "floats/binary-op-rounding" -> "floats/deliver";
   "floats/contract" -> "floats/binary-op-rounding";
+  "floats/ex2-approx" -> "floats/binary-op-rounding";
   "floats/maxnum-minnum" -> "floats/nan-payloads";
   "floats/nan-payloads" -> "floats/deliver";
   "floats/rsqrt-approx" -> "floats/deliver";
@@ -168,6 +170,7 @@ digraph roadmap {
   "kernels/rms-norm" -> "floats/rsqrt-approx";
   "kernels/rms-norm" -> "gpu-model/launch";
   "kernels/rms-norm" -> "gpu-model/warp-shuffles";
+  "kernels/softmax" -> "floats/ex2-approx";
   "kernels/softmax" -> "floats/maxnum-minnum";
   "kernels/softmax" -> "gpu-model/launch";
   "kernels/softmax" -> "gpu-model/warp-shuffles";
@@ -191,6 +194,7 @@ digraph roadmap {
   "layout/idx2crd" -> "layout/crd2idx";
   "layout/index-width" -> "layout/crd2idx";
   "layout/is-affine" -> "layout/crd2idx";
+  "layout/two-level-swizzle" -> "layout/bit-layout";
   "layout/two-level-swizzle" -> "layout/is-affine";
   "layout/two-level-swizzle" -> "layout/swizzle";
   "layout/zipped-divide" -> "layout/crd2idx";

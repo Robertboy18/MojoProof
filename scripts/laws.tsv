@@ -1,0 +1,17 @@
+# Theorems that the audit's equivalences rule accepts and that are laws between two concepts, not
+# second definitions of one (scripts/Audit.lean, `laws`). One row each, by tabs: name, kind, the
+# pairs of definitions the row exempts (`f g`, by commas), the reviewed statement's fingerprint
+# (`stmtHash`) and the reason. A row exempts only its pairs, and only while the theorem's statement
+# has that fingerprint: a further pair in the statement is counted, and a changed statement makes
+# the row stale. Kind `law`: one side's definition meets a specification that the other side
+# states, on the domain the premises give. Kind `unfold`: one side's definition is by cases and is
+# the other side in the case the premises select. The audit prints the rows it uses (`laws N`) and
+# the stale ones with the statement's fingerprint and pairs (`laws_stale N`); scripts/counts.tsv
+# limits both, so a new or renewed row is a decision, made in review.
+MojoProof.Layout.Lay.modes_size_call	law	MojoProof.Layout.Lay.call MojoProof.Layout.dotColex	3439832703	Lay.call (the layout algebra's value at a scalar) is dotColex of the flattened modes on congruent layouts below the size: the colexicographic offset is the specification, the call is the definition Mojo's Layout has
+MojoProof.Layout.xorBits_place	law	MojoProof.Layout.xorBits MojoProof.Layout.dotColex	3216867100	the XOR of the placed bit images (BitLayout, Mojo's bit-linear form) is dotColex of the modes, for layouts that bitLinear accepts: the placement compiler's correctness
+MojoProof.Layout.placement_call	law	MojoProof.Layout.BitLayout.call MojoProof.Layout.Lay.call	4102910317	the bit-linear placement's call is the flat layout's call below the size, for layouts isBitLinear accepts: two Mojo representations agree on the domain where both are defined
+MojoProof.Layout.Swizzle.twoLevel_parts	law	MojoProof.Layout.innerXor MojoProof.Layout.Swizzle.call	3635667126	the inner bits of the two-level layout are the swizzle of the inner offset, mode by mode, under the asserts of two_level_layout_from_swizzle: a step of twoLevel_call
+MojoProof.Layout.Swizzle.twoLevel_call	law	MojoProof.Layout.TwoLevel.call MojoProof.Layout.Swizzle.call	784273927	the two-level layout's call is Swizzle.call after the flat layout's call, under the asserts of two_level_layout_from_swizzle: Mojo's construction meets its specification Swizzle(L(x))
+MojoProof.Sem.bflyDeliver_error	law	MojoProof.Sem.bflyRoundsAt MojoProof.Sem.bflyRounds	1562610818	the butterfly with an oracle number per round and lane (bflyRoundsAt) is the butterfly of Model.add (bflyRounds) when its value is finite; infinite or NaN values differ, so neither definition replaces the other
+MojoProof.Sym.Exit.of_targetWith	unfold	MojoProof.Sym.Valuation.intoWith MojoProof.Sym.Valuation.afterWith	2290092831	Valuation.intoWith is by cases on the exit and is Valuation.afterWith in the cases with a target (br, cond), which the premise selects; at phi it differs

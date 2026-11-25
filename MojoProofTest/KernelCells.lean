@@ -10,15 +10,16 @@ from 0 to `%n` in a loop and then, if `%tid.x < %n`, store `%i` to cell `%ctaid.
 of an `i32` array. On the launch `L23` (two blocks of three threads) with `%n = 2`, threads with
 `%tid.x = 2` skip the store, and the cell of thread 2 (block 0, which skips) is the cell of thread 3
 (block 1), so the cells are apart only on the storing threads (`apartC`, `not_apartC`): the case
-`Kernel.sound_elem` excludes.
+`Kernel.sound_elem` excludes. The storing threads' cells are apart at every block size and row
+length (`apart_blocks`; `apartC` and `apart_8_5` are its instances).
 
 * `kernelProof` and the tactic kernel_check of this file: they close a goal by evaluation in the
   kernel with its local context reverted, so the goal may mention a memory the evaluation does
   not inspect.
 * `kc`, `kcP`, its block summaries and the two sequences of loops `chains` (`chains_covers`).
 * The launch: `outM`, `argsC`, `cellC`, `bsC`, the start `startC` (six threads, `sizeC`; one
-  frame each, `framesC`) and the output block it keeps (`blkC`).
-* `mem_eta`, `ret_store` and `ret_of`: each thread's run on a memory of `Elem` and `Elem.Only`,
+  frame each, `framesC`, by `Grid.start_thread`) and the output block it keeps (`blkC`).
+* `mem_eta`, `ret_storeWith` and `ret_of`: each thread's run on a memory of `Elem` and `Elem.Only`,
   symbolic but for its output block.
 * `kernelC`: the kernel theorem. It covers this one program, launch, argument list, memory,
   address choice and oracle.
@@ -164,12 +165,47 @@ def cellC (k : Nat) : Nat := 4 * (k / 3 * 2 + k % 3)
 def bsC (k : Nat) : Option (List MemByte) :=
   if k % 3 < 2 then kcP.layout.encode (.int 32) (.bits 32 (BitVec.ofNat 32 2)) else none
 
-/-- The cells of the storing threads (`k % 3 < 2`) are 4 bytes apart. -/
-theorem apartC : Apart (fun i : {i // i % 3 < 2} => cellC i) 4 := by
+/-- **The cells of the storing threads are apart, at every block size**: for every block size
+`t`, bound `n` and width `w`, the cells `w * (k / t * n + k % t)` (block `k / t`, position
+`k % t`, row length `n`) of the threads `k` with `k % t < n` are `w` bytes apart: two of them with
+one cell have one block and one position, so are one thread. -/
+theorem apart_blocks (t n w : Nat) :
+    Apart (fun i : {i // i % t < n} => w * (i.1 / t * n + i.1 % t)) w := by
   rintro ⟨i, hi⟩ ⟨j, hj⟩ hij
-  have : i ≠ j := fun e => hij (Subtype.ext e)
-  simp only [cellC]
-  omega
+  have hne : i / t * n + i % t ≠ j / t * n + j % t := by
+    intro e
+    have hq : i / t = j / t := by
+      rcases Nat.lt_trichotomy (i / t) (j / t) with h | h | h
+      · have := Nat.mul_le_mul_right n (Nat.succ_le_of_lt h)
+        rw [Nat.succ_mul] at this
+        omega
+      · exact h
+      · have := Nat.mul_le_mul_right n (Nat.succ_le_of_lt h)
+        rw [Nat.succ_mul] at this
+        omega
+    have hr : i % t = j % t := by
+      rw [hq] at e
+      omega
+    exact hij (Subtype.ext (show i = j from calc
+      i = t * (i / t) + i % t := (Nat.div_add_mod i t).symm
+      _ = t * (j / t) + j % t := by rw [hq, hr]
+      _ = j := Nat.div_add_mod j t))
+  rcases Nat.lt_or_gt_of_ne hne with h | h
+  · left
+    have := Nat.mul_le_mul_left w (Nat.succ_le_of_lt h)
+    rwa [Nat.mul_succ] at this
+  · right
+    have := Nat.mul_le_mul_left w (Nat.succ_le_of_lt h)
+    rwa [Nat.mul_succ] at this
+
+/-- The cells of the storing threads (`k % 3 < 2`) are 4 bytes apart: `apart_blocks` at blocks of
+3 threads, rows of 2 and width 4. -/
+theorem apartC : Apart (fun i : {i // i % 3 < 2} => cellC i) 4 :=
+  apart_blocks 3 2 4
+
+/-- `apart_blocks` at blocks of 8 threads, rows of 5 and width 8: a test at a second size. -/
+theorem apart_8_5 : Apart (fun i : {i // i % 8 < 5} => 8 * (i.1 / 8 * 5 + i.1 % 8)) 8 :=
+  apart_blocks 8 5 8
 
 /-- **The twin of the restricted cells**: the cells of all threads are not apart, since thread 2
 (block 0, `t = 2`, which skips) and thread 3 (block 1, `t = 0`) have cell 8, so
@@ -202,10 +238,10 @@ theorem sizeC : gC.threads.size = 6 := by decide +kernel
 def frC (k : Nat) : Frame :=
   ((Grid.thread gC k).frames.head?).getD ⟨kc, 0, 0, fun _ => none, fun _ => none, [], none⟩
 
-/-- Each thread of the start has the one frame `frC k` (evaluated). -/
-theorem framesC : ∀ k < 6, (Grid.thread gC k).frames = [frC k] := by
-  intro k hk
-  interval_cases k <;> rfl
+/-- Each thread of the start has the one frame `frC k`: an instance of `Grid.start_thread` (every
+start's thread has one frame) at `startC`. -/
+theorem framesC : ∀ k < 6, (Grid.thread gC k).frames = [frC k] := fun k hk =>
+  have ⟨_, e, _⟩ := Grid.start_thread startC (sizeC ▸ hk); by simp [frC, e]
 
 /-- The start keeps the caller's output block (`Grid.start_blocks`). -/
 theorem blkC : gC.mem.blocks outM.2 = outM.1.blocks outM.2 := Grid.start_blocks startC rfl
@@ -272,39 +308,15 @@ theorem ret_storeWith {contract : Bool} {m₀ : Mem} {out w : Nat} {cell : Nat �
     rw [SEff.run, he, List.foldlM_cons, ha]
     rfl
 
-set_option smartUnfolding false in
-/-- A path whose last block's one effect is a store of thread `k` to its cell ends in `Elem`
-after `k + 1` threads and `Elem.Only`: `ret_storeWith` without `fmul contract`, for every memory,
-valuation, path and store as there, with the premises with `phi`s (`WalkI`, `Valuation.lastI`)
-and the conclusion a `Ret`. -/
-theorem ret_store {m₀ : Mem} {out w : Nat} {cell : Nat → Nat} {bs : Nat → Option (List MemByte)}
-    {k : Nat} {T : Nat → Prop} {m : Mem} (hE : Elem m₀ out w cell bs k m)
-    (hO : Elem.Only out T m) {W : Valuation} {l : Nat} {ds : List Cond} {S : Summary}
-    {ps : List (Nat × List Cond × Summary)} {lbl pc : Nat} {v p : SVal} {x : Val}
-    {r : Option Nat} {vol : Bool} {t : Ty} {tv : Value} {a : Nat} {pv : Value}
-    {al : Option Nat} {md : List (String × Nat)}
-    (H : WalkI W ((l, ds, S) :: ps) ∧ (W.lastI l S ps).2.2.exit = .ret ∧
-      (W.lastI l S ps).1.mem = m ∧ (W.lastI l S ps).2.2.effs = [.store lbl pc v p] ∧
-      (SEff.apply (W.lastI l S ps).1 (vals (W.lastI l S ps).1 (W.lastI l S ps).2.2.nodes) m
-        (.store lbl pc v p)).isOk = true ∧
-      (W.lastI l S ps).1.stmt lbl pc = some ⟨r, .store vol ⟨t, tv⟩ ⟨.ptr a, pv⟩ al, md⟩ ∧
-      (W.lastI l S ps).1.ctx.who.thread = k ∧
-      v.eval (W.lastI l S ps).1 (vals (W.lastI l S ps).1 (W.lastI l S ps).2.2.nodes) = .ok x ∧
-      p.eval (W.lastI l S ps).1 (vals (W.lastI l S ps).1 (W.lastI l S ps).2.2.nodes) =
-        .ok (.ptr ⟨out, cell k⟩) ∧
-      (W.lastI l S ps).1.ctx.prog.layout.encode t x = bs k ∧
-      (W.lastI l S ps).1.ctx.prog.layout.stored t ≤ w ∧ T k) :
-    Ret W (fun me => Elem m₀ out w cell bs (k + 1) me ∧ Elem.Only out T me) ((l, ds, S) :: ps) :=
-  ret_storeWith (contract := false) hE hO H
-
 /-- A path to `ret` whose effects leave memory `m` of `Q` is a `Ret` to `Q`: for every valuation,
-predicate, path and memory, from the path's premises (`WalkI`), its last exit `ret` and its last
-effects' run to `m` (`Ret`'s fields with the memory given). -/
+predicate, path and memory, from the path's premises (`WalkWith false`), its last exit `ret` and
+its last effects' run to `m` (`Ret`'s fields with the memory given). -/
 theorem ret_of {W : Valuation} {Q : Mem → Prop} {l : Nat} {ds : List Cond} {S : Summary}
     {ps : List (Nat × List Cond × Summary)} {m : Mem} (hQ : Q m)
-    (H : WalkI W ((l, ds, S) :: ps) ∧ (W.lastI l S ps).2.2.exit = .ret ∧
-      SEff.run (W.lastI l S ps).1 (vals (W.lastI l S ps).1 (W.lastI l S ps).2.2.nodes)
-        (W.lastI l S ps).2.2.effs = .ok m) :
+    (H : WalkWith false W ((l, ds, S) :: ps) ∧ (W.lastWith false l S ps).2.2.exit = .ret ∧
+      SEff.run (W.lastWith false l S ps).1
+        (vals (W.lastWith false l S ps).1 (W.lastWith false l S ps).2.2.nodes)
+        (W.lastWith false l S ps).2.2.effs = .ok m) :
     Ret W Q ((l, ds, S) :: ps) :=
   ⟨H.1, H.2.1, m, H.2.2, hQ⟩
 
@@ -339,14 +351,16 @@ theorem kernelC : Kernel.Sound kcP kc L23 argsC outM.1 (fun ch o => ch = ch₀ �
   · refine ⟨chainS, by simp [chains], ?_⟩
     interval_cases k <;> first
       | omega
-      | exact Chain.of_rounds (by rfl) 2 (by kernel_check) (Chain.last (ret_store (lbl := 4)
-          (pc := 3) (v := .reg 10) (p := .node 2) (x := .bits 32 (BitVec.ofNat 32 2)) (r := none)
-          (vol := false) (t := .int 32) (tv := .loc 10) (a := 1) (pv := .loc 16) (al := some 4)
-          (md := []) hE hO (by kernel_check)))
+      | exact ChainWith.of_rounds (contract := false) (by rfl) 2 (by kernel_check)
+          (ChainWith.last (ret_storeWith
+          (contract := false) (lbl := 4) (pc := 3) (v := .reg 10) (p := .node 2)
+          (x := .bits 32 (BitVec.ofNat 32 2)) (r := none) (vol := false) (t := .int 32)
+          (tv := .loc 10) (a := 1) (pv := .loc 16) (al := some 4) (md := []) hE hO
+          (by kernel_check)))
   · refine ⟨chainN, by simp [chains], ?_⟩
     interval_cases k <;> first
       | omega
-      | exact Chain.of_rounds (by rfl) 2 (by kernel_check)
-          (Chain.last (ret_of ⟨hE.skip rfl, hO⟩ (by kernel_check)))
+      | exact ChainWith.of_rounds (contract := false) (by rfl) 2 (by kernel_check)
+          (ChainWith.last (ret_of ⟨hE.skip rfl, hO⟩ (by kernel_check)))
 
 end MojoProofTest.KernelCells

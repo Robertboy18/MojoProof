@@ -1,6 +1,6 @@
 import MojoProof.Sym.Block
 import MojoProof.Sem.Spec
-import MojoProof.Sem.OneRun
+import GPUProof.OneRun
 import MojoProof.Sem.Determinism
 
 /-!
@@ -8,7 +8,7 @@ import MojoProof.Sem.Determinism
 
 Every result here is for every program, launch and contexts.
 
-* `Steps.grid`: steps that continue a thread (`Steps`, MojoProof/Sym/Block.lean), when thread `n`
+* `Steps.grid`: steps that continue a thread (`Steps`, MojoProof/Sym/Rel.lean), when thread `n`
   of a grid runs that thread on the grid's memory, are a run of grid steps (`Grid.Step`) to the
   grid with only thread `n`'s status (running the thread after the steps) and the memory changed.
 * `Runs`: a thread's run to its end, steps that continue it and then a step that returns
@@ -26,7 +26,7 @@ Every result here is for every program, launch and contexts.
   of grid steps to the grid with threads `ns` done, every other thread unchanged, and the last
   memory. `Seq.trace`: that memory's trace is the threads' events (the last thread's in front) in
   front of the first memory's. `Seq.done`: when `ns` names every thread of the grid, the run ends
-  in a grid that is done (`Grid.Done`, `Grid.done_foldl`).
+  in a grid that is done (the core's `Done` at `sig`, `Grid.done_foldl`).
 * `Seq.start_sound`: from the grid `Grid.start` gives, threads run in turn to a done grid that is
   not bad make the start's grid sound (`Grid.Sound`, by `Grid.start_sound`); the premise that the
   done grid is not bad is the caller's.
@@ -39,6 +39,7 @@ Every result here is for every program, launch and contexts.
   about the memory only.
   On a launch whose grid and block have side 1 in `y` and `z`, thread `k` of `Seq.of_inv` is
   the thread of index `k` (`Launch.index_oneDim`, MojoProof/Sem/Index.lean).
+* `Grid.start_threads`: each thread `n` of the start's grid runs `Grid.thread g n`.
 
 `Seq` is `Turns` of `Runs`; `Seq.grid`, `Seq.trace` and `Seq.of_inv` are
 `Turns.grid`, `Turns.trace` and `Turns.of_inv` at it. No collective call is involved in `Seq`:
@@ -50,6 +51,7 @@ uses it with runs to a wait.
 namespace MojoProof.Sym
 
 open MojoProof.LLVM MojoProof.Sem
+open GPUProof
 
 /-- An array whose entry `n` is `a` is unchanged by setting entry `n` to `a`. -/
 theorem Array.set!_of_getElem? {α : Type} {xs : Array α} {n : Nat} {a : α} (h : xs[n]? = some a) :
@@ -274,11 +276,13 @@ theorem Seq.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ns : List 
       ∃ k, Path (Grid.Step L c) k g ⟨ns.foldl (fun ts n => ts.set! n .done) g.threads, m'⟩ :=
   Turns.grid (s := fun _ => .done) (fun hr hg hm => Runs.grid hr hg hm) h
 
-/-- For every array of statuses and memory: setting the entries `ns` to `.done`, when every index
-of the array is one of `ns`, leaves a done grid. -/
-theorem Grid.done_foldl {ns : List Nat} {ts : Array Status} (m : Mem)
-    (hall : ∀ j < ts.size, j ∈ ns) : Grid.Done ⟨ns.foldl (fun ts n => ts.set! n .done) ts, m⟩ := by
-  simp only [Grid.Done, Array.all_eq_true]
+/-- For every launch, contexts, array of statuses and memory: setting the entries `ns` to `.done`,
+when every index of the array is one of `ns`, leaves a done grid (the core's `Done` at `sig`). -/
+theorem Grid.done_foldl {L : Launch} {c : Nat → Ctx} {ns : List Nat} {ts : Array Status} (m : Mem)
+    (hall : ∀ j < ts.size, j ∈ ns) :
+    GPUProof.Done sig (⟨ns.foldl (fun ts n => ts.set! n .done) ts, m⟩, L, c) := by
+  refine Grid.done_of_all ?_
+  simp only [Array.all_eq_true]
   intro j hj
   have e := foldl_done_getElem? ns ts j
   have hj' : j < ts.size := by
@@ -294,13 +298,13 @@ theorem Grid.done_foldl {ns : List Nat} {ts : Array Status} (m : Mem)
 /-- **Threads run in turn to a done grid.** For every launch `L`, contexts `c`, threads `t` and
 grid `g` in which each of the distinct threads `ns` runs its thread `t n`, whose memory is `m`
 and every one of whose threads is one of `ns`: threads `ns` run in turn from `m` to `m'` are a run
-of grid steps from `g` to a done grid (`Grid.Done`) with memory `m'`, whose trace is the threads'
-events in front of `m`'s (`Seq.trace`). -/
+of grid steps from `g` to a done grid (the core's `Done` at `sig`) with memory `m'`, whose trace is
+the threads' events in front of `m`'s (`Seq.trace`). -/
 theorem Seq.done {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ns : List Nat} {m m' : Mem}
     {Es : List (List Event)} (h : Seq c t ns m Es m') {g : Grid} (hd : ns.Nodup)
     (hg : ∀ n ∈ ns, g.threads[n]? = some (.run (t n))) (hm : g.mem = m)
     (hall : ∀ j < g.threads.size, j ∈ ns) :
-    ∃ z, (∃ k, Path (Grid.Step L c) k g z) ∧ z.Done ∧ z.mem = m' ∧
+    ∃ z, (∃ k, Path (Grid.Step L c) k g z) ∧ GPUProof.Done sig (z, L, c) ∧ z.mem = m' ∧
       z.mem.trace = Es.reverse.flatten ++ m.trace :=
   ⟨_, Seq.grid h hd hg hm, Grid.done_foldl m' hall, rfl, h.trace⟩
 
@@ -320,7 +324,7 @@ theorem Seq.start_sound {prog : Program} {fn : Func} {L : Launch} {args : List V
     {t : Nat → Thread} {ns : List Nat} {Es : List (List Event)} {m' : Mem}
     (hs : Seq c t ns g₀.mem Es m') (hd : ns.Nodup)
     (hg : ∀ n ∈ ns, g₀.threads[n]? = some (.run (t n))) (hall : ∀ j < g₀.threads.size, j ∈ ns)
-    (hb : ¬ Grid.Bad L c ⟨ns.foldl (fun ts n => ts.set! n .done) g₀.threads, m'⟩)
+    (hb : ¬ GPUProof.Bad sig (⟨ns.foldl (fun ts n => ts.set! n .done) g₀.threads, m'⟩, L, c))
     {y : β} (hy : obs m' = some y) (hR : R y) : Grid.Sound L c g₀ obs R :=
   have ⟨_, hp⟩ := Seq.grid (L := L) hs hd hg rfl
   Grid.start_sound h hm hO hp (Grid.done_foldl m' hall) hb hy hR
@@ -331,6 +335,18 @@ def Grid.thread (g : Grid) (n : Nat) : Thread :=
   match g.threads[n]? with
   | some (.run t) => t
   | _ => ⟨[], 0⟩
+
+/-- **The start's threads run**: for every program, kernel, launch, arguments, memory, address
+choice and oracle whose start (`Grid.start`) gives grid `g`, each thread `n` of `g` runs its
+thread `Grid.thread g n` (`Grid.start_run`). -/
+theorem Grid.start_threads {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
+    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) :
+    ∀ n < g.threads.size, g.threads[n]? = some (.run (Grid.thread g n)) := fun n hn => by
+  obtain ⟨-, _, t, -, e⟩ := Grid.start_run h n _ (Array.getElem?_eq_getElem hn)
+  have e' : g.threads[n]? = some (.run t) := by rw [Array.getElem?_eq_getElem hn, e]
+  unfold Grid.thread
+  rw [e']
 
 /-- **Threads in turn by an invariant.** For every contexts `c`, threads `t`, number `N` and
 family `P` of memory predicates indexed by the number of threads done: if each thread `k < N`,
@@ -348,10 +364,13 @@ contexts `c`, on a caller's memory `m` meeting `Mem.BytesIn`, every observation 
 only the blocks and every family `P` of memory predicates indexed by the number of threads done:
 if `g₀`'s memory is of `P 0`, each thread `k < N` of `g₀` (`Grid.thread`), from every memory of
 `P k`, runs to its end leaving a memory of `P (k + 1)`, and every memory `m'` of `P N` has a trace
-with no data race (`racy`) that keeps the promise of `!invariant.load` (`kept`) and has
-`obs m' = some y` with `R y`, then `g₀` is sound (`Grid.Sound`): `Seq.of_inv`, `Grid.start_run`
-(every thread of `g₀` runs), `Grid.Done.bad_iff` (the done grid the threads leave is bad only by
-its trace) and `Seq.start_sound`. The trace premise is the caller's. -/
+that keeps the promise of `!invariant.load` (the core's `GPUProof.kept` at `sig`), that has no
+data race (the core's `racy` at `sig`) when it has the premises of `racy_iff`, and has
+`obs m' = some y` with `R y`, then `g₀` is sound (`Grid.Sound`): `Seq.of_inv`,
+`Grid.start_threads` (every thread of `g₀` runs), `Grid.Done.bad_iff` (the done grid the threads
+leave, with `g₀`'s number of threads, is bad only by its trace), `Grid.start_reach_fits` (the
+done grid, reachable by `Seq.grid`, has the premises of `racy_iff`) and `Seq.start_sound`. The
+trace premise is the caller's. -/
 theorem Seq.start_sound_inv {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
     {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
@@ -360,20 +379,25 @@ theorem Seq.start_sound_inv {prog : Program} {fn : Func} {L : Launch} {args : Li
     (h0 : P 0 g₀.mem)
     (hk : ∀ k < g₀.threads.size, ∀ m, P k m →
       ∃ m', Runs (c k) (Grid.thread g₀ k) m m' ∧ P (k + 1) m')
-    (hb : ∀ m', P g₀.threads.size m' → racy m'.trace = false ∧ kept m'.trace = true)
+    (hb : ∀ m', P g₀.threads.size m' →
+      ((∀ a, Sem.Event.access a ∈ m'.trace → a.who.thread < volume L.grid * volume L.block ∧
+          a.who.cta = a.who.thread / volume L.block) → Trace.Shaped m'.trace.reverse →
+        GPUProof.racy sig (m'.trace.map (Event.toCore L)).reverse = false) ∧
+      GPUProof.kept sig (m'.trace.map (Event.toCore L)).reverse = true)
     (hy : ∀ m', P g₀.threads.size m' → ∃ y, obs m' = some y ∧ R y) : Grid.Sound L c g₀ obs R := by
   obtain ⟨Es, m', hs, hP⟩ := Seq.of_inv hk h0
   obtain ⟨y, hy, hR⟩ := hy m' hP
-  refine Seq.start_sound h hm hO hs List.nodup_range (fun n hn => ?_)
-    (fun j hj => List.mem_range.2 hj)
+  have hd : GPUProof.Done sig
+      (⟨(List.range g₀.threads.size).foldl (fun ts n => ts.set! n .done) g₀.threads, m'⟩, L, c) :=
+    Grid.done_foldl m' fun j hj => List.mem_range.2 hj
+  have hg : ∀ n ∈ List.range g₀.threads.size, g₀.threads[n]? = some (.run (Grid.thread g₀ n)) :=
+    fun n hn => Grid.start_threads h n (List.mem_range.1 hn)
+  obtain ⟨_, hp⟩ := Seq.grid (L := L) hs List.nodup_range hg rfl
+  have hf := Grid.start_reach_fits h (Path.exists_iff.1 ⟨_, hp⟩)
+  exact Seq.start_sound h hm hO hs List.nodup_range hg (fun j hj => List.mem_range.2 hj)
     (fun hb' => ((Grid.Done.bad_iff
-        (Grid.done_foldl m' fun j hj => List.mem_range.2 hj)).1 hb').elim
-      (fun h' => Bool.false_ne_true ((hb m' hP).1.symm.trans h'))
+        ((foldl_set_size (fun _ => .done) _ _).trans (Grid.start_size h)).le hd).1 hb').elim
+      (fun h' => Bool.false_ne_true (((hb m' hP).1 hf.trace hf.2).symm.trans h'))
       fun h' => Bool.false_ne_true (h'.symm.trans (hb m' hP).2)) hy hR
-  have hn := List.mem_range.1 hn
-  obtain ⟨-, _, t, -, e⟩ := Grid.start_run h n _ (Array.getElem?_eq_getElem hn)
-  have e' : g₀.threads[n]? = some (.run t) := by rw [Array.getElem?_eq_getElem hn, e]
-  unfold Grid.thread
-  rw [e']
 
 end MojoProof.Sym

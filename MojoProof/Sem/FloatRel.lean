@@ -4,6 +4,7 @@ import FloatLib.Floats.Formats.BinaryInterchange.Arithmetic.Proof
 import FloatLib.Floats.Formats.BinaryInterchange.Arithmetic.SignedSemantics.Core
 import FloatLib.Floats.Formats.BinaryInterchange.Dyadic.Classification
 import FloatLib.Floats.Formats.BinaryInterchange.Spec.Division
+import GPUProof.NaN
 
 /-!
 # Relations between two runs' float results, one operation at a time (T5's rows)
@@ -11,22 +12,25 @@ import FloatLib.Floats.Formats.BinaryInterchange.Spec.Division
 The relations on float results that are proved, each for one operation on scalars (`Val`) or on
 words, not for terms (docs/proofs/payload.md, section "T5's rows, one operation at a time").
 
-Definitions, for every FloatLib format: `FinEq` (equal words, or neither finite), `NaNEq` (equal
-words, or both NaNs), the estimate `Est` with its validity flag and `Est.Holds` (if valid, the word
-is finite and within the bound of the value), `Est.contract` (the estimate of a contracted `fadd` /
-`fsub`: the exact value of `contract_error`, its bound, valid when the operands are finite and no
-choice's exact result exceeds the largest finite magnitude), and `RsqrtClose` (a binary32 word
-finite and within relative error `rsqrtErr` of `1 / √a`). On scalars: `Val.Lift`, a relation on
+Definitions, for every FloatLib format: `FinEq` (equal words, or neither finite:
+`GPUProof.UpToNaN` at the words that are not finite), `NaNEq` (equal words, or both NaNs:
+`GPUProof.UpToNaN` at FloatLib's `Model.isNaN`), the estimate `Est` with
+its validity flag and `Est.Holds` (if valid, the word is finite and within the bound of the
+value), `Est.contract` (the estimate of a contracted `fadd` / `fsub`: the exact value of
+`contract_error`, its bound, valid when the operands are finite and no choice's exact result
+exceeds the largest finite magnitude), and `RsqrtClose` (a binary32 word finite and within
+relative error `rsqrtErr` of `1 / √a`). On scalars: `Val.Lift`, a relation on
 the floats of one type as one on scalars (equal scalars, or two related floats);
 `Respects R S C o`, an operation that gives related results (`Except.Rel S`: the same fault, or
 values related by `S`) on operand lists related by `R` and oracle numbers coupled by `C`; and
 `floatOp`, `floatBin` with no recorded factor on operand lists.
 
 Proved, for all operands:
-* `FinEq.deliver`: `deliver` keeps `FinEq` for every two oracle numbers (with `not_finite_deliver`);
+* `FinEq.deliver`: `deliver` keeps `FinEq` for every two oracle numbers (with `not_finite_deliver`,
+  and `NaNEq.deliver` through `GPUProof.UpToNaN.mono`, a NaN being not finite);
   `FinEq.op`: so does every binary operation whose finite results have finite operands, which
   FloatLib's `add`, `sub` and `mul` are on every float type of the semantics (`fbin_finite`, with
-  `isIEEE_fmt`).
+  `isIEEE_fmt`); it is the case of `GPUProof.UpToNaN.map₂` at the words that are not finite.
 * `floatBin_ofFloat`: on two floats of type `t`, with no recorded factor and flags without `nnan`,
   `ninf`, `nsz`, `reassoc`, `arcp`, `afn`, `floatBin` is FloatLib's operation through `deliver`, for
   every operator but `frem` and every oracle number (with `contract_none`: a contraction with no
@@ -94,11 +98,14 @@ open FloatLib.Floats.Formats.BinaryInterchange LLVM
 
 variable {fmt : FloatFormat}
 
-/-- Equal words, or neither finite (each a NaN or an infinity). -/
-def FinEq (x y : Model fmt) : Prop := x = y ∨ (x.isFinite = false ∧ y.isFinite = false)
+/-- Equal words, or neither finite (each a NaN or an infinity), in every format: the core's
+equality up to NaN payloads (`GPUProof.UpToNaN`) at the words that are not finite, so an
+infinity is treated as a NaN is. -/
+def FinEq (x y : Model fmt) : Prop := GPUProof.UpToNaN (fun w : Model fmt => !w.isFinite) x y
 
-/-- Equal words, or both NaNs. -/
-def NaNEq (x y : Model fmt) : Prop := x = y ∨ (x.isNaN = true ∧ y.isNaN = true)
+/-- Equal words, or both NaNs, in every format: the core's equality up to NaN payloads
+(`GPUProof.UpToNaN`) at FloatLib's `Model.isNaN`. -/
+def NaNEq (x y : Model fmt) : Prop := GPUProof.UpToNaN Model.isNaN x y
 
 /-- An estimate of a float: a real value, an error bound, and whether the estimate applies (the
 flag carries the range hypothesis: no exact result exceeds the largest finite magnitude). -/
@@ -147,17 +154,6 @@ theorem not_finite_deliver {r : Model fmt} (h : r.isFinite = false) (n : Nat) :
     exact h
   · exact Model.isFinite_eq_false_of_isNaN (isNaN_deliver hr n)
 
-/-- `deliver` keeps `FinEq`, for every two oracle numbers: a NaN is delivered as a NaN, and a word
-that is not a NaN as itself. -/
-theorem FinEq.deliver {r r' : Model fmt} (h : FinEq r r') (n n' : Nat) :
-    FinEq (deliver r n) (deliver r' n') := by
-  rcases h with rfl | ⟨h1, h2⟩
-  · cases hr : r.isNaN
-    · exact .inl (by rw [deliver_of_isNaN_eq_false hr, deliver_of_isNaN_eq_false hr])
-    · exact .inr ⟨Model.isFinite_eq_false_of_isNaN (isNaN_deliver hr n),
-        Model.isFinite_eq_false_of_isNaN (isNaN_deliver hr n')⟩
-  · exact .inr ⟨not_finite_deliver h1 n, not_finite_deliver h2 n'⟩
-
 /-- `deliver` keeps `NaNEq`, for every two oracle numbers: a NaN is delivered as a NaN, and a word
 that is not a NaN as itself. -/
 theorem NaNEq.deliver {r r' : Model fmt} (h : NaNEq r r') (n n' : Nat) :
@@ -168,29 +164,28 @@ theorem NaNEq.deliver {r r' : Model fmt} (h : NaNEq r r') (n n' : Nat) :
     · exact .inr ⟨isNaN_deliver hr n, isNaN_deliver hr n'⟩
   · exact .inr ⟨isNaN_deliver h1 n, isNaN_deliver h2 n'⟩
 
+/-- `deliver` keeps `FinEq`, for every two oracle numbers: a word is delivered as one `NaNEq` to
+it under every two oracle numbers (`NaNEq.deliver`), and a NaN is not finite; a word that is not
+finite is delivered as one that is not finite (`not_finite_deliver`). -/
+theorem FinEq.deliver {r r' : Model fmt} (h : FinEq r r') (n n' : Nat) :
+    FinEq (deliver r n) (deliver r' n') := by
+  rcases h with rfl | ⟨h1, h2⟩
+  · exact GPUProof.UpToNaN.mono (fun x hx => by simp [Model.isFinite_eq_false_of_isNaN hx])
+      (NaNEq.deliver (.inl rfl) n n')
+  · exact .inr ⟨by simp [not_finite_deliver (by simpa using h1) n],
+      by simp [not_finite_deliver (by simpa using h2) n']⟩
+
 /-- Every binary operation whose finite results have finite operands keeps `FinEq`: on equal
 operands the results are equal, and an operand that is not finite on both sides makes both
-results not finite. -/
+results not finite (`GPUProof.UpToNaN.map₂` at the words that are not finite). -/
 theorem FinEq.op {f : Model fmt → Model fmt → Model fmt}
     (hf : ∀ x y, (f x y).isFinite = true → x.isFinite = true ∧ y.isFinite = true)
-    {x x' y y' : Model fmt} (hx : FinEq x x') (hy : FinEq y y') : FinEq (f x y) (f x' y') := by
-  have nf : ∀ {a b : Model fmt}, (a.isFinite = false ∨ b.isFinite = false) →
-      (f a b).isFinite = false := by
-    intro a b h
-    cases hab : (f a b).isFinite with
-    | false => rfl
-    | true =>
-      obtain ⟨ha, hb⟩ := hf a b hab
-      rcases h with h | h
-      · rw [ha] at h
-        cases h
-      · rw [hb] at h
-        cases h
-  rcases hx with rfl | ⟨h1, h2⟩
-  · rcases hy with rfl | ⟨h3, h4⟩
-    · exact .inl rfl
-    · exact .inr ⟨nf (.inr h3), nf (.inr h4)⟩
-  · exact .inr ⟨nf (.inl h1), nf (.inl h2)⟩
+    {x x' y y' : Model fmt} (hx : FinEq x x') (hy : FinEq y y') : FinEq (f x y) (f x' y') :=
+  GPUProof.UpToNaN.map₂ (f := f) (fun a b h => by
+    simp only [Bool.not_eq_true'] at h ⊢
+    exact Bool.eq_false_iff.2 fun e => by
+      obtain ⟨ha, hb⟩ := hf a b e
+      rcases h with h | h <;> simp_all) hx hy
 
 /-- The format of every float type of the semantics is an IEEE format. -/
 theorem isIEEE_fmt (t : FloatTy) : t.fmt.isIEEE = true := by
@@ -374,14 +369,11 @@ theorem fbin_some {op : FBinOp} (hop : op ≠ .frem) : ∃ f, fbin (fmt := fmt) 
   cases op <;> first | exact absurd rfl hop | exact ⟨_, rfl⟩
 
 /-- Every operator with an IEEE operation `f` keeps `NaNEq`: on equal operands the results are
-equal, and an operand that is a NaN on both sides makes both results NaNs (`fbin_isNaN`). -/
+equal, and an operand that is a NaN on both sides makes both results NaNs (`fbin_isNaN`, through
+`GPUProof.UpToNaN.map₂`). -/
 theorem NaNEq.op {op : FBinOp} {f : Model fmt → Model fmt → Model fmt} (hf : fbin op = some f)
-    {x x' y y' : Model fmt} (hx : NaNEq x x') (hy : NaNEq y y') : NaNEq (f x y) (f x' y') := by
-  rcases hx with rfl | ⟨h1, h2⟩
-  · rcases hy with rfl | ⟨h3, h4⟩
-    · exact .inl rfl
-    · exact .inr ⟨fbin_isNaN hf (.inr h3), fbin_isNaN hf (.inr h4)⟩
-  · exact .inr ⟨fbin_isNaN hf (.inl h1), fbin_isNaN hf (.inl h2)⟩
+    {x x' y y' : Model fmt} (hx : NaNEq x x') (hy : NaNEq y y') : NaNEq (f x y) (f x' y') :=
+  GPUProof.UpToNaN.map₂ (f := f) (fun _ _ h => fbin_isNaN hf h) hx hy
 
 /-- **NaN equivalence under free oracles** (T5's NaN row as a `Respects` statement): for every
 float type `t`, `fadd`, `fsub`, `fmul` and `fdiv` with no recorded factor and flags without `nnan`

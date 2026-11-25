@@ -40,6 +40,7 @@ as the store faults (`running_every`).
 namespace MojoProofTest.PayloadRun
 
 open MojoProof MojoProof.Sem MojoProof.LLVM MojoProofTest.Pending MojoProofTest.Determinism
+open GPUProof
 open MojoProofTest.SkelStep (labB afterLd)
 open MojoProofTest.ScheduleOwned (succs mem_succs every every_sound)
 open Relation
@@ -215,21 +216,23 @@ def word1 (m : Mem) : Option (List MemByte) :=
 /-- For `w1`, by evaluation: the launch's thread runs in four steps to `doneF w1`, in which every
 thread has returned, which is not bad, and whose block 1 holds 2.0. -/
 theorem runF_run :
-    Path (Grid.Step .one (runF w1).2) 4 (runF w1).1 (doneF w1) ∧ (doneF w1).Done ∧
-      ¬ (doneF w1).Bad .one (runF w1).2 ∧
+    Path (Grid.Step .one (runF w1).2) 4 (runF w1).1 (doneF w1) ∧
+      GPUProof.Done sig (doneF w1, Launch.one, (runF w1).2) ∧
+      ¬ GPUProof.Bad sig (doneF w1, Launch.one, (runF w1).2) ∧
       word1 (doneF w1).mem = some [.byte 0, .byte 0, .byte 0, .byte 0x40] := by
-  have hd : (doneF w1).Done := by
-    unfold Grid.Done
+  have hd : GPUProof.Done sig (doneF w1, Launch.one, (runF w1).2) :=
+    Grid.done_of_all (by decide +kernel)
+  have hs : (doneF w1).threads.size ≤ volume Launch.one.grid * volume Launch.one.block := by
     decide +kernel
   refine ⟨.cons ⟨0, .inl (ldF_eq false)⟩
     (path_advs _ [0, 0, 0] (by decide +kernel) (.nil _)), hd, ?_, by decide +kernel⟩
   rintro (hf | hr | hk | hr)
-  · exact done_not_faults hd hf
-  · rw [show racy (doneF w1).mem.trace = false by decide +kernel] at hr
-    cases hr
-  · rw [show kept (doneF w1).mem.trace = true by decide +kernel] at hk
-    cases hk
-  · exact hd.not_raceEnabled hr
+  · exact done_not_faults hs hd hf
+  · exact nomatch (show GPUProof.racy sig ((doneF w1).mem.trace.map
+      (Event.toCore Launch.one)).reverse = false by decide +kernel).symm.trans hr
+  · exact nomatch (show GPUProof.kept sig ((doneF w1).mem.trace.map
+      (Event.toCore Launch.one)).reverse = true by decide +kernel).symm.trans hk
+  · exact Grid.Done.not_raceEnabled hs hd hr
 
 /-- **The instance of `Grid.skel_run`** on a kernel that reads and writes the payload: under
 `labB` and with block 1 payload, for every memory `m₂` related to `memF w1` by `Mem.SkelEq` and
@@ -239,8 +242,9 @@ steps to a grid in which every thread has returned, that is not bad, is related 
 block 1 and 4. The premises: `memF_bytesIn`, `okF`, `memF_ok` and `runF_run`. -/
 theorem run_inst {m₂ : Mem} (hm : (memF w1).SkelEq (· = 1) m₂) (o₂ : Nat → Nat → Nat) :
     ∃ g₂ c₂ z₂, Grid.start progF kF .one [.ptr ⟨1, 0⟩] m₂ (fun _ => 0) o₂ = .ok (g₂, c₂) ∧
-      Path (Grid.Step .one c₂) 4 g₂ z₂ ∧ z₂.Done ∧ ¬ z₂.Bad .one c₂ ∧
-      (doneF w1).SkelRel labB (· = 1) z₂ ∧ obsF z₂.mem = some 4 ∧
+      Path (Grid.Step .one c₂) 4 g₂ z₂ ∧ GPUProof.Done sig (z₂, Launch.one, c₂) ∧
+      ¬ GPUProof.Bad sig (z₂, Launch.one, c₂) ∧ (doneF w1).SkelRel labB (· = 1) z₂ ∧
+      obsF z₂.mem = some 4 ∧
       Grid.Sound .one c₂ g₂ obsF (· = 4) := by
   obtain ⟨p₁, hd₁, hb₁, -⟩ := runF_run
   obtain ⟨g₂, c₂, z₂, e, p₂, hd₂, hb₂, hr, hs⟩ := Grid.skel_run (lab := labB) (o₂ := o₂)
@@ -298,16 +302,20 @@ returned, as the store to block 1 faults (`running_every`). -/
 theorem run_twin :
     ¬ (memF w1).SkelEq (· = 1) (memF w1 true) ∧
       ¬ ∃ g₂ c₂ z₂, Grid.start progF kF .one [.ptr ⟨1, 0⟩] (memF w1 true) (fun _ => 0)
-          (fun _ _ => 0) = .ok (g₂, c₂) ∧ Path (Grid.Step .one c₂) 4 g₂ z₂ ∧ z₂.Done := by
+          (fun _ _ => 0) = .ok (g₂, c₂) ∧ Path (Grid.Step .one c₂) 4 g₂ z₂ ∧
+          GPUProof.Done sig (z₂, Launch.one, c₂) := by
   refine ⟨(memF_skel w1 w1).2, fun ⟨g₂, c₂, z₂, e, p, hd⟩ => ?_⟩
+  have hd' := Grid.Done.all (Grid.start_reach_size e (Path.exists_iff.1 ⟨_, p⟩)).le hd
   rw [startF_eq] at e
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj e).symm
   have h : running z₂ = true := by
     rcases reachF true (Path.exists_iff.1 ⟨_, p⟩) with rfl | hz
     · decide +kernel
     · exact every_sound hz running_every
-  have hd' : z₂.threads.all (· matches .done) = true := hd
-  simp only [running, hd', Bool.not_true] at h
+  have hr : running z₂ = false := by
+    have := congrArg (!·) hd'
+    exact this
+  rw [hr] at h
   cases h
 
 end MojoProofTest.PayloadRun

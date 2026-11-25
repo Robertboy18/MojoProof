@@ -20,14 +20,15 @@ together), from grids related by `S`:
 
 `Grid.Lockstep.symm` flips it, and `Grid.Lockstep.eq` (`Eq`, for every launch and contexts) is
 its instance. The proof is docs/proofs/payload.md section T3a; it uses no property of the
-semantics beyond the definitions of `Grid.Step`, `Grid.Bad` and `Grid.Sound`. T3b, that the
-skeleton relation of a labelled program is a lockstep bisimulation between two payloads, is not
-proved here.
+semantics beyond the definitions of `Grid.Step`, the core's `Bad` at `sig` and `Grid.Sound`. T3b,
+that the skeleton relation of a labelled program is a lockstep bisimulation between two payloads,
+is not proved here.
 -/
 
 namespace MojoProof.Sem
 
 open MojoProof.LLVM Relation
+open GPUProof
 
 /-- Two results of a step (an `advance` or a `fire`) agree under `S`: both fault, both take no
 step, or both give grids related by `S`. -/
@@ -49,12 +50,13 @@ structure Grid.Lockstep (L : Launch) (c c' : Nat → Ctx) (S : Grid → Grid →
   advance : ∀ {g₁ g₂}, S g₁ g₂ → ∀ n, Grid.Agree S (g₁.advance c n) (g₂.advance c' n)
   /-- Every collective call of related grids agrees in the same way. -/
   fire : ∀ {g₁ g₂}, S g₁ g₂ → ∀ n, Grid.Agree S (g₁.fire L c n) (g₂.fire L c' n)
-  /-- Related grids are done together. -/
-  done : ∀ {g₁ g₂}, S g₁ g₂ → (g₁.Done ↔ g₂.Done)
+  /-- Related grids are done together (the core's `Done` at `sig`). -/
+  done : ∀ {g₁ g₂}, S g₁ g₂ → (GPUProof.Done sig (g₁, L, c) ↔ GPUProof.Done sig (g₂, L, c'))
   /-- Related grids have one trace. -/
   trace : ∀ {g₁ g₂}, S g₁ g₂ → g₁.mem.trace = g₂.mem.trace
-  /-- Related grids have a race enabled together. -/
-  race : ∀ {g₁ g₂}, S g₁ g₂ → (g₁.RaceEnabled c ↔ g₂.RaceEnabled c')
+  /-- Related grids have a race enabled together (the core's `RaceEnabled` at `sig`). -/
+  race : ∀ {g₁ g₂}, S g₁ g₂ →
+    (GPUProof.RaceEnabled sig (g₁, L, c) ↔ GPUProof.RaceEnabled sig (g₂, L, c'))
 
 namespace Grid.Agree
 
@@ -153,26 +155,32 @@ theorem reach (hS : Grid.Lockstep L c c' S) {g₁ g₂ z₁ : Grid} (h : S g₁ 
 
 /-- If one of two related grids faults under `c`, the other faults under `c'`. -/
 theorem faults (hS : Grid.Lockstep L c c' S) {g₁ g₂ : Grid} (h : S g₁ g₂)
-    (hf : g₁.Faults L c) : g₂.Faults L c' := by
-  obtain ⟨n, e, he | he⟩ := hf
+    (hf : GPUProof.Faults sig (g₁, L, c)) : GPUProof.Faults sig (g₂, L, c') := by
+  obtain ⟨n, e, he | he⟩ := Grid.faults_iff.1 hf
   · have := hS.advance h n
     rw [he] at this
     obtain ⟨e', h'⟩ := this.error
-    exact ⟨n, e', .inl h'⟩
+    exact Grid.faults_iff.2 ⟨n, e', .inl h'⟩
   · have := hS.fire h n
     rw [he] at this
     obtain ⟨e', h'⟩ := this.error
-    exact ⟨n, e', .inr h'⟩
+    exact Grid.faults_iff.2 ⟨n, e', .inr h'⟩
 
 /-- Two related grids are bad together. -/
 theorem bad (hS : Grid.Lockstep L c c' S) {g₁ g₂ : Grid} (h : S g₁ g₂) :
-    g₁.Bad L c ↔ g₂.Bad L c' := by
+    GPUProof.Bad sig (g₁, L, c) ↔ GPUProof.Bad sig (g₂, L, c') := by
   have key : ∀ {c c' : Nat → Ctx} {S : Grid → Grid → Prop}, Grid.Lockstep L c c' S →
-      ∀ {g₁ g₂ : Grid}, S g₁ g₂ → g₁.Bad L c → g₂.Bad L c' := by
+      ∀ {g₁ g₂ : Grid}, S g₁ g₂ → GPUProof.Bad sig (g₁, L, c) → GPUProof.Bad sig (g₂, L, c') := by
     rintro c c' S hS g₁ g₂ h (hf | hr | hk | he)
     · exact .inl (hS.faults h hf)
-    · exact .inr (.inl (hS.trace h ▸ hr))
-    · exact .inr (.inr (.inl (hS.trace h ▸ hk)))
+    · refine .inr (.inl ?_)
+      show GPUProof.racy sig (g₂.mem.trace.map (Event.toCore L)).reverse = true
+      rw [← hS.trace h]
+      exact hr
+    · refine .inr (.inr (.inl ?_))
+      show GPUProof.kept sig (g₂.mem.trace.map (Event.toCore L)).reverse = false
+      rw [← hS.trace h]
+      exact hk
     · exact .inr (.inr (.inr ((hS.race h).1 he)))
   exact ⟨key hS h, key hS.symm h⟩
 
@@ -180,7 +188,8 @@ theorem bad (hS : Grid.Lockstep L c c' S) {g₁ g₂ : Grid} (h : S g₁ g₂) :
 related grids in which every thread has returned agree, and every relation `R`: if one of two
 related grids is sound under `c`, the other is sound under `c'`. -/
 theorem sound (hS : Grid.Lockstep L c c' S) {g₁ g₂ : Grid} (h : S g₁ g₂) {β : Type}
-    {obs : Mem → Option β} {R : β → Prop} (hO : ∀ {x y}, S x y → x.Done → obs x.mem = obs y.mem)
+    {obs : Mem → Option β} {R : β → Prop}
+    (hO : ∀ {x y}, S x y → GPUProof.Done sig (x, L, c) → obs x.mem = obs y.mem)
     (hs : Grid.Sound L c g₁ obs R) : Grid.Sound L c' g₂ obs R where
   safe x hx hf := by
     obtain ⟨y, hy, e⟩ := hS.symm.reach h hx
@@ -236,15 +245,16 @@ theorem Grid.payload_run {prog : Program} {fn : Func} {L : Launch} {args : List 
     {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₂ : Grid} {c' : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₂, c')) (hm : m.BytesIn m.Known)
     {c : Nat → Ctx} {S : Grid → Grid → Prop} (hS : Grid.Lockstep L c c' S) {g₁ : Grid}
-    (e : S g₁ g₂) {k : Nat} {z₁ : Grid} (run : Path (Grid.Step L c) k g₁ z₁) (hz : z₁.Done)
-    (hb : ¬ z₁.Bad L c) :
-    ∃ z₂, Path (Grid.Step L c') k g₂ z₂ ∧ z₂.Done ∧ ¬ z₂.Bad L c' ∧ S z₁ z₂ ∧
+    (e : S g₁ g₂) {k : Nat} {z₁ : Grid} (run : Path (Grid.Step L c) k g₁ z₁)
+    (hz : GPUProof.Done sig (z₁, L, c)) (hb : ¬ GPUProof.Bad sig (z₁, L, c)) :
+    ∃ z₂, Path (Grid.Step L c') k g₂ z₂ ∧ GPUProof.Done sig (z₂, L, c') ∧
+      ¬ GPUProof.Bad sig (z₂, L, c') ∧ S z₁ z₂ ∧
       ∀ {β : Type} {obs : Mem → Option β} {R : β → Prop},
         (∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') →
         ∀ {y : β}, obs z₂.mem = some y → R y → Grid.Sound L c' g₂ obs R := by
   obtain ⟨z₂, p₂, ez⟩ := hS.path run e
   have hz₂ := (hS.done ez).1 hz
-  have hb₂ : ¬ z₂.Bad L c' := fun hb₂ => hb ((hS.bad ez).2 hb₂)
+  have hb₂ : ¬ GPUProof.Bad sig (z₂, L, c') := fun hb₂ => hb ((hS.bad ez).2 hb₂)
   refine ⟨z₂, p₂, hz₂, hb₂, ez, fun {_ _ _} hO {_} hy hR => ?_⟩
   exact Grid.start_sound h hm hO p₂ hz₂ hb₂ hy hR
 

@@ -11,6 +11,12 @@ for every shape and stride that satisfy each law's premises:
 * `crd2idx_flat`, `Lay.call_leaves`, `Lay.call_flat` and `Lay.call_add`: a coordinate of one
   leaf per mode has as offset its dot product with the strides, whatever the extents, so on a
   flat layout the map is additive (the layout is affine);
+* `Lay.isAffine` and `Lay.isAffine_flat`: Mojo's is-affine flag holds for every layout of the model,
+  and on a flat layout adding `n` to one coordinate adds `n` times its stride to the offset;
+* `crd2idx_mixed` and `Lay.call_mixed`: a mixed coordinate (`fits`: tuples where the shape has
+  tuples, scalars below a mode's size where it splits a scalar, leaves of any value against leaf
+  extents) has as offset the dot product of its digits (`digits`) with the stride's leaves, for
+  every shape;
 * `Lay.cosize_eq` and `Lay.call_lt_cosize`: the cosize is one more than the sum of
   `(s - 1) * d` over the modes, and every scalar coordinate's offset lies below it;
 * `idx2crd_call`: idx2crd inverts the coordinate map on a flat layout whose modes are nested
@@ -240,6 +246,137 @@ theorem Lay.call_add (ms : List (Nat × Nat)) (c c' : List Nat) (b : Bool)
         (Lay.flat ms).call (tup (c'.map (leaf · b))) := by
   rw [Lay.call_flat _ _ _ h, Lay.call_flat _ _ _ h', Lay.call_flat _ _ _ (by simp [h, h']),
     sum_zipWith_add _ _ _ (h.trans h'.symm)]
+
+/-- `TensorLayout.is_affine` (layout.mojo:116-120): "whether the layout's offset is a sum of
+coordinate times stride", which code that steps through memory by adding a stride must check.
+The trait's default is `True` and `Layout` (layout.mojo:329) keeps it, so it holds for every
+layout of the model. The two-level layouts, which set it to `False`
+(two_level_layout.mojo:520), are not modelled. -/
+def Lay.isAffine (_ : Lay) : Bool := true
+
+/-- Adding `n` to the `k`-th coordinate adds `n` times the `k`-th stride to the dot product. -/
+theorem sum_zipWith_modify : ∀ (c d : List Nat) (k n : Nat), c.length = d.length →
+    (hk : k < d.length) →
+    (List.zipWith (· * ·) (c.modify k (· + n)) d).sum = (List.zipWith (· * ·) c d).sum + n * d[k]
+  | [], _, _, _, h, hk => by simp at h; simp [← h] at hk
+  | _ :: _, [], _, _, h, _ => by simp at h
+  | x :: c, e :: d, 0, n, _, _ => by
+    simp only [List.modify_zero_cons, List.zipWith_cons_cons, List.sum_cons,
+      List.getElem_cons_zero, Nat.add_mul]
+    omega
+  | x :: c, e :: d, k + 1, n, h, hk => by
+    simp only [List.length_cons, Nat.add_right_cancel_iff, Nat.add_lt_add_iff_right] at h hk
+    simp only [List.modify_succ_cons, List.zipWith_cons_cons, List.sum_cons,
+      List.getElem_cons_succ, sum_zipWith_modify c d k n h hk]
+    omega
+
+/-- **`is_affine` on flat layouts** (is-affine card): `is_affine` holds for a flat layout, and so
+does what it promises: adding `n` to the `k`-th element of a coordinate of one leaf per mode adds
+`n` times the `k`-th stride to the offset. For every flat layout, coordinate, mode and `n`, with
+no bound on the coordinate. -/
+theorem Lay.isAffine_flat (ms : List (Nat × Nat)) (c : List Nat) (b : Bool)
+    (h : c.length = ms.length) (k n : Nat) (hk : k < ms.length) :
+    (Lay.flat ms).isAffine = true ∧
+      (Lay.flat ms).call (tup ((c.modify k (· + n)).map (leaf · b))) =
+        (Lay.flat ms).call (tup (c.map (leaf · b))) + n * ms[k].2 := by
+  refine ⟨rfl, ?_⟩
+  rw [Lay.call_flat _ _ _ h, Lay.call_flat _ _ _ (by simp [h]),
+    sum_zipWith_modify c _ k n (by simp [h]) (by simpa using hk)]
+  simp
+
+/-! ## Mixed coordinates -/
+
+mutual
+/-- `fits c s` is `true` when `c` is a mixed coordinate of the shape `s`: a leaf against a leaf
+extent, of any value; a leaf below the size of a tuple shape (a scalar that `crd2idx` splits
+across the tuple); or a tuple of at least two elements against a tuple shape of as many modes,
+each element a mixed coordinate of its mode, at any depth. -/
+def fits : Tup → Tup → Bool
+  | leaf _ _, leaf _ _ => true
+  | leaf v _, tup ss => decide (v < (tup ss).size)
+  | tup cs, tup ss => decide (1 < cs.length) && fitsL cs ss
+  | tup _, leaf _ _ => false
+/-- `fits` element by element: lists of equal length, pairwise. -/
+def fitsL : List Tup → List Tup → Bool
+  | [], [] => true
+  | c :: cs, s :: ss => fits c s && fitsL cs ss
+  | _, _ => false
+end
+
+mutual
+/-- The digits of a mixed coordinate `c` of the shape `s`, one per leaf of `s`: a leaf against a
+leaf extent is its own digit; a leaf against a tuple shape gives its colexicographic digits
+against the shape's leaves (the first leaf fastest); a tuple gives its elements' digits against
+the matching modes, concatenated. -/
+def digits : Tup → Tup → List Nat
+  | leaf v _, leaf _ _ => [v]
+  | leaf v _, tup ss => colex v (leavesL ss)
+  | tup cs, tup ss => digitsL cs ss
+  | tup _, leaf _ _ => []
+/-- `digits` element by element, concatenated. -/
+def digitsL : List Tup → List Tup → List Nat
+  | c :: cs, s :: ss => digits c s ++ digitsL cs ss
+  | _, _ => []
+end
+
+mutual
+/-- **Mixed coordinates** (crd2idx card): for every shape `s`, every stride `d` congruent to it,
+and every mixed coordinate `c` of `s` (`fits`), `c` has one digit per leaf of `s` and `crd2idx`
+gives it the dot product of its digits (`digits c s`) with the stride's leaves. -/
+theorem crd2idx_mixed : ∀ (c s d : Tup), s.congruent d = true → fits c s = true →
+    (digits c s).length = s.leaves.length ∧
+      crd2idx c s d = (List.zipWith (· * ·) (digits c s) d.leaves).sum
+  | leaf v b, leaf e _, leaf e' _, _, _ => by simp [digits, leaves, crd2idx_leaf_leaf]
+  | leaf v b, tup ss, tup ds, h, hf => by
+    simp only [fits, decide_eq_true_eq] at hf
+    refine ⟨by simp [digits, leaves, colex_length], ?_⟩
+    rw [crd2idx_leaf (tup ss) (tup ds) v b h hf]; rfl
+  | tup cs, tup ss, tup ds, h, hf => by
+    simp only [fits, Bool.and_eq_true, decide_eq_true_eq] at hf
+    simp only [congruent] at h
+    obtain ⟨hl, h1, h2⟩ := zipIdx_mixed cs ss ds h hf.2
+    refine ⟨by simpa [digits, leaves] using h1, ?_⟩
+    have hlt : 1 < ds.length := by rw [← congruentL_length ss ds h, ← hl]; exact hf.1
+    have e : crd2idx (tup cs) (tup ss) (tup ds) = zipIdx cs ss ds := by
+      simp [crd2idx, len, elems, hl, hlt, congruentL_length ss ds h]
+    rw [e, h2]; rfl
+  | leaf _ _, leaf _ _, tup _, h, _ | leaf _ _, tup _, leaf _ _, h, _
+  | tup _, tup _, leaf _ _, h, _ => by simp [congruent] at h
+  | tup _, leaf _ _, _, _, hf => by simp [fits] at hf
+/-- `crd2idx_mixed` element by element: for a list of modes, congruent strides and one mixed
+coordinate per mode (`fitsL`), the coordinates are as many as the modes, the digits are one per
+leaf, and `zipIdx` is the dot product of the digits with the strides' leaves. -/
+theorem zipIdx_mixed : ∀ (cs ss ds : List Tup), congruentL ss ds = true → fitsL cs ss = true →
+    cs.length = ss.length ∧ (digitsL cs ss).length = (leavesL ss).length ∧
+      zipIdx cs ss ds = (List.zipWith (· * ·) (digitsL cs ss) (leavesL ds)).sum
+  | [], [], [], _, _ => by simp [digitsL, leavesL, zipIdx]
+  | c :: cs, s :: ss, d :: ds, h, hf => by
+    simp only [congruentL, Bool.and_eq_true] at h
+    simp only [fitsL, Bool.and_eq_true] at hf
+    obtain ⟨a1, a2⟩ := crd2idx_mixed c s d h.1 hf.1
+    obtain ⟨b0, b1, b2⟩ := zipIdx_mixed cs ss ds h.2 hf.2
+    refine ⟨by simp [b0], by simp [digitsL, leavesL, a1, b1], ?_⟩
+    simp only [zipIdx, digitsL, leavesL]
+    rw [sum_zipWith_append _ _ _ _ (a1.trans (congruent_leaves_length s d h.1)), a2, b2]
+  | [], [], _ :: _, h, _ | _ :: _, _ :: _, [], h, _ => by simp [congruentL] at h
+  | [], _ :: _, _, _, hf | _ :: _, [], _, _, hf => by simp [fitsL] at hf
+end
+
+/-- **Mixed coordinates of a layout** (crd2idx card): on a layout whose shape and stride are
+congruent, a mixed coordinate `c` of the shape (`fits`) has the offset `Σₖ digitₖ * dₖ` over the
+shape's leaves, the digits being `digits c` and the `dₖ` the stride's leaves. For every shape,
+nested or flat; a scalar below the size is `Lay.call_scalar`. -/
+theorem Lay.call_mixed (L : Lay) (h : congruentL L.shape L.stride = true) (c : Tup)
+    (hc : fits c (tup L.shape) = true) :
+    L.call c = (List.zipWith (· * ·) (digits c (tup L.shape)) (leavesL L.stride)).sum := by
+  have e := (crd2idx_mixed c (tup L.shape) (tup L.stride) h hc).2
+  rcases c with ⟨v, b⟩ | cs
+  · exact e
+  · have hl : ¬ L.rank < cs.length := by
+      simp only [fits, Bool.and_eq_true] at hc
+      simp [Lay.rank, (zipIdx_mixed _ _ _ h hc.2).1]
+    simp only [Lay.call, hl, ↓reduceIte]
+    exact e
 
 /-! ## Cosize -/
 

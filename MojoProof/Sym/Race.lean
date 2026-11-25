@@ -10,8 +10,9 @@ race-freedom results take, and leaves the others open, logged:
 * `Apart cell w` (of `Elem.safe` and `Tiling.ofApart`), for cells affine in the thread: by `omega`
   for a literal stride, by `apart_stride` for `base + k * s` with `w ≤ s`;
 * `Elem.Own out w cell a` (the `owned` field of `Elem`, `Elem.succ`, `Elem.log`) for an access `a`
-  whose fields are given: in its thread's cell when it is to `out`, a read otherwise, and not to
-  `out` with `!invariant.load`, each from the local context by `omega`;
+  whose fields are given: in its thread's cell when it is to `out`, a read that is not an
+  `atomicrmw`'s otherwise, and not to `out` with `!invariant.load`, each from the local context by
+  `omega`;
 * `∀ x ∈ l, P x` for a list `l` of accesses, element by element;
 * `x.conflict y = false` for two accesses (`Access.conflict_of_reads`, `Access.conflict_of_apart`):
   different blocks, or bytes apart, or both reads;
@@ -81,7 +82,7 @@ theorem Elem.Own.invariant_apart {tr : List Event} {out w : Nat} {cell : Nat →
   have h1 := (H a ha).2.2 hi
   have h2 : e.ptr.block = out := by
     by_contra h
-    rw [(H e he).2.1 h] at hw
+    rw [((H e he).2.1 h).1] at hw
     cases hw
   exact h1 (hb.trans h2)
 
@@ -105,7 +106,7 @@ theorem Elem.Own.owned {tr : List Event} {out w ext : Nat} {cell : Nat → Nat} 
     (hb : ∀ a, Event.access a ∈ tr → a.ptr.block = out → a.ptr.off + a.len ≤ ext) :
     ∀ a, Event.access a ∈ tr →
       Owned (fun b => if b = out then some (Tiling.clip cell w ext hap) else none) (fun t => t) a :=
-  fun a ha => ⟨fun hT => (H a ha).2.1 fun ho => by simp [ho] at hT, fun t hT => by
+  fun a ha => ⟨fun hT => ((H a ha).2.1 fun ho => by simp [ho] at hT).1, fun t hT => by
     by_cases ho : a.ptr.block = out
     · simp only [ho, ↓reduceIte, Option.some.injEq] at hT
       subst hT
@@ -154,7 +155,7 @@ def routes : TacticM (Array (TSyntax `tactic)) := do
     ← `(tactic| (intro i j hij; dsimp only; omega)),
     ← `(tactic| exact apart_stride _ (by omega)),
     ← `(tactic| (unfold Elem.Own; dsimp only; refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩ <;>
-        first | rfl | contradiction | omega)),
+        first | rfl | exact ⟨rfl, rfl⟩ | contradiction | omega)),
     ← `(tactic| (apply Access.conflict_of_reads <;> rfl)),
     ← `(tactic| (apply Access.conflict_of_apart; dsimp only; omega)),
     ← `(tactic| (apply Elem.Own.invariant_apart; assumption)),

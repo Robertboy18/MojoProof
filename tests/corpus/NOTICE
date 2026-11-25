@@ -40,12 +40,19 @@ what was changed:
     gemv/gemv_f32.mojo             from max/kernels/test/gpu/linalg/test_gemv.mojo at bbc13a71:
                                    reduced to the two float32 launches of its `run_matvec`,
                                    `gemv_kernel` and `gevm_kernel` of max/kernels/src/linalg/gemv.mojo
+    gevm_t512/gevm_f32_t512.mojo   from max/kernels/test/gpu/linalg/test_gemv.mojo at bbc13a71:
+                                   reduced to one float32 `gevm_kernel` launch, as gemv_f32.mojo
+                                   but with 16 warps per block (`tile_size` 512)
+    naive_k512/naive_f32.mojo      from max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo
+                                   at bbc13a71: reduced to its float32 `matmul_kernel_naive` launch
+                                   (BLOCK_DIM 16, transpose_b) at M = 20, N = 256, K = 512
     ../gpu/naive/test_multistage_gemm_kernel.mojo
                                    from max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo
                                    at bbc13a71: a driver of its float32 `matmul_kernel_naive`
                                    launch (BLOCK_DIM 16, transpose_b), its `main` replaced
 
-Their IR is in vmul/, vsub/, gemv/ and mgemm_sm80/, under the same license.
+Their IR is in vmul/, vsub/, gemv/, gevm_t512/, naive_k512/ and mgemm_sm80/, under the same
+license.
 
 LICENSE-APACHE-LLVM is the file Licenses/APACHE_LICENSE of the Modular repository at bbc13a71,
 byte for byte (git blob 62f360af9a9148bfae1d91e0a258dde0283adeb3). The repository's top-level

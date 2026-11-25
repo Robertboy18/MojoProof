@@ -4,9 +4,9 @@ import Std.Data.HashMap
 /-!
 # A fast race check
 
-`racy` (MojoProof/Sem/Spec.lean) compares every access of a trace with every earlier one, and the
-trace of the full `tiled_matmul` launch has about 600,000 accesses. `fast` checks the same
-property with a hash map of the bytes touched:
+The core's `racy` at `sig` (GPUProof/Race.lean) checks each access of a trace against the
+accesses before it, and the trace of the full `tiled_matmul` launch has about 600,000 accesses.
+`fast` checks races with a hash map of the bytes touched:
 
 * `phases` gives each access its phase, the number of barriers of its block of threads before it,
   in one pass. Two accesses of one block of threads have a barrier of that block between them
@@ -17,34 +17,34 @@ property with a hash map of the bytes touched:
   lists plus, for each write, the accesses that share a byte with it.
 
 Proved, for every trace:
-* `racy_iff` (L9 of docs/proofs/schedule.md): `racy tr` exactly when two accesses of
-  `(phases tr).1` clash, by `races_iff` for each access; `phases` lists exactly the accesses of
-  the trace (`mem_phases`, `phases_mem`), each in a phase at most the final count (`phase_le`);
-* `fast_sound`, `fast tr = false → racy tr = false`. The converse is not proved: `fast` could
-  report a race `racy` does not; the tests compare the two on every trace short enough for
-  `racy`.
+* `races_iff`: an access races with the trace before it (`Access.races`) exactly when it clashes
+  with an access of the trace's `phases`; `phases` lists exactly the accesses of the trace
+  (`mem_phases`, `phases_mem`), each in a phase at most the final count (`phase_le`);
+* `phasesF_eq`: `phasesF`, `phases` with the barrier counts as a function, gives the same
+  accesses with the same phases and counts;
+* `clash_comm`, `Access.overlaps_bytes`, and the lists of `bucket` hold each access of each byte
+  it touches (`mem_insertAll`, `mem_buckets`).
+
+From these MojoProof/Sem/RaceSig.lean proves, for every launch and trace with the premises of its
+`racy_iff`, that the core's `racy` at `sig` holds exactly when two accesses of `phases` clash
+(`racy_iff`, L9 of docs/proofs/schedule.md), and `fast_sound`: `fast tr = false` gives
+`GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false`. The converse is not proved: `fast`
+could report a race the core's `racy` does not; the tests compare the two on traces short enough
+for the core's `racy`.
+
+`phases` and `Access.bytes` are defined in MojoProof/Sem/SigDef.lean, with `sig`, which reaches
+them.
 -/
 
 namespace MojoProof.Sem
 
 open Std
 
-/-- The accesses of trace `tr` (newest first), each with its phase, the number of barriers of its
-block of threads before it; and those numbers after the whole trace, by block of threads. -/
-def phases (tr : List Event) : List (Access × Nat) × HashMap Nat Nat :=
-  tr.foldr (init := ([], ∅)) fun e p => match e with
-    | .barrier k => (p.1, p.2.insert k (p.2.getD k 0 + 1))
-    | .access a => ((a, p.2.getD a.who.cta 0) :: p.1, p.2)
-
 /-- Accesses `x` and `y`, with their phases, race in either order: they are by different threads,
 conflict, and are by different blocks of threads or in one phase. -/
 def clash (x y : Access × Nat) : Bool :=
   x.1.who.thread != y.1.who.thread && x.1.conflict y.1 &&
     (x.1.who.cta != y.1.who.cta || x.2 == y.2)
-
-/-- The bytes access `a` touches: block and offset. -/
-def Access.bytes (a : Access) : List (Nat × Int) :=
-  (List.range a.len).map fun i : Nat => (a.ptr.block, a.ptr.off + (i : Int))
 
 /-- `m` with `x` added to the list of each byte it touches. -/
 def bucket (m : HashMap (Nat × Int) (List (Access × Nat))) (x : Access × Nat) :
@@ -118,6 +118,34 @@ theorem phase_le : ∀ {tr : List Event} {y : Access × Nat}, y ∈ (phases tr).
     · exact le_rfl
     · exact phase_le h
 
+/-- `phases` with the barrier counts as a function instead of a hash map, for every trace: the
+same accesses with the same phases (`phasesF_eq`). Proofs by induction on a trace read it without
+the hash map's lemmas, and `decide +kernel` evaluates it (the kernel does not reduce the hash
+map's lookups of a block of threads other than 0). -/
+def phasesF (tr : List Event) : List (Access × Nat) × (Nat → Nat) :=
+  tr.foldr (init := ([], fun _ => 0)) fun e p => match e with
+    | .barrier k => (p.1, fun j => if k = j then p.2 j + 1 else p.2 j)
+    | .access a => ((a, p.2 a.who.cta) :: p.1, p.2)
+
+/-- **`phasesF` is `phases`**, for every trace: the same accesses with the same phases, and the
+same barrier count of every block of threads. -/
+theorem phasesF_eq : ∀ tr : List Event,
+    (phases tr).1 = (phasesF tr).1 ∧ ∀ j, (phases tr).2.getD j 0 = (phasesF tr).2 j
+  | [] => ⟨rfl, fun j => by simp [phases, phasesF]⟩
+  | .barrier k :: tr => by
+    obtain ⟨h1, h2⟩ := phasesF_eq tr
+    refine ⟨by rw [phases_barrier]; exact h1, fun j => ?_⟩
+    rw [phases_barrier, HashMap.getD_insert]
+    show _ = if k = j then (phasesF tr).2 j + 1 else (phasesF tr).2 j
+    by_cases hk : k = j
+    · subst hk
+      simp [h2]
+    · simp [hk, h2]
+  | .access a :: tr => by
+    obtain ⟨h1, h2⟩ := phasesF_eq tr
+    rw [phases_access]
+    exact ⟨by rw [h1, h2]; rfl, h2⟩
+
 /-- An access `a` races with trace `tr` exactly when it clashes with an access `y` of `tr`: `y`
 is by another thread, conflicts with `a`, and is by another block of threads, or no barrier of
 their block of threads completed after `tr` (`sync`) and `y` is in the phase of `a`. -/
@@ -160,34 +188,6 @@ theorem clash_comm {x y : Access × Nat} : clash x y = clash y x := by
   simp only [clash, Access.conflict, Access.overlaps, Bool.and_eq_true, bne_iff_ne, ne_eq,
     beq_iff_eq, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true']
   grind
-
-/-- **L9.** A trace has a data race exactly when two of its accesses clash. -/
-theorem racy_iff : ∀ {tr : List Event}, racy tr = true ↔
-    ∃ x ∈ (phases tr).1, ∃ y ∈ (phases tr).1, clash x y = true
-  | [] => by simp [racy, phases]
-  | .barrier _ :: tr => by
-    rw [phases_barrier]
-    simpa [racy] using racy_iff (tr := tr)
-  | .access a :: tr => by
-    have head : ∀ y : Access × Nat, clash (a, (phases tr).2.getD a.who.cta 0) y = true ↔
-        y.1.who.thread ≠ a.who.thread ∧ a.conflict y.1 = true ∧
-          (y.1.who.cta ≠ a.who.cta ∨ false = false ∧ y.2 = (phases tr).2.getD a.who.cta 0) := by
-      intro y
-      simp only [clash, Bool.and_eq_true, bne_iff_ne, Bool.or_eq_true, beq_iff_eq, true_and]
-      exact ⟨fun ⟨⟨ht, hc⟩, hk⟩ => ⟨Ne.symm ht, hc, hk.imp Ne.symm Eq.symm⟩,
-        fun ⟨ht, hc, hk⟩ => ⟨⟨Ne.symm ht, hc⟩, hk.imp Ne.symm Eq.symm⟩⟩
-    simp only [racy, Bool.or_eq_true]
-    rw [phases_access, racy_iff, races_iff]
-    constructor
-    · rintro (⟨y, hy, h⟩ | ⟨x, hx, y, hy, h⟩)
-      · exact ⟨_, List.mem_cons_self, y, List.mem_cons_of_mem _ hy, (head y).2 h⟩
-      · exact ⟨x, List.mem_cons_of_mem _ hx, y, List.mem_cons_of_mem _ hy, h⟩
-    · rintro ⟨x, hx, y, hy, h⟩
-      rcases List.mem_cons.1 hx with rfl | hx <;> rcases List.mem_cons.1 hy with rfl | hy
-      · simp [clash] at h
-      · exact .inl ⟨y, hy, (head y).1 h⟩
-      · exact .inl ⟨x, hx, (head x).1 (clash_comm.trans h)⟩
-      · exact .inr ⟨x, hx, y, hy, h⟩
 
 /-- Accesses that overlap touch a common byte. -/
 theorem Access.overlaps_bytes {a e : Access} (h : a.overlaps e = true) :
@@ -237,25 +237,5 @@ theorem mem_buckets :
     · rcases List.mem_cons.1 hz with rfl | hz
       · exact .inl (mem_insertAll (.inr ⟨rfl, hb⟩))
       · exact .inr ⟨hz, hb⟩
-
-/-- `fast` finds every data race: a trace it passes has none. -/
-theorem fast_sound {tr : List Event} (h : fast tr = false) : racy tr = false := by
-  cases hr : racy tr
-  · rfl
-  obtain ⟨x, hx, y, hy, hc⟩ := racy_iff.1 hr
-  have found : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, clash x y = true → x.1.write = true →
-      fast tr = true := by
-    intro x hx y hy hc hw
-    simp only [clash, Access.conflict, Bool.and_eq_true] at hc
-    obtain ⟨b, hbx, hby⟩ := Access.overlaps_bytes hc.1.2.1.1
-    simp only [fast, List.any_eq_true, Bool.and_eq_true]
-    exact ⟨x, hx, hw, b, hbx, y, mem_buckets (.inr ⟨hy, hby⟩), by
-      simp only [clash, Access.conflict, Bool.and_eq_true]; exact hc⟩
-  have hw : x.1.write = true ∨ y.1.write = true := by
-    simp only [clash, Access.conflict, Bool.and_eq_true, Bool.or_eq_true] at hc
-    exact hc.1.2.1.2
-  rcases hw with hw | hw
-  · rw [found x hx y hy hc hw] at h; cases h
-  · rw [found y hy x hx (clash_comm ▸ hc) hw] at h; cases h
 
 end MojoProof.Sem

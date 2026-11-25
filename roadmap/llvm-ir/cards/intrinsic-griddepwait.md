@@ -18,7 +18,7 @@ PTX ISA's section on the instruction NVPTX lowers it to (the quote is the sectio
 
 ## Corpus
 
-12 of the 114 corpus files use it (12 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.griddepcontrol.wait`.
+12 of the 116 corpus files use it (12 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.griddepcontrol.wait`.
 
 ## Out of scope
 

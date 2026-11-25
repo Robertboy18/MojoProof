@@ -4,7 +4,7 @@ title: Stepping by a stride is exact only for an affine layout
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:120
 quote: "this first: only an affine layout makes that step exact."
-lean: MojoProof.Layout.Lay.call_add
+lean: MojoProof.Layout.Lay.isAffine, MojoProof.Layout.Lay.isAffine_flat, MojoProof.Layout.Lay.call_add
 corpus: none
 tests: MojoProofTest.LayoutLaws
 upstream:
@@ -27,8 +27,8 @@ Which kernels step by a stride without checking `is_affine`: that is a per-kerne
 
 ## In MojoProof
 
-`Lay.call_add`: on every flat layout, the offset of the sum of two exact coordinates is the sum of their offsets, so stepping one coordinate by 1 adds that mode's stride. A swizzle is not affine: `Swizzle(1, 0, 1)` maps 1 to 1 and 2 to 3 (MojoProofTest.LayoutLaws, by `decide`). `is_affine` itself is not transcribed.
+`Lay.isAffine` transcribes `is_affine`: `Layout` (layout.mojo:329) keeps the trait's default `True`, so it is `true` on every layout of the model. `Lay.isAffine_flat`: on every flat layout `is_affine` holds and adding `n` to the `k`-th element of an exact coordinate adds `n` times the `k`-th stride to the offset, for every mode and `n`, with no bound on the coordinate. `Lay.call_add`: on every flat layout, the offset of the sum of two exact coordinates is the sum of their offsets. A swizzle is not affine: `Swizzle(1, 0, 1)` maps 1 to 1 and 2 to 3 (MojoProofTest.LayoutLaws, by `decide`).
 
 ## Open
 
-`is_affine` in Lean, and the stepping law for every layout it accepts.
+The stepping law on nested layouts, where a step past a mode's bound carries into the next digit (`Lay.call_mixed` gives the offset of each mixed coordinate). The two-level layouts, which set `is_affine` to `False` (two_level_layout.mojo:520), are not modelled.

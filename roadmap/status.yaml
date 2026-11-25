@@ -3,7 +3,7 @@ areas:
   - id: floats
     title: "Floats"
     readme: roadmap/floats/README.md
-    levels: {L0: 0, L1: 3, L2: 0, L3: 3, L4: 0}
+    levels: {L0: 0, L1: 4, L2: 0, L3: 3, L4: 0}
     cards:
       - id: binary-op-rounding
         title: "the rounding of fadd, fsub, fmul and fdiv, to nearest even in the operation's format"
@@ -35,6 +35,16 @@ areas:
         corpus_kernels: 0
         lean: [MojoProof.Sem.deliver, MojoProof.Sem.deliver_finite, MojoProof.Sem.exists_deliver, MojoProof.Sem.not_finite_deliver, MojoProof.Sem.FinEq, MojoProof.Sem.FinEq.deliver, MojoProof.Sem.Ctx.oracle]
         depends: []
+      - id: ex2-approx
+        title: "ex2.approx.ftz.f32, the approximate base-2 exponential of Mojo's float32 exp"
+        kind: construct
+        level: L1
+        evidence_present: []
+        evidence_scope: {}
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
+        corpus_kernels: 0
+        lean: [MojoProof.Float.Ex2Close, MojoProof.Float.ex2Err, MojoProof.Float.ex2Tiny, MojoProof.Float.log2e, MojoProof.Float.log2e_close, MojoProof.Float.ex2_error, MojoProof.Float.ex2Sum_error]
+        depends: [floats/binary-op-rounding]
       - id: maxnum-minnum
         title: "llvm.maxnum and llvm.minnum, the floating-point maximum and minimum"
         kind: construct
@@ -108,7 +118,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Sem.AsyncCopy, MojoProof.Sem.AsyncOp, MojoProof.Sem.Async, MojoProof.Sem.Async.step, MojoProof.Sem.Async.wait_length, MojoProof.Sem.Async.run_init, MojoProof.Sem.Async.wait_run, MojoProof.Sem.Async.visible, MojoProof.Sem.Async.visible_bytes]
+        lean: [MojoProof.Sem.AsyncCopy, MojoProof.Sem.AsyncCopy.Writes, MojoProof.Sem.AsyncOp, MojoProof.Sem.Async, MojoProof.Sem.Async.Step, MojoProof.Sem.Async.Run, MojoProof.Sem.Async.lazyRun, MojoProof.Sem.Async.Run.lazy, MojoProof.Sem.Async.Run.within, MojoProof.Sem.Async.lazyRun_init, MojoProof.Sem.Async.wait_run, MojoProof.Sem.Async.visible, MojoProof.Sem.Async.determined, MojoProof.Sem.Async.visible_bytes]
         depends: [gpu-model/shared-memory]
       - id: launch
         title: "threads and the launch, the grid and blocks of threads and their special registers"
@@ -128,7 +138,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Sem.ldm, MojoProof.Sem.ldm_inv, MojoProof.Sem.ldmatrix, MojoProof.Sem.ldmatrix_gather, MojoProof.Sem.ldmatrix_fragA, MojoProof.Sem.ldmatrix_fragB_cols, MojoProof.Sem.ldmatrix_fragB, MojoProof.Sem.ldmatrix_fragBt]
+        lean: [MojoProof.Sem.ldm, MojoProof.Sem.ldm_inv, MojoProof.Sem.ldmatrix, MojoProof.Sem.ldmatrix_gather, MojoProof.Sem.ldmatrix_fragA, MojoProof.Sem.ldmatrix_fragB_cols, MojoProof.Sem.ldmatrix_fragB, MojoProof.Sem.ldmatrix_fragBt, MojoProof.Sem.ldmWarp, MojoProof.Sem.ldmWarp_spec]
         depends: [gpu-model/shared-memory]
       - id: mma
         title: "mma, a warp's tensor-core multiply-accumulate"
@@ -138,7 +148,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Sem.Frag, MojoProof.Sem.Frag.bijOn, MojoProof.Sem.fragA_inv, MojoProof.Sem.fragB_inv, MojoProof.Sem.fragC_inv, MojoProof.Sem.mmaPack, MojoProof.Sem.mmaFrags, MojoProof.Sem.mmaFrags_inv, MojoProof.Sem.mmaStep, MojoProof.Sem.mmaStep_gather, MojoProof.Sem.mma_exact, MojoProof.Sem.AccOk, MojoProof.Sem.mma_contract, MojoProof.Sem.castDot_ok, MojoProof.Sem.Grid.warpReady]
+        lean: [MojoProof.Sem.Frag, MojoProof.Sem.Frag.bijOn, MojoProof.Sem.fragA_inv, MojoProof.Sem.fragB_inv, MojoProof.Sem.fragC_inv, MojoProof.Sem.quadA, MojoProof.Sem.quadB, MojoProof.Sem.quadC, MojoProof.Sem.quad_inv, MojoProof.Sem.mmaFrags, MojoProof.Sem.mmaFrags_inv, MojoProof.Sem.mmaStep, MojoProof.Sem.mmaStep_gather, MojoProof.Sem.mma_exact, MojoProof.Sem.AccBy, MojoProof.Sem.AccOk, MojoProof.Sem.mma_contract, MojoProof.Sem.castDot_ok, MojoProof.Sem.fuseAcc, MojoProof.Sem.fuseSum_err, MojoProof.Sem.fuseRound_err, MojoProof.Sem.fuseStep_err, MojoProof.Sem.fuseFold_err, MojoProof.Sem.fuseAcc_ok, MojoProof.Sem.Grid.warpReady, MojoProof.Sem.RegForm.get_put, MojoProof.Sem.RegForm.put_elem, MojoProof.Sem.mmaWarp, MojoProof.Sem.mmaWarp_spec, MojoProof.LLVM.Mma.table, MojoProof.Sem.MmaAcc, MojoProof.Sem.gridAcc, MojoProof.Sem.gridAcc_ok, MojoProof.Sem.seqAcc, MojoProof.Sem.seqAcc_ok, MojoProof.Sem.mmaGrid, MojoProof.Sem.Grid.fire_mma]
         depends: [gpu-model/launch]
       - id: shared-memory
         title: "shared memory, the static and dynamic shared blocks of a block of threads"
@@ -183,7 +193,7 @@ areas:
         evidence_scope: {}
         next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 34
-        lean: [TorchLean.Tensor.layerNorm]
+        lean: [TorchLean.Tensor.layerNorm, TorchLean.TransformerBlock.layerNorm, MojoProof.Float.welford, MojoProof.Float.welford_error, MojoProof.Float.wvar_error, MojoProof.Float.lnorm, MojoProof.Float.lnorm_error]
         depends: [gpu-model/warp-shuffles, gpu-model/shared-memory, gpu-model/barriers, floats/rsqrt-approx, gpu-model/launch]
       - id: layout-mma
         title: "the layout tensor-core tests, mma_layout_tc, matmul_naive and c_fragment_kernel (TorchLean.Tensor.matmul)"
@@ -233,7 +243,7 @@ areas:
         evidence_scope: {}
         next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [TorchLean.Tensor.rmsNorm]
+        lean: [TorchLean.Tensor.rmsNorm, MojoProof.Float.msq_error, MojoProof.Float.rmsnorm, MojoProof.Float.rmsnorm_error]
         depends: [gpu-model/warp-shuffles, floats/rsqrt-approx, gpu-model/launch]
       - id: softmax
         title: "softmax_kernel, the row-wise softmax (TorchLean.Tensor.softmax)"
@@ -243,8 +253,8 @@ areas:
         evidence_scope: {}
         next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [TorchLean.Tensor.softmax]
-        depends: [gpu-model/warp-shuffles, floats/maxnum-minnum, gpu-model/launch]
+        lean: [TorchLean.Tensor.softmax, TorchLean.TransformerBlock.softmax, MojoProof.Float.softmax_error, MojoProof.Float.maskSoftmax_error, MojoProof.Float.ex2Sum_error, MojoProof.Float.logSoftmax_error]
+        depends: [gpu-model/warp-shuffles, floats/maxnum-minnum, floats/ex2-approx, gpu-model/launch]
       - id: split-k-reduce
         title: "matmul split-k reduce, the sum of the partial products of a split GEMM (TorchLean.Tensor.sum)"
         kind: kernel
@@ -298,7 +308,7 @@ areas:
   - id: layout
     title: "Layout laws"
     readme: roadmap/layout/README.md
-    levels: {L0: 1, L1: 14, L2: 0, L3: 0, L4: 0}
+    levels: {L0: 0, L1: 15, L2: 0, L3: 0, L4: 0}
     cards:
       - id: bit-layout
         title: "A layout whose extents are powers of two is linear over F2"
@@ -308,7 +318,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Swizzle.call_xor]
+        lean: [MojoProof.Layout.Swizzle.call_xor, MojoProof.Layout.BitLayout, MojoProof.Layout.BitLayout.put, MojoProof.Layout.BitLayout.call, MojoProof.Layout.xorBits, MojoProof.Layout.BitLayout.call_xor, MojoProof.Layout.bitLinear, MojoProof.Layout.isBitLinear, MojoProof.Layout.placeModes, MojoProof.Layout.placement, MojoProof.Layout.xorBits_place, MojoProof.Layout.placement_call]
         depends: [layout/swizzle]
       - id: blocked-product
         title: "`blocked_product`'s outer stride is documented as the block's cosize times the tiler's stride"
@@ -338,7 +348,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.compose, MojoProof.Layout.composeLeaf, MojoProof.Layout.composeStep, MojoProof.Layout.composeDiv, MojoProof.Layout.composeLeaf_prod_dot, MojoProof.Layout.Lay.compose_call]
+        lean: [MojoProof.Layout.Lay.compose, MojoProof.Layout.composeLeaf, MojoProof.Layout.composeStep, MojoProof.Layout.composeDiv, MojoProof.Layout.composeLeaf_prod_dot, MojoProof.Layout.composeLeaf_flatMap, MojoProof.Layout.Lay.compose_modes, MojoProof.Layout.Lay.compose_sum, MojoProof.Layout.noCarry, MojoProof.Layout.noCarry_one, MojoProof.Layout.dotColex_sum, MojoProof.Layout.Lay.compose_call, MojoProof.Layout.carryFree, MojoProof.Layout.carryFree_pick, MojoProof.Layout.Lay.compose_all]
         depends: [layout/crd2idx]
       - id: cosize
         title: "`cosize` is the offset of the last coordinate plus one"
@@ -358,7 +368,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.crd2idx, MojoProof.Layout.Lay.call, MojoProof.Layout.Lay.call_scalar, MojoProof.Layout.crd2idx_flat, MojoProof.Layout.Lay.call_leaves, MojoProof.Layout.Lay.call_flat, MojoProof.Layout.crd2idx_leaf_leaf]
+        lean: [MojoProof.Layout.crd2idx, MojoProof.Layout.Lay.call, MojoProof.Layout.Lay.call_scalar, MojoProof.Layout.crd2idx_flat, MojoProof.Layout.Lay.call_leaves, MojoProof.Layout.Lay.call_flat, MojoProof.Layout.crd2idx_leaf_leaf, MojoProof.Layout.fits, MojoProof.Layout.digits, MojoProof.Layout.crd2idx_mixed, MojoProof.Layout.Lay.call_mixed]
         depends: []
       - id: idx2crd
         title: "`idx2crd` maps an offset back to a coordinate, documented as the inverse of `crd2idx`"
@@ -388,7 +398,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.call_add]
+        lean: [MojoProof.Layout.Lay.isAffine, MojoProof.Layout.Lay.isAffine_flat, MojoProof.Layout.Lay.call_add]
         depends: [layout/crd2idx]
       - id: reverse-transpose
         title: "`reverse` and `transpose` reverse the shape and the stride"
@@ -423,13 +433,13 @@ areas:
       - id: two-level-swizzle
         title: "`two_level_layout_from_swizzle` evaluates to `Swizzle(L(x))`"
         kind: construct
-        level: L0
+        level: L1
         evidence_present: []
         evidence_scope: {}
-        next: "L1 needs a Lean model"
+        next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: []
-        depends: [layout/swizzle, layout/is-affine]
+        lean: [MojoProof.Layout.TwoLevel, MojoProof.Layout.TwoLevel.offset, MojoProof.Layout.TwoLevel.call, MojoProof.Layout.Swizzle.period, MojoProof.Layout.Swizzle.innerBits, MojoProof.Layout.Swizzle.twoLevel, MojoProof.Layout.swizzleValid, MojoProof.Layout.Swizzle.disjoint, MojoProof.Layout.Swizzle.testBit_call, MojoProof.Layout.Swizzle.call_add, MojoProof.Layout.xorBits_map, MojoProof.Layout.Swizzle.twoLevel_parts, MojoProof.Layout.Swizzle.twoLevel_call]
+        depends: [layout/swizzle, layout/is-affine, layout/bit-layout]
       - id: upcast
         title: "`upcast` divides strides and shapes by the factor with `shape_div`"
         kind: construct
@@ -438,7 +448,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.upcast, MojoProof.Layout.shapeDiv, MojoProof.Layout.shapeDiv_factor, MojoProof.Layout.Lay.upcast_modes, MojoProof.Layout.Lay.upcast_call]
+        lean: [MojoProof.Layout.Lay.upcast, MojoProof.Layout.shapeDiv, MojoProof.Layout.shapeDiv_factor, MojoProof.Layout.shapeDiv_dvd, MojoProof.Layout.shapeDiv_mul, MojoProof.Layout.Lay.upcast_fuse, MojoProof.Layout.Lay.upcast_scale, MojoProof.Layout.Lay.upcast_modes, MojoProof.Layout.Lay.upcast_call]
         depends: []
       - id: zipped-divide
         title: "`zipped_divide` splits a layout into tile and number-of-tiles modes"
@@ -503,7 +513,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
-        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_alloca]
         depends: []
       - id: inst-and
         title: "The `and` instruction"
@@ -563,7 +573,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
-        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_extractelement]
         depends: []
       - id: inst-extractvalue
         title: "The `extractvalue` instruction"
@@ -663,7 +673,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
-        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_insertelement]
         depends: []
       - id: inst-insertvalue
         title: "The `insertvalue` instruction"
@@ -673,7 +683,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 5
-        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec]
+        lean: [MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sym.exec_insertvalue]
         depends: []
       - id: inst-load
         title: "The `load` instruction"

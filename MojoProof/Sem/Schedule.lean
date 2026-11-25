@@ -13,7 +13,7 @@ barriers of each block of threads. Proved: putting the same events in front keep
 same (`Trace.Same.append`, the first half of L11); two lists of events each independent of the other
 (no barrier of the block of threads of an access of the other, `Event.indep`) give the same trace in
 either order (`Trace.Same.swap`, the second half); and the same traces are both racy or both not
-(`Trace.Same.racy`, L12, by `racy_iff`) and both keep the promise of `!invariant.load` or both break
+(`Trace.Same.clash`, L12) and both keep the promise of `!invariant.load` or both break
 it (`Trace.Same.kept`, L12). And a race of one thread's accesses in front of a trace stays a race
 when events with no barrier of its block of threads come between (`racy_insert`, L13). `Trace.Same`
 is an equivalence (`refl`, `symm`, `trans`), and so is `Grid.Same`, the equivalence of T2: the
@@ -73,17 +73,15 @@ MojoProof/Sem/Closed.lean.
 The value part of L10 (two `atomicrmw`s of one admitted operation give the same value in
 either order) is in MojoProof/Sem/Rmw.lean, which this module imports, so a file that imports this
 module has those declarations too.
+
+`Trace.Same`, `Grid.Same`, `Stmt.pending`, `Thread.pending`, `Grid.pending`, `Grid.fired`,
+`Block.shape`, `Val.NamesIn`, `Val.AllNamesIn` and `Scope.NamesIn` are defined in
+MojoProof/Sem/SigDef.lean, with `sig`, which reaches them.
 -/
 
 namespace MojoProof.Sem
 
 open LLVM
-
-/-- Traces `tr` and `tr'` (newest first) are the same up to the order of independent events:
-`phases` lists the same accesses, each in the same phase, up to order, and counts the same number
-of barriers of each block of threads. -/
-def Trace.Same (tr tr' : List Event) : Prop :=
-  (phases tr).1.Perm (phases tr').1 ∧ ∀ k, (phases tr).2.getD k 0 = (phases tr').2.getD k 0
 
 /-- **L11, first half.** The same events in front of two traces that are the same give traces
 that are the same. -/
@@ -150,27 +148,26 @@ theorem Trace.Same.swap {E F : List Event} (h : ∀ e ∈ E, ∀ f ∈ F, e.inde
     simp only [List.cons_append, List.nil_append, List.append_assoc] at ih' ⊢
     exact ih'.trans (past F (h e List.mem_cons_self) _)
 
-/-- **L12, `racy`.** Traces that are the same are both racy or both not. -/
-theorem Trace.Same.racy {tr tr' : List Event} (h : Trace.Same tr tr') : racy tr = racy tr' := by
-  rw [Bool.eq_iff_iff, racy_iff, racy_iff]
-  exact ⟨fun ⟨x, hx, y, hy, hc⟩ => ⟨x, h.1.subset hx, y, h.1.subset hy, hc⟩,
+/-- **L12, races.** Traces that are the same have clashes by phases both or neither (the core's
+`racy` at `sig` of a trace with `racy_iff`'s two premises is a clash by phases). -/
+theorem Trace.Same.clash {tr tr' : List Event} (h : Trace.Same tr tr') :
+    (∃ x ∈ (phases tr).1, ∃ y ∈ (phases tr).1, clash x y = true) ↔
+      ∃ x ∈ (phases tr').1, ∃ y ∈ (phases tr').1, clash x y = true :=
+  ⟨fun ⟨x, hx, y, hy, hc⟩ => ⟨x, h.1.subset hx, y, h.1.subset hy, hc⟩,
     fun ⟨x, hx, y, hy, hc⟩ => ⟨x, h.1.symm.subset hx, y, h.1.symm.subset hy, hc⟩⟩
 
-/-- **L12, `kept`.** Traces that are the same both keep the promise of `!invariant.load` or both
-break it: they have the same accesses. -/
-theorem Trace.Same.kept {tr tr' : List Event} (h : Trace.Same tr tr') : kept tr = kept tr' := by
+/-- **L12, `kept`.** Traces that are the same both keep the promise of `!invariant.load` (the
+core's `kept` at `sig`, for every launch) or both break it: they have the same accesses. -/
+theorem Trace.Same.kept {L : Launch} {tr tr' : List Event} (h : Trace.Same tr tr') :
+    GPUProof.kept sig (tr.map (Event.toCore L)).reverse =
+      GPUProof.kept sig (tr'.map (Event.toCore L)).reverse := by
   have mem {tr tr' : List Event} (h : (phases tr).1.Perm (phases tr').1) {a : Access}
       (ha : Event.access a ∈ tr) : Event.access a ∈ tr' :=
     have ⟨n, hn⟩ := phases_mem ha
     mem_phases (x := (a, n)) (h.subset hn)
-  rw [Bool.eq_iff_iff, kept_iff, kept_iff]
-  exact ⟨fun k a e ha hi he hw => k a e (mem h.1.symm ha) hi (mem h.1.symm he) hw,
-    fun k a e ha hi he hw => k a e (mem h.1 ha) hi (mem h.1 he) hw⟩
-
-/-- A racy trace stays racy when events are added in front. -/
-theorem racy_append {tr : List Event} (h : racy tr = true) : ∀ E : List Event, racy (E ++ tr) = true
-  | [] => h
-  | e :: E => racy_cons e (racy_append h E)
+  rw [Bool.eq_iff_iff, kept_sig_iff, kept_sig_iff]
+  exact ⟨fun k w a hw ha hww haf => k w a (mem h.1.symm hw) (mem h.1.symm ha) hww haf,
+    fun k w a hw ha hww haf => k w a (mem h.1 hw) (mem h.1 ha) hww haf⟩
 
 /-- Accesses by `a`'s own thread do not race with `a`: `Access.races` skips them. -/
 theorem races_skip {a : Access} {sync : Bool} {tr : List Event} :
@@ -195,29 +192,25 @@ theorem races_insert {a : Access} {sync : Bool} {tr : List Event} (h : a.races s
 
 /-- **L13.** A race of trace `tr` with accesses `P` in front, all by one thread of block of threads
 `w.cta`, stays a race when events `Q` with no barrier of that block of threads come between: the
-race is in `tr`, or one of `P` with one of `tr`, and `Q` orders neither. -/
+race is in `tr`, or one of `P` with one of `tr`, and `Q` orders neither. Races here are clashes by
+phases (`racy_iff`). -/
 theorem racy_insert {w : Who} {tr Q : List Event} (hQ : .barrier w.cta ∉ Q) :
-    ∀ {P : List Event}, (∀ e ∈ P, ∃ a, e = .access a ∧ a.who = w) → racy (P ++ tr) = true →
-      racy (P ++ Q ++ tr) = true
-  | [], _, h => by simpa using racy_append h Q
+    ∀ {P : List Event}, (∀ e ∈ P, ∃ a, e = .access a ∧ a.who = w) →
+      (∃ x ∈ (phases (P ++ tr)).1, ∃ y ∈ (phases (P ++ tr)).1, clash x y = true) →
+      ∃ x ∈ (phases (P ++ Q ++ tr)).1, ∃ y ∈ (phases (P ++ Q ++ tr)).1, clash x y = true
+  | [], _, h => by simpa using clash_append h Q
   | e :: P, hP, h => by
     obtain ⟨a, rfl, hw⟩ := hP e List.mem_cons_self
     have hP' : ∀ e ∈ P, ∃ a', e = .access a' ∧ a'.who = w := fun e he =>
       hP e (List.mem_cons_of_mem _ he)
     have skip : ∀ X, a.races false (P ++ X) = a.races false X := fun _ =>
       races_skip fun e he => (hP' e he).imp fun a' ⟨he', hw'⟩ => ⟨he', by rw [hw', hw]⟩
-    simp only [List.cons_append, racy, Bool.or_eq_true, List.append_assoc] at h ⊢
+    rw [List.cons_append, clash_access] at h
+    rw [List.cons_append, List.cons_append, clash_access, List.append_assoc]
     rw [skip] at h ⊢
     rcases h with h | h
     · exact .inl (races_insert h (hw ▸ hQ))
     · exact .inr (by simpa using racy_insert hQ hP' h)
-
-/-- Grids `g` and `g'` are the same up to the order of independent trace events: the same
-threads, blocks and next block number, and traces that are the same (`Trace.Same`). The
-equivalence of schedule independence (T2 in docs/proofs/schedule.md). -/
-def Grid.Same (g g' : Grid) : Prop :=
-  g.threads = g'.threads ∧ g.mem.blocks = g'.mem.blocks ∧ g.mem.next = g'.mem.next ∧
-    Trace.Same g.mem.trace g'.mem.trace
 
 /-- Every grid is the same as itself. -/
 theorem Grid.Same.refl (g : Grid) : g.Same g := ⟨rfl, rfl, rfl, .refl _⟩
@@ -283,21 +276,6 @@ theorem intrinsic_trace {c : Ctx} {s : Scope} {fm : FastMath} {i : Intrinsic} {a
   repeat' (first | split at h | (simp only [bind, Except.bind, pure, Except.pure] at h))
   all_goals first | (cases h; done) | (cases h; rfl) | (cases h; exact Mem.setLive_trace ..)
 
-/-- The accesses that statement `st` would log in context `c` with scope `s`, newest first: for a
-`load`, `store` or `atomicrmw` whose pointer operand evaluates to a pointer, its access (two for an
-`atomicrmw`: its write, in front of its read), and nothing otherwise. -/
-def _root_.MojoProof.LLVM.Stmt.pending (c : Ctx) (s : Scope) (st : Stmt) : List Event :=
-  let acc (a : Nat) (p : Value) (t : Ty) (write : Bool) (op : Option RmwOp) (inv : Bool) :=
-    match evalV s (.ptr a) p >>= Val.addr? with
-    | .ok q => [Event.access ⟨c.who, q, c.prog.layout.stored t, write, op, inv⟩]
-    | .error _ => []
-  match st.inst with
-  | .load _ t (.mk (.ptr a) p) _ => acc a p t false none (st.md.any (·.1 == "invariant.load"))
-  | .store _ (.mk t _) (.mk (.ptr a) p) _ => acc a p t true none false
-  | .atomicrmw _ op (.mk (.ptr a) p) (.mk t _) _ _ _ =>
-    acc a p t true (some op) false ++ acc a p t false (some op) false
-  | _ => []
-
 /-- L1a for statements: a statement that continues logs exactly its pending accesses, and one
 that calls or stops at a collective has none. -/
 theorem exec_pending {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {e : Eff}
@@ -314,17 +292,6 @@ theorem exec_pending {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {e 
        simp [LLVM.Stmt.pending, Mem.log, bind, Except.bind, *])
     | (have := intrinsic_trace ‹intrinsic _ _ _ _ _ = Except.ok (some _)›
        simp [LLVM.Stmt.pending, *])
-
-/-- The accesses that the step of thread `t` on memory `m` would log, newest first: those of the
-statement at its position (`Stmt.pending`), and none at a terminator. -/
-def Thread.pending (c : Ctx) (t : Thread) (m : Mem) : List Event :=
-  match t.frames with
-  | f :: _ => match f.fn.blocks.find? (·.label == f.label) with
-    | some b => match b.stmts[f.pc]? with
-      | some st => st.pending c (c.scope m f t.k)
-      | none => []
-    | none => []
-  | [] => []
 
 /-- L1a for steps: a step that succeeds logs exactly the thread's pending accesses, and a step
 that stops at a collective has none. -/
@@ -619,20 +586,6 @@ def Grid.retrace (g : Grid) (tr : List Event) : Grid := { g with mem := { g.mem 
 /-- Replacing a grid's trace by its own trace gives the grid. -/
 theorem Grid.retrace_self (g : Grid) : g.retrace g.mem.trace = g := rfl
 
-/-- The events the step of thread `n` of grid `g` would log, newest first: its pending accesses
-if it runs (`Thread.pending`), none otherwise. -/
-def Grid.pending (c : Nat → Ctx) (g : Grid) (n : Nat) : List Event :=
-  match g.threads[n]? with
-  | some (.run t) => t.pending (c n) g.mem
-  | _ => []
-
-/-- The events the completion of the collective call thread `n` of grid `g` waits at would log:
-one `.barrier` of `n`'s block of threads at a barrier, none otherwise. -/
-def Grid.fired (L : Launch) (g : Grid) (n : Nat) : List Event :=
-  match g.threads[n]? with
-  | some (.wait _ .barrier _ _) => [.barrier (n / volume L.block)]
-  | _ => []
-
 /-- **L1a for the grid's steps.** For every grid, trace and thread number, the step of thread `n`
 of `g` with trace `tr` gives the same fault, `none` or grid as from `g`, with `n`'s pending
 accesses in front of `tr` (`Grid.pending`). -/
@@ -726,36 +679,20 @@ theorem Grid.Same.step {L : Launch} {c : Nat → Ctx} {g₁ g₂ g₁' : Grid} (
       (h.map (F := (·.fire L c n)) (Grid.fire_retrace L c g₁ · n)).2.2 _ hs
     exact ⟨g₂', ⟨n, .inr h₂⟩, h'⟩
 
-/-- The `Faults` part of `bad_eqv` (T2): for every launch and context map, grids that are the
-same both fault or both do not. -/
+/-- The faults part (`GPUProof.Faults` at `sig`) of `bad_eqv` (T2): for every launch and context
+map, grids that are the same both fault or both do not. -/
 theorem Grid.Same.faults {L : Launch} {c : Nat → Ctx} {g₁ g₂ : Grid} (h : g₁.Same g₂) :
-    g₁.Faults L c ↔ g₂.Faults L c := by
+    GPUProof.Faults sig (g₁, L, c) ↔ GPUProof.Faults sig (g₂, L, c) := by
   have ha : ∀ n e, g₁.advance c n = .error e ↔ g₂.advance c n = .error e := fun n =>
     (h.map (F := (·.advance c n)) (Grid.advance_retrace c g₁ · n)).1
   have hf : ∀ n e, g₁.fire L c n = .error e ↔ g₂.fire L c n = .error e := fun n =>
     (h.map (F := (·.fire L c n)) (Grid.fire_retrace L c g₁ · n)).1
-  simp only [Grid.Faults, ha, hf]
-
-/-- The space, size and addresses of a block: what evaluating an operand reads of it. -/
-def Block.shape (b : Block) : Nat × Nat × Nat × Nat := (b.space, b.size, b.addr, b.gaddr)
+  simp only [Grid.faults_iff, ha, hf]
 
 /-- Memories `m` and `m'` have blocks of the same shape (`Block.shape`), or none, at every block
 number of `S`. -/
 def Mem.SameShape (S : Nat → Prop) (m m' : Mem) : Prop :=
   ∀ b, S b → (m.blocks b).map Block.shape = (m'.blocks b).map Block.shape
-
-mutual
-  /-- Every pointer in value `v` (in vectors and aggregates too) names a block number of `S`. -/
-  def Val.NamesIn (S : Nat → Prop) : Val → Prop
-    | .ptr p => S p.block
-    | .vec xs | .agg xs => Val.AllNamesIn S xs
-    | _ => True
-
-  /-- Every pointer in values `xs` names a block number of `S`. -/
-  def Val.AllNamesIn (S : Nat → Prop) : List Val → Prop
-    | [] => True
-    | x :: xs => x.NamesIn S ∧ Val.AllNamesIn S xs
-end
 
 section Shape
 
@@ -863,7 +800,7 @@ theorem fill_namesIn {x : Val} (hx : x.NamesIn S) : ∀ t : Ty, (fill x t).Names
     rintro _ ⟨_, rfl⟩
     exact fill_namesIn hx t
   | .struct fs => by
-    simp only [fill, Val.NamesIn, Val.allNamesIn_iff, List.mem_map]
+    simp only [fill, fillAll_eq, Val.NamesIn, Val.allNamesIn_iff, List.mem_map]
     rintro _ ⟨t, ht, rfl⟩
     exact fill_namesIn hx t
   | .void | .int _ | .fp _ | .ptr _ | .label | .metadata => by simpa only [fill] using hx
@@ -968,17 +905,6 @@ theorem gep_namesIn {m : Mem} {x y : Val} (hx : x.NamesIn S) {l fl src a idx}
   all_goals simp only [gep, pure, Except.pure] at h
   all_goals cases h
   trivial
-
-/-- Scope `s` names only block numbers of `S`: null's, its registers' and its globals'. -/
-structure Scope.NamesIn (S : Nat → Prop) (s : Scope) : Prop where
-  /-- Builds `Scope.NamesIn` from its three fields. -/
-  mk ::
-  /-- The null pointer's number 0 is in `S`. -/
-  null : S 0
-  /-- Every register's value names only numbers of `S`. -/
-  regs : ∀ n v, s.regs n = some v → v.NamesIn S
-  /-- Every global's pointer names a number of `S`. -/
-  globals : ∀ g p, s.globals g = some p → S p.block
 
 mutual
 /-- L1c for values: evaluating a value reads the memory only at the shape of the blocks that the

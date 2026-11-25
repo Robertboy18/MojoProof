@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-LangRef's section on `fptrunc` (the quote is the first sentence of its overview). The importer reads `fptrunc` as `Inst.cast` with `CastOp.fptrunc` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.floatCast`. MojoProofTest/Modelled.lean runs a kernel of it (its row `fptrunc`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr; ptrtoint before any store); refused (fptoui, fptosi, inttoptr, an ill-typed cast, or ptrtoint after a store): SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates), and ptrtoint before the block's first store only.
+LangRef's section on `fptrunc` (the quote is the first sentence of its overview). The importer reads `fptrunc` as `Inst.cast` with `CastOp.fptrunc` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.floatCast`. MojoProofTest/Modelled.lean runs a kernel of it (its row `fptrunc`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr; ptrtoint after an alloca on the memory the effects before it make (SNode.castAfter)); refused (fptoui, fptosi, inttoptr or an ill-typed cast): SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates).
 
 ## Corpus
 
-6 of the 114 corpus files use it (321 uses); `corpus` lists the first 5 in path order.
+6 of the 116 corpus files use it (321 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

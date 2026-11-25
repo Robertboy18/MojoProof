@@ -25,7 +25,8 @@ takes `gevm_kernel`'s entry block, with its lane number (`llvm.nvvm.read.ptx.sre
 thread of every valid launch with `ntid.x = 1024`, the entry's column, output cell and trip count
 `⌈K / 32⌉`, and the loop's rounds for every `K` divisible by 32 (MojoProofTest/OblGevm.lean:
 `entry_edge`, `entry_regs`, `rounds`; the lane number by `MojoProof.Sym.SNode.eval_laneid`). The
-checker refuses `gemv_kernel`'s entry block at an `alloca [2 x ptr]` (`gemv_entry`). Its summary
+checker refuses `gemv_kernel`'s entry block at an `alloca [2 x ptr]` (`gemv_entry`) and takes it
+from statement 3, after the three `alloca`s, to its branch (`gemv_segs`). Its summary
 of each warp reduction stops at the first collective call (`reductions_refused`), and the
 reductions are segments that end at their collective calls (`MojoProof.Sym.summarizeTo`; a
 thread's steps over a segment reach the call's wait, `MojoProof.Sym.Seg.sound`, for every
@@ -41,7 +42,7 @@ by block, what the checker needs and the order of the work.
 evaluator's dot loop (tested in MojoProofTest.Matmul); it is about the loop, not about this
 kernel. `MojoProof.Sem.warpDot` is the kernels' order, the butterfly over the 32 strided loops;
 for every IEEE format (`fmt.isIEEE = true`), length and oracle its finite results are within
-`warpBound` of TorchLean's real entries (`MojoProof.Sem.warpDot_matVec`, `MojoProof.Sem.warpDot_vecMat`), and with the
+the error of `GPUProof.laneGrade (.ieee fmt) 32 5 ⌈n / 32⌉ n` (grades `⟨0, 0⟩`) of TorchLean's real entries (`MojoProof.Sem.warpDot_matVec`, `MojoProof.Sem.warpDot_vecMat`), and with the
 contraction off it is FloatLib's reduction along the butterfly tree up to NaNs
 (`MojoProof.Sem.warpDot_eq`) (docs/proofs/warp-dot.md). So with the contraction off a kernel's
 word is not the sequential fold's: at 40 binary32 pairs the two differ (MojoProofTest/WarpDot.lean

@@ -12,14 +12,13 @@ block 2, thread 0's `alloca`, holds the four bytes of 7 (`done2_good`), so the s
 sound for the observation of those bytes (`sound2`), and every grid in which every thread has
 returned that is reachable from it observes them (`final2`).
 
-The twin of `¬ z.Bad`: in the launch `startP` of MojoProofTest/Bad.lean both threads store 7 to
-bytes 0 to 3 of block 1; after thread 0's store and return and thread 1's, every thread has
-returned and block 1 holds the bytes of 7, but the trace is racy, so the grid is bad and the
-start's grid is sound for no observation (`racy_twin`). The twin of the premise that the
-observation reads only the blocks: the newest event of the trace, which another memory with the
-same blocks does not have, is thread 1's store after `done2`'s run and thread 0's after a run
-with thread 1's store first (`done2'`), so `start2`'s grid is sound for no relation on it
-(`trace_twin`).
+The twin of `¬ GPUProof.Bad sig (z, L, c)`: in the launch `startP` of MojoProofTest/Bad.lean both
+threads store 7 to bytes 0 to 3 of block 1; after thread 0's store and return and thread 1's, every
+thread has returned and block 1 holds the bytes of 7, but the trace is racy, so the grid is bad and
+the start's grid is sound for no observation (`racy_twin`). The twin of the premise that the
+observation reads only the blocks: the newest event of the trace, which another memory with the same
+blocks does not have, is thread 1's store after `done2`'s run and thread 0's after a run with thread
+1's store first (`done2'`), so `start2`'s grid is sound for no relation on it (`trace_twin`).
 
 The instance of `Grid.start_refute`: as `doneP` is bad, every grid reachable from `startP`'s
 without a step is bad (`refuteP`). The twin of its premise that some reachable grid is bad: on
@@ -29,6 +28,7 @@ without a step is bad (`refuteP`). The twin of its premise that some reachable g
 namespace MojoProofTest.Determinism
 
 open MojoProof.Sem MojoProof.LLVM MojoProofTest.Confluence MojoProofTest.Bad
+open GPUProof
 
 -- `Array.any` recurses by well-founded recursion, so `rfl` cannot evaluate a step without this.
 unseal Array.anyM.loop
@@ -80,7 +80,8 @@ def obs2 (m : Mem) : Option (List MemByte) := (m.blocks 2).map (·.read 0 4)
 /-- The instance of `Grid.confluent`: `start2`'s steps are confluent. -/
 theorem confluent2 :
     Confluent (fun x y : {g // Relation.ReflTransGen (Grid.Step two c2) run2.1 g} =>
-      Grid.Step two c2 x.1 y.1) (fun x y => x.1.Same y.1) (fun x => x.1.Bad two c2) :=
+      Grid.Step two c2 x.1 y.1) (fun x y => x.1.Same y.1)
+      (fun x => GPUProof.Bad sig (x.1, two, c2)) :=
   Grid.confluent start2_eq fun _ _ _ _ _ h => by cases h
 
 /-- The run of `done2`. -/
@@ -88,11 +89,15 @@ theorem run2_path : Path (Grid.Step two c2) 6 run2.1 done2 :=
   path_advs run2.1 [0, 0, 0, 1, 1, 1] rfl (.nil _)
 
 /-- In `done2` every thread has returned, it is not bad, and block 2 holds the bytes of 7. -/
-theorem done2_good : done2.Done ∧ ¬ done2.Bad two c2 ∧ obs2 done2.mem = some (leBytes 4 7) := by
-  have hd : done2.Done := rfl
+theorem done2_good : GPUProof.Done sig (done2, two, c2) ∧ ¬ GPUProof.Bad sig (done2, two, c2) ∧
+    obs2 done2.mem = some (leBytes 4 7) := by
+  have hd : GPUProof.Done sig (done2, two, c2) := Grid.done_of_all rfl
   refine ⟨hd, fun hb => ?_, rfl⟩
-  rw [hd.bad_iff, show racy done2.mem.trace = false from rfl,
-    show kept done2.mem.trace = true from rfl] at hb
+  rw [Grid.Done.bad_iff (by decide) hd,
+    show GPUProof.racy sig (done2.mem.trace.map (Event.toCore two)).reverse = false by
+      decide +kernel,
+    show GPUProof.kept sig (done2.mem.trace.map (Event.toCore two)).reverse = true by
+      decide +kernel] at hb
   simp at hb
 
 /-- The instance of `Grid.start_sound`. -/
@@ -102,7 +107,8 @@ theorem sound2 : Grid.Sound two c2 run2.1 obs2 (· = leBytes 4 7) :=
 
 /-- So every grid reachable from `start2`'s in which every thread has returned observes the bytes
 of 7 (`Grid.Sound.result`). -/
-theorem final2 : ∀ g, Relation.ReflTransGen (Grid.Step two c2) run2.1 g → g.Done →
+theorem final2 : ∀ g, Relation.ReflTransGen (Grid.Step two c2) run2.1 g →
+    GPUProof.Done sig (g, two, c2) →
     obs2 g.mem = some (leBytes 4 7) := by
   obtain ⟨y, hR, -, hy⟩ := sound2.result
   rw [← hR]
@@ -111,31 +117,34 @@ theorem final2 : ∀ g, Relation.ReflTransGen (Grid.Step two c2) run2.1 g → g.
 /-- `startP`'s grid after thread 0's store and return, then thread 1's. -/
 def doneP : Grid := advs cP runP.1 [0, 0, 1, 1]
 
-/-- The twin of `¬ z.Bad`: `doneP`, reachable from `startP`'s grid, has every thread returned and
-block 1 holding the bytes of 7, but its trace is racy, so it is bad and the start's grid is sound
-for no observation. -/
-theorem racy_twin : Relation.ReflTransGen (Grid.Step two cP) runP.1 doneP ∧ doneP.Done ∧
-    (doneP.mem.blocks 1).map (·.read 0 4) = some (leBytes 4 7) ∧ doneP.Bad two cP ∧
+/-- The twin of `¬ GPUProof.Bad sig (z, L, c)`: `doneP`, reachable from `startP`'s grid, has
+every thread returned and block 1 holding the bytes of 7, but its trace is racy, so it is bad and
+the start's grid is sound for no observation. -/
+theorem racy_twin : Relation.ReflTransGen (Grid.Step two cP) runP.1 doneP ∧
+    GPUProof.Done sig (doneP, two, cP) ∧
+    (doneP.mem.blocks 1).map (·.read 0 4) = some (leBytes 4 7) ∧ GPUProof.Bad sig (doneP, two, cP) ∧
     ∀ {β : Type} (obs : Mem → Option β) (R : β → Prop), ¬ Grid.Sound two cP runP.1 obs R := by
   have hr : Relation.ReflTransGen (Grid.Step two cP) runP.1 doneP :=
     Path.exists_iff.1 ⟨_, path_advs runP.1 [0, 0, 1, 1] rfl (.nil _)⟩
-  have ht : racy doneP.mem.trace = true := rfl
-  refine ⟨hr, rfl, rfl, .inr (.inl ht), fun _ _ hs => ?_⟩
+  have ht : GPUProof.racy sig (doneP.mem.trace.map (Event.toCore two)).reverse = true := by
+    decide +kernel
+  refine ⟨hr, Grid.done_of_all rfl, rfl, .inr (.inl ht), fun _ _ hs => ?_⟩
   rw [hs.raceFree _ hr] at ht
   cases ht
 
 /-- The instance of `Grid.start_refute`: `doneP` is bad, so every grid reachable from `startP`'s
 without a step is bad. -/
 theorem refuteP : ∀ z, Relation.ReflTransGen (Grid.Step two cP) runP.1 z →
-    (∀ g, ¬ Grid.Step two cP z g) → z.Bad two cP :=
+    (∀ g, ¬ Grid.Step two cP z g) → GPUProof.Bad sig (z, two, cP) :=
   fun _ hz hn =>
     Grid.start_refute startP_eq (Closed.mem_bytesIn _) racy_twin.1 racy_twin.2.2.2.1 hz hn
 
 /-- The twin of its premise that some reachable grid is bad: `done2`, reachable from `start2`'s,
 has no step and is not bad. -/
 theorem refute_twin : Relation.ReflTransGen (Grid.Step two c2) run2.1 done2 ∧
-    (∀ g, ¬ Grid.Step two c2 done2 g) ∧ ¬ done2.Bad two c2 :=
-  ⟨Path.exists_iff.1 ⟨_, run2_path⟩, fun _ => Grid.Done.final done2_good.1, done2_good.2.1⟩
+    (∀ g, ¬ Grid.Step two c2 done2 g) ∧ ¬ GPUProof.Bad sig (done2, two, c2) :=
+  ⟨Path.exists_iff.1 ⟨_, run2_path⟩, fun _ => Grid.Done.final (by decide) done2_good.1,
+    done2_good.2.1⟩
 
 /-- The newest event of the trace. -/
 def newest (m : Mem) : Option Event := m.trace.head?
@@ -154,7 +163,8 @@ theorem trace_twin : ¬ (∀ m m' : Mem, m.blocks = m'.blocks → newest m = new
   refine ⟨fun h => ?_, h₁, h₂, fun _ hs => ?_⟩
   · have := h { trace := [.barrier 0] } {} rfl
     simp [newest] at this
-  · have := hs.determinate _ _ (Path.exists_iff.1 ⟨_, run2_path⟩) hr' rfl rfl
+  · have := hs.determinate _ _ (Path.exists_iff.1 ⟨_, run2_path⟩) hr'
+      (Grid.done_of_all rfl) (Grid.done_of_all rfl)
     rw [h₁, h₂] at this
     simp at this
 

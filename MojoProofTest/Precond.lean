@@ -22,6 +22,9 @@ MojoProof/Sem/Precond.lean at `vadd`'s layout (`lV`, `Kernels.vadd.prog.layout`)
   start's grid is closed (`pre_starts`; every memory meeting the precondition, `vadd` only). At
   `memX` (`start5`).
 
+`Mem.allocs_spec` at five blocks of 20 bytes, at `vadd`'s layout and alignment 16 (`memK5`,
+`allocs5`; `Map2.pre_mem` and `Mat.pre_mem` use it at three blocks, through `Mem.three_spec`).
+
 Twins. Of `Map2.Pre.ne` (and of `bufs`): with the output at block 1, the first input, `memX` is
 closed for the arguments and `vadd` starts on them on every launch, but `Map2.Pre` fails
 (`alias_twin`). Of `Map2.Pre.closed`: with the output at block 7, which `memX` does not have
@@ -96,6 +99,24 @@ theorem start5 (L : Launch) (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
     ∃ g c, Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L (Map2.args argTail 1 2 3 5) memX ch
       oracle = .ok (g, c) ∧ ∀ g', Relation.ReflTransGen (Grid.Step L c) g g' → g'.Closed c :=
   pre_starts pre5 L ch oracle
+
+/-- Five global blocks of 20 bytes at `vadd`'s layout and alignment 16 (`Mem.allocs` at `k = 5`),
+read-only except block 5, with no initial bytes, block `i + 1` at address `16 (i + 1)` in both
+spaces. -/
+def memK5 : Mem :=
+  Mem.allocs lV 16 5 (fun _ => 20) (fun i => decide (i.val < 4)) (fun _ => [])
+    (fun i => i.val + 1) (fun i => i.val + 1)
+
+/-- **`Mem.allocs_spec` at five blocks** (`Mem.three_spec` is its instance at three): `memK5` is
+closed under every list of values naming numbers up to 5, and its block `i + 1` is a
+`Mem.Buffer` of 20 bytes at addresses 16 divides, writable exactly at block 5, that fits below
+`2 ^ 64` for 20 bytes. -/
+theorem allocs5 : (∀ vs : List Val, Val.bounds vs ≤ 5 + 1 → memK5.Closed vs) ∧
+    ∀ i : Fin 5, memK5.Buffer (i.val + 1) 20 16 (!decide (i.val < 4)) ∧
+      memK5.Fits lV (i.val + 1) 20 :=
+  Mem.allocs_spec lV 16 (fun _ => 20) (fun i => decide (i.val < 4)) (I := fun _ => [])
+    (fun _ _ _ => List.not_mem_nil) (A := fun i => i.val + 1) (G := fun i => i.val + 1)
+    (n := fun _ => 20) (fun _ => Nat.le_refl 20) (by decide +kernel) (by decide +kernel)
 
 /-- **The twin of `Map2.Pre.ne`**: with the output at block 1, the first input, `memX` is closed
 for the arguments and `vadd` starts on them, on every launch, for every address choice and

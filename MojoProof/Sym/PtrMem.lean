@@ -5,7 +5,7 @@ import MojoProof.Sym.Sched
 # The memory premises of a path from the labelling's memory hypothesis
 
 The memory premises of the two-run theorem along a path (`Valuation.PathMem`, the premise `hm` of
-`Block.sound_retI_rel`, MojoProof/Sym/Payload.lean: on each block, `Valuation.LoadsOk` and
+`Block.sound_ret_rel`, MojoProof/Sym/Payload.lean: on each block, `Valuation.LoadsOk` and
 `Valuation.StoresOk` of its summary, which read the summary's pointer terms) from the labelling's
 memory hypothesis (`Labels.MemOk` and `Labels.MemNext`, MojoProof/Sem/Labels.lean, which read the
 statements' pointer operands in the thread's scope), through the pointer facts that the block
@@ -24,9 +24,10 @@ and path the checkers accept.
   checks (`pathOk`) and the pointer facts of whose blocks hold from the thread, `Labels.MemNext`
   at every state the thread's steps reach gives `Valuation.PathMem`.
 * `Block.sound_pathMem`: for every program and path that the path checker with `phi`s
-  (`coversPathI`) and `pathOk` accept, every context of the program and thread at the path's first
-  block whose premises hold (`WalkI`), `Labels.MemNext` at every state the thread's steps reach
-  gives `Valuation.PathMem` from the thread's entry valuation (`Block.sound_pathI_ptrs`).
+  (`coversPathWith false`) and `pathOk` accept, every context of the program and thread at the
+  path's first block whose premises hold (`WalkWith false`), `Labels.MemNext` at every state the
+  thread's steps reach gives `Valuation.PathMem` from the thread's entry valuation
+  (`Block.sound_pathWith_ptrs`).
 * `Labels.MemOk.steps`: `Labels.MemOk` gives `Labels.MemNext` at every state that the steps of a
   running thread of a reachable grid reach (`Steps.grid`), so `Block.sound_pathMem` applies to
   each running thread of each grid a launch reaches.
@@ -39,11 +40,12 @@ twin) and `vadd21_memNext_twin` (`Ptrs.loadsOk`).
 namespace MojoProof.Sym
 
 open MojoProof.LLVM MojoProof.Sem
+open GPUProof
 
 /-- A stored operand `w` that the term `x`, payload at the roles of table `ns`, describes with
 table `ns` and register entries `regs` (`StoreVal`) mentions a payload register, when every
-entry of `regs` to a payload term is of a payload register: a float constant's node is never
-payload. -/
+entry of `regs` to a payload term is of a payload register: a float constant's node and a
+constant's (`SNode.constAt`) are never payload. -/
 theorem StoreVal.mentions {lab : Labels} {fn : Func} {ns : List SNode}
     {regs : List (Nat × SVal)} {x : SVal} {w : Value} (h : StoreVal ns regs x w)
     (hx : x.pay lab fn (roles lab fn ns) = true)
@@ -60,13 +62,15 @@ theorem StoreVal.mentions {lab : Labels} {fn : Func} {ns : List SNode}
   · obtain ⟨j, ft, rfl, hj⟩ := h
     have hr : (roles lab fn ns)[j]? = some false := by rw [roles_getElem?, hj]; rfl
     simp [SVal.pay, List.getD_eq_getElem?_getD, hr] at hx
-  · obtain ⟨n, i, rfl⟩ := h
-    simp [SVal.pay] at hx
+  · rcases h with ⟨n, i, rfl⟩ | ⟨j, l, pc, i, rfl, hj⟩
+    · simp [SVal.pay] at hx
+    · have hr : (roles lab fn ns)[j]? = some false := by rw [roles_getElem?, hj]; rfl
+      simp [SVal.pay, List.getD_eq_getElem?_getD, hr] at hx
 
 /-- **`Labels.MemNext` gives `Valuation.LoadsOk`**: for every labelling `lab`, payload
 blocks `pay`, context, thread `t` on memory `m` and block with entry valuation `V` and summary
 `S` whose pointer facts hold (`Ptrs`, from `Block.sound_ptrs` or along a path from
-`Block.sound_path_ptrs` and `Block.sound_pathI_ptrs`), if every state the thread's steps reach
+`Block.sound_pathWith_ptrs`), if every state the thread's steps reach
 meets `Labels.MemNext`, each `load` node of `S`'s table whose result register `lab` does not label
 payload reads outside `pay`. For every valuation and summary whose pointer facts hold, which
 `Block.sound_ptrs` gives for every block the checker accepts. -/
@@ -115,16 +119,16 @@ theorem Ptrs.storesOk {lab : Labels} {pay : Nat → Prop} {c : Ctx} {t : Thread}
   simp only [TValue.mentions, hfn]
   exact StoreVal.mentions hw hv hag
 
-/-- **The memory premises along a path from `Labels.MemNext`**: for every labelling `lab`,
-payload blocks `pay`, context, thread `t` on memory `m` and path `(l, S) :: ps` from valuation
-`V` whose summaries pass the path checks (`pathOk`) and the pointer facts of whose blocks hold
-(`Ptrs`, at each block's entry valuation `Valuation.blocksI`), if every state the thread's steps
-reach meets `Labels.MemNext`, the memory premises of two runs along the path hold
+/-- **The memory premises along a path from `Labels.MemNext`**: for every labelling `lab`, payload
+blocks `pay`, context, thread `t` on memory `m` and path `(l, S) :: ps` from valuation `V` whose
+summaries pass the path checks (`pathOk`) and the pointer facts of whose blocks hold (`Ptrs`, at
+each block's entry valuation `Valuation.blocksWith false`), if every state the thread's steps reach
+meets `Labels.MemNext`, the memory premises of two runs along the path hold
 (`Valuation.PathMem`: `Ptrs.loadsOk` and `Ptrs.storesOk` at each block). -/
 theorem Valuation.pathMem_of_ptrs {lab : Labels} {pay : Nat → Prop} {c : Ctx} {t : Thread}
     {m : Mem} {rest : List Frame} (hM : ∀ t' m', Steps c t m t' m' → lab.MemNext pay c m' t') :
     ∀ (ps : List (Nat × List Cond × Summary)) {V : Valuation} {l : Nat} {S : Summary},
-      pathOk lab V.fn l S ps = true → (∀ q ∈ V.blocksI l S ps, Ptrs c t m rest q) →
+      pathOk lab V.fn l S ps = true → (∀ q ∈ V.blocksWith false l S ps, Ptrs c t m rest q) →
       V.PathMem lab pay l S ps
   | [], V, l, S, hk, hQ => by
     have hq := hQ _ (List.mem_singleton_self _)
@@ -138,24 +142,25 @@ theorem Valuation.pathMem_of_ptrs {lab : Labels} {pay : Nat → Prop} {c : Ctx} 
         fun q hm => hQ q (List.mem_cons_of_mem _ hm)⟩
 
 /-- **The memory premises of a path the checkers accept**: for every program, function,
-labelling `lab`, payload blocks `pay` and path `(l, ds, S) :: ps` that the path checker with
-`phi`s accepts (`coversPathI`, the first block from position `p0`) and whose summaries pass the
+labelling `lab`, payload blocks `pay` and path `(l, ds, S) :: ps` that the path checker with `phi`s
+accepts (`coversPathWith false`, the first block from position `p0`) and whose summaries pass the
 path checks (`pathOk`), every context of the program and thread whose innermost frame `f` is at
 block `l`'s position `p0`, with memory `m`, whose path premises hold from the entry valuation
-(`WalkI`): if every state the thread's steps reach meets `Labels.MemNext`, the memory premises of
-two runs along the path hold from the entry valuation (`Valuation.PathMem`), the premise `hm` of
-`Block.sound_retI_rel` (`Block.sound_pathI_ptrs`, `Valuation.pathMem_of_ptrs`). -/
+(`WalkWith false`): if every state the thread's steps reach meets `Labels.MemNext`, the memory
+premises of two runs along the path hold from the entry valuation (`Valuation.PathMem`), the premise
+`hm` of `Block.sound_ret_rel` (`Block.sound_pathWith_ptrs`, `Valuation.pathMem_of_ptrs`). -/
 theorem Block.sound_pathMem {P : Program} {fn : Func} {lab : Labels} {pay : Nat → Prop}
     {c : Ctx} (hP : c.prog = P) {rest : List Frame} {ps : List (Nat × List Cond × Summary)}
     {l p0 : Nat} {ds : List Cond} {S : Summary} {t : Thread} {m : Mem} {f : Frame}
-    (hc : coversPathI P fn p0 ((l, ds, S) :: ps) = true) (hk : pathOk lab fn l S ps = true)
+    (hc : coversPathWith false P fn p0 ((l, ds, S) :: ps) = true)
+    (hk : pathOk lab fn l S ps = true)
     (ht : t.frames = f :: rest) (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
-    (hW : WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps))
+    (hW : WalkWith false (Valuation.entry c t.k m f) ((l, ds, S) :: ps))
     (hM : ∀ t' m', Steps c t m t' m' → lab.MemNext pay c m' t') :
     (Valuation.entry c t.k m f).PathMem lab pay l S ps :=
   Valuation.pathMem_of_ptrs hM ps
     (by rw [show (Valuation.entry c t.k m f).fn = fn from hfn]; exact hk)
-    (Block.sound_pathI_ptrs hP ps hc ht hfn hl hp hW).2
+    (Block.sound_pathWith_ptrs hP ps hc ht hfn hl hp hW).2
 
 /-- **`Labels.MemOk` gives `Labels.MemNext` along a thread's steps**: for every labelling
 `lab`, payload blocks `pay`, launch `L`, contexts `c` and grid `g₀` that meets `Labels.MemOk`,

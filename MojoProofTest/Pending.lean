@@ -94,19 +94,16 @@ theorem grid (c : Nat → Ctx) :
   cases ht
   exact h
 
-/-- A launch of one block of `size` threads. -/
-def launch (size : Nat) : Launch := ⟨fun _ => 1, fun d => if d = .x then size else 1, 0⟩
-
 /-- A thread of `kernel #[]` waiting at barrier 0. -/
 def atBarrier : Status := .wait (thread #[]) .barrier [.bits 32 0] (kernel #[])
 
 /-- For every context, the one thread of a block waiting at barrier 0: the barrier completes and
 logs one `.barrier` of block 0, by `Grid.fire_trace`. -/
 theorem fire (c : Nat → Ctx) :
-    ∃ g', ({ threads := #[atBarrier], mem := {} } : Grid).fire (launch 1) c 0 = .ok (some g') ∧
-      g'.mem.trace = [.barrier 0] := by
+    ∃ g', ({ threads := #[atBarrier], mem := {} } : Grid).fire (launch2 1 1 1 1) c 0 =
+      .ok (some g') ∧ g'.mem.trace = [.barrier 0] := by
   refine ⟨_, rfl, ?_⟩
-  obtain ⟨t, i, args, r, ht, h⟩ := Grid.fire_trace (L := launch 1) (c := c)
+  obtain ⟨t, i, args, r, ht, h⟩ := Grid.fire_trace (L := launch2 1 1 1 1) (c := c)
     (g := { threads := #[atBarrier], mem := {} }) (n := 0) rfl
   cases ht
   exact h
@@ -114,7 +111,7 @@ theorem fire (c : Nat → Ctx) :
 /-- The twin: in a block of two threads, one at barrier 0 and one still running, the barrier does
 not complete, so `Grid.fire_trace` says nothing of it. -/
 theorem fire_twin (c : Nat → Ctx) :
-    ({ threads := #[atBarrier, .run (thread #[])], mem := {} } : Grid).fire (launch 2) c 0 =
+    ({ threads := #[atBarrier, .run (thread #[])], mem := {} } : Grid).fire (launch2 1 1 2 1) c 0 =
       .ok none := rfl
 
 /-- The twin: a finished thread takes no step. -/
@@ -145,14 +142,20 @@ theorem bisim (L : Launch) (c : Nat → Ctx) :
   exact ⟨_, g₂, ⟨0, .inl rfl⟩, h₂, h⟩
 
 /-- For every launch and context, the `load` grid with either trace faults (`Grid.Same.faults`). -/
-theorem faults (L : Launch) (c : Nat → Ctx) : (grid1 #[loadNull] [w 2 4, w 1 0]).Faults L c :=
-  (same #[loadNull]).faults.1 ⟨0, _, .inl rfl⟩
+theorem faults (L : Launch) (c : Nat → Ctx) :
+    GPUProof.Faults sig (grid1 #[loadNull] [w 2 4, w 1 0], L, c) :=
+  (same #[loadNull]).faults.1 (Grid.faults_iff.2 ⟨0, _, .inl rfl⟩)
 
 /-- The twin: the grid with the memory of `bisim`'s first grid whose one thread has returned is
 not the same as it, and has no step. -/
 theorem bisim_twin (L : Launch) (c : Nat → Ctx) (g : Grid) :
-    ¬ Grid.Step L c { threads := #[.done], mem := { trace := [w 1 0, w 2 4] } } g :=
-  Grid.Done.final (by simp [Grid.Done])
+    ¬ Grid.Step L c { threads := #[.done], mem := { trace := [w 1 0, w 2 4] } } g := by
+  rintro ⟨n, h⟩
+  have hn : (#[.done] : Array Status)[n]? = none ∨ (#[.done] : Array Status)[n]? = some .done := by
+    rcases n with _ | n
+    · exact .inr rfl
+    · exact .inl (by simp)
+  rcases hn with hn | hn <;> simp [Grid.advance, Grid.fire, hn, pure, Except.pure] at h
 
 /-- `getelementptr inbounds i32, ptr %0, i64 1`, a pointer operand. -/
 def gep1 : TValue :=

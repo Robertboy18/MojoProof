@@ -25,34 +25,49 @@ conditions of `ds` (`List.isPrefixOf`: a check by position, linear).
 
 The fragment: `bin`, scalar integer `icmp`, `trunc` / `zext` / `sext`, the other casts that `castV`
 evaluates (`castOk`: not `fptoui`, `fptosi`, `inttoptr` or an ill-typed cast; node `SNode.castAt`,
-at the statement's operator and types; `ptrtoint`, which reads the addresses, only before the
-block's first store), `extractvalue`, `getelementptr` with one index (on a global, two nodes:
-`SNode.globalAt` for the global's pointer, then the `getelementptr` on it), `load`, `store` (on a
-global, the `SNode.globalAt` node of the pointer operand, then the `load` or `store` on it), `fbin`
-but `fmul contract` (in the fragment of `coversC`, whose float nodes carry their operands' products:
+at the statement's operator and types), `extractvalue`, `insertvalue` (`SNode.insert`),
+`extractelement` and `insertelement` (`SNode.eltAt`, `SNode.insEltAt`; an `insertvalue` or
+`insertelement` into a `zeroinitializer`, `undef` or `poison`, two nodes: `SNode.constAt` for the
+constant, then the insertion into it), `getelementptr` with one index (on a global, two nodes:
+`SNode.globalAt` for the global's pointer, then the `getelementptr` on it) and with any other
+number of indices on a base that is not a global (`SNode.gepN`),
+`load`, `store` (on a global, the `SNode.globalAt` node of the pointer operand, then the `load` or
+`store` on it; of a `zeroinitializer`, `undef` or `poison` through a pointer that is not a global,
+the `SNode.constAt` node of the stored operand, then the `store` of that node), `fbin` but `fmul
+contract` (in the fragment of `coversC`, whose float nodes carry their operands' products:
 `SNode.fbinOf`), `select` of integers (node `SNode.select`), calls of a special register or of the
 lane number (a declaration that `P.intrinsics` names `sreg r d` or `laneid`, with no arguments and
 no fast-math flags, whose attributes `Func.check` accepts: node `SNode.call`), and calls of an
 integer maximum or minimum (a declaration that `P.intrinsics` names `minmax signed max t`, with two
 arguments, no fast-math flags and no parameter, return or call-site attributes, whose attributes
 `Func.check` accepts: node `SNode.minmax`), with operands that are registers, integer constants or
-float constants; `getelementptr`, `icmp` and the calls of a special register or the lane number only
-before the block's first `store` (they read the entry memory), and a `load` after it as
-`SNode.loadAfter` (on a global, on the global's `SNode.globalAt` node), which carries the effects
-before it (the memory it reads; their operands are nodes of the table before it, `SEff.before`);
-terminators `br`, `br i1` and `ret void`. A branch to blocks that start with `phi`s is `Exit.phi`:
-for each target, each `phi`'s incoming operand from this block must be a register, an integer
-constant or a float constant, and its obligation is that the operand evaluates (`SState.phiConds`; a
-float constant's obligation is that its node evaluates, which `decide` checks only when the kernel
-reduces `floatLit` of the literal). Anything else (other calls among them) makes `summarize` fail.
+float constants. The nodes of `getelementptr`, `icmp`, `ptrtoint` and the calls of a special
+register or the lane number read the entry memory's blocks' addresses and sizes, which the block's
+stores keep (`SEff.run_shape`), so the checker takes them after a `store` too; it takes a `load`
+after a `store` as `SNode.loadAfter` (on a global, on the global's `SNode.globalAt` node), which
+carries the effects before it (the memory it reads; their operands are nodes of the table before
+it, `SEff.before`); terminators `br`, `br i1` and `ret void`. A branch to blocks that start with
+`phi`s is `Exit.phi`: for each target, each `phi`'s incoming operand from this block must be a
+register, an integer constant or a float constant, and its obligation is that the operand
+evaluates (`SState.phiConds`; a float constant's obligation is that its node evaluates, which
+`decide` checks only when the kernel reduces `floatLit` of the literal). Anything else (other calls
+among them) makes `summarize` fail.
 `summarize` and `covers` are `summarizeWith` and `coversWith` with the exit function
 `SState.exitAt`; `coversTo P fn lbl p0 d₀` is `coversWith` with `SState.exitTo`, whose `br i1` into
 blocks with `phi`s has the obligations of its edge into block `d₀` only, so a `phi` operand of the
 other edge that is outside the fragment or faults does not refuse the block.
+`summarizeAt alloca` and `coversAt alloca` are these with the checker's `alloca` flag
+(`SState.alloca`) set to `alloca`; `summarizeWith` and `coversWith` are their instances with the
+flag off. With it on, the fragment has `alloca` too (a pointer node `SNode.fresh` to the block at
+the number `exec` gives it, the effect `SEff.alloca` that makes the block, and `SState.count` of
+the count operand), and after an `alloca` the nodes of `getelementptr`, `icmp` and `ptrtoint`
+read the memory the effects before them make (`SNode.gepAfter`, `SNode.gepNAfter`,
+`SNode.icmpAfter`, `SNode.castAfter`), as the entry memory has no block where the `alloca` made
+one.
 
 This module holds the checker's definitions, which the kernel evaluates; MojoProof/Sym/Block.lean
 proves them sound (`Block.sound`, `Block.sound_to`), and MojoProof/Sym/Path.lean along paths
-(`Block.sound_pathI`).
+(`Block.sound_pathAt_ptrs`).
 -/
 
 namespace MojoProof.Sym
@@ -84,11 +99,11 @@ def regProdIn (V : Valuation) (vs : List (Except Fault Val)) (ns : List SNode)
   | none => V.prods r
 
 /-- The state of symbolic execution: the node table (in order), the registers the block has set
-with their entries (latest first), the memory effects (in order), the obligations, and whether a
-`store` has run. -/
+with their entries (latest first), the memory effects (in order), the obligations, whether a
+`store` or an `alloca` has run, and whether the checker takes `alloca`. -/
 structure SState where
-  /-- The state from its node table, register entries, memory effects, obligations and whether a
-  `store` has run. -/
+  /-- The state from its node table, register entries, memory effects, obligations, whether a
+  `store` or an `alloca` has run, and whether the checker takes `alloca`. -/
   mk ::
   /-- The node table, in order. -/
   nodes : List SNode
@@ -98,11 +113,15 @@ structure SState where
   effs : List SEff
   /-- The obligations. -/
   obls : List Cond
-  /-- A `store` has run. -/
+  /-- A `store` or an `alloca` has run. -/
   stored : Bool
+  /-- The checker takes `alloca` (`SState.stmt`, `SEff.alloca`, `SNode.fresh`). Off at
+  `SState.init` and `SState.start`, so the summaries of `summarizeWith` and the segments allocate
+  nothing and their frames keep the entry's `allocas`. -/
+  alloca : Bool := false
 
 /-- The state at the block entry. -/
-def SState.init : SState := ⟨[], [], [], [], false⟩
+def SState.init : SState := ⟨[], [], [], [], false, false⟩
 
 /-- The entry of register `r`: its node, or the register at the block entry. -/
 def SState.get (σ : SState) (r : Nat) : SVal := (σ.regs.lookup r).getD (.reg r)
@@ -116,6 +135,12 @@ def SState.op (σ : SState) : Ty → Value → Option SVal
   | .int w, .int i => some (.int w i)
   | .fp ft, .float lit => (σ.nodes.findIdx? (· == .flit ft lit)).map .node
   | _, _ => none
+
+/-- The entry of an `alloca`'s count operand: `none` for no count, else `SState.op` of it (`none`
+outside the fragment). -/
+def SState.count (σ : SState) : Option TValue → Option (Option SVal)
+  | none => some none
+  | some (.mk ct cv) => (σ.op ct cv).map some
 
 /-- Node `nd` appended to the table, register `res` (if any) set to it, with the obligation that
 it evaluates. -/
@@ -139,7 +164,7 @@ vector's element type when a vector): `trunc`, `zext`, `sext`, `bitcast` and `ad
 every type, `fptrunc` and `fpext` from a float type to a float type, `sitofp` and `uitofp` to a
 float type, and `ptrtoint` from a pointer type. Not `fptoui`, `fptosi`, `inttoptr`, nor another
 operator at other types: there `castV` faults (unsupported) on every operand, and nowhere else
-(`castOk_iff`, MojoProof/Sym/Block.lean, for every layout, memory and choice). -/
+(`castOk_iff`, MojoProof/Sym/Exec.lean, for every layout, memory and choice). -/
 def castOk (op : CastOp) (s t : Ty) : Bool :=
   match op, s.elt, t.elt with
   | .trunc, _, _ | .zext, _, _ | .sext, _, _ => true
@@ -154,7 +179,11 @@ def castOk (op : CastOp) (s t : Ty) : Bool :=
 `σ`; `none` outside the fragment. With `contract` (`coversC`), `fmul contract` is in the
 fragment too; a float operator's node is `SNode.fbinOf` of its operands' `fmul contract` operand
 terms, which is `SNode.fbin` when no node of the table is an `fmul contract` (always so without
-`contract`). -/
+`contract`). An `alloca` is in the fragment when the state's `alloca` is set; after one, the
+statements that read the blocks' addresses and sizes (`icmp`, `getelementptr`, `ptrtoint`) have
+nodes that read the memory the effects before them make (`SNode.icmpAfter`, `SNode.castAfter`,
+`SNode.gepAfter`, `SNode.gepNAfter`), not the entry memory, which has no block where the `alloca`
+made one. -/
 def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
     (contract : Bool := false) : Option SState :=
   if st.checkMd.isOk then
@@ -163,21 +192,71 @@ def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
       let x ← σ.op t a
       let y ← σ.op t b
       pure (σ.def st.res (.bin op fl (P.layout.scalarBits t.elt) x y))
-    | .icmp p (.int w) a b => if σ.stored then none else do
+    | .icmp p (.int w) a b => if SEff.allocates σ.effs then
+        -- after an `alloca`: on the memory the effects before it make
+        if σ.effs.all (·.before σ.nodes.length) then do
+          let x ← σ.op (.int w) a
+          let y ← σ.op (.int w) b
+          pure (σ.def st.res (.icmpAfter p w x y σ.effs))
+        else none
+      else do
       let x ← σ.op (.int w) a
       let y ← σ.op (.int w) b
       pure (σ.def st.res (.icmp p w x y))
     | .cast op (.mk s a) t => if op = .trunc ∨ op = .zext ∨ op = .sext then do
         let x ← σ.op s a
         pure (σ.def st.res (.cast op (P.layout.scalarBits t.elt) x))
-      else if (σ.stored ∧ op = .ptrtoint) ∨ castOk op s t = false then none else do
+      else if castOk op s t = false then none
+      else if op == .ptrtoint && SEff.allocates σ.effs then
+        -- after an `alloca`: on the memory the effects before it make
+        if σ.effs.all (·.before σ.nodes.length) then do
+          let x ← σ.op s a
+          pure (σ.def st.res (.castAfter lbl pc n x σ.effs))
+        else none
+      else do
         let x ← σ.op s a
         pure (σ.def st.res (.castAt lbl pc n x))
     | .extractvalue (.mk t a) is => do
       let x ← σ.op t a
       pure (σ.def st.res (.extract is x))
-    | .gep _ _ (.mk (.ptr as) b) [.mk ti i] => if σ.stored then none else
-      match b with
+    | .insertvalue (.mk t a) (.mk te e) is =>
+      -- into a constant its type gives: the node of the constant, then the `insertvalue` into it
+      if tyConst a then do
+        let y ← σ.op te e
+        pure ((σ.def none (.constAt lbl pc 0)).def st.res (.insert is (.node σ.nodes.length) y))
+      else do
+        let x ← σ.op t a
+        let y ← σ.op te e
+        pure (σ.def st.res (.insert is x y))
+    | .extractelement (.mk t v) (.mk ti i) => do
+      let x ← σ.op t v
+      let y ← σ.op ti i
+      pure (σ.def st.res (.eltAt lbl pc x y))
+    | .insertelement (.mk t v) (.mk te e) (.mk ti i) =>
+      -- into a constant its type gives: the node of the constant, then the `insertelement` into it
+      if tyConst v then do
+        let y ← σ.op te e
+        let z ← σ.op ti i
+        pure ((σ.def none (.constAt lbl pc 0)).def st.res
+          (.insEltAt lbl pc (.node σ.nodes.length) y z))
+      else do
+        let x ← σ.op t v
+        let y ← σ.op te e
+        let z ← σ.op ti i
+        pure (σ.def st.res (.insEltAt lbl pc x y z))
+    | .gep _ _ (.mk (.ptr as) b) [.mk ti i] => if SEff.allocates σ.effs then
+        -- after an `alloca`: on the memory the effects before it make
+        if σ.effs.all (·.before σ.nodes.length) then match b with
+          | .glob _ => do
+            let xi ← σ.op ti i
+            pure ((σ.def none (.globalAt lbl pc 0)).def st.res
+              (.gepAfter lbl pc (.node σ.nodes.length) xi σ.effs))
+          | _ => do
+            let xi ← σ.op ti i
+            let xb ← σ.op (.ptr as) b
+            pure (σ.def st.res (.gepAfter lbl pc xb xi σ.effs))
+        else none
+      else match b with
       -- on a global: the node of its pointer, then the `getelementptr` on that node
       | .glob _ => do
         let xi ← σ.op ti i
@@ -187,6 +266,18 @@ def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
         let xi ← σ.op ti i
         let xb ← σ.op (.ptr as) b
         pure (σ.def st.res (.gep lbl pc xb xi))
+    | .gep _ _ (.mk (.ptr as) b) idx => if SEff.allocates σ.effs then
+        -- after an `alloca`: on the memory the effects before it make
+        if σ.effs.all (·.before σ.nodes.length) then do
+          let ys ← idx.mapM fun | .mk t v => σ.op t v
+          let xb ← σ.op (.ptr as) b
+          pure (σ.def st.res (.gepNAfter lbl pc xb ys σ.effs))
+        else none
+      else do
+      -- other than one index, on a base that is not a global (`SState.op` gives none at one)
+      let ys ← idx.mapM fun | .mk t v => σ.op t v
+      let xb ← σ.op (.ptr as) b
+      pure (σ.def st.res (.gepN lbl pc xb ys))
     | .load _ _ (.mk (.ptr as) p) _ => if σ.stored then
         -- after a store: the `load` from the memory the effects before it make (on a global, on
         -- the node of its pointer)
@@ -213,18 +304,23 @@ def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
         let x ← σ.op t v
         pure { σ.def none (.globalAt lbl pc 1) with
           effs := σ.effs ++ [.store lbl pc x (.node σ.nodes.length)], stored := true }
-      | _ => do
-        let x ← σ.op t v
-        let y ← σ.op (.ptr as) p
-        pure { σ with effs := σ.effs ++ [.store lbl pc x y], stored := true }
+      -- a `zeroinitializer`, `undef` or `poison`: the node of its value, then the `store` of
+      -- that node
+      | _ => if tyConst v then do
+          let y ← σ.op (.ptr as) p
+          pure { σ.def none (.constAt lbl pc 0) with
+            effs := σ.effs ++ [.store lbl pc (.node σ.nodes.length) y], stored := true }
+        else do
+          let x ← σ.op t v
+          let y ← σ.op (.ptr as) p
+          pure { σ with effs := σ.effs ++ [.store lbl pc x y], stored := true }
     | .fbin op fm t a b => match t.elt with
       | .fp ft => if !contract && op == .fmul && fm.contract then none else do
         let x ← σ.op t a
         let y ← σ.op t b
         pure (σ.def st.res (.fbinOf op fm ft n x y (x.factors σ.nodes) (y.factors σ.nodes)))
       | _ => none
-    | .call fm _ (.fn g) [] => if σ.stored then none else
-      match P.module.funcs.find? (·.name == g) with
+    | .call fm _ (.fn g) [] => match P.module.funcs.find? (·.name == g) with
       | some fn => match P.intrinsics.lookup g with
         | some (.sreg r d) =>
           if (fm == {}) && fn.blocks.isEmpty && (fn.check P.module (some (.sreg r d))).isOk then
@@ -252,6 +348,11 @@ def SState.stmt (P : Program) (lbl pc n : Nat) (σ : SState) (st : Stmt)
           pure (σ.def st.res (.minmax sg mx x y))
         else none
       | _, _ => none
+    | .alloca _ cnt _ => if σ.alloca then do
+        -- the pointer to the new block, then the effect that makes it
+        let c ← σ.count cnt
+        pure { σ.def st.res (.fresh n) with effs := σ.effs ++ [.alloca lbl pc n c], stored := true }
+      else none
     | _ => none
   else none
 
@@ -412,15 +513,22 @@ structure Summary where
   deriving DecidableEq, Repr, Inhabited
 
 /-- The summary of block `lbl` of `fn` from position `p0`, run from the state with the block's
-float constants (`SState.start`), with the exit and its obligations from exit function `ex` at
-the final state and the terminator, with `fmul contract` in the fragment when `contract`
-(`SState.stmt`). -/
-def summarizeWith (P : Program) (fn : Func) (lbl p0 : Nat)
+float constants (`SState.start`) and the checker's `alloca` flag (`SState.alloca`) set to
+`alloca`, with the exit and its obligations from exit function `ex` at the final state and the
+terminator, with `fmul contract` in the fragment when `contract` (`SState.stmt`). With the flag on
+the checker takes `alloca` (a pointer node `SNode.fresh` and an effect `SEff.alloca`, with or
+without a count), and after one these statements read the memory the effects before them make,
+not the entry memory: `icmp` on integers (`SNode.icmpAfter`), `ptrtoint` (`SNode.castAfter`),
+`getelementptr` with one index, on a register or a global (`SNode.gepAfter`), or with any other
+number of indices (`SNode.gepNAfter`), and `load` (`SNode.loadAfter`, as after a `store`). It
+refuses each of them when an operand of an effect before it refers to a node at or after the
+statement's (`SEff.before`). With the flag off it refuses `alloca`. -/
+def summarizeAt (alloca : Bool) (P : Program) (fn : Func) (lbl p0 : Nat)
     (ex : SState → Term → Option (Exit × List Cond)) (contract : Bool := false) :
     Option Summary :=
   match fn.blocks.find? (·.label == lbl) with
   | some b => match SState.run contract P lbl p0 (b.stmts.toList.drop p0) 0
-      (SState.start fn lbl p0 b) with
+      { SState.start fn lbl p0 b with alloca } with
     | some σ => match ex σ b.term with
       | some (x, cs) => some ⟨σ.nodes, σ.regs, σ.effs, cs ++ .mem σ.effs :: σ.obls, x,
           (b.stmts.toList.drop p0).length⟩
@@ -428,20 +536,35 @@ def summarizeWith (P : Program) (fn : Func) (lbl p0 : Nat)
     | none => none
   | none => none
 
+/-- The summary of block `lbl` of `fn` from position `p0` with the `alloca` flag off, as
+`SState.start` leaves it (`summarizeAt false`). -/
+def summarizeWith (P : Program) (fn : Func) (lbl p0 : Nat)
+    (ex : SState → Term → Option (Exit × List Cond)) (contract : Bool := false) :
+    Option Summary :=
+  summarizeAt false P fn lbl p0 ex contract
+
 /-- The summary of block `lbl` of `fn` from position `p0` (`summarizeWith`, the exit from
 `SState.exitAt`). -/
 def summarize (P : Program) (fn : Func) (lbl p0 : Nat) : Option Summary :=
   summarizeWith P fn lbl p0 fun σ tm => σ.exitAt fn lbl tm
 
-/-- The block checker with exit function `ex`: `summarizeWith` gives summary `S` (with
+/-- **The block checker with the `alloca` flag**: `summarizeAt alloca` gives summary `S` (with
 `fmul contract` in the fragment when `contract`), and the obligations of `S` are the first
-conditions of `ds`. -/
+conditions of `ds` (`Block.soundAt`). -/
+def coversAt (alloca : Bool) (P : Program) (fn : Func) (lbl p0 : Nat)
+    (ex : SState → Term → Option (Exit × List Cond)) (ds : List Cond) (S : Summary)
+    (contract : Bool := false) : Bool :=
+  match summarizeAt alloca P fn lbl p0 ex contract with
+  | some S' => decide (S' = S) && S.obls.isPrefixOf ds
+  | none => false
+
+/-- The block checker with exit function `ex`: `coversAt` with the `alloca` flag off, so
+`summarizeWith` gives summary `S` and the obligations of `S` are the first conditions of
+`ds`. -/
 def coversWith (P : Program) (fn : Func) (lbl p0 : Nat)
     (ex : SState → Term → Option (Exit × List Cond)) (ds : List Cond) (S : Summary)
     (contract : Bool := false) : Bool :=
-  match summarizeWith P fn lbl p0 ex contract with
-  | some S' => decide (S' = S) && S.obls.isPrefixOf ds
-  | none => false
+  coversAt false P fn lbl p0 ex ds S contract
 
 /-- **The block checker.** `summarize` gives summary `S`, and the obligations of `S` are the
 first conditions of `ds` (`coversWith`, the exit from `SState.exitAt`). -/

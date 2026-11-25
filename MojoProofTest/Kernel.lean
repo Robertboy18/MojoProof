@@ -12,9 +12,9 @@ import TorchLean.Tensor.Arithmetic
 
 An instance of `Kernel.sound_eval` (MojoProof/Sym/Kernel.lean), on the paths `mojo_kernel` makes
 (`Kernels.vadd.paths`, MojoProof/Kernels/Vadd.lean): `vector_addition` (`Kernels.vadd`) on 2 blocks
-of 2 threads (`two2`, MojoProofTest/Start.lean) with element count 3, its inputs `inA`, `inB` and
-output at blocks 1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `ch₀` (every choice
-0) and oracle `ω₀` (every number 0).
+of 2 threads (`launch2 2 1 2 1`) with element count 3, its inputs `inA`, `inB` and output at blocks
+1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `ch₀` (every choice 0) and oracle `ω₀`
+(every number 0).
 
 * `start22`: the launch starts (evaluated), with grid `g22` and contexts `c22`; `size22`: it has
   4 threads.
@@ -43,9 +43,9 @@ output at blocks 1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `c
   `16 (2 i + 1)`), which meets `Map2.Pre` by `Map2.pre_mem` (`pre5`): for every oracle `ω`, the
   kernel is sound at every address choice and `ω`, with output cell `4 i` of thread `i < 5`
   holding `deliver (x5_i + y5_i)` and thread 5's cell untouched.
-* `correct12`: the same with fewer threads than the count, on one block of 2 threads (`L12`,
-  `valid12`) with `mem5` and count 5: only cells `4 i` of the threads `i < 2` are put, and cells
-  2 to 4 keep `mem5`'s contents.
+* `correct12`: the same with fewer threads than the count, on one block of 2 threads
+  (`Confluence.two`, `launch2 1 1 2 1`) with `mem5` and count 5: only cells `4 i` of the threads
+  `i < 2` are put, and cells 2 to 4 keep `mem5`'s contents.
 
 * `evalRun`, `evalRun_ok`, `evalRun_ub`: `Grid.start` then `Grid.run` (fuel 64, one phase) at
   `ch₀` and `ω₀`, and the start's and the run's equations from a check of its result that the
@@ -63,12 +63,12 @@ output at blocks 1 to 3 of `mem0` (MojoProofTest/SymRun.lean), address choice `c
   `mem4`, whose output has 4 floats, meets every field of `Map2.Pre` at count 5 but the output's
   length, and the run faults (`access out of bounds`); (b) `pre_alias`, `run_alias`,
   `twin_alias`: an output at the first input's block is refused by `Map2.Pre` (`ne`), and on
-  `mem5w` (that block writable) the run ends with no race and `kept` false, with the broken
+  `mem5w` (that block writable) the run ends with no race and `GPUProof.kept` false, with the broken
   promise `broken?` names; (c) `run_tid`, `twin_tid`: `fnTid` (index `tid.x` alone, an edit of
   one instruction of `Kernels.vadd.prog`'s kernel, in `progTid`) on 2 blocks has a race, with the
-  two accesses `race?` names; (d) `rows2`, `twin_2d`: four valid launches, each with two rows in
-  one of the grid's and the block's `y` and `z` (the block `L32` is one), so each rejected by
-  one of `Kernels.vadd.correct`'s four hypotheses on the launch, and the checker reports a race
+  two accesses `race?` names; (d) `rows2`, `twin_2d`: four valid launches, each with two rows in one
+  of the grid's and the block's `y` and `z` (the block `launch2 1 1 3 2` is one), so each rejected
+  by one of `Kernels.vadd.correct`'s four hypotheses on the launch, and the checker reports a race
   on each.
 * `canaries_vadd`, `canaries_vmul`, `canaries_vsub`: for every admission that admits `ch₀` and
   `ω₀`, the kernel is not sound for `Elem.Out` with any of `Elem.canaries`'s five wrong outputs
@@ -114,7 +114,7 @@ def args3 : List Val := [buf 1, buf 2, buf 3, .bits 32 (BitVec.ofNat 32 3)]
 
 /-- The start's grid and contexts (the empty grid if it faults). -/
 def run22 : Grid × (Nat → Ctx) :=
-  match Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 two2 args3 mem0 ch₀ ω₀ with
+  match Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 (launch2 2 1 2 1) args3 mem0 ch₀ ω₀ with
   | .ok r => r
   | .error _ => (⟨#[], {}⟩, fun _ => ctx0)
 
@@ -126,7 +126,8 @@ def c22 : Nat → Ctx := run22.2
 
 /-- **The launch starts**, with grid `g22` and contexts `c22` (evaluated). -/
 theorem start22 :
-    Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 two2 args3 mem0 ch₀ ω₀ = .ok (g22, c22) := rfl
+    Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 (launch2 2 1 2 1) args3 mem0 ch₀ ω₀ =
+      .ok (g22, c22) := rfl
 
 /-- The start has 4 threads. -/
 theorem size22 : g22.threads.size = 4 := by decide +kernel
@@ -158,7 +159,7 @@ of 2 threads with count 3 on `mem0`, at address choice `ch₀` and oracle `ω₀
 observation of the blocks, whose output cells 0 to 2 hold the sums of the inputs' cells. The
 kernel evaluates that each thread, in turn, has a path of `Kernels.vadd.paths` to `ret`
 (`Kernel.check`), and the last memory's trace and cells. -/
-theorem kernel22 : Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 two2 args3 mem0
+theorem kernel22 : Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 (launch2 2 1 2 1) args3 mem0
     (fun ch o => ch = ch₀ ∧ o = ω₀) (fun m => some m.blocks) (fun B => sums3 B = true) :=
   Kernel.sound_eval Kernels.vadd.covers mem0_bytesIn start22 (fun _ _ h => congrArg some h)
     (by decide +kernel) (by decide +kernel) ⟨_, rfl, by show sums3 _ = true; decide +kernel⟩
@@ -170,9 +171,9 @@ theorem out_twin (Q : Mem → Prop) :
   fun h => absurd h.1 (by decide +kernel)
 
 /-- **The twin of the entry check**: the path that starts at `%21` is accepted from position 0
-by the path checker with `phi`s, but `coversEntry` refuses it, since `%21` is not the kernel's
-first block. -/
-theorem entry_twin : coversPathI Kernels.vadd.prog Kernels.vadd.fn_0 0 vaddIn = true ∧
+by the path checker (`coversPathWith false`), but `coversEntry` refuses it, since `%21` is not
+the kernel's first block. -/
+theorem entry_twin : coversPathWith false Kernels.vadd.prog Kernels.vadd.fn_0 0 vaddIn = true ∧
     coversEntry Kernels.vadd.prog Kernels.vadd.fn_0 [vaddIn] = false := by decide +kernel
 
 /-- A write of 4 bytes at offset 0 of block 3 by thread `n`. -/
@@ -180,11 +181,13 @@ def w (n : Nat) : Event := .access ⟨⟨n, 0⟩, ⟨3, 0⟩, 4, true, none, fal
 
 /-- **The twin of `Apart`**: with cells `4 * (i % 2)` (threads 0 and 2 share cell 0, not
 `Apart`), the memory whose trace is the writes of threads 0 and 2 meets `Elem` from the empty
-memory with no thread done (every access owned), but its trace has a data race. -/
+memory with no thread done (every access owned), but its trace has a data race (the core's `racy`
+at `sig` on `launch2 2 1 2 1`). -/
 theorem elem_twin : ¬ Apart (fun i => 4 * (i % 2)) 4 ∧
     Elem {} 3 4 (fun i => 4 * (i % 2)) (fun _ => none) 0 { trace := [w 0, w 2] } ∧
-    racy [w 0, w 2] = true := by
-  refine ⟨fun h => absurd (h 0 2 (by decide)) (by decide), ⟨rfl, fun _ _ => rfl, ?_⟩, by decide⟩
+    GPUProof.racy sig ([w 0, w 2].map (Event.toCore (launch2 2 1 2 1))).reverse = true := by
+  refine ⟨fun h => absurd (h 0 2 (by decide)) (by decide), ⟨rfl, fun _ _ => rfl, ?_⟩,
+    by decide +kernel⟩
   intro a ha
   simp only [List.mem_cons, List.not_mem_nil, or_false, w, Event.access.injEq] at ha
   rcases ha with rfl | rfl <;> (unfold Elem.Own; decide)
@@ -193,12 +196,15 @@ theorem elem_twin : ¬ Apart (fun i => 4 * (i % 2)) 4 ∧
 def cell (i : Nat) : Nat := 4 * i
 
 /-- **`Elem` at the start** (`Elem.zero`, `Grid.start_trace`, `Elem.safe`): the start's memory
-meets `Elem` from itself with no thread done, for every bytes, so its trace has no data race and
-keeps the promise of `!invariant.load`. -/
+meets `Elem` from itself with no thread done, for every bytes, so its trace, empty and so with the
+premises of `racy_iff`, has no data race and keeps the promise of `!invariant.load`. -/
 theorem elem22 (bs : Nat → Option (List MemByte)) : Elem g22.mem 3 4 cell bs 0 g22.mem ∧
-    racy g22.mem.trace = false ∧ kept g22.mem.trace = true :=
+    GPUProof.racy sig (g22.mem.trace.map (Event.toCore (launch2 2 1 2 1))).reverse = false ∧
+      GPUProof.kept sig (g22.mem.trace.map (Event.toCore (launch2 2 1 2 1))).reverse = true :=
   have h := Elem.zero (out := 3) (w := 4) (cell := cell) (bs := bs) (Grid.start_trace start22)
-  ⟨h, Elem.safe (fun i j hij => by simp only [cell]; omega) h⟩
+  have hs := Elem.safe (L := launch2 2 1 2 1) (fun i j hij => by simp only [cell]; omega) h
+  ⟨h, hs.1 (fun a ha => by rw [Grid.start_trace start22] at ha; cases ha)
+    (by rw [Grid.start_trace start22]; exact Trace.shaped_nil), hs.2⟩
 
 /-- The bytes of thread 0 (the bytes of 1.0), none for the others. -/
 def bs1 (i : Nat) : Option (List MemByte) := if i = 0 then some (leBytes 4 0x3f800000) else none
@@ -209,8 +215,10 @@ def mem1 : Mem :=
       else mem0.blocks b, trace := [w 0] }
 
 /-- **A thread's step of `Elem`** (`Elem.succ`, `Elem.safe`): after thread 0's store to its cell,
-`mem1` meets `Elem` from `mem0` after one thread, so its trace has no data race. -/
-theorem elem1 : Elem mem0 3 4 cell bs1 1 mem1 ∧ racy mem1.trace = false :=
+`mem1` meets `Elem` from `mem0` after one thread, so its trace, one write of thread 0 of
+`launch2 2 1 2 1` and so with the premises of `racy_iff`, has no data race. -/
+theorem elem1 : Elem mem0 3 4 cell bs1 1 mem1 ∧
+    GPUProof.racy sig (mem1.trace.map (Event.toCore (launch2 2 1 2 1))).reverse = false :=
   have h := Elem.succ (Elem.zero (m₀ := mem0) (out := 3) (w := 4) (cell := cell) (bs := bs1) rfl)
     (m' := mem1) (by simp [mem1, bs1, cell]) (fun b hb => by simp [mem1, hb])
     (fun a ha => .inr (by
@@ -218,7 +226,15 @@ theorem elem1 : Elem mem0 3 4 cell bs1 1 mem1 ∧ racy mem1.trace = false :=
       subst ha
       unfold Elem.Own
       decide))
-  ⟨h, (Elem.safe (fun i j hij => by simp only [cell]; omega) h).1⟩
+  ⟨h, (Elem.safe (L := launch2 2 1 2 1) (fun i j hij => by simp only [cell]; omega) h).1
+    (fun a ha => by
+      simp only [mem1, List.mem_cons, List.not_mem_nil, or_false, w, Event.access.injEq] at ha
+      subst ha
+      decide)
+    (show Trace.Shaped [w 0] from Trace.shaped_single fun a ha => by
+      simp only [w, Event.access.injEq] at ha
+      subst ha
+      decide)⟩
 
 /-- **`Kernels.vadd.ret`'s premises on the context, from the start** (`Grid.start_ctx`):
 for every launch `L`, arguments, memory, address choice and oracle `ω`, the
@@ -233,15 +249,10 @@ theorem start_ctx_vadd {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Na
     (Grid.start_ctx h k).2.2.2⟩
 
 /-- The launch of grid `(2, 1, 1)` and block `(3, 1, 1)`: 2 blocks of 3 threads. -/
-def L23 : Launch := ⟨fun | .x => 2 | _ => 1, fun | .x => 3 | _ => 1, 0⟩
+def L23 : Launch := launch2 2 1 3 1
 
 /-- `L23` is valid. -/
-theorem valid23 : L23.Valid where
-  grid_pos d := by cases d <;> decide
-  grid_le d := by cases d <;> decide
-  block_pos d := by cases d <;> decide
-  block_le d := by cases d <;> decide
-  threads := by decide
+theorem valid23 : L23.Valid := launch2_valid (by decide)
 
 /-- `2 ^ i` in cell `i` of 5 (the binary32 words `0x3f800000 + 2 ^ 23 i`: 1, 2, 4, 8, 16). -/
 def x5 : TorchLean.Tensor (Model FloatTy.float.fmt) [5] :=
@@ -300,17 +311,6 @@ theorem phi_runs : ∃ m', Runs SymPhi.ctxN ⟨[SymPhi.frameH 0], 0⟩ mem0 m' �
   next v hv => rw [hv, Val.float?_eq_some.1 (of_decide_eq_true hc)]
   next => exact absurd hc (by decide)
 
-/-- The launch of grid `(1, 1, 1)` and block `(2, 1, 1)`: one block of 2 threads. -/
-def L12 : Launch := ⟨fun _ => 1, fun | .x => 2 | _ => 1, 0⟩
-
-/-- `L12` is valid. -/
-theorem valid12 : L12.Valid where
-  grid_pos d := by cases d <;> decide
-  grid_le d := by cases d <;> decide
-  block_pos d := by cases d <;> decide
-  block_le d := by cases d <;> decide
-  threads := by decide
-
 /-- **`vector_addition`'s kernel theorem with fewer threads than the count**
 (`Kernels.vadd.correct` with every premise discharged): on one block of 2 threads with count 5
 and `correct23`'s memory `mem5`, for every oracle `ω`, the kernel is sound at every address choice
@@ -318,11 +318,11 @@ and `ω` for the observation of the blocks and `Elem.Out` at 2 threads: block 3 
 the bytes `Kernels.vadd.bytes ω x5 y5 5 i` put at cell `4 i` for `i < 2` only, so its cells 2 to
 4 keep `mem5`'s contents, and blocks 1 and 2 are unchanged. -/
 theorem correct12 (ω : Nat → Nat → Nat) :
-    Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 L12
+    Kernel.Sound Kernels.vadd.prog Kernels.vadd.fn_0 Confluence.two
       (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 (fun _ ω' => ω' = ω)
       (fun m => some m.blocks)
       (Elem.Out mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω x5 y5 5) 2) :=
-  Kernels.vadd.correct valid12 ⟨rfl, rfl⟩ ⟨rfl, rfl⟩ (by decide) pre5
+  Kernels.vadd.correct (launch2_valid (by decide)) ⟨rfl, rfl⟩ ⟨rfl, rfl⟩ (by decide) pre5
 
 
 /-! ### The satisfiability witness, the negative twins and the canaries, by evaluation -/
@@ -383,7 +383,7 @@ floats `sums5` (`Elem.word`); and `correct23` gives `Elem.Out` itself for this f
 (`Grid.Sound.run`). -/
 theorem g2_vadd : ∃ g c g', Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
       (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 ch₀ ω₀ = .ok (g, c) ∧
-    g.run L23 c 64 1 = .ok g' ∧ g'.Done ∧
+    g.run L23 c 64 1 = .ok g' ∧ GPUProof.Done sig (g', L23, c) ∧
     Elem.outBelow mem5 3 (fun i => 4 * i) (Kernels.vadd.bytes ω₀ x5 y5 5) 6 4 24
       g'.mem.blocks = true ∧
     (List.range 5).map (Elem.word Kernels.vadd.prog.layout .float 3 (fun i => 4 * i)
@@ -400,7 +400,7 @@ theorem g2_vadd : ∃ g c g', Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
   cases hs₁
   obtain ⟨_, ⟨⟩, hO⟩ := hS.run hr
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
-  exact ⟨g, c, g', hs, hr, hp.1.1, hp.1.2, hp.2, hO⟩
+  exact ⟨g, c, g', hs, hr, Grid.done_of_all hp.1.1, hp.1.2, hp.2, hO⟩
 
 /-- `mem5` has no block from 4 on (`Map2.mem`'s three allocations are at 1, 2 and 3). -/
 theorem mem5_none : ∀ b, 4 ≤ b → mem5.blocks b = none := by
@@ -557,17 +557,20 @@ threads 1 writes 4 bytes at offset 16 of block 1. On `mem5`, whose block 1 is re
 faults instead. -/
 theorem run_alias : ∃ g c g', Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
       (Kernels.vadd.args 1 2 1 (BitVec.ofNat 32 5)) mem5w ch₀ ω₀ = .ok (g, c) ∧
-    g.run L23 c 64 1 = .ok g' ∧ g'.Done ∧ racy g'.mem.trace = false ∧
-    kept g'.mem.trace = false ∧ broken? g'.mem.trace = some
+    g.run L23 c 64 1 = .ok g' ∧ GPUProof.Done sig (g', L23, c) ∧
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L23)).reverse = false ∧
+    GPUProof.kept sig (g'.mem.trace.map (Event.toCore L23)).reverse = false ∧
+    broken? g'.mem.trace = some
       (⟨⟨4, 1⟩, ⟨1, 16⟩, 4, false, none, true⟩, ⟨⟨4, 1⟩, ⟨1, 16⟩, 4, true, none, false⟩) := by
   obtain ⟨g, c, g', hs, hr, hp⟩ := evalRun_ok Kernels.vadd.prog Kernels.vadd.fn_0 L23
     (Kernels.vadd.args 1 2 1 (BitVec.ofNat 32 5)) mem5w (p := fun g' =>
     g'.threads.all (· matches .done) &&
-    !racy g'.mem.trace && decide (broken? g'.mem.trace = some
+    !GPUProof.racy sig (g'.mem.trace.map (Event.toCore L23)).reverse &&
+    decide (broken? g'.mem.trace = some
       (⟨⟨4, 1⟩, ⟨1, 16⟩, 4, false, none, true⟩, ⟨⟨4, 1⟩, ⟨1, 16⟩, 4, true, none, false⟩)))
     (by decide +kernel)
   simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at hp
-  exact ⟨g, c, g', hs, hr, hp.1.1, hp.1.2, kept_of_broken hp.2, hp.2⟩
+  exact ⟨g, c, g', hs, hr, Grid.done_of_all hp.1.1, hp.1.2, kept_of_broken hp.2, hp.2⟩
 
 /-- **Negative twin (b), refuted**: `vector_addition` on `L23` with arguments blocks 1, 2, 1 and
 count 5 and `mem5w` is not sound for any observation and relation, for every admission that
@@ -600,17 +603,19 @@ of threads 1 writes 4 bytes at offset 8 of block 3, and earlier thread 2 of bloc
 writes 4 bytes at offset 8 of block 3. -/
 theorem run_tid : ∃ g c g', Grid.start progTid fnTid L23
       (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 ch₀ ω₀ = .ok (g, c) ∧
-    g.run L23 c 64 1 = .ok g' ∧ g'.Done ∧ racy g'.mem.trace = true ∧
+    g.run L23 c 64 1 = .ok g' ∧ GPUProof.Done sig (g', L23, c) ∧
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L23)).reverse = true ∧
     race? g'.mem.trace = some
       (⟨⟨5, 1⟩, ⟨3, 8⟩, 4, true, none, false⟩, ⟨⟨2, 0⟩, ⟨3, 8⟩, 4, true, none, false⟩) := by
   obtain ⟨g, c, g', hs, hr, hp⟩ := evalRun_ok progTid fnTid L23
     (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 (p := fun g' =>
     g'.threads.all (· matches .done) &&
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L23)).reverse &&
     decide (race? g'.mem.trace = some
       (⟨⟨5, 1⟩, ⟨3, 8⟩, 4, true, none, false⟩, ⟨⟨2, 0⟩, ⟨3, 8⟩, 4, true, none, false⟩)))
     (by decide +kernel)
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
-  exact ⟨g, c, g', hs, hr, hp.1, racy_of_race hp.2, hp.2⟩
+  exact ⟨g, c, g', hs, hr, Grid.done_of_all hp.1.1, hp.1.2, hp.2⟩
 
 /-- **Negative twin (c), refuted**: `fnTid` on `L23` (valid, one-dimensional) with count 5 and
 `mem5`, which meets `Map2.Pre` (`pre5`), is not sound for any observation and relation, for
@@ -622,17 +627,12 @@ theorem twin_tid {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} (hadm 
       obs R :=
   Kernel.replay_unsafe (fuel := 64) (phases := 1) (by decide +kernel) hadm
 
-/-- The launch of grid `(1, 1, 1)` and block `(3, 2, 1)`: one two-dimensional block of 6
-threads. -/
-def L32 : Launch := ⟨fun _ => 1, fun | .x => 3 | .y => 2 | _ => 1, 0⟩
-
 /-- The four launches of 6 threads with two rows in one dimension other than `x` and 3 threads
-in `x`: the grid `(1, 2, 1)` and the grid `(1, 1, 2)` of blocks `(3, 1, 1)`, the block `(3, 2, 1)`
-(`L32`) and the block `(3, 1, 2)` in a grid `(1, 1, 1)`. -/
+in `x`: the grid `(1, 2, 1)` (`launch2 1 2 3 1`) and the grid `(1, 1, 2)` of blocks `(3, 1, 1)`,
+the block `(3, 2, 1)` (`launch2 1 1 3 2`) and the block `(3, 1, 2)` in a grid `(1, 1, 1)`. -/
 def rows2 : List Launch :=
-  [⟨fun | .y => 2 | _ => 1, fun | .x => 3 | _ => 1, 0⟩,
-    ⟨fun | .z => 2 | _ => 1, fun | .x => 3 | _ => 1, 0⟩, L32,
-    ⟨fun _ => 1, fun | .x => 3 | .z => 2 | _ => 1, 0⟩]
+  [launch2 1 2 3 1, ⟨fun | .z => 2 | _ => 1, fun | .x => 3 | _ => 1, 0, gridAcc⟩,
+    launch2 1 1 3 2, ⟨fun _ => 1, fun | .x => 3 | .z => 2 | _ => 1, 0, gridAcc⟩]
 
 /-- **Negative twin (d), launches with two rows**: each launch of `rows2` is valid, and of the
 sides of its grid and block in `y` and `z`, all of which `Kernels.vadd.correct` requires to be 1,

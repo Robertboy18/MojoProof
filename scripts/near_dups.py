@@ -6,7 +6,7 @@ scripts/counts.tsv.
 
 --lib names the library directories under <tree> to scan (default: every top-level directory with .lean files,
 except .lake, lake-packages, tests, test, scratch, attic and build). This repository's check is
-`python3 scripts/near_dups.py . --lib MojoProof --list 5`.
+`python3 scripts/near_dups.py . --lib GPUProof --lib MojoProof --list 5`.
 
 Prints three counts and, with --list, the N largest clusters:
 - width families: theorems whose text is identical once widths, types and chunk names are replaced

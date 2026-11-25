@@ -96,8 +96,7 @@ theorem finEq_inst : FinEq (f32 0x7f800000) (f32 0x7fc00000) ∧ ¬ FinEq (ct 0)
   · have := congrArg Model.toRat? h
     rw [ct_vals.1, ct_vals.2] at this
     exact absurd (Option.some.inj this) (by norm_num)
-  · rw [Model.Algebraic.isFinite_of_toRat?_eq_some ct_vals.1] at h
-    cases h
+  · simp [Model.Algebraic.isFinite_of_toRat?_eq_some ct_vals.1] at h
 
 /-- `maxnum` of a signaling NaN and 1 under oracle number `n`: a NaN for odd `n`, 1 for even. -/
 def mx (n : Nat) : Model .binary32 := maxnum true (f32 0x7fa00000) (f32 0x3f800000) n
@@ -371,8 +370,8 @@ theorem row1_inst :
     floatOp .float .fdiv {} [sc 0x3f800000, sc 0x7f800000] 0 = .ok (sc 0) ∧
     floatOp .float .fdiv {} [sc 0x3f800000, sc 0x7fc00000] 0 = .ok (sc 0x7fc00000) ∧
     ¬ Val.Lift .float FinEq (sc 0) (sc 0x7fc00000) := by
-  have inf : (f32 0x7f800000).isFinite = false := by decide +kernel
-  have nan : (f32 0x7fc00000).isFinite = false := by decide +kernel
+  have inf : (!(f32 0x7f800000).isFinite) = true := by decide +kernel
+  have nan : (!(f32 0x7fc00000).isFinite) = true := by decide +kernel
   refine ⟨floatOp_finEq .float (.inl rfl) rfl rfl _ _ 0 5
     (.cons (Or.inr ⟨_, _, rfl, rfl, Or.inr ⟨inf, nan⟩⟩) (.cons (Or.inl rfl) .nil)) trivial,
     rfl, rfl, ?_, rfl, rfl, ?_⟩

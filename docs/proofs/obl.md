@@ -1,19 +1,19 @@
-# `vector_addition` walks the path its index selects (`vadd_walk_launch`, `mojo_obl`)
+# `vector_addition` walks the path its index selects (`vadd_walk`, `mojo_obl`)
 
 Lean: `MojoProof/Sym/OblLemmas.lean` (the lemmas) and `MojoProof/Sym/Obl.lean` (the tactic).
 Tests: `MojoProofTest/Obl.lean`.
 
-**Scope.** Every valid one-dimensional launch, alignment, pair of input buffers and output buffer of
-`n < 2 ^ 31` floats that fit below `2 ^ 64`, thread `k`, and context, memory and frame with the
-facts below. The goal is the walk along the path the index selects, the first conjunct of `Ret` in
-`Kernel.sound_of_paths`; `mojo_ret` proves it inside its `Ret` goals. The program, its summaries and
-paths are `Kernels.vadd.*` (MojoProof/Kernels/Vadd.lean); the lemmas are for every valuation,
-program and table.
+**Scope.** Every valid launch, alignment, pair of input buffers and output buffer of `n < 2 ^ 31`
+floats that fit below `2 ^ 64`, thread `k`, and context, memory and frame with the facts below; on
+one-dimensional launches the index is `k` (`vadd_walk_launch`). The goal is the walk along the path
+the index selects, the first conjunct of `Ret` in `Kernel.sound_of_paths`; `mojo_ret` proves it
+inside its `Ret` goals. The program, its summaries and paths are `Kernels.vadd.*`
+(MojoProof/Kernels/Vadd.lean); the lemmas are for every valuation, program and table.
 
 ## Statement
 
-`MojoProofTest.Obl.vadd_walk_launch` (MojoProofTest/Obl.lean). For every `L : Launch`
-with `L.Valid`, `L.grid .y = 1 ∧ L.grid .z = 1`, `L.block .y = 1 ∧ L.block .z = 1`; every `al`
+`MojoProofTest.Obl.vadd_walk` (MojoProofTest/Obl.lean). For every `L : Launch` with `L.Valid`;
+every `al`
 with `4 ∣ al`; every `a b out n N` and tensors `x y` of `N` binary32 values with `a`, `b`, `out`
 distinct, `n ≤ N`, `n < 2 ^ 31`; every `k < volume L.grid * volume L.block`; every `c : Ctx` with
 `c.prog = Kernels.vadd.prog`, `c.env = L.env k`, `c.who = ⟨k, k / volume L.block⟩`; every memory
@@ -23,8 +23,13 @@ the structs of `a`, `b`, `out`; `m.Buffer` of `n * 4` bytes at `a`, `b` (read-on
 (writable), aligned to `al`; `m.Holds` of `x` at `a` and `y` at `b`, row-major; and
 `m.Fits l a (n * 4)` (`Mem.Fits`, MojoProof/Sem/Precond.lean), the same for `b` and `out`:
 
-    (k < n → Walk (Valuation.entry c 0 m f) (Kernels.vadd.paths.getD 0 [])) ∧
-    (¬ k < n → Walk (Valuation.entry c 0 m f) (Kernels.vadd.paths.getD 1 []))
+    (L.index k .x < n → WalkWith false (Valuation.entry c 0 m f) (Kernels.vadd.paths.getD 0 [])) ∧
+    (¬ L.index k .x < n → WalkWith false (Valuation.entry c 0 m f) (Kernels.vadd.paths.getD 1 []))
+
+`L.index k .x` is `ctaid.x * ntid.x + tid.x` of thread `k` (`Launch.index`), the value of `%19`,
+which the kernel computes in `i64`, so it does not wrap. `MojoProofTest.Obl.vadd_walk_launch` is
+the corollary with `L.grid .y = 1 ∧ L.grid .z = 1` and `L.block .y = 1 ∧ L.block .z = 1`, where
+`L.index k .x = k` (`Launch.index_oneDim`), with `k < n` and `¬ k < n` in the two conjuncts.
 
 Path 0 is `%4 → %21 → %31` (labels 4, 21, 31), path 1 is `%4 → %30 → %31` (labels 4, 22, 31).
 `m.Fits l c s` is `∃ blk, m.blocks c = some blk ∧ blk.gaddr + s ≤ 2 ^ (l.ptr 0).1`; mojo_obl
@@ -34,10 +39,12 @@ so the fact is `Mem.Fits`'s.
 
 ## Proof
 
-A (the walk). `Walk V ((l, ds, S) :: (l', ds', S') :: ps)` is `∀ d ∈ ds, d.Holds V (vals V
-S.nodes)`, then `S.exit.target V (vals V S.nodes) = some l'`, then the walk of the rest from
-`V.after S` (`Walk.cons2`; `Walk.one`, `Walk.nil'` for the ends). So the proof is, per block, its
-obligations at its entry valuation and its exit.
+A (the walk). `WalkWith false V ((l, ds, S) :: (l', ds', S') :: ps)` is `∀ d ∈ ds, d.Holds V
+(vals V S.nodes)`, then `S.exit.dest V (vals V S.nodes) = some l'`, then the walk of the rest from
+`V.intoWith false l S` (`WalkWith.cons2`; `WalkWith.one`, `WalkWith.nil'` for the ends). On an
+exit other than `Exit.phi`, `Exit.dest` is `Exit.target` and `V.intoWith false l S` is
+`V.after S` (`Exit.of_targetWith`). So the proof is, per block, its obligations at its entry
+valuation and its exit.
 
 B (block `%4`, at `V = Valuation.entry c 0 m f`). The node values, in order:
 nodes 0, 2, 4 are the byval loads at `p2`, `p1`, `p0`, whose values are the hypotheses' structs
@@ -53,17 +60,17 @@ below `2 ^ 63` (`intCast_ofNat`, `intBin_mul_ofNat`, `intBin_add_ofNat`); node 1
 below `2 ^ 63`). The obligations: `ok` of each node from its value, `bool` of node 15 from
 `Val.ofBool`, and the three load effects run, each logging its access (`SEff.apply_load_at`,
 `SEff.foldlM_cons_ex`). The exit `cond (node 15) 21 22` goes to 21 when the comparison holds
-(`Exit.target_cond_true`) and to 22 when it fails (`Exit.target_cond_false`); `Launch.index_oneDim`
-says `ctaid.x * ntid.x + tid.x = k` on this launch, so the comparison is `k < n`, which `hkn`
-decides either way (`omega`).
+(`Exit.target_cond_true`) and to 22 when it fails (`Exit.target_cond_false`); the sum is
+`i = L.index k .x` (`Launch.index`, which the proof unfolds in `hkn`), so the comparison is
+`i < n`, which `hkn` decides either way (`omega`). On a 1-D launch `i = k` (`Launch.index_oneDim`).
 
-C (block `%21`, at `V₁ = V.after b0`, when `k < n`). The registers of `V₁` are `b0`'s node values
+C (block `%21`, at `V₁ = V.after b0`, when `i < n`). The registers of `V₁` are `b0`'s node values
 (`Valuation.after_regs_some`), its memory is `m` with three trace entries, with `m`'s blocks
 (`Valuation.after_mem_fold`). Node 0 is `trunc 32` of the index and node 1 its `sext 64`, the
-word of `k` since `k < n < 2 ^ 31`. Nodes 2, 4, 7 are `getelementptr inbounds float` from `⟨a, 0⟩`,
-`⟨b, 0⟩`, `⟨out, 0⟩` by `k`: by `gep_buffer`, `⟨c, 4 k⟩`, since `4 k < 4 n` and the buffer fits,
-so its address `gaddr + 4 k` does not reach `2 ^ 64` and the `inbounds` checks pass. Nodes 3 and 5
-are the loads of element `k` of `a` and `b`, the floats `x k` and `y k` (`load_buffer`: `Mem.Holds`
+word of `i` since `i < n < 2 ^ 31`. Nodes 2, 4, 7 are `getelementptr inbounds float` from `⟨a, 0⟩`,
+`⟨b, 0⟩`, `⟨out, 0⟩` by `i`: by `gep_buffer`, `⟨c, 4 i⟩`, since `4 i < 4 n` and the buffer fits,
+so its address `gaddr + 4 i` does not reach `2 ^ 64` and the `inbounds` checks pass. Nodes 3 and 5
+are the loads of element `i` of `a` and `b`, the floats `x i` and `y i` (`load_buffer`: `Mem.Holds`
 with `rowMajor_one`, `Mem.load_holds`, alignment from `4 ∣ al ∣ gaddr`). Node 6 is the `fadd` of
 them (`SNode.eval_fbin_ofFloat`). The obligations: each node's `ok`, and the effects (the two loads,
 then the store of node 6 at node 7) run: the store's check passes on the writable buffer `out`
@@ -71,13 +78,14 @@ then the store of node 6 at node 7) run: the store's check passes on the writabl
 (`Exit.target_br`).
 
 D (blocks `%30` and `%31`). No nodes; the one obligation `mem []` runs (`SEff.foldlM_nil_ex`); `%30`
-exits by `br 31`. `%31`'s exit (`ret`) is not part of `Walk`.
+exits by `br 31`. `%31`'s exit (`ret`) is not part of `WalkWith`.
 
-E (the twin, `vadd_walk_launch_open`, MojoProofTest/Obl.lean). With `hkn : ¬ Below k n` and
-`Below` irreducible, step B's `omega` has no fact on `k < n`, so the exit of `%4` stays open: the
-logged goal is `Exit.target (Valuation.entry c 0 m f) (vals (Valuation.entry c 0 m f)
+E (the twin, `vadd_walk_open`, MojoProofTest/Obl.lean). With `hkn : ¬ Below (L.index k .x) n`
+and `Below` irreducible, step B's `omega` has no fact on the index, so the exit of `%4` stays open:
+the logged goal is `Exit.dest (Valuation.entry c 0 m f) (vals (Valuation.entry c 0 m f)
 Kernels.vadd.b0.nodes) Kernels.vadd.b0.exit = some 22` (checked by `#guard_msgs`). After
-`unfold Below at hkn`, `mojo_obl` closes it.
+`unfold Below Launch.index at hkn`, `mojo_obl` closes it. `vadd_walk_launch_open` is its corollary
+on 1-D launches, with `hkn : ¬ Below k n`.
 
 ## Why the buffers must fit
 
@@ -89,8 +97,9 @@ they are used.
 
 ## Heartbeats
 
-`vadd_walk_launch` takes 42,217 heartbeats (Mathlib's `#count_heartbeats in`, in a scratch file),
-of the default 200,000; no option is set.
+`vadd_walk_launch` took 42,217 heartbeats (Mathlib's `#count_heartbeats in`, in a scratch file),
+of the default 200,000, when mojo_obl proved it directly; `vadd_walk` runs the same mojo_obl calls
+after unfolding `Launch.index` (not measured again), and no option is set.
 
 ## The naive matrix product (`MojoProofTest/OblMatmul.lean`)
 
@@ -267,8 +276,8 @@ moved by `Mem.Buffer.of_block`, `Mem.Fits.of_block` or `Mem.Holds.of_block`. (Si
    `M₀`'s blocks (the kernel checks `M.blocks = M₀.blocks`). A buffer fact at `V.mem` is its
    hypothesis at `M₀` moved by the block lemma (`Mem.blocks_keep`).
 3. `Elem` and `Elem.Only` at `V.mem` are their hypotheses at `M₀`, carried through each logged
-   access to a block other than the output block, read only (`Elem.log_read`,
-   `Elem.Only.log_other`): `omega` proves the access's block other than `out`, from the
+   access to a block other than the output block, for `Elem` a read that is not an
+   `atomicrmw`'s (`Elem.log_read`, `Elem.Only.log_other`): `omega` proves the access's block other than `out`, from the
    hypotheses (for the naive kernel `At.ne`: `bA ≠ bC`, `bB ≠ bC`).
 4. A goal that is a structure of propositions, such as `Mat.Head`, is proved field by field: the
    function (`Obl.fnOf`), registers (`Inv.reg`, a hypothesis with the same left side first), their
@@ -278,7 +287,10 @@ Then `head_in` and `round_in` proved the invariant's memory facts and registers 
 after the `obl_have` that names the registers and memory the rest of the proof uses, with no hand
 memory step; their statements stayed. Now the `mat … inv` clause proves `Mat.Head` at the loop
 head by `mojo_inv` and `naive.kept` gives the registers the loop keeps, so `head_in` and
-`round_in` use mojo_inv only for `%48`'s `fmul contract` operands.
+`round_in` use mojo_inv only for `%48`'s `fmul contract` operands. Since the family
+`NaiveFam.prog sA sB sC` (MojoProofTest/Family.lean), `head_in`, `round_in` and `exit_in` are
+`head_inF`, `round_inF` and `exit_inF` of MojoProofTest/NaiveFamRun.lean at the corpus strides,
+and those call mojo_inv as described here, at every row stride.
 `exit_in`'s path stores the accumulator into the thread's cell; mojo_inv's store rule gives `Elem`
 after one more thread and `Elem.Only` on the memory of the store's run (`SEff.apply`, or a block's
 run of one effect by `SEff.run_one`): `Elem.apply_store` and `Elem.Only.apply`, the statement from

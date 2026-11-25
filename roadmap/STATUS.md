@@ -27,10 +27,10 @@ roadmap/README.md describes the cards and the levels.
 
 | Area | Cards | L0 | L1 | L2 | L3 | L4 |
 |---|---|---|---|---|---|---|
-| [Floats](floats/README.md) | 6 | 0 | 3 | 0 | 3 | 0 |
+| [Floats](floats/README.md) | 7 | 0 | 4 | 0 | 3 | 0 |
 | [The GPU model](gpu-model/README.md) | 9 | 0 | 8 | 0 | 1 | 0 |
 | [Kernels](kernels/README.md) | 13 | 9 | 0 | 0 | 0 | 4 |
-| [Layout laws](layout/README.md) | 15 | 1 | 14 | 0 | 0 | 0 |
+| [Layout laws](layout/README.md) | 15 | 0 | 15 | 0 | 0 | 0 |
 | [LLVM IR constructs](llvm-ir/README.md) | 64 | 8 | 36 | 0 | 20 | 0 |
 | [std.math functions the corpus kernels call](std-math/README.md) | 3 | 0 | 3 | 0 | 0 | 0 |
 
@@ -45,6 +45,7 @@ Records of GPU runs the cards cite: 4.
 | [binary-op-rounding](floats/cards/binary-op-rounding.md): the rounding of fadd, fsub, fmul and fdiv, to nearest even in the operation's format | construct | L3 | - | - | top level | 13 |
 | [contract](floats/cards/contract.md): contract, the fast-math flag that lets fmul and fadd fuse into one rounding | construct | L3 | - | - | top level | 14 |
 | [deliver](floats/cards/deliver.md): deliver, the result of a floating-point operation as a word, NaNs from the oracle | construct | L3 | - | - | top level | 0 |
+| [ex2-approx](floats/cards/ex2-approx.md): ex2.approx.ftz.f32, the approximate base-2 exponential of Mojo's float32 exp | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [maxnum-minnum](floats/cards/maxnum-minnum.md): llvm.maxnum and llvm.minnum, the floating-point maximum and minimum | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [nan-payloads](floats/cards/nan-payloads.md): NaN payloads, which NaN a floating-point operation may return | construct | L1 | L3 evidence present | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [rsqrt-approx](floats/cards/rsqrt-approx.md): rsqrt.approx.ftz.f32, the approximate reciprocal square root | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 34 |
@@ -103,7 +104,7 @@ Records of GPU runs the cards cite: 4.
 | [reverse-transpose](layout/cards/reverse-transpose.md): `reverse` and `transpose` reverse the shape and the stride | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [row-major-views](layout/cards/row-major-views.md): `TileTensor.as_span`, `reshape` and `coalesce` need row-major contiguous strides | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [swizzle](layout/cards/swizzle.md): `Swizzle` is `x ^ ((x & mask) >> shift)` and needs `abs(shift) >= bits` | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
-| [two-level-swizzle](layout/cards/two-level-swizzle.md): `two_level_layout_from_swizzle` evaluates to `Swizzle(L(x))` | construct | L0 | - | - | L1 needs a Lean model | 0 |
+| [two-level-swizzle](layout/cards/two-level-swizzle.md): `two_level_layout_from_swizzle` evaluates to `Swizzle(L(x))` | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [upcast](layout/cards/upcast.md): `upcast` divides strides and shapes by the factor with `shape_div` | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 | [zipped-divide](layout/cards/zipped-divide.md): `zipped_divide` splits a layout into tile and number-of-tiles modes | construct | L1 | - | - | L2 needs a recorded GPU run (a conformance test, not a proof) | 0 |
 

@@ -11,9 +11,11 @@ itself is proved sound.
 |---|---|
 | `MojoProof/Sym/Term.lean` | symbolic values: the node table (`SVal`, `SNode`), their values (`vals`), memory effects (`SEff`), obligations (`Cond`) |
 | `MojoProof/Sym/Checker.lean` | the checker: `summarize`, `Summary`, `covers`, `coversTo` |
-| `MojoProof/Sym/Block.lean` | its soundness: `Block.sound`, `Block.soundC`, the pointer facts |
+| `MojoProof/Sym/Rel.lean` | the relation `Rel` of the checker's state to a frame and a memory, its lemmas, the terminator's step (`SState.exitAt_sound`) and the pointer facts' definitions |
+| `MojoProof/Sym/Block.lean` | its soundness: `SState.stmt_sound`, `Block.sound`, `Block.soundC`, the pointer facts |
+| `MojoProof/Sym/Exec.lean` | the statements `exec` runs (`exec_bin` to `exec_minmax`) and the shape of the memory the effects make (`SEff.run_shape`) |
 | `MojoProof/Sym/Segment.lean` | segments that end at a barrier or a warp shuffle: `summarizeTo`, `SegSummary`, `Seg.sound`, `Seg.through`; or at a lifetime marker: `summarizeLife`, `Seg.lifetime`, `Seg.lifetime_ptr` |
-| `MojoProof/Sym/Path.lean` | along a path: `coversPath`, `coversPathI`, `Walk`, `WalkI`, edges into blocks with `phi`s, returns |
+| `MojoProof/Sym/Path.lean` | along a path: `coversPathWith`, `WalkWith`, edges into blocks with `phi`s, returns |
 | `MojoProof/Sym/Loop.lean` | loops: `Block.sound_loop`, invariants, sequences of loops and nested loops |
 | `MojoProof/Sym/PtrMem.lean` | the memory premises of a path from a labelling's memory hypothesis |
 | `MojoProofTest/Sym.lean`, `SymRun.lean`, `SymPhi.lean`, `SymLoop.lean` | tests |
@@ -41,8 +43,12 @@ The nodes are:
 - integer operators with their width;
 - integer `icmp`;
 - `trunc`, `zext` and `sext`;
-- `extractvalue`;
-- `getelementptr` with one index;
+- `extractvalue`, and `insertvalue` (`insert is a b`, the value `b` put into `a` at indices
+  `is`);
+- `extractelement` and `insertelement` at position `pc` of block `lbl` (`eltAt lbl pc a i` and
+  `insEltAt lbl pc a e i`, whose vector type the statement gives);
+- `getelementptr` with one index (`gep lbl pc base i`), and with any other number of indices on a
+  base that is not a global (`gepN lbl pc base is`);
 - `load` from the entry memory;
 - float operators with their flags and the step whose oracle numbers they read
   (`fbin op fm ft n a b`, `n` steps after the block entry);
@@ -103,28 +109,33 @@ again, so a wrong summary from `sym_summary` is refused rather than trusted.
 
 The fragment the checker accepts:
 
-- instructions: `bin`; scalar integer `icmp`; `trunc`, `zext`, `sext`; the other casts that
-  `castV` evaluates (`castOk`, which is `castV`'s cases by `castOk_iff`; `SNode.castAt`,
-  `exec_cast`), so not `fptoui`, `fptosi` or `inttoptr`; `extractvalue`;
+- instructions: `bin`; scalar integer `icmp`; `trunc`, `zext`, `sext`; the other casts that `castV`
+  evaluates (`castOk`, which is `castV`'s cases by `castOk_iff`; `SNode.castAt`, `exec_cast`), so
+  not `fptoui`, `fptosi` or `inttoptr`; `extractvalue`; `insertvalue`, `extractelement` and
+  `insertelement` (`SNode.insert`, `SNode.eltAt`, `SNode.insEltAt`; into a `zeroinitializer`,
+  `undef` or `poison`, two nodes: `SNode.constAt` for the constant, then the insertion into it);
   `getelementptr` with one index (on a global, two nodes: the global's pointer, `SNode.globalAt`,
-  then the `getelementptr` on it); `load` and `store` (on a global, the global's pointer,
-  `SNode.globalAt` at the pointer operand, then the `load` or `store` on that node); float
-  operators except `fmul contract`
-  (`fadd contract` may fuse with its product, which the frame records and the summary of
+  then the `getelementptr` on it) and with any other number of indices on a base that is not a
+  global (`SNode.gepN`); `load` and `store` (on a global, the global's pointer, `SNode.globalAt` at
+  the pointer operand, then the `load` or `store` on that node); float operators except `fmul
+  contract` (`fadd contract` may fuse with its product, which the frame records and the summary of
   `covers` does not model; the checker `coversC` admits it, below); `select` of integers
   (`SNode.select`); calls of a special register or of the lane number (a declaration that
   `P.intrinsics` names `sreg r d` or `laneid`, called with no arguments and no fast-math flags,
-  whose attributes `Func.check` accepts; `exec_sreg`, `exec_laneid`); calls of an integer
-  maximum or minimum (`llvm.smax`, `llvm.smin`, `llvm.umax`, `llvm.umin`: a declaration that
-  `P.intrinsics` names `minmax signed max t`, called with two arguments, no fast-math flags and
-  no parameter, return or call-site attributes, whose attributes `Func.check` accepts;
-  `SNode.minmax`);
-- operands: registers and integer constants, and a global as a `getelementptr`'s base;
+  whose attributes `Func.check` accepts; `exec_sreg`, `exec_laneid`); calls of an integer maximum or
+  minimum (`llvm.smax`, `llvm.smin`, `llvm.umax`, `llvm.umin`: a declaration that `P.intrinsics`
+  names `minmax signed max t`, called with two arguments, no fast-math flags and no parameter,
+  return or call-site attributes, whose attributes `Func.check` accepts; `SNode.minmax`);
+- operands: registers and integer constants, a global as a one-index `getelementptr`'s base or a
+  `load`'s or `store`'s pointer, and a `zeroinitializer`, `undef` or `poison` as the aggregate
+  or vector an `insertvalue` or `insertelement` inserts into, or as the value a `store` through
+  a pointer that is not a global stores;
 - order: `getelementptr`, `icmp`, `ptrtoint` and the calls of a special register or the lane
-  number only before the block's first `store`, since their terms read the entry memory, which a
-  store changes; a `load` after it is `SNode.loadAfter` (on a global, on the global's
-  `SNode.globalAt` node), with the effects before it, whose operands are nodes before it
-  (`SEff.before`, so they run on its table as on the final one, `SEff.run_before`);
+  number read only the entry memory's blocks' addresses and sizes, which a `store` keeps
+  (`SEff.run_shape`), so they are taken after a store too; a `load` after a `store` is
+  `SNode.loadAfter` (on a global, on the global's `SNode.globalAt` node), with the effects before
+  it, whose operands are nodes before it (`SEff.before`, so they run on its table as on the final
+  one, `SEff.run_before`);
 - terminators: `br`, `br i1` and `ret void`. On an edge into blocks with `phi`s, each `phi`'s
   operand for the edge must be a register, an integer constant or a float constant, and its
   obligation is that the operand evaluates (`SState.phiConds`).
@@ -152,24 +163,24 @@ faults then does not refuse the block.
 
 A path is a list of entries `(l, ds, S)`: a block's label, its conditions and its summary.
 
-- `coversPath P fn p0 ps` checks the first block from position `p0`, and each later one from
-  position 0, with `covers`.
-- `coversPathI P fn p0 ps` is the same for edges into blocks with `phi`s. Each later block is
-  checked from the position its edge enters at (`Exit.pc`: after the `phi`s), and each block but
-  the last by `covers` or by `coversTo` for the edge into the next block.
-- `Walk V ps` is a path's premise: each block's conditions hold under its entry valuation and
-  table, and each block's exit goes to the next block (`Exit.target`). `WalkI` is the same with
-  `Exit.dest`, where a `br i1`'s condition picks the target, and `Valuation.into`, the entry
-  valuation after the edge, with the `phi`s set.
-- `Walk` and `WalkI` are decidable (`Walk.dec`, `WalkI.dec`), so `decide +kernel` decides them on
-  concrete valuations.
+- `coversPathWith contract P fn p0 ps` checks the first block from position `p0`, and each later
+  one from the position its edge enters at (`Exit.pc`: after the `phi`s of a block with `phi`s,
+  else 0), each block but the last by `covers` or by `coversTo` for the edge into the next block
+  (their `coversWith` forms with the flag; `contract = false` without `fmul contract`).
+- `WalkWith contract V ps` is a path's premise: each block's conditions hold under its entry
+  valuation and table, and each block's exit goes to the next block (`Exit.dest`, where a `br i1`
+  into blocks with `phi`s picks the target by its condition, and `Exit.target` on other exits).
+  Each block after the first is entered at `Valuation.intoWith contract`, the valuation after the
+  edge, with the `phi`s set.
+- `WalkWith` is decidable (`WalkWith.dec`), so `decide +kernel` decides it on concrete
+  valuations.
 
 ## What it proves
 
 Every theorem below is proved once, for every program, function, block, position, conditions
 and summary (or path) that the checker accepts. Those about a block or a path are about one
 thread's steps, and their premises are that the conditions hold under the thread's entry
-valuation (`hds`, `Walk`, `WalkI`). The
+valuation (`hds`, `WalkWith`). The
 checker's run is a per-kernel computation (`covers … = true` by `decide +kernel`). The premises
 are per thread: a test that proves them by `decide +kernel` covers the contexts, memories and
 frames it names. A proof for every thread needs them proved symbolically.
@@ -189,16 +200,18 @@ and a memory `me` such that, for `k' := t.k + S.len`:
 - the terminator's step is `S.exit.next`, which succeeds.
 
 The proof is in the module docstring of `MojoProof/Sym/Block.lean`. In short, the relation `Rel`
-says a symbolic state describes a frame and a memory. `SState.stmt_sound` shows each statement of
-the fragment keeps it, `SState.run_sound` extends that to the statement list, and
-`SState.exitAt_sound` covers the terminator.
+(`MojoProof/Sym/Rel.lean`) says a symbolic state describes a frame and a memory.
+`SState.stmt_sound` shows each statement of the fragment keeps it, `SState.run_sound` extends
+that to the statement list, and `SState.exitAt_sound` (`MojoProof/Sym/Rel.lean`) covers the
+terminator.
 
 `Block.sound_ptrs` concludes `Ends` and the pointer facts `Ptrs` as well: the thread's steps
 reach the statement of each `load` node and each `store` effect, and there the statement's
 pointer operand, evaluated in the thread's scope, is the summary term's pointer value
-(`docs/proofs/ptrs.md`). `Block.sound_with` is `Block.sound` for any exit function whose exit is
-the terminator's step when its obligations hold, and for either value of the flag `contract`
-(concluding `EndsWith contract`, which is `Ends` without it). `Block.sound_to` is `Block.sound` for
+(`docs/proofs/ptrs.md`). `Block.sound_withAt` is `Block.sound` for any exit function whose exit
+is the terminator's step when its obligations hold, and for either value of the flags `alloca`
+and `contract` (concluding `EndsAt contract`, which is `EndsWith contract` with the flag `alloca`
+off, by `EndsAt.ends`, and `Ends` without either flag). `Block.sound_to` is `Block.sound` for
 `coversTo`, when the exit goes to `d₀`.
 
 `coversC` is `covers` with `fmul contract` in the fragment: a float operator's node records the
@@ -206,10 +219,10 @@ the terminator's step when its obligations hold, and for either value of the fla
 `EndsC`, which is `Ends` with the frame's products at the block's end given by the table
 (`regProdIn`: for a register the block sets, the values of its node's operand terms).
 `Ends.edgeC` is `Ends.edge` from `EndsC`, entering the next block at `Valuation.intoC`
-(`Valuation.into` with the table's products). `Block.sound_pathC` takes a path that `coversPathI`
-accepts, then one block that `coversC` accepts. The path and loop checkers take the same flag
-(`coversPathWith`, `WalkWith`, `RoundWith`, `ChainWith`, `coversChainsWith`), and the path and
-loop theorems are proved once for both values (`docs/proofs/contract.md`).
+(`Valuation.into` with the table's products). `Block.sound_pathC` takes a path that
+`coversPathWith false` accepts, then one block that `coversC` accepts. The path and loop checkers
+take the same flag (`coversPathWith`, `WalkWith`, `RoundWith`, `ChainWith`, `coversChainsWith`), and
+the path and loop theorems are proved once for both values (`docs/proofs/contract.md`).
 
 ### Segments that end at a collective (`MojoProof/Sym/Segment.lean`)
 
@@ -222,8 +235,10 @@ term evaluates. `Seg.sound`, for every program: from the entry valuation of a fr
 meets the obligations, the thread's steps reach `p1` with the summary's registers and memory, and
 the step there is the `.wait` of the collective on the arguments' values (`Waits`). The resumed
 thread is at `p1 + 1` with the same function and block (`Thread.resume_at`; `Seg.resume`, from
-the summary's collective and length, the steps to the `.wait` and the resumed frame), where the
-next segment starts (`summarizeTo` again, or `summarize` and `Block.sound` for the last one).
+the summary's collective and length, the steps to the `.wait` and the resumed frame), and has at
+every register but the call's result the summary's value (`Thread.resume_regs`,
+`Seg.resume_regs`), where the next segment starts (`summarizeTo` again, or `summarize` and
+`Block.sound` for the last one).
 `summarizeSegs P fn lbl p0 ps` gives the summaries of all of a block's segments, with the
 collective calls at the positions `ps`, and the summary of the rest; `Seg.through`, for every
 program, runs them in a row on one thread (`Seg.Through`), each wait followed by the resume with
@@ -246,47 +261,47 @@ pointer into a block the thread owns and for `poison`. The marker's parameter ma
 - `Ends.edge`: from `Ends` at `(V, l, S)` with `Exit.dest = some d`, the exit's step takes the
   thread into a frame of `V.fn` at block `d`'s position `Exit.pc`, with entry valuation
   `V.into l S`.
-- `Block.sound_pathI`: `coversPathI` and `WalkI` give `Ends` of the path's last block from its
-  entry valuation (`Valuation.lastI`). `Block.sound_path` is its corollary for `coversPath` and
-  `Walk`.
-- `Block.sound_retR`: for a last block that ends in `ret void`, under any list of caller frames,
-  the thread's steps reach the `ret` on the memory the last block's effects make. The next step
-  is `.done` without a caller, else a return to the caller at the position after its call; the
-  frame's `alloca` blocks are dead either way. With one frame (`rest = []`) it is the `.done`
-  case, and `Block.sound_ret` is its one-frame corollary for `coversPath` and `Walk`.
+- `Block.sound_pathWith_ptrs`: `coversPathWith contract` and `WalkWith contract` give
+  `EndsWith contract` (`Ends` without the flag) of the path's last block from its entry valuation
+  (`Valuation.lastWith contract`), and the pointer facts of every block of the path.
+- `Block.sound_retWith`: for a last block that ends in `ret void`, under any list of caller
+  frames, the thread's steps reach the `ret` on the memory the last block's effects make. The next
+  step is `.done` without a caller, else a return to the caller at the position after its call;
+  the frame's `alloca` blocks are dead either way. With one frame (`rest = []`) it is the `.done`
+  case.
 - `Block.sound_back`: with a caller frame `g`, if `covers` accepts `g`'s block from `g.pc + 1` and
   its conditions hold after the return, the caller's block ends (`Ends`) too
   (`docs/proofs/back.md`).
-- `Block.sound_pathMem` (`MojoProof/Sym/PtrMem.lean`): along a path that `coversPathI` and
-  `pathOk` accept, `Labels.MemNext` at every state the thread's steps reach gives the memory
+- `Block.sound_pathMem` (`MojoProof/Sym/PtrMem.lean`): along a path that `coversPathWith false`
+  and `pathOk` accept, `Labels.MemNext` at every state the thread's steps reach gives the memory
   premises `Valuation.PathMem` of the two-run theorem. `Labels.MemOk.steps` gives `Labels.MemNext`
   at every state that a running thread's steps reach, in every grid reachable from a grid that
   meets `Labels.MemOk`.
 
 ### To the kernel theorem
 
-`Runs.of_ret` (`MojoProof/Sym/Kernel.lean`) turns a path that `coversPathI` accepts and that is a
-`Ret` to `Q` (its premises hold, its last block returns, its effects run to a memory of `Q`) into
-the thread's run to its end (`Runs`). `Kernel.sound_of_paths` takes a list of paths that
+`Runs.of_ret` (`MojoProof/Sym/Kernel.lean`) turns a path that `coversPathWith false` accepts and
+that is a `Ret` to `Q` (its premises hold, its last block returns, its effects run to a memory of
+`Q`) into the thread's run to its end (`Runs`). `Kernel.sound_of_paths` takes a list of paths that
 `coversEntry` accepts (each from the kernel's first block) and an invariant on the memory, indexed
-by the number of threads done. Each thread must take one of the paths as a `Ret` from the
-invariant at `k` threads to the invariant at `k + 1`. From these and the premises it states, it
-concludes `Kernel.Sound` for every launch, arguments, memory, admission and observation.
-`Kernel.sound_of_chains` is the same with, for each thread, a path or a sequence of loops
-(`RetLs`, through `Runs.of_chains`), and `Kernel.sound_of_paths` is its case without loops.
-`mojo_kernel` enumerates a kernel's paths, and with one `loop` clause per loop its sequence of
-loops, and generates these theorems (`docs/kernel.md`).
+by the number of threads done. Each thread must take one of the paths as a `Ret` from the invariant
+at `k` threads to the invariant at `k + 1`. From these and the premises it states, it concludes
+`Kernel.Sound` for every launch, arguments, memory, admission and observation.
+`Kernel.sound_of_chains` is the same with, for each thread, a path or a sequence of loops (`RetLs`,
+through `Runs.of_chainsWith`), and `Kernel.sound_of_paths` is its case without loops. `mojo_kernel`
+enumerates a kernel's paths, and with one `loop` clause per loop its sequence of loops, and
+generates these theorems (`docs/kernel.md`).
 
 ## Loops: what is automated and what is not
 
 A loop is a path `(h, ds, S) :: B` from its header `h`, entered at position `p` (after its
 `phi`s), through the body to the latch, whose exit goes back to `h`. `Valuation.round` is the
 header's valuation after one round. `Round` is the decidable premise of one round: the loop path's
-`WalkI`, and its last exit goes to `h` at position `p`. The theorems (`MojoProof/Sym/Loop.lean`)
-are proved once, for every program, function, path, list of loops, nesting, trip count and
-invariant, and for blocks with and without `fmul contract`: each takes a flag `contract`, and
-with `contract = true` reads `coversPathWith true`, `RoundWith true`, `Valuation.roundWith true`
-and `ChainWith true` for the names below (`docs/proofs/contract.md`).
+`WalkWith false`, and its last exit goes to `h` at position `p`. The theorems
+(`MojoProof/Sym/Loop.lean`) are proved once, for every program, function, path, list of loops,
+nesting, trip count and invariant, and for blocks with and without `fmul contract`: each takes a
+flag `contract`, and with `contract = true` reads `coversPathWith true`, `RoundWith true`,
+`Valuation.roundWith true` and `ChainWith true` for the names below (`docs/proofs/contract.md`).
 
 - `Block.sound_loop`: if `Round` holds at the `i`-th round's valuation for every `i < n`, the
   thread's steps reach `h`'s position `p` again, with the `n`-th round's valuation.
@@ -296,18 +311,19 @@ and `ChainWith true` for the names below (`docs/proofs/contract.md`).
   `ret` runs to its end (`Runs`), from `RetL`. `RetL` says: the entry path goes to the header, an
   invariant holds at round 0 and is preserved, and at the trip count it gives `Ret` of the exit
   path.
-- `Runs.of_chain`: the same through a list of loops in sequence, each of whose rounds may run
-  nested loops (`LoopSeg`), from the inductive premise `Chain`.
-- `Runs.of_loops`, `Runs.of_chains`: the same for the threads `Grid.start` makes, with the paths
-  checked by the closed Booleans `coversLoops` and `coversChains`.
+- `Runs.of_chainWith`: the same through a list of loops in sequence, each of whose rounds may run
+  nested loops (`LoopSeg`), from the inductive premise `ChainWith` (`ChainWith false` without the
+  flag).
+- `Runs.of_loops`, `Runs.of_chainsWith`: the same for the threads `Grid.start` makes, with the
+  paths checked by the closed Booleans `coversLoops` and `coversChains`.
 
 What is automated:
 
 - the checks of every path of the loops (`coversChain`, `coversChains`, `coversLoops`): closed
   Booleans that the kernel evaluates;
-- on a concrete valuation and trip count, the premises of the rounds: `Chain.of_rounds` (a loop
-  with no nested loop) and `Chain.of_iter` (a loop given by a round function) turn them into
-  closed propositions that `decide +kernel` decides;
+- on a concrete valuation and trip count, the premises of the rounds: `ChainWith.of_rounds` (a
+  loop with no nested loop) and `ChainWith.of_iter` (a loop given by a round function) turn them
+  into closed propositions that `decide +kernel` decides;
 - `backEdges fn` and `cutPoints fn` list a function's back edges and loop headers, which
   `#mojo_info` prints.
 
@@ -376,9 +392,9 @@ What is not automated:
    hold under the thread's entry valuation. On a concrete context, memory and frame,
    `decide +kernel` proves it (`vadd21_hds`, `MojoProofTest/SymRun.lean`). For every thread it
    needs a symbolic proof.
-5. For a path, list its entries, check them with `coversPathI` by `decide +kernel`, and apply
-   `Block.sound_pathI` or `Block.sound_retR` with `WalkI` (`vadd_paths` and `vadd_ret` in
-   `MojoProofTest/Sym.lean`).
+5. For a path, list its entries, check them with `coversPathWith false` by `decide +kernel`, and
+   apply `Block.sound_pathWith_ptrs` or `Block.sound_retWith` with `WalkWith false` (`vadd_paths`
+   and `vadd_ret` in `MojoProofTest/Sym.lean`).
 6. For a loop-free kernel, `mojo_kernel` summarizes every block, enumerates and checks the paths
    from the entry, and adds `Kernel.sound_of_paths` at them with the premises that remain. With
    the clause `map2`, for a binary elementwise kernel, it also proves the kernel theorem for every
@@ -394,7 +410,8 @@ What is not automated:
   relabelled atom in the table, reordered effects, another exit, a moved call node, a fast-math
   flag on a special-register call). The paths `%4 → %21 → %31` and `%4 → %30 → %31` are accepted
   (`vadd_paths`), with two twin paths refused. `vadd_ret` takes either path to the `ret` for every
-  context of the kernel and thread with one frame at `%4` whose path premises (`Walk`) hold.
+  context of the kernel and thread with one frame at `%4` whose path premises (`WalkWith false`)
+  hold.
 - `MojoProofTest/SymRun.lean`: the premises on concrete runs. These are a context, a memory with
   four-cell inputs and output, and a frame per thread `i < 4`. `vadd21_cell` and `vadd_cell` show
   that output cell `i` holds FloatLib's binary32 sum of the inputs' cells. The twins fail on an

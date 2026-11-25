@@ -1,5 +1,9 @@
 # The repository
 
+- `GPUProof/`: the core, definitions for every machine with no front end, importing only Mathlib
+  and FloatLib: the one-run theorem (`OneRun.lean`), the signature (`Sig.lean`), races and
+  happens-before (`Race.lean`), runs and `Clean` (`Run.lean`), and confluence along a surjection
+  (`Transfer.lean`).
 - `MojoProof/LLVM/`: the LLVM IR syntax, lexer, parser and printer, the intrinsic table, the
   `mojo_import` and `mojo_corpus` commands, and a mutation harness.
 - `MojoProof/Sem/`: the semantics (values, memory, floats, threads, launches) and what a kernel

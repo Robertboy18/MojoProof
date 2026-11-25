@@ -13,8 +13,8 @@ Families: the PTX special registers `%tid`, `%ntid`, `%ctaid`, `%nctaid` (x, y, 
 the block barrier; warp shuffles; integer `smax`/`smin`/`umax`/`umin` and float `maxnum`/`minnum`
 on scalars and vectors; `rsqrt.approx.ftz.f`; lifetime markers; `vector.reduce.and`,
 `vector.extract`, `stepvector`; grid dependency control; `cp.async` commit and wait; `ldmatrix`
-`m8n8.x4`; and the tensor-core `mma` for every shape and input type whose register counts the
-PTX rules determine.
+`m8n8.x4`; and the tensor-core `mma` at the shapes and input types of `Mma.table`, those the
+PTX ISA lists whose names the importer decodes.
 
 This module defines data and executable checks; it proves nothing.
 -/
@@ -115,12 +115,22 @@ def Mma.regs (v : Mma) : Nat × Nat × Nat :=
   let rb := v.ab.regBits
   (v.m * v.k * v.ab.bits / (32 * rb), v.k * v.n * v.ab.bits / (32 * rb), v.m * v.n / 32)
 
-/-- The shape is one whose fragments divide evenly among the 32 lanes. -/
-def Mma.ok (v : Mma) : Bool :=
-  let rb := v.ab.regBits
-  v.suffix.isSome && v.m * v.k * v.ab.bits % (32 * rb) == 0 &&
-    v.k * v.n * v.ab.bits % (32 * rb) == 0 && v.m * v.n % 32 == 0 && v.regs.1 > 0 &&
-    v.regs.2.1 > 0 && v.regs.2.2 > 0
+/-- The shapes and types of `mma` the importer accepts: those the PTX ISA lists for
+`mma.sync.aligned` (version 9.5, section 9.7.16.5.14, the syntax of `.m8n8k4`, `.m16n8k4`,
+`.m16n8k8` and `.m16n8k16`) with an input type and accumulator the names decode
+(`Mma.ofName?`): f16 inputs with f32 accumulators at `m16n8k8` and `m16n8k16`; tf32 at
+`m16n8k4` and `m16n8k8`; bf16 at `m16n8k8` and `m16n8k16`; f64 at `m8n8k4`, `m16n8k4`,
+`m16n8k8` and `m16n8k16`. The ISA also lists `m8n8k4` with f16 inputs, whose fragments are the
+quad pairs' (section 9.7.16.5.1) and do not have `Mma.regs`' register counts; it is not in the
+table. -/
+def Mma.table : List Mma :=
+  [⟨16, 8, 8, .f16, .float⟩, ⟨16, 8, 16, .f16, .float⟩, ⟨16, 8, 4, .tf32, .float⟩,
+    ⟨16, 8, 8, .tf32, .float⟩, ⟨16, 8, 8, .bf16, .float⟩, ⟨16, 8, 16, .bf16, .float⟩,
+    ⟨8, 8, 4, .f64, .double⟩, ⟨16, 8, 4, .f64, .double⟩, ⟨16, 8, 8, .f64, .double⟩,
+    ⟨16, 8, 16, .f64, .double⟩]
+
+/-- The `mma` is one the importer accepts: it is in `Mma.table`. -/
+def Mma.ok (v : Mma) : Bool := Mma.table.contains v
 
 /-- A letter followed by a decimal number, at the front of `cs`. -/
 private def tagged (c : Char) : List Char → Option (Nat × List Char)

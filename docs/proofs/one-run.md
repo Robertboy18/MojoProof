@@ -1,6 +1,6 @@
 # The one-run theorem (`Confluent.one_run`)
 
-Lean: `MojoProof/Sem/OneRun.lean`.
+Lean: `GPUProof/OneRun.lean`.
 
 **Scope.** Every type `α`, step relation `r`, relation `e` and set `Bad`. Nothing here is about kernels.
 It is Newman's random descent with an equivalence and a bad set (van Oostrom and Toyama, FSCD 2016); not
@@ -76,6 +76,8 @@ normal, the path `reach` gives has no step, so `z' = g`. (4) is `reach`.
 
 ## Instances
 
-`Grid.sound_one` (states are the grids reachable from one thread; `e` is `=`; `Bad` is a fault, a race or a
-broken `!invariant.load` promise) and `Grid.sound_returning` (states are the sets of returned threads; `Bad`
-is empty). Both go through the adapter (`adapter.md`).
+Outside GPUProof/OneRun.lean its one caller is `GPUProof.Clean.of_lift` (GPUProof/Sound.lean), for every
+machine; `Sound.of_lift`, `Sound.of_one_run` and MojoProof's `Grid.sound_of_one_run` (the adapter,
+`adapter.md`) are its cases. The adapter's instances are `Grid.start_sound` (states are the grids
+reachable from a start grid; `e` is `Grid.Same`; `Bad` is a fault, a race or a broken `!invariant.load`
+promise) and `Grid.sound_returning` (states are the sets of returned threads; `e` is `=`; `Bad` is empty).

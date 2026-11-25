@@ -68,10 +68,10 @@ The results:
   the second loop's exit returns. `cnt2C`: the two loops after the entry block (`LoopChain`,
   `loop1`, `loop2`); `cnt2_covers`: `coversChains` accepts them.
   - `cnt2_retLs`: `RetLs` of the two loops at `frame2`'s entry valuation (bound `%n = 2`, `%p` and
-    `%s` at the two blocks of `out3`), each loop by `Chain.of_rounds` with trip count 2; its
+    `%s` at the two blocks of `out3`), each loop by `ChainWith.of_rounds` with trip count 2; its
     premises, and the cells of the memory the `ret` leaves (`run_ok`), by `decide +kernel`.
-  - `cnt2_run`: `Runs.of_chains` with `cnt2_covers` and `cnt2_retLs`. The thread runs to its end,
-    and cells 0 and 1 of both blocks hold 0 and 1 in the memory it leaves.
+  - `cnt2_run`: `Runs.of_chainsWith` with `cnt2_covers` and `cnt2_retLs`. The thread runs to its
+    end, and cells 0 and 1 of both blocks hold 0 and 1 in the memory it leaves.
   - `cnt2_twins`: the first loop alone (`RetLs` of `[loop1]`) does not run to `ret`, for every
     predicate and valuation, since its path out ends at the second header; and `coversChains`
     refuses the second loop's path from its header's position 0, its `phi`.
@@ -84,10 +84,10 @@ The results:
   - `nest_rounds`: the premises of the outer loop's two rounds from `hdrT`, each with the inner
     loop's two rounds, by `decide +kernel`.
   - `nest_retLs`: `RetLs` of the nested loops at `frameT`'s entry valuation (`%n = 2`, `%p` at
-    `out2`'s block), the outer loop by `Chain.of_iter` with the round function `outerT` and trip
-    count 2, each round's inner loop by `Chain.of_rounds`.
-  - `nest_run`: `Runs.of_chains` with `nest_covers` and `nest_retLs`. The thread runs to its end,
-    and cells 0 and 1 hold 1 in the memory it leaves.
+    `out2`'s block), the outer loop by `ChainWith.of_iter` with the round function `outerT` and
+    trip count 2, each round's inner loop by `ChainWith.of_rounds`.
+  - `nest_run`: `Runs.of_chainsWith` with `nest_covers` and `nest_retLs`. The thread runs to its
+    end, and cells 0 and 1 hold 1 in the memory it leaves.
   - `nest_twins`: without its nested loop the outer loop does not run to `ret` from `frameT`'s
     entry valuation, for every predicate; and `coversChains` refuses the inner loop's paths from
     its header's position 0.
@@ -391,7 +391,7 @@ theorem invN_step {c : Ctx} (hP : c.prog = cntP) {n b : Nat} (hn : n ≤ 2 ^ 60)
   · rw [hH]
     delta cntH
     simp [Exit.dest, Exit.target, SVal.eval, hslt, Val.ofBool]
-  · rw [hdr_into]
+  · rw [show W.intoWith false 1 cntH = W.after cntH from hdr_into W]
     intro d hd
     delta cntB at hd
     simp only [List.mem_cons, List.mem_nil_iff, or_false] at hd
@@ -427,10 +427,11 @@ theorem invN_step {c : Ctx} (hP : c.prog = cntP) {n b : Nat} (hn : n ≤ 2 ^ 60)
 exit path's premises hold (the header's comparison `n < n` is false), its last exit is `ret`, and
 its memory has `j` in cell `j` for every `j < n`. -/
 theorem invN_exit {c : Ctx} {n b : Nat} (hn : n ≤ 2 ^ 60) {W : Valuation} (h : invN c n b n W) :
-    WalkI W ((1, cntH.obls, cntH) :: exitC) ∧ (W.lastI 1 cntH exitC).2.2.exit = .ret ∧
-      ∃ me, SEff.run (W.lastI 1 cntH exitC).1
-          (vals (W.lastI 1 cntH exitC).1 (W.lastI 1 cntH exitC).2.2.nodes)
-          (W.lastI 1 cntH exitC).2.2.effs = .ok me ∧
+    WalkWith false W ((1, cntH.obls, cntH) :: exitC) ∧
+      (W.lastWith false 1 cntH exitC).2.2.exit = .ret ∧
+      ∃ me, SEff.run (W.lastWith false 1 cntH exitC).1
+          (vals (W.lastWith false 1 cntH exitC).1 (W.lastWith false 1 cntH exitC).2.2.nodes)
+          (W.lastWith false 1 cntH exitC).2.2.effs = .ok me ∧
         ∀ j < n, me.load cntP.layout c.who 1 (.int 64) ⟨b, 8 * j⟩ (some 8) =
           .ok (.bits 64 (BitVec.ofNat 64 j)) := by
   obtain ⟨-, -, h4, h7, -, hm⟩ := h
@@ -457,12 +458,12 @@ header's entry valuation (`%i = 0`). -/
 theorem invN_entry {c : Ctx} {n b k : Nat} {m : Mem} {f : Frame} (hfn : f.fn = cnt)
     (h7 : f.regs 7 = some (.bits 64 (BitVec.ofNat 64 n))) (h8 : f.regs 8 = some (.ptr ⟨b, 0⟩))
     (hm : Cells c.who n b 0 m) :
-    WalkI (Valuation.entry c k m f) [(0, cntE.obls, cntE)] ∧
-      ((Valuation.entry c k m f).lastI 0 cntE []).2.2.exit.dest
-        ((Valuation.entry c k m f).lastI 0 cntE []).1
-        (vals ((Valuation.entry c k m f).lastI 0 cntE []).1
-          ((Valuation.entry c k m f).lastI 0 cntE []).2.2.nodes) = some 1 ∧
-      ((Valuation.entry c k m f).lastI 0 cntE []).2.2.exit.pc cnt 1 = 1 ∧
+    WalkWith false (Valuation.entry c k m f) [(0, cntE.obls, cntE)] ∧
+      ((Valuation.entry c k m f).lastWith false 0 cntE []).2.2.exit.dest
+        ((Valuation.entry c k m f).lastWith false 0 cntE []).1
+        (vals ((Valuation.entry c k m f).lastWith false 0 cntE []).1
+          ((Valuation.entry c k m f).lastWith false 0 cntE []).2.2.nodes) = some 1 ∧
+      ((Valuation.entry c k m f).lastWith false 0 cntE []).2.2.exit.pc cnt 1 = 1 ∧
       invN c n b 0 (Valuation.round 0 cntE [] (Valuation.entry c k m f)) := by
   have hE := Valuation.into_of_enter (V := Valuation.entry c k m f) (l := 0) (S := cntE) rfl rfl
     (cnt_enter (F := (Valuation.entry c k m f).frameAt 0 cntE) hfn (.inl ⟨rfl, rfl⟩)
@@ -500,8 +501,9 @@ theorem cnt_retL {c : Ctx} (hP : c.prog = cntP) {n b k : Nat} (hn : n ≤ 2 ^ 60
         .ok (.bits 64 (BitVec.ofNat 64 j))) cntL := by
   obtain ⟨hW, hd, hpc, h0⟩ := invN_entry (k := k) hfn h7 h8 hm
   rw [← show (Valuation.entry c k m f).fn = cnt from hfn] at hpc
-  exact Chain.loop (invN c n b) n ⟨hW, hd, hpc⟩ h0
-    (fun i hi W hW => Chain.last (invN_step hP hn hi hW)) fun W hW => Chain.last (invN_exit hn hW)
+  exact ChainWith.loop (contract := false) (invN c n b) n ⟨hW, hd, hpc⟩ h0
+    (fun i hi W hW => ChainWith.last (invN_step hP hn hi hW))
+    fun W hW => ChainWith.last (invN_exit hn hW)
 
 /-- **The counting loop for every trip count.** For every context `c` of `cntP`, bound
 `n ≤ 2 ^ 60`, block `b`, memory `m` of `Cells c.who n b 0` (room for `n` cells), and thread `t`
@@ -538,7 +540,7 @@ checker refuses the loop path from the header's position 0, its `phi`. -/
 theorem cnt_twins :
     ¬ Round 1 1 cntH.obls cntH bodyC ((Valuation.round 1 cntH bodyC)^[3] (hdrC 3)) ∧
     ¬ Round 1 1 cntH.obls cntH bodyC ((Valuation.round 1 cntH bodyC)^[3] (hdrC 4)) ∧
-    coversPathI cntP cnt 0 ((1, cntH.obls, cntH) :: bodyC) = false := by
+    coversPathWith false cntP cnt 0 ((1, cntH.obls, cntH) :: bodyC) = false := by
   decide +kernel
 
 /-- **The invariant twin**: `badC 3` holds at round 0, but it is not preserved, so `Runs.of_loop`'s
@@ -654,22 +656,23 @@ theorem run_ok {Q : Mem → Prop} [DecidablePred Q] {r : Except Fault Mem}
   | ok me => exact ⟨me, rfl, of_decide_eq_true h⟩
 
 /-- The run of the two loops from `frame2`'s entry valuation to `ret` (`RetLs`), each loop with
-no nested loop by `Chain.of_rounds` (the invariant: the iterates of its header's entry
+no nested loop by `ChainWith.of_rounds` (the invariant: the iterates of its header's entry
 valuation) and trip count 2: the premises of the entry, of each round and of each path out are
 evaluated by the kernel, and so are the cells of the memory the `ret` leaves (`run_ok`). -/
 theorem cnt2_retLs : RetLs (fun me => ∀ j < 2, cell2 me out2.2 j = some j ∧
     cell2 me out3.2 j = some j) [loop1, loop2] (Valuation.entry ctx2 0 out3.1 frame2) 0
     cntE.obls cntE [] :=
-  Chain.of_rounds (by rfl) 2 (by decide +kernel) (Chain.of_rounds (by rfl) 2 (by decide +kernel)
-    (Chain.last (by refine ⟨?_, ?_, run_ok ?_⟩ <;> decide +kernel)))
+  ChainWith.of_rounds (contract := false) (by rfl) 2 (by decide +kernel)
+    (ChainWith.of_rounds (by rfl) 2 (by decide +kernel)
+      (ChainWith.last (by refine ⟨?_, ?_, run_ok ?_⟩ <;> decide +kernel)))
 
-/-- **Two loops in sequence** (`Runs.of_chains` with `cnt2_covers` and `cnt2_retLs`): the thread
+/-- **Two loops in sequence** (`Runs.of_chainsWith` with `cnt2_covers` and `cnt2_retLs`): the thread
 whose one frame is `frame2` runs on `out3`'s memory to its end, and in the memory it leaves cells
 0 and 1 of both blocks hold 0 and 1. -/
 theorem cnt2_run : ∃ m', Runs ctx2 ⟨[frame2], 0⟩ out3.1 m' ∧
     ∀ j < 2, cell2 m' out2.2 j = some j ∧ cell2 m' out3.2 j = some j :=
-  Runs.of_chains (P := cnt2P) (c := ctx2) (t := ⟨[frame2], 0⟩) (f := frame2) rfl cnt2_covers
-    rfl rfl rfl rfl rfl ⟨cnt2C, List.mem_singleton.2 rfl, cnt2_retLs⟩
+  Runs.of_chainsWith (contract := false) (P := cnt2P) (c := ctx2) (t := ⟨[frame2], 0⟩)
+    (f := frame2) rfl cnt2_covers rfl rfl rfl rfl rfl ⟨cnt2C, List.mem_singleton.2 rfl, cnt2_retLs⟩
 
 /-- **The twins.** The first loop alone does not run to `ret`, for every predicate and valuation:
 its path out ends at block `3`, whose exit goes to the second header (the invariant holds at the
@@ -687,7 +690,7 @@ theorem cnt2_twins :
     | succ i ih =>
       intro hi
       obtain ⟨W, hW⟩ := ih (by omega)
-      have h1 : Chain _ [] _ _ _ _ _ := hr i (by omega) W hW
+      have h1 : ChainWith false _ [] _ _ _ _ _ := hr i (by omega) W hW
       cases h1 with
       | last h =>
         obtain ⟨-, hJ⟩ := h
@@ -799,22 +802,22 @@ theorem nest_rounds : ∀ i < 2,
   decide +kernel
 
 /-- The run of the nested loops from `frameT`'s entry valuation to `ret` (`RetLs`): the outer
-loop by `Chain.of_iter` with round function `outerT` and trip count 2, each of its rounds by
-`Chain.of_rounds` on the inner loop with trip count 2 (`nest_rounds`), and the outer path out to
+loop by `ChainWith.of_iter` with round function `outerT` and trip count 2, each of its rounds by
+`ChainWith.of_rounds` on the inner loop with trip count 2 (`nest_rounds`), and the outer path out to
 `ret` with the cells of the memory it leaves (`run_ok`), by `decide +kernel`. -/
 theorem nest_retLs : RetLs (fun me => ∀ j < 2, cell2 me out2.2 j = some 1) [loopI]
     (Valuation.entry ctxT 0 out2.1 frameT) 0 cntE.obls cntE [] :=
-  Chain.of_iter outerT 2 (by decide +kernel)
-    (fun i hi => Chain.of_rounds (L := loopJ) (by rfl) 2 (nest_rounds i hi).1
-      (Chain.last ⟨(nest_rounds i hi).2, rfl⟩))
-    (Chain.last (by refine ⟨?_, ?_, run_ok ?_⟩ <;> decide +kernel))
+  ChainWith.of_iter (contract := false) outerT 2 (by decide +kernel)
+    (fun i hi => ChainWith.of_rounds (L := loopJ) (by rfl) 2 (nest_rounds i hi).1
+      (ChainWith.last ⟨(nest_rounds i hi).2, rfl⟩))
+    (ChainWith.last (by refine ⟨?_, ?_, run_ok ?_⟩ <;> decide +kernel))
 
-/-- **Two nested loops** (`Runs.of_chains` with `nest_covers` and `nest_retLs`): the thread whose
-one frame is `frameT` runs on `out2`'s memory to its end, and in the memory it leaves cells 0
-and 1 hold 1, the outer counter's last value. -/
+/-- **Two nested loops** (`Runs.of_chainsWith` with `nest_covers` and `nest_retLs`): the thread
+whose one frame is `frameT` runs on `out2`'s memory to its end, and in the memory it leaves cells
+0 and 1 hold 1, the outer counter's last value. -/
 theorem nest_run : ∃ m', Runs ctxT ⟨[frameT], 0⟩ out2.1 m' ∧ ∀ j < 2, cell2 m' out2.2 j = some 1 :=
-  Runs.of_chains (P := nestP) (c := ctxT) (t := ⟨[frameT], 0⟩) (f := frameT) rfl nest_covers
-    rfl rfl rfl rfl rfl ⟨nestC, List.mem_singleton.2 rfl, nest_retLs⟩
+  Runs.of_chainsWith (contract := false) (P := nestP) (c := ctxT) (t := ⟨[frameT], 0⟩)
+    (f := frameT) rfl nest_covers rfl rfl rfl rfl rfl ⟨nestC, List.mem_singleton.2 rfl, nest_retLs⟩
 
 /-- **The twins.** Without its nested loop, the outer loop does not run to `ret` from
 `frameT`'s entry valuation, for every predicate: with trip count 0 the outer path out fails at
@@ -835,7 +838,7 @@ theorem nest_twins :
       obtain ⟨hW, -⟩ := h
       exact absurd hW (by decide +kernel)
   | succ n =>
-    have h1 : Chain _ [] _ _ _ _ _ := hr 0 (Nat.zero_lt_succ n) _ h0
+    have h1 : ChainWith false _ [] _ _ _ _ _ := hr 0 (Nat.zero_lt_succ n) _ h0
     cases h1 with
     | last h =>
       obtain ⟨hE, -⟩ := h

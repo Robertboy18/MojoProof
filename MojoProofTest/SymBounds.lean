@@ -86,7 +86,7 @@ theorem vadd_index_1d {L : Launch} (hL : L.Valid) (hg : L.grid .y = 1 ∧ L.grid
 /-- **The twin**: on the launch of one block of 1 × 2 threads (side 2 in `y`), thread 1 has
 `tid.x = 0`, so its index is 0, not 1. -/
 theorem vadd_index_1d_twin :
-    let L : Launch := ⟨fun _ => 1, fun | .y => 2 | _ => 1, 0⟩
+    let L := launch2 1 1 1 2
     (idx (sreg L 1 .ctaid) (sreg L 1 .ntid) (sreg L 1 .tid)).toInt = 0 := by
   decide
 

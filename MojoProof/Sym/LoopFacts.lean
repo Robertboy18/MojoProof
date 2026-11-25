@@ -15,11 +15,11 @@ summaries that the kernel evaluates and its soundness:
   (`Valuation.iterate_regs_keep`).
 * Memory: `LoopSeg.loadsFrom F L rs` checks that the loop path keeps the registers `rs` and that
   its blocks' effects are loads through pointers with their base in `rs` (`Summary.loadsIn`,
-  `SVal.baseIn`); `Valuation.iterate_loads`: every property of memories that logging a read of a
-  block of a set `Q` keeps holds after any number of rounds when the values of `rs` name only
-  blocks of `Q`. Its instances: `Valuation.iterate_blocks` (the blocks and the next block number,
-  so `Mem.Buffer`, `Mem.Fits` and `Mem.Holds` by `Mem.Buffer.of_block`, `Mem.Fits.of_block` and
-  `Mem.Holds.of_block`), `Valuation.iterate_elem`
+  `SVal.baseIn`); `Valuation.iterate_loads`: every property of memories that logging a plain read
+  (not an `atomicrmw`'s) of a block of a set `Q` keeps holds after any number of rounds when the
+  values of `rs` name only blocks of `Q`. Its instances: `Valuation.iterate_blocks` (the blocks
+  and the next block number, so `Mem.Buffer`, `Mem.Fits` and `Mem.Holds` by
+  `Mem.Buffer.of_block`, `Mem.Fits.of_block` and `Mem.Holds.of_block`), `Valuation.iterate_elem`
   (`Elem` at an output block `o` that the values of `rs` do not name) and
   `Valuation.iterate_only` (`Elem.Only` at `o`).
 * Step counts: `pathOff S ps i`, the steps from a path's entry to the entry of its block `i`, and
@@ -44,13 +44,15 @@ def SVal.reads : SVal → List Nat
   | .reg r => [r]
   | .int .. | .node _ => []
 
-/-- The registers effect `e`'s operands read (`SVal.reads`). -/
+/-- The registers effect `e`'s operands read (`SVal.reads`), an `alloca`'s count included. -/
 def SEff.reads : SEff → List Nat
   | .load _ _ p => p.reads
   | .store _ _ v p => v.reads ++ p.reads
+  | .alloca _ _ _ c => c.elim [] SVal.reads
 
 /-- The registers node `n`'s operands read (`SVal.reads`), the `fmul contract` operand terms of
-an `fbinP` and the effects a `loadAfter` carries (`SEff.reads`) included. -/
+an `fbinP` and the effects a `loadAfter` or another node after an `alloca` carries (`SEff.reads`)
+included. -/
 def SNode.reads : SNode → List Nat
   | .bin _ _ _ a b | .icmp _ _ a b | .gep _ _ a b | .fbin _ _ _ _ a b | .minmax _ _ a b =>
     a.reads ++ b.reads
@@ -58,8 +60,14 @@ def SNode.reads : SNode → List Nat
   | .select _ c a b => c.reads ++ a.reads ++ b.reads
   | .fbinP _ _ _ _ a b pa pb => a.reads ++ b.reads ++
     pa.elim [] (fun p => p.1.reads ++ p.2.reads) ++ pb.elim [] (fun p => p.1.reads ++ p.2.reads)
-  | .call .. | .flit .. | .globalAt .. => []
+  | .call .. | .flit .. | .globalAt .. | .constAt .. | .fresh .. => []
+  | .insert _ a b | .eltAt _ _ a b => a.reads ++ b.reads
+  | .insEltAt _ _ a e i => a.reads ++ e.reads ++ i.reads
   | .loadAfter _ _ p es => p.reads ++ es.flatMap SEff.reads
+  | .gepN _ _ a is => a.reads ++ is.flatMap SVal.reads
+  | .icmpAfter _ _ a b es | .gepAfter _ _ a b es => a.reads ++ b.reads ++ es.flatMap SEff.reads
+  | .castAfter _ _ _ a es => a.reads ++ es.flatMap SEff.reads
+  | .gepNAfter _ _ a is es => a.reads ++ is.flatMap SVal.reads ++ es.flatMap SEff.reads
 
 /-- The registers obligation `d`'s operands read (`SVal.reads`). -/
 def Cond.reads : Cond → List Nat
@@ -104,11 +112,11 @@ theorem LoopSeg.kept_round {c : Bool} {F : Func} {L : LoopSeg} {r : Nat} (hr : r
 /-! ## The memory of rounds that only read -/
 
 /-- Whether summary `S`'s effects are all loads through pointers with their base in registers
-`rs` (`SVal.baseIn` on `S`'s nodes): a summary with no store. -/
+`rs` (`SVal.baseIn` on `S`'s nodes): a summary with no store and no `alloca`. -/
 def Summary.loadsIn (rs : List Nat) (S : Summary) : Bool :=
   S.effs.all fun
     | .load _ _ p => p.baseIn S.nodes rs
-    | .store .. => false
+    | .store .. | .alloca .. => false
 
 /-- Whether the loop path `L.H :: L.B` of loop `L` of function `F` reads memory only through
 registers `rs` that it keeps: it keeps each register of `rs` (`Func.keeps`), and each block's
@@ -121,14 +129,16 @@ def LoopSeg.loadsFrom (F : Func) (L : LoopSeg) (rs : List Nat) : Bool :=
 /-- **Rounds that only read keep the properties reads keep**: for every flag `c`, function `F`,
 loop `L` and registers `rs` that its loop path keeps and reads memory through only
 (`LoopSeg.loadsFrom`), set of blocks `Q`, property `P` of memories that logging a
-read (`a.write = false`) of a block of `Q` keeps, valuation `V` of `F` whose registers `rs` have
-values naming only blocks of `Q`, with `P` at its memory, and count `i`: `P` holds at the memory
-after `i` rounds. Each load's pointer has its base in `rs` (`SVal.eval_baseIn`), so it reads a
-block of `Q`; the registers keep their values (`Valuation.iterate_regs_keep`), and an edge
-keeps the memory. For every program and every loop (with nested loops, its loop path alone). -/
+read that is not an `atomicrmw`'s (`a.write = false`, `a.atomic = none`) of a block of `Q` keeps,
+valuation `V` of `F` whose registers `rs` have values naming only blocks of `Q`, with `P` at its
+memory, and count `i`: `P` holds at the memory after `i` rounds. Each load's pointer has its
+base in `rs` (`SVal.eval_baseIn`), so it reads a block of `Q`; the registers keep their values
+(`Valuation.iterate_regs_keep`), and an edge keeps the memory. For every program and every loop
+(with nested loops, its loop path alone). -/
 theorem Valuation.iterate_loads {c : Bool} {F : Func} {L : LoopSeg} {rs : List Nat}
     {Q : Nat → Prop} {P : Mem → Prop} (hL : L.loadsFrom F rs = true)
-    (hP : ∀ m (a : Access), P m → a.write = false → Q a.ptr.block → P (m.log (.access a)))
+    (hP : ∀ m (a : Access), P m → a.write = false → a.atomic = none → Q a.ptr.block →
+      P (m.log (.access a)))
     {V : Valuation} (hF : V.fn = F) (hr : ∀ r ∈ rs, ∃ v, V.regs r = some v ∧ v.NamesIn Q)
     (hm : P V.mem) (i : Nat) : P ((Valuation.roundWith c L.h L.H L.B)^[i] V).mem := by
   simp only [LoopSeg.loadsFrom, Bool.and_eq_true, List.all_eq_true] at hL
@@ -167,7 +177,7 @@ theorem Valuation.iterate_loads {c : Bool} {F : Func} {L : LoopSeg} {rs : List N
         refine ih (fun e' he' => hes e' (List.mem_cons_of_mem _ he')) m1 m ?_ h2
         have he' := hT e (hes e (by simp))
         cases e with
-        | store => simp at he'
+        | store | alloca => simp at he'
         | load lbl pc p =>
           rw [SEff.apply] at h1
           split at h1
@@ -179,7 +189,7 @@ theorem Valuation.iterate_loads {c : Bool} {F : Func} {L : LoopSeg} {rs : List N
               revert hq
               cases x <;> simp [Val.addr?, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
             subst hxq
-            exact hP _ _ h0 rfl (SVal.eval_baseIn hr' he' hx)
+            exact hP _ _ h0 rfl rfl (SVal.eval_baseIn hr' he' hx)
           · simp [throw, throwThe, MonadExceptOf.throw] at h1
     show P ((SEff.run W (vals W T.nodes) T.effs).toOption.getD W.mem)
     cases hrun : SEff.run W (vals W T.nodes) T.effs with
@@ -246,7 +256,7 @@ theorem Valuation.iterate_blocks {c : Bool} {F : Func} {L : LoopSeg} {rs : List 
     ((Valuation.roundWith c L.h L.H L.B)^[i] V).mem.blocks = V.mem.blocks ∧
       ((Valuation.roundWith c L.h L.H L.B)^[i] V).mem.next = V.mem.next :=
   Valuation.iterate_loads (Q := fun _ => True)
-    (P := fun m => m.blocks = V.mem.blocks ∧ m.next = V.mem.next) hL (fun _ _ h _ _ => h) hF
+    (P := fun m => m.blocks = V.mem.blocks ∧ m.next = V.mem.next) hL (fun _ _ h _ _ _ => h) hF
     (fun r hr' => by
       obtain ⟨v, hv⟩ := Option.isSome_iff_exists.1 (hr r hr')
       exact ⟨v, hv, Val.NamesIn.mono (fun _ _ => trivial) (Val.namesIn_bound v)⟩)
@@ -265,7 +275,7 @@ theorem Valuation.iterate_elem {c : Bool} {F : Func} {L : LoopSeg} {rs : List Na
     (hm : Elem m₀ out w cell bs n V.mem) (i : Nat) :
     Elem m₀ out w cell bs n ((Valuation.roundWith c L.h L.H L.B)^[i] V).mem :=
   Valuation.iterate_loads (Q := (· ≠ out)) (P := Elem m₀ out w cell bs n) hL
-    (fun _ _ hm hw hq => hm.log_read hq hw) hF hr hm i
+    (fun _ _ hm hw hx hq => hm.log_read hq hw hx) hF hr hm i
 
 /-- **Rounds that only read keep `Elem.Only`** at an output block `out` that the values of the
 registers they read through do not name: for every flag, function, loop, registers its loop
@@ -279,7 +289,7 @@ theorem Valuation.iterate_only {c : Bool} {F : Func} {L : LoopSeg} {rs : List Na
     (hm : Elem.Only out T V.mem) (i : Nat) :
     Elem.Only out T ((Valuation.roundWith c L.h L.H L.B)^[i] V).mem :=
   Valuation.iterate_loads (Q := (· ≠ out)) (P := Elem.Only out T) hL
-    (fun _ _ hm _ hq => hm.log_other hq) hF hr hm i
+    (fun _ _ hm _ _ hq => hm.log_other hq) hF hr hm i
 
 /-! ## Step counts -/
 

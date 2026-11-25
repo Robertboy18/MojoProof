@@ -16,12 +16,21 @@ builds, for every input that meets each law's premises:
   when the tile divides the shape;
 * `Lay.blockedProduct_call`: the product's offset is the block's offset plus the block's size
   times the tiler's offset;
-* `Lay.upcast_call` and `Lay.upcast_modes`: on strides that are positive multiples of the factor,
-  upcast divides every offset and every stride by the factor and keeps the extents;
+* `Lay.upcast_scale` and `Lay.upcast_fuse`: on positive strides that are multiples or divisors
+  of the factor, `f` times the upcast offset of a coordinate is the layout's offset of the
+  coordinate with each divisor stride's leaf multiplied by `f / stride`; a multiple stride is
+  divided by the factor and a divisor stride becomes 1, its extent divided by `f / stride`;
+  `Lay.upcast_call` and `Lay.upcast_modes` are the case of multiples only;
 * `Lay.call_flat_ofNat`: the offset computed in `w`-bit arithmetic is the offset mod `2 ^ w`;
-* `Lay.compose_call`: composing a layout with a single mode (one extent, one stride) that meets
-  the divisibility premise `composeDiv` gives every coordinate the layout's offset of the mode's
-  offset, and the composite's size is the mode's extent.
+* `Lay.compose_sum`: composing a layout `A` with a layout `B` whose modes each meet the
+  divisibility premise `composeDiv` keeps `B`'s size and gives a scalar coordinate the sum, over
+  `B`'s modes, of `A`'s offset of that mode's term (digit times stride);
+* `Lay.compose_call`: when those terms' digits against `A`'s extents add without carry
+  (`noCarry`, which a single-mode `B` always meets), the composite's offset of a coordinate is
+  `A`'s offset of `B`'s offset;
+* `Lay.compose_all`: the same at every coordinate of `B` under one premise on `A` and `B`
+  alone, `carryFree`: at each extent of `A`, the largest digits of `B`'s modes' terms add up to
+  less than the extent, and nothing is left above `A`'s last extent.
 -/
 
 namespace MojoProof.Layout
@@ -176,6 +185,26 @@ theorem dotColex_append (A B : List (Nat × Nat)) (j : Nat) :
   simp only [dotColex, List.map_append, colex_append]
   exact sum_zipWith_append _ _ _ _ (by simp [colex_length])
 
+/-- `dotColex` of 0 is 0. -/
+theorem dotColex_zero : ∀ ps : List (Nat × Nat), dotColex ps 0 = 0
+  | [] => rfl
+  | p :: ps => by
+    have := dotColex_zero ps
+    simp only [dotColex] at this ⊢
+    simp [colex, this]
+
+/-- `dotColex` depends only on the index mod the product of the extents. For every `j`. -/
+theorem dotColex_mod (ps : List (Nat × Nat)) (j : Nat) :
+    dotColex ps (j % (ps.map Prod.fst).prod) = dotColex ps j := by
+  simp only [dotColex, colex_mod]
+
+/-- The modes of a flat layout are its (extent, stride) pairs. -/
+theorem Lay.modes_flat (ps : List (Nat × Nat)) : (Lay.flat ps).modes = ps := by
+  simp only [Lay.modes, Lay.flat, leavesL_map_leaf]
+  induction ps with
+  | nil => rfl
+  | cons p ps ih => simp [ih]
+
 /-- A coalesce step keeps the product of the extents of the pairs kept so far and the new mode. -/
 theorem coalesceStep_prod (acc : List (Nat × Nat)) (m : Nat × Nat) :
     ((coalesceStep acc m).map Prod.fst).prod = ((acc ++ [m]).map Prod.fst).prod := by
@@ -260,13 +289,7 @@ theorem Lay.coalesce_call (L : Lay) (h : congruentL L.shape L.stride = true) (v 
   rw [(L.modes_size_call h).2 v b hv]
   have := ((Lay.flat (L.modes.foldl coalesceStep [(1, 0)])).modes_size_call
     (Lay.flat_congruent _)).2 v b hv'
-  rw [Lay.coalesce, this]
-  have hm : ∀ ps : List (Nat × Nat), (Lay.flat ps).modes = ps := fun ps => by
-    simp only [Lay.modes, Lay.flat, leavesL_map_leaf]
-    induction ps with
-    | nil => rfl
-    | cons p ps ih => simp [ih]
-  rw [hm, (coalesce_fold L.modes [(1, 0)]).2, dotColex_append]
+  rw [Lay.coalesce, this, Lay.modes_flat, (coalesce_fold L.modes [(1, 0)]).2, dotColex_append]
   simp [dotColex, colex]
 
 /-! ## Zipped divide -/
@@ -444,18 +467,46 @@ theorem shapeDiv_factor (f d : Nat) (h0 : 0 < d) (hf : f ∣ d) :
     simp [Nat.div_self h0]
   · simp [h, Nat.pos_iff_ne_zero.mp h0]
 
-/-- **Upcast divides the offsets** (upcast card): on a flat layout whose strides are positive
-multiples of the factor `f`, upcast divides every stride by `f` (`Lay.upcast_modes`), so `f`
-times the upcast layout's offset of a coordinate (one leaf per mode) is the layout's offset of
-it. For every such layout, factor and coordinate. -/
-theorem Lay.upcast_call (f : Nat) (ms : List (Nat × Nat)) (hd : ∀ m ∈ ms, 0 < m.2 ∧ f ∣ m.2)
-    (c : List Nat) (b : Bool) (hc : c.length = ms.length) :
+/-- For a positive `d` that divides a positive factor `f`, `shape_div(f, d)` is `f / d` and
+`shape_div(d, f)` is 1: the two divisions upcast makes on a mode of stride `d`. -/
+theorem shapeDiv_dvd (f d : Nat) (h0 : 0 < d) (hf : 0 < f) (hd : d ∣ f) :
+    shapeDiv f d = f / d ∧ shapeDiv d f = 1 := by
+  refine ⟨by simp [shapeDiv, Nat.mod_eq_zero_of_dvd hd], ?_⟩
+  have hle : d ≤ f := Nat.le_of_dvd hf hd
+  unfold shapeDiv
+  by_cases h : d % f = 0
+  · have : d = f := Nat.le_antisymm hle (Nat.le_of_dvd h0 (Nat.dvd_of_mod_eq_zero h))
+    subst this; simp [Nat.div_self h0]
+  · simp [h, Nat.pos_iff_ne_zero.mp hf]
+
+/-- On a positive stride `d` that the factor `f` divides or that divides `f`, `f` times the new
+stride `shape_div(d, f)` is `shape_div(f, d)` times `d`. -/
+theorem shapeDiv_mul (f d : Nat) (h0 : 0 < d) (h : f ∣ d ∨ d ∣ f) :
+    f * shapeDiv d f = shapeDiv f d * d := by
+  rcases h with h | h
+  · rw [(shapeDiv_factor f d h0 h).1, (shapeDiv_factor f d h0 h).2, Nat.mul_div_cancel' h,
+      Nat.one_mul]
+  · rcases Nat.eq_zero_or_pos f with rfl | hf
+    · simp [shapeDiv]
+    · rw [(shapeDiv_dvd f d h0 hf h).1, (shapeDiv_dvd f d h0 hf h).2, Nat.mul_one,
+        Nat.div_mul_cancel h]
+
+/-- **Upcast scales the coordinate** (upcast card): on a flat layout whose strides are positive,
+each a multiple of the factor `f` or a divisor of it, `f` times the upcast layout's offset of a
+coordinate `c` (one leaf per mode) is the layout's offset of `c` with each leaf `cₖ` multiplied
+by `shape_div(f, dₖ)`: by 1 on a stride that `f` divides, and by `f / dₖ` on a stride that
+divides `f`, whose `f / dₖ` consecutive elements upcast fuses into one. For every such layout,
+factor and coordinate, with no bound on the coordinate. -/
+theorem Lay.upcast_scale (f : Nat) (ms : List (Nat × Nat))
+    (hd : ∀ m ∈ ms, 0 < m.2 ∧ (f ∣ m.2 ∨ m.2 ∣ f)) (c : List Nat) (b : Bool)
+    (hc : c.length = ms.length) :
     f * (Lay.upcast f (Lay.flat ms)).call (tup (c.map (leaf · b))) =
-      (Lay.flat ms).call (tup (c.map (leaf · b))) := by
+      (Lay.flat ms).call
+        (tup ((List.zipWith (fun x m => x * shapeDiv f m.2) c ms).map (leaf · b))) := by
   rw [Lay.call_leaves _ c (ms.map fun m => shapeDiv m.2 f) b true
       (by simp [Lay.upcast, Lay.flat, value]) (by simp [Lay.upcast, Lay.flat, hc])
       (by simp [Lay.upcast, Lay.flat]),
-    Lay.call_flat _ _ _ hc]
+    Lay.call_flat _ _ _ (by simp [hc])]
   clear hc
   induction ms generalizing c with
   | nil => simp
@@ -463,25 +514,64 @@ theorem Lay.upcast_call (f : Nat) (ms : List (Nat × Nat)) (hd : ∀ m ∈ ms, 0
     rcases c with _ | ⟨x, c⟩
     · simp
     · simp only [List.mem_cons, forall_eq_or_imp] at hd
-      simp only [List.map_cons, List.zipWith_cons_cons, List.sum_cons, Nat.mul_add,
-        (shapeDiv_factor f m.2 hd.1.1 hd.1.2).2]
-      rw [ih hd.2 c, Nat.mul_left_comm, Nat.mul_div_cancel' hd.1.2]
+      simp only [List.map_cons, List.zipWith_cons_cons, List.sum_cons, Nat.mul_add]
+      rw [ih hd.2 c, Nat.mul_left_comm, shapeDiv_mul f m.2 hd.1.1 hd.1.2, ← Nat.mul_assoc]
 
-/-- **Upcast keeps the extents** (upcast card): on a flat layout whose strides are positive
-multiples of the factor `f`, the upcast layout's modes are the extents with the strides divided
-by `f`. For every such layout and factor. -/
-theorem Lay.upcast_modes (f : Nat) : ∀ ms : List (Nat × Nat), (∀ m ∈ ms, 0 < m.2 ∧ f ∣ m.2) →
-    (Lay.upcast f (Lay.flat ms)).modes = ms.map fun m => (m.1, m.2 / f)
+/-- **Upcast divides the offsets** (upcast card): on a flat layout whose strides are positive
+multiples of the factor `f`, `f` times the upcast layout's offset of a coordinate (one leaf per
+mode) is the layout's offset of it: `Lay.upcast_scale`, where every leaf is multiplied by 1. For
+every such layout, factor and coordinate. -/
+theorem Lay.upcast_call (f : Nat) (ms : List (Nat × Nat)) (hd : ∀ m ∈ ms, 0 < m.2 ∧ f ∣ m.2)
+    (c : List Nat) (b : Bool) (hc : c.length = ms.length) :
+    f * (Lay.upcast f (Lay.flat ms)).call (tup (c.map (leaf · b))) =
+      (Lay.flat ms).call (tup (c.map (leaf · b))) := by
+  have hs : List.zipWith (fun x m => x * shapeDiv f m.2) c ms = c := by
+    clear b
+    induction ms generalizing c with
+    | nil => cases c <;> simp_all
+    | cons m ms ih =>
+      cases c with
+      | nil => simp
+      | cons x c =>
+        simp only [List.mem_cons, forall_eq_or_imp] at hd
+        simp [(shapeDiv_factor f m.2 hd.1.1 hd.1.2).1, ih hd.2 c (by simpa using hc)]
+  rw [Lay.upcast_scale f ms (fun m h => ⟨(hd m h).1, Or.inl (hd m h).2⟩) c b hc, hs]
+
+/-- **Upcast's modes** (upcast card): on a flat layout whose strides are positive, each a
+multiple of the factor `f`, or a divisor `dₖ` of a positive `f` with `f / dₖ` dividing the
+extent, upcast keeps the extent and divides the stride by `f` on a multiple of `f`, and divides
+the extent by `f / dₖ` and makes the stride 1 on a divisor of `f`. For every such layout and
+factor; Mojo's docstring example `upcast[2](row_major[4, 8])`, (4, 4):(4, 1), is an instance. -/
+theorem Lay.upcast_fuse (f : Nat) : ∀ ms : List (Nat × Nat),
+    (∀ m ∈ ms, 0 < m.2 ∧ (f ∣ m.2 ∨ 0 < f ∧ m.2 ∣ f ∧ f / m.2 ∣ m.1)) →
+    (Lay.upcast f (Lay.flat ms)).modes =
+      ms.map fun m => if f ∣ m.2 then (m.1, m.2 / f) else (m.1 / (f / m.2), 1)
   | [], _ => rfl
   | m :: ms, hd => by
     simp only [List.mem_cons, forall_eq_or_imp] at hd
-    have ih := Lay.upcast_modes f ms hd.2
-    obtain ⟨e1, e2⟩ := shapeDiv_factor f m.2 hd.1.1 hd.1.2
-    have e3 : shapeDiv m.1 1 = m.1 := by
-      simp only [shapeDiv, Nat.mod_one, or_true, ↓reduceIte, Nat.div_one]
+    have ih := Lay.upcast_fuse f ms hd.2
+    have hm : (shapeDiv m.1 (shapeDiv f m.2), shapeDiv m.2 f) =
+        if f ∣ m.2 then (m.1, m.2 / f) else (m.1 / (f / m.2), 1) := by
+      by_cases h : f ∣ m.2
+      · obtain ⟨e1, e2⟩ := shapeDiv_factor f m.2 hd.1.1 h
+        simp only [e1, e2, h, ↓reduceIte]
+        simp [shapeDiv, Nat.mod_one]
+      · obtain ⟨hf, hdf, hs⟩ := hd.1.2.resolve_left h
+        obtain ⟨e1, e2⟩ := shapeDiv_dvd f m.2 hd.1.1 hf hdf
+        simp only [e1, e2, h, ↓reduceIte]
+        simp [shapeDiv, Nat.mod_eq_zero_of_dvd hs]
     simp only [Lay.upcast, Lay.flat, Lay.modes, List.map_cons, List.zipWith_cons_cons, leavesL,
-      leaves, value, e1, e2, e3, List.singleton_append, List.zip_cons_cons] at ih ⊢
-    rw [ih]
+      leaves, value, List.singleton_append, List.zip_cons_cons] at ih ⊢
+    rw [ih, hm]
+
+/-- **Upcast keeps the extents** (upcast card): on a flat layout whose strides are positive
+multiples of the factor `f`, the upcast layout's modes are the extents with the strides divided
+by `f`: `Lay.upcast_fuse` with every stride a multiple of `f`. For every such layout and
+factor. -/
+theorem Lay.upcast_modes (f : Nat) (ms : List (Nat × Nat)) (hd : ∀ m ∈ ms, 0 < m.2 ∧ f ∣ m.2) :
+    (Lay.upcast f (Lay.flat ms)).modes = ms.map fun m => (m.1, m.2 / f) :=
+  (Lay.upcast_fuse f ms fun m h => ⟨(hd m h).1, Or.inl (hd m h).2⟩).trans
+    (List.map_congr_left fun m h => by simp only [(hd m h).2, ↓reduceIte])
 
 /-! ## The index width -/
 
@@ -608,9 +698,7 @@ theorem composeFold_dot (L : Nat × Nat) : ∀ (M out : List (Nat × Nat)) (e r 
   | [], out, e, r, _, _, j, i, hj, hi, hb => by
     have hP : 0 < (out.map Prod.fst).prod := by omega
     have dm : dotColex out (i + (out.map Prod.fst).prod * j) = dotColex out i := by
-      rw [← (show ∀ x, dotColex out (x % (out.map Prod.fst).prod) = dotColex out x from
-        fun x => by simp only [dotColex, colex_mod]), Nat.add_mul_mod_self_left,
-        Nat.mod_eq_of_lt hi]
+      rw [← dotColex_mod, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hi]
     simp only [List.foldl_nil, List.nil_append] at hb ⊢
     rw [dotColex_append, dm, Nat.add_mul_div_left _ _ hP, Nat.div_eq_of_lt hi, Nat.zero_add]
     simp only [List.map_cons, List.map_nil, List.prod_cons, List.prod_nil, Nat.mul_one] at hb
@@ -621,9 +709,7 @@ theorem composeFold_dot (L : Nat × Nat) : ∀ (M out : List (Nat × Nat)) (e r 
     obtain ⟨hc, hd⟩ := hd
     have hP : 0 < (out.map Prod.fst).prod := by omega
     have dm : ∀ x, dotColex out (i + (out.map Prod.fst).prod * x) = dotColex out i := fun x => by
-      rw [← (show ∀ x, dotColex out (x % (out.map Prod.fst).prod) = dotColex out x from
-        fun x => by simp only [dotColex, colex_mod]), Nat.add_mul_mod_self_left,
-        Nat.mod_eq_of_lt hi]
+      rw [← dotColex_mod, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hi]
     have hX : ((M ++ [L]).map Prod.fst).prod ≠ 0 := by
       rintro h; simp only [List.cons_append, List.map_cons, List.prod_cons, h, Nat.mul_zero] at hb
       omega
@@ -664,10 +750,6 @@ theorem composeFold_dot (L : Nat × Nat) : ∀ (M out : List (Nat × Nat)) (e r 
         have : r * q ≠ 0 := Nat.mul_ne_zero (by omega) (by omega)
         simp [shapeDiv, h1, this]
       rw [hrq] at hq
-      have z : ∀ ps : List (Nat × Nat), dotColex ps 0 = 0 := fun ps => by
-        induction ps with
-        | nil => rfl
-        | cons p ps ih => simp only [dotColex] at ih ⊢; simp [colex, ih]
       by_cases e1 : e = 1
       · subst e1
         have j0 : j = 0 := by omega
@@ -678,7 +760,7 @@ theorem composeFold_dot (L : Nat × Nat) : ∀ (M out : List (Nat × Nat)) (e r 
         have := composeFold_dot L M out 1 1 hd Nat.one_pos 0 i Nat.one_pos hi
           (Nat.pos_of_ne_zero hX)
         simp only [Nat.mul_zero, Nat.add_zero, Nat.zero_mul, Nat.zero_mod, Nat.zero_div] at this ⊢
-        rw [this]; simp [z]
+        rw [this]; simp [dotColex_zero]
       · by_cases eq : e ≤ q
         · have hm : min q e = e := Nat.min_eq_right eq
           have hs : ∀ o, composeStep (r * q, ad) (o, e, r) = (o ++ [(e, r * ad)], 1, 1) :=
@@ -695,12 +777,12 @@ theorem composeFold_dot (L : Nat × Nat) : ∀ (M out : List (Nat × Nat)) (e r 
           have := composeFold_dot L M _ 1 1 hd Nat.one_pos 0 _ Nat.one_pos hlt
             (Nat.pos_of_ne_zero hX)
           simp only [Nat.mul_zero, Nat.add_zero, Nat.zero_mul] at this
-          rw [this, z, dotColex_append, dm, Nat.add_mul_div_left _ _ hP, Nat.div_eq_of_lt hi,
-            Nat.zero_add]
+          rw [this, dotColex_zero, dotColex_append, dm, Nat.add_mul_div_left _ _ hP,
+            Nat.div_eq_of_lt hi, Nat.zero_add]
           have hjq : j * r < r * q := by
             have := Nat.mul_le_mul_right r (show j + 1 ≤ q by omega)
             rw [Nat.add_mul, Nat.one_mul, Nat.mul_comm q r] at this; omega
-          rw [Nat.mod_eq_of_lt hjq, Nat.div_eq_of_lt hjq, z]
+          rw [Nat.mod_eq_of_lt hjq, Nat.div_eq_of_lt hjq, dotColex_zero]
           simp [dotColex, colex, Nat.mod_eq_of_lt hj, Nat.mul_assoc]
         · obtain ⟨t, rfl⟩ := Nat.dvd_of_mod_eq_zero (hq.resolve_left eq)
           have hm : min q (q * t) = q := Nat.min_eq_left (by omega)
@@ -733,14 +815,19 @@ theorem composeFold_dot (L : Nat × Nat) : ∀ (M out : List (Nat × Nat)) (e r 
             Nat.zero_add, Nat.mul_comm r q, Nat.mul_mod_mul_right, Nat.mul_div_mul_right _ _ hr]
           simp [dotColex, colex, Nat.mul_assoc, Nat.add_assoc]
 
-/-- **Composing a single mode** (composition card): for every list `A` of (extent, stride) modes
-and every mode of extent `s > 0` and stride `d > 0` that meets `composeDiv` on the modes of `A`
-but the last, the modes `composeLeaf` returns have the extents' product `s`, and give every index
-`c < s` with `c * d` below the size of `A` the offset that `A` gives `c * d`. -/
-theorem composeLeaf_prod_dot (A : List (Nat × Nat)) (s d : Nat) (hd : 0 < d) (hs : 0 < s)
+/-- **Composing one leaf** (composition card): for every list `A` of (extent, stride) modes and
+every leaf of extent `s > 0` and stride `d` that meets `composeDiv` on the modes of `A` but the
+last, the modes `composeLeaf` returns have the extents' product `s`, and give every index `c < s`
+with `c * d` below the size of `A` the offset that `A` gives `c * d`. A stride 0 meets
+`composeDiv` and composes to the single mode `(s, 0)`. -/
+theorem composeLeaf_prod_dot (A : List (Nat × Nat)) (s d : Nat) (hs : 0 < s)
     (hdiv : composeDiv A.dropLast (s, d) = true) :
     ((composeLeaf A s d).map Prod.fst).prod = s ∧ ∀ c, c < s →
       c * d < (A.map Prod.fst).prod → dotColex (composeLeaf A s d) c = dotColex A (c * d) := by
+  rcases Nat.eq_zero_or_pos d with rfl | hd
+  · refine ⟨by simp [composeLeaf], fun c _ _ => ?_⟩
+    rw [Nat.mul_zero, dotColex_zero]
+    simp [composeLeaf, dotColex, colex]
   rcases List.eq_nil_or_concat A with rfl | ⟨M, L, rfl⟩
   · refine ⟨by simp [composeLeaf, Nat.pos_iff_ne_zero.mp hd], fun c _ hb => ?_⟩
     simp [composeLeaf, Nat.pos_iff_ne_zero.mp hd, dotColex, colex]
@@ -764,42 +851,289 @@ theorem composeLeaf_prod_dot (A : List (Nat × Nat)) (s d : Nat) (hd : 0 < d) (h
         List.zipWith_nil_left, List.sum_cons, List.sum_nil, Nat.mod_one, Nat.zero_mul,
         Nat.add_zero]
 
-/-- **The composition law** (composition card): for every layout `A` whose shape and stride are
-congruent and every single-mode layout `B = (s):(d)` with `s, d > 0` that meets `composeDiv` on
-the flattened modes of `A` but the last, `composition(A, B)` gives every scalar coordinate `c < s`
-the offset that `A` gives `B`'s offset of `c`, when that offset `c * d` is below the size of
-`A`. The size of the composite is `s`. -/
-theorem Lay.compose_call (A : Lay) (hA : congruentL A.shape A.stride = true) (s d : Nat)
-    (hd : 0 < d) (hdiv : composeDiv A.modes.dropLast (s, d) = true) (c : Nat) (b : Bool)
-    (hc : c < s) (hb : c * d < A.size) :
-    (A.compose (Lay.flat [(s, d)])).size = s ∧
-      (A.compose (Lay.flat [(s, d)])).call (leaf c b) =
-        A.call (leaf ((Lay.flat [(s, d)]).call (leaf c b)) b) := by
-  have hm : ∀ ps : List (Nat × Nat), (Lay.flat ps).modes = ps := fun ps => by
-    simp only [Lay.modes, Lay.flat, leavesL_map_leaf]
-    induction ps with
-    | nil => rfl
-    | cons p ps ih => simp [ih]
-  have hB : (Lay.flat [(s, d)]).call (leaf c b) = c * d := by
-    rw [((Lay.flat [(s, d)]).modes_size_call (Lay.flat_congruent _)).2 c b
-      (by rw [Lay.size_flat]; simpa using hc), hm]
-    simp [dotColex, colex, Nat.mod_eq_of_lt hc]
+/-- Composition leaf by leaf, on lists: for the flattened modes `ms` of an inner layout, each
+meeting `composeDiv` on the modes of `A` but the last, and an index `v` below their size whose
+offset `dotColex ms v` is below the size of `A`, the modes that `composeLeaf` gives the leaves,
+concatenated, have the size of `ms` and give `v` the sum over the leaves of `F` of the leaf's
+digit times its stride, for every `F` that agrees with `dotColex A` below the size of `A`. -/
+theorem composeLeaf_flatMap (A : List (Nat × Nat)) (F : Nat → Nat)
+    (hF : ∀ t, t < (A.map Prod.fst).prod → F t = dotColex A t) :
+    ∀ (ms : List (Nat × Nat)) (v : Nat), (∀ m ∈ ms, composeDiv A.dropLast m = true) →
+    v < (ms.map Prod.fst).prod → dotColex ms v < (A.map Prod.fst).prod →
+    ((ms.flatMap fun m => composeLeaf A m.1 m.2).map Prod.fst).prod = (ms.map Prod.fst).prod ∧
+      dotColex (ms.flatMap fun m => composeLeaf A m.1 m.2) v =
+        (List.zipWith (fun x m => F (x * m.2)) (colex v (ms.map Prod.fst)) ms).sum
+  | [], v, _, _, _ => by simp [dotColex, colex]
+  | m :: ms, v, hd, hv, hb => by
+    simp only [List.mem_cons, forall_eq_or_imp] at hd
+    simp only [List.map_cons, List.prod_cons] at hv
+    have hm : 0 < m.1 := Nat.pos_of_ne_zero (by intro h; simp [h] at hv)
+    have hv' : v / m.1 < (ms.map Prod.fst).prod := by
+      rw [Nat.div_lt_iff_lt_mul hm, Nat.mul_comm]; exact hv
+    have hcons : dotColex (m :: ms) v = v % m.1 * m.2 + dotColex ms (v / m.1) := by
+      rw [← List.singleton_append, dotColex_append]; simp [dotColex, colex]
+    rw [hcons] at hb
+    obtain ⟨p1, d1⟩ := composeLeaf_prod_dot A m.1 m.2 hm hd.1
+    obtain ⟨p2, d2⟩ := composeLeaf_flatMap A F hF ms (v / m.1) hd.2 hv' (by omega)
+    simp only [List.flatMap_cons, List.map_append, List.prod_append, p1, p2, List.map_cons,
+      List.prod_cons, true_and]
+    rw [dotColex_append, p1, d2, ← dotColex_mod, p1, d1 _ (Nat.mod_lt _ hm) (by omega),
+      ← hF _ (by omega)]
+    simp [colex]
+
+/-- The composite's flattened modes are the modes that `composeLeaf` gives `B`'s flattened modes,
+leaf by leaf, concatenated, and its shape and stride are congruent. For every `A` and every `B`
+whose shape and stride are congruent, nested or flat. -/
+theorem Lay.compose_modes (A B : Lay) (hB : congruentL B.shape B.stride = true) :
+    (A.compose B).modes = B.modes.flatMap (fun m => composeLeaf A.modes m.1 m.2) ∧
+      congruentL (A.compose B).shape (A.compose B).stride = true := by
+  have key : ∀ ss ds : List Tup, congruentL ss ds = true →
+      (List.zipWith (fun bs bd => ((leaves bs).zip (leaves bd)).flatMap
+        (fun m => composeLeaf A.modes m.1 m.2)) ss ds).flatten =
+        ((leavesL ss).zip (leavesL ds)).flatMap (fun m => composeLeaf A.modes m.1 m.2) := by
+    intro ss
+    induction ss with
+    | nil => intro ds h; cases ds <;> simp_all [congruentL, leavesL]
+    | cons s ss ih =>
+      intro ds h
+      cases ds with
+      | nil => simp [congruentL] at h
+      | cons d ds =>
+        simp only [congruentL, Bool.and_eq_true] at h
+        simp only [List.zipWith_cons_cons, List.flatten_cons, leavesL,
+          List.zip_append (congruent_leaves_length s d h.1), List.flatMap_append, ih ds h.2]
+  have hms : ∀ ms : List (List (Nat × Nat)),
+      (leavesL (ms.map fun m => tup (m.map fun p => leaf p.1 true))).zip
+        (leavesL (ms.map fun m => tup (m.map fun p => leaf p.2 true))) = ms.flatten ∧
+      congruentL (ms.map fun m => tup (m.map fun p => leaf p.1 true))
+        (ms.map fun m => tup (m.map fun p => leaf p.2 true)) = true := by
+    intro ms
+    induction ms with
+    | nil => simp [leavesL, congruentL]
+    | cons m ms ih =>
+      have h1 := Lay.modes_flat m
+      have h2 := Lay.flat_congruent m
+      simp only [Lay.modes, Lay.flat] at h1 h2
+      simp only [List.map_cons, leavesL, leaves, congruentL, congruent, h2, Bool.true_and, ih.2,
+        List.flatten_cons, and_true]
+      rw [List.zip_append (by simp [leavesL_map_leaf]), h1, ih.1]
+  obtain ⟨e1, e2⟩ := hms (List.zipWith (fun bs bd => ((leaves bs).zip (leaves bd)).flatMap
+    (fun m => composeLeaf A.modes m.1 m.2)) B.shape B.stride)
+  exact ⟨e1.trans (key _ _ hB), e2⟩
+
+/-- **Composition, mode by mode** (composition card): for every layout `A` whose shape and stride
+are congruent, every layout `B` whose shape and stride are congruent and whose flattened modes
+each meet `composeDiv` on the flattened modes of `A` but the last, and every scalar coordinate
+`v` below the size of `B` whose offset `B(v)` is below the size of `A`, the composite has the
+size of `B`, and its offset of `v` is the sum over `B`'s flattened modes of `A`'s offset of the
+mode's digit times its stride, the digits being `v`'s colexicographic digits against `B`'s
+extents. For every shape of `A` and `B`, nested or flat. -/
+theorem Lay.compose_sum (A B : Lay) (hA : congruentL A.shape A.stride = true)
+    (hB : congruentL B.shape B.stride = true)
+    (hdiv : ∀ m ∈ B.modes, composeDiv A.modes.dropLast m = true) (v : Nat) (b : Bool)
+    (hv : v < B.size) (hb : B.call (leaf v b) < A.size) :
+    (A.compose B).size = B.size ∧ (A.compose B).call (leaf v b) =
+      (List.zipWith (fun x m => A.call (leaf (x * m.2) b)) (colex v (B.modes.map Prod.fst))
+        B.modes).sum := by
   obtain ⟨hAp, hAc⟩ := A.modes_size_call hA
-  obtain ⟨hXp, hXd⟩ := composeLeaf_prod_dot A.modes s d hd (by omega) hdiv
-  have hR : A.compose (Lay.flat [(s, d)]) =
-      ⟨[tup (Lay.flat (composeLeaf A.modes s d)).shape],
-        [tup (Lay.flat (composeLeaf A.modes s d)).stride]⟩ := by
-    simp [Lay.compose, Lay.flat, leaves]
-  have hRc : congruentL (A.compose (Lay.flat [(s, d)])).shape
-      (A.compose (Lay.flat [(s, d)])).stride = true := by
-    rw [hR]; simp [congruentL, congruent, Lay.flat_congruent]
-  have hRm : (A.compose (Lay.flat [(s, d)])).modes = composeLeaf A.modes s d := by
-    rw [hR]
-    refine Eq.trans ?_ (hm (composeLeaf A.modes s d))
-    simp only [Lay.modes, leavesL, leaves, List.append_nil]
-  obtain ⟨hRp, hRd⟩ := (A.compose (Lay.flat [(s, d)])).modes_size_call hRc
-  rw [hRm, hXp] at hRp
-  refine ⟨hRp.symm, ?_⟩
-  rw [hRd c b (by omega), hRm, hB, hAc _ b hb, hXd c hc (by rw [hAp]; exact hb)]
+  obtain ⟨hBp, hBc⟩ := B.modes_size_call hB
+  obtain ⟨hRm, hRc⟩ := Lay.compose_modes A B hB
+  obtain ⟨hRp, hRd⟩ := (A.compose B).modes_size_call hRc
+  rw [hBc v b hv] at hb
+  obtain ⟨p, d⟩ := composeLeaf_flatMap A.modes (fun t => A.call (leaf t b))
+    (fun t ht => hAc t b (by rw [← hAp]; exact ht)) B.modes v hdiv (by rw [hBp]; exact hv)
+    (by rw [hAp]; exact hb)
+  have hs : (A.compose B).size = B.size := by rw [← hRp, hRm, p, hBp]
+  exact ⟨hs, by rw [hRd v b (by rw [hs]; exact hv), hRm, d]⟩
+
+/-- `noCarry A ts` is `true` when the terms `ts` add without a carry against the extents `A`: at
+each extent `a`, the sum of the terms' digits `t % a` is below `a`, and the same holds for the
+quotients `t / a` against the remaining extents. Then the colexicographic digits of the sum are
+the sums of the terms' digits, and `dotColex` adds over the terms (`dotColex_sum`). -/
+def noCarry : List Nat → List Nat → Bool
+  | [], _ => true
+  | a :: A, ts => decide ((ts.map (· % a)).sum < a) && noCarry A (ts.map (· / a))
+
+/-- A single term never carries against positive extents. -/
+theorem noCarry_one : ∀ (A : List Nat) (t : Nat), (∀ a ∈ A, 0 < a) → noCarry A [t] = true
+  | [], _, _ => rfl
+  | a :: A, t, h => by
+    simp only [List.mem_cons, forall_eq_or_imp] at h
+    simp [noCarry, Nat.mod_lt _ h.1, noCarry_one A (t / a) h.2]
+
+/-- For every `a` and every list of numbers, the sum is `a` times the sum of the quotients by `a`
+plus the sum of the remainders. -/
+theorem sum_divMod (a : Nat) : ∀ us : List Nat,
+    us.sum = a * (us.map (· / a)).sum + (us.map (· % a)).sum
+  | [] => rfl
+  | t :: us => by
+    simp only [List.sum_cons, List.map_cons, Nat.mul_add, sum_divMod a us]
+    have := Nat.div_add_mod t a
+    omega
+
+/-- **A layout adds over terms that do not carry** (composition card): for every list `A` of
+(extent, stride) modes and every list of terms `ts` that `noCarry` accepts against `A`'s
+extents, the offset of the sum of the terms is the sum of their offsets. -/
+theorem dotColex_sum : ∀ (A : List (Nat × Nat)) (ts : List Nat),
+    noCarry (A.map Prod.fst) ts = true → dotColex A ts.sum = (ts.map (dotColex A)).sum
+  | [], ts, _ => by
+    have z : ∀ us : List Nat, (us.map (dotColex [])).sum = 0 := by
+      intro us
+      induction us with
+      | nil => rfl
+      | cons t us ih => simp only [List.map_cons, List.sum_cons, ih]; rfl
+    rw [z]; rfl
+  | (a, e) :: A, ts, h => by
+    simp only [List.map_cons, noCarry, Bool.and_eq_true, decide_eq_true_eq] at h
+    have hcons : ∀ x, dotColex ((a, e) :: A) x = x % a * e + dotColex A (x / a) := fun x => by
+      rw [← List.singleton_append, dotColex_append]; simp [dotColex, colex]
+    have ha : 0 < a := by omega
+    have h1 : ts.sum % a = (ts.map (· % a)).sum := by
+      rw [sum_divMod a ts, Nat.mul_add_mod, Nat.mod_eq_of_lt h.1]
+    have h2 : ts.sum / a = (ts.map (· / a)).sum := by
+      rw [sum_divMod a ts, Nat.mul_add_div ha, Nat.div_eq_of_lt h.1, Nat.add_zero]
+    have hr : ∀ us : List Nat, (us.map (dotColex ((a, e) :: A))).sum =
+        (us.map (· % a)).sum * e + ((us.map (· / a)).map (dotColex A)).sum := by
+      intro us
+      induction us with
+      | nil => simp
+      | cons t us ih => simp only [List.map_cons, List.sum_cons, hcons, ih, Nat.add_mul]; omega
+    rw [hcons, h1, h2, dotColex_sum A _ h.2, hr]
+
+/-- **The composition law** (composition card): for every layout `A` whose shape and stride are
+congruent, every layout `B` whose shape and stride are congruent and whose flattened modes each
+meet `composeDiv` on the flattened modes of `A` but the last, and every scalar coordinate `v`
+below the size of `B` whose offset `B(v)` is below the size of `A` and whose terms (each mode's
+digit times its stride, which add up to `B(v)`) do not carry against `A`'s extents
+(`noCarry`), the composite gives `v` the offset that `A` gives `B(v)`. For every shape of `A`
+and `B`, nested or flat. A `B` of one mode meets `noCarry` at every `v` (`noCarry_one`: `A`'s
+extents are positive, as `B(v) < A.size` requires). Mojo's cosize assert,
+`B.cosize ≤ A.size`, gives `B(v) < A.size`. -/
+theorem Lay.compose_call (A B : Lay) (hA : congruentL A.shape A.stride = true)
+    (hB : congruentL B.shape B.stride = true)
+    (hdiv : ∀ m ∈ B.modes, composeDiv A.modes.dropLast m = true) (v : Nat) (b : Bool)
+    (hv : v < B.size) (hb : B.call (leaf v b) < A.size)
+    (hnc : noCarry (A.modes.map Prod.fst)
+      (List.zipWith (fun x m => x * m.2) (colex v (B.modes.map Prod.fst)) B.modes) = true) :
+    (A.compose B).call (leaf v b) = A.call (leaf (B.call (leaf v b)) b) := by
+  obtain ⟨hAp, hAc⟩ := A.modes_size_call hA
+  obtain ⟨hBp, hBc⟩ := B.modes_size_call hB
+  obtain ⟨hRm, hRc⟩ := Lay.compose_modes A B hB
+  obtain ⟨hRp, hRd⟩ := (A.compose B).modes_size_call hRc
+  rw [hBc v b hv] at hb ⊢
+  obtain ⟨p, d⟩ := composeLeaf_flatMap A.modes (dotColex A.modes) (fun _ _ => rfl) B.modes v
+    hdiv (by rw [hBp]; exact hv) (by rw [hAp]; exact hb)
+  have hs : (A.compose B).size = B.size := by rw [← hRp, hRm, p, hBp]
+  have ht : dotColex B.modes v =
+      (List.zipWith (fun x m => x * m.2) (colex v (B.modes.map Prod.fst)) B.modes).sum := by
+    simp [dotColex, List.zipWith_map_right]
+  rw [hRd v b (by rw [hs]; exact hv), hRm, d, hAc _ b hb, ht, dotColex_sum _ _ hnc,
+    List.map_zipWith]
+
+/-- `carryFree A Ts` is `true` when, at each extent `a` of `A`, the largest remainders `t % a`
+of the lists of `Ts` add up to less than `a`, the same holds for the quotients `t / a` against
+the remaining extents, and after the last extent every quotient is `0`. Then every choice of one
+term from each list adds without carry against `A` and stays below the product of `A`
+(`carryFree_pick`). It costs the total length of `Ts`, not the number of choices. -/
+def carryFree : List Nat → List (List Nat) → Bool
+  | [], Ts => Ts.all (·.all (· == 0))
+  | a :: A, Ts => decide ((Ts.map fun T => (T.map (· % a)).max?.getD 0).sum < a) &&
+      carryFree A (Ts.map (·.map (· / a)))
+
+/-- For every list of extents `A`, every list of lists `Ts` that `carryFree` accepts against
+`A`, and every list `ts` of one term from each list of `Ts` (same length, each term a member of
+its list), the terms do not carry against `A` (`noCarry`) and their sum is below the product
+of `A`. -/
+theorem carryFree_pick : ∀ (A : List Nat) (Ts : List (List Nat)) (ts : List Nat),
+    carryFree A Ts = true → ts.length = Ts.length → (∀ p ∈ ts.zip Ts, p.1 ∈ p.2) →
+    noCarry A ts = true ∧ ts.sum < A.prod
+  | [], Ts, ts, h, hl, hm => by
+    refine ⟨rfl, ?_⟩
+    have z : ∀ (ts : List Nat) (Ts : List (List Nat)), Ts.all (·.all (· == 0)) = true →
+        ts.length = Ts.length → (∀ p ∈ ts.zip Ts, p.1 ∈ p.2) → ts.sum = 0 := by
+      intro ts
+      induction ts with
+      | nil => intros; rfl
+      | cons t ts ih =>
+        intro Ts h hl hm
+        cases Ts with
+        | nil => simp at hl
+        | cons T Ts =>
+          simp only [List.all_cons, Bool.and_eq_true] at h
+          have ht := List.all_eq_true.1 h.1 t (hm (t, T) (by simp))
+          simp only [beq_iff_eq] at ht
+          simp only [List.sum_cons, ht, ih Ts h.2 (by simpa using hl)
+            (fun p hp => hm p (by simp [hp]))]
+    simp [z ts Ts h hl hm]
+  | a :: A, Ts, ts, h, hl, hm => by
+    simp only [carryFree, Bool.and_eq_true, decide_eq_true_eq] at h
+    have hle : ∀ (ts : List Nat) (Ts : List (List Nat)), ts.length = Ts.length →
+        (∀ p ∈ ts.zip Ts, p.1 ∈ p.2) →
+        (ts.map (· % a)).sum ≤ (Ts.map fun T => (T.map (· % a)).max?.getD 0).sum := by
+      intro ts
+      induction ts with
+      | nil => intros; simp
+      | cons t ts ih =>
+        intro Ts hl hm
+        cases Ts with
+        | nil => simp at hl
+        | cons T Ts =>
+          simp only [List.map_cons, List.sum_cons]
+          exact Nat.add_le_add
+            (List.le_max?_getD_of_mem (List.mem_map_of_mem (hm (t, T) (by simp))))
+            (ih Ts (by simpa using hl) (fun p hp => hm p (by simp [hp])))
+    have hr := Nat.lt_of_le_of_lt (hle ts Ts hl hm) h.1
+    obtain ⟨hn, hq⟩ := carryFree_pick A _ (ts.map (· / a)) h.2 (by simpa using hl) (by
+      intro p hp
+      rw [List.zip_map] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.1 hp
+      exact List.mem_map_of_mem (hm q hq))
+    refine ⟨by simp [noCarry, hr, hn], ?_⟩
+    have hP := Nat.mul_le_mul_left a (Nat.succ_le_of_lt hq)
+    rw [sum_divMod a ts, List.prod_cons]
+    rw [Nat.mul_succ] at hP
+    omega
+
+/-- For every list of (extent, stride) modes and every `v` below the product of the extents,
+each term of `v` (its colexicographic digit against the extents times the mode's stride) is a
+multiple of its mode's stride by a number below its mode's extent. -/
+theorem colex_pick : ∀ (ms : List (Nat × Nat)) (v : Nat), v < (ms.map Prod.fst).prod →
+    ∀ p ∈ (List.zipWith (fun x m => x * m.2) (colex v (ms.map Prod.fst)) ms).zip
+      (ms.map fun m => (List.range m.1).map (· * m.2)), p.1 ∈ p.2
+  | [], _, _ => by simp
+  | (s, d) :: ms, v, hv => by
+    simp only [List.map_cons, List.prod_cons] at hv
+    have hs : 0 < s := Nat.pos_of_ne_zero (by rintro rfl; simp at hv)
+    intro p hp
+    simp only [List.map_cons, colex, List.zipWith_cons_cons, List.zip_cons_cons,
+      List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact List.mem_map.2 ⟨v % s, List.mem_range.2 (Nat.mod_lt v hs), rfl⟩
+    · exact colex_pick ms (v / s)
+        ((Nat.div_lt_iff_lt_mul hs).2 (by rw [Nat.mul_comm]; exact hv)) p hp
+
+/-- **The composition law at every coordinate** (composition card): for every layout `A` whose
+shape and stride are congruent, and every layout `B` whose shape and stride are congruent, whose
+flattened modes each meet `composeDiv` on the flattened modes of `A` but the last, and whose
+term lists (for each flattened mode `(s, d)` of `B`, the multiples `x * d` for `x < s`) are
+`carryFree` against `A`'s extents, the composite gives every scalar coordinate `v` below the
+size of `B` the offset that `A` gives `B(v)`. The premises are on `A` and `B` alone: `carryFree`
+gives at every `v` both `B(v) < A.size` and `noCarry`, the premises of `Lay.compose_call` at
+`v`. It is sufficient, not shown necessary. For every shape of `A` and `B`, nested or flat. -/
+theorem Lay.compose_all (A B : Lay) (hA : congruentL A.shape A.stride = true)
+    (hB : congruentL B.shape B.stride = true)
+    (hdiv : ∀ m ∈ B.modes, composeDiv A.modes.dropLast m = true)
+    (hcf : carryFree (A.modes.map Prod.fst)
+      (B.modes.map fun m => (List.range m.1).map (· * m.2)) = true)
+    (v : Nat) (b : Bool) (hv : v < B.size) :
+    (A.compose B).call (leaf v b) = A.call (leaf (B.call (leaf v b)) b) := by
+  obtain ⟨hAp, -⟩ := A.modes_size_call hA
+  obtain ⟨hBp, hBc⟩ := B.modes_size_call hB
+  have ht : dotColex B.modes v =
+      (List.zipWith (fun x m => x * m.2) (colex v (B.modes.map Prod.fst)) B.modes).sum := by
+    simp [dotColex, List.zipWith_map_right]
+  obtain ⟨hn, hs⟩ := carryFree_pick _ _ _ hcf (by simp [colex_length])
+    (colex_pick B.modes v (by rw [hBp]; exact hv))
+  exact Lay.compose_call A B hA hB hdiv v b hv (by rw [hBc v b hv, ht, ← hAp]; exact hs) hn
 
 end MojoProof.Layout

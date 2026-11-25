@@ -14,11 +14,11 @@ level: L0
 
 ## Rule
 
-PTX ISA's section on the instruction NVPTX lowers it to (the quote is the section's first sentence). The importer accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its name and signature (`Intrinsic.name`, `Intrinsic.sig`). The family is parsed, not modelled: MojoProofTest/Modelled.lean's kernel of a call (its row `Intrinsic.mma`) stops with `unsupported: ldmatrix and mma in a grid`. The declarations: `MojoProof.LLVM.Intrinsic.ofDecl`, `MojoProof.LLVM.Intrinsic`, `MojoProof.Sem.intrinsic`. The block checker (MojoProof/Sym/Rules.lean): refused: SState.stmt takes calls of special registers and of minmax only.
+PTX ISA's section on the instruction NVPTX lowers it to (the quote is the section's first sentence). The importer accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its name and signature (`Intrinsic.name`, `Intrinsic.sig`). The family is parsed, not modelled: MojoProofTest/Modelled.lean's kernel of a call (its row `Intrinsic.mma`) stops with `unsupported: mma in a warp cut by its block of threads`. The declarations: `MojoProof.LLVM.Intrinsic.ofDecl`, `MojoProof.LLVM.Intrinsic`, `MojoProof.Sem.intrinsic`. The block checker (MojoProof/Sym/Rules.lean): refused: SState.stmt takes calls of special registers and of minmax only.
 
 ## Corpus
 
-29 of the 114 corpus files use it (1541 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.mma.m16n8k16.row.col.bf16`, `llvm.nvvm.mma.m16n8k4.row.col.tf32`, `llvm.nvvm.mma.m16n8k8.row.col.bf16`, `llvm.nvvm.mma.m16n8k8.row.col.f32.f32`, `llvm.nvvm.mma.m16n8k8.row.col.tf32`, `llvm.nvvm.mma.m8n8k4.row.col.f64`.
+29 of the 116 corpus files use it (1541 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.mma.m16n8k16.row.col.bf16`, `llvm.nvvm.mma.m16n8k4.row.col.tf32`, `llvm.nvvm.mma.m16n8k8.row.col.bf16`, `llvm.nvvm.mma.m16n8k8.row.col.f32.f32`, `llvm.nvvm.mma.m16n8k8.row.col.tf32`, `llvm.nvvm.mma.m8n8k4.row.col.f64`.
 
 ## Out of scope
 
@@ -26,4 +26,4 @@ Members of the family the corpus does not call. The NVPTX backend's documentatio
 
 ## Open
 
-L1 needs a semantics of the construct: the run of its test kernel stops with `unsupported: ldmatrix and mma in a grid`. L2 then needs a recorded GPU run of a test of it; there is none.
+L1 needs a semantics of the construct: the run of its test kernel stops with `unsupported: mma in a warp cut by its block of threads`. L2 then needs a recorded GPU run of a test of it; there is none.

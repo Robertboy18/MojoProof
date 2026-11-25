@@ -10,8 +10,9 @@ over `2 ^ k` cells, with a barrier between rounds. This module gives that loop a
 MojoProof/Float/Tree.lean, so cell 0's result is the evaluation of a FloatLib `ReductionTree`,
 and composes it with the warp butterfly of MojoProof/Sem/Bfly.lean.
 
-Definitions: `halveStep s c`, the tree of cell `c`'s value after the round with stride `s`;
-`halvings k`, the strides `2 ^ (k - 1), ..., 1`.
+Definitions: `halveStep s c`, the tree of cell `c`'s value after the round with stride `s`. The
+strides over `2 ^ k` cells, first to last, are `2 ^ (k - 1), ..., 2, 1`, the butterfly's offsets
+`bflyOffsets k` (MojoProof/Sem/Bfly.lean).
 
 Proved:
 * `leaves_halve`, `depth_halve`, for every `k`: cell 0's tree after the halving rounds over
@@ -41,23 +42,19 @@ its own value with cell `c + s`'s, its own first; every other cell keeps its val
 def halveStep (s c : Nat) : ReductionTree Nat :=
   if c < s then .node (.leaf c) (.leaf (c + s)) else .leaf c
 
-/-- The strides of the halving rounds over `2 ^ k` cells, first to last:
-`2 ^ (k - 1), ..., 2, 1`. -/
-def halvings (k : Nat) : List Nat := (List.range k).reverse.map (2 ^ ·)
-
 /-- The halving rounds over `2 ^ (k + 1)` cells are the stride `2 ^ k`, then the rounds over
 `2 ^ k` cells. -/
-private theorem halvings_succ (k : Nat) : halvings (k + 1) = 2 ^ k :: halvings k := by
-  simp [halvings, List.range_succ]
+private theorem bflyOffsets_succ (k : Nat) : bflyOffsets (k + 1) = 2 ^ k :: bflyOffsets k := by
+  simp [bflyOffsets, List.range_succ]
 
 /-- For every `k`, cell 0's tree after the halving rounds over `2 ^ k` cells has the leaves
 `0, ..., 2 ^ k - 1` up to order: every cell below `2 ^ k` exactly once. -/
 theorem leaves_halve (k : Nat) :
-    (roundsTree halveStep (halvings k) 0).leaves.Perm (List.range (2 ^ k)) := by
+    (roundsTree halveStep (bflyOffsets k) 0).leaves.Perm (List.range (2 ^ k)) := by
   induction k with
   | zero => exact .refl _
   | succ k ih =>
-    rw [halvings_succ, roundsTree, leaves_graft]
+    rw [bflyOffsets_succ, roundsTree, leaves_graft]
     refine (ih.flatMap_right _).trans ?_
     rw [List.flatMap_congr (g := fun c => [c] ++ [c + 2 ^ k]) fun c hc => by
       simp [halveStep, List.mem_range.1 hc, ReductionTree.leaves]]
@@ -67,11 +64,11 @@ theorem leaves_halve (k : Nat) :
     exact congrArg _ (List.map_congr_left fun j _ => Nat.add_comm j _)
 
 /-- For every `k`, cell 0's tree after the halving rounds over `2 ^ k` cells has depth `k`. -/
-theorem depth_halve (k : Nat) : (roundsTree halveStep (halvings k) 0).depth = k := by
+theorem depth_halve (k : Nat) : (roundsTree halveStep (bflyOffsets k) 0).depth = k := by
   induction k with
   | zero => rfl
   | succ k ih =>
-    rw [halvings_succ, roundsTree, depth_graft _ _ (d := 1) fun c hc => by
+    rw [bflyOffsets_succ, roundsTree, depth_graft _ _ (d := 1) fun c hc => by
       simp [halveStep, List.mem_range.1 ((leaves_halve k).mem_iff.1 hc), ReductionTree.depth], ih]
 
 /-- **The halving loop of IEEE additions.** In every IEEE format, for every `k` and values `v`:
@@ -81,9 +78,9 @@ finite, every `v j` with `j < 2 ^ k` is finite and that value is within
 `sum_error` at cell 0's tree. Nothing is claimed when the result is infinite or a NaN. -/
 theorem halve_error {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (k : Nat)
     (v : Nat → Model fmt)
-    (h : (rounds (fun x y => Model.add x y) halveStep (halvings k) v 0).isFinite = true) :
+    (h : (rounds (fun x y => Model.add x y) halveStep (bflyOffsets k) v 0).isFinite = true) :
     (∀ j < 2 ^ k, (v j).isFinite = true) ∧
-      |(rounds (fun x y => Model.add x y) halveStep (halvings k) v 0).toReal -
+      |(rounds (fun x y => Model.add x y) halveStep (bflyOffsets k) v 0).toReal -
           ((List.range (2 ^ k)).map fun j => (v j).toReal).sum| ≤
         ((1 + Model.unitRoundoffAt fmt) ^ k - 1) *
           ((List.range (2 ^ k)).map fun j => |(v j).toReal|).sum := by

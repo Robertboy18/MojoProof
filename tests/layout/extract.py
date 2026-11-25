@@ -115,6 +115,12 @@ def model(c):
         crds = "[" + ", ".join(nats(x) for x in c["crds"]) + "]"
         return (f"{crds}.map (fun x => {L}.call (tup (x.map (leaf · true))))",
                 f"the offsets of the coordinates {crds} in {fmt(c['shape'], c['stride'])}")
+    if k == "mixed":
+        L = lay(c["shape"], c["stride"])
+        crds = "[" + ", ".join(tree(x) for x in c["crds"]) + "]"
+        return (f"{crds}.map {L}.call",
+                f"the offsets of the mixed coordinates "
+                f"{', '.join(fmtc(x) for x in c['crds'])} in {fmt(c['shape'], c['stride'])}")
     if k == "idx2crd":
         L = lay(c["shape"], c["stride"])
         return (f"{nats(c['idxs'])}.flatMap (fun k => "
@@ -153,9 +159,14 @@ def model(c):
     if k == "compose":
         (as_, ad), (bs, bd) = c["a"], c["b"]
         L = f"({lay(as_, ad)}.compose {lay(bs, bd)})"
-        return (f"(List.range {prod(bs)}).map (fun i => {L}.call (leaf i true))",
+        return (f"(List.range {prod(leaves(bs))}).map (fun i => {L}.call (leaf i true))",
                 f"the offsets of composition({fmt(as_, ad)}, {fmt(bs, bd)})")
     die(f"unknown kind {k}")
+
+
+def fmtc(x):
+    """A coordinate tree as Mojo prints it: an int, or a parenthesized tuple."""
+    return str(x) if isinstance(x, int) else "(" + ", ".join(fmtc(y) for y in x) + ")"
 
 
 def fmt(shape, stride):

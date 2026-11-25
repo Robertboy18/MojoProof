@@ -6,15 +6,15 @@ import MojoProof.Sym.Block
 
 The rules and refusals of the block checker (`SState.stmt` and `SState.exitAt`,
 MojoProof/Sym/Checker.lean) for every constructor of `Inst` (19), `Term` (5) and `Intrinsic` (17),
-by `@[mojo_rule]` and mojo_refuse (MojoProof/Sym/RuleAttr.lean). The rules are the lemmas of
-MojoProof/Sym/Block.lean, tagged here from another module: `exec_bin`, `exec_icmp`, `exec_cast`,
-`exec_extract`, `exec_gep`, `exec_load`, `exec_store`, `exec_fbin`, `exec_fbinC` (with `fmul
-contract`, in the fragment of `coversC`), `exec_select`, `exec_sreg`, `exec_laneid` and
-`exec_minmax` (a statement's step), and `SState.exit_sound` and `SState.exitAt_sound` (a
-terminator's step). A refusal's reason is the case of `SState.stmt` or `SState.exitAt` that gives
-`none`. The last command, `mojo_rules_complete Inst Term Intrinsic`, fails the build when a
-constructor has neither a rule nor a refusal: a constructor added to `Inst`, `Term` or `Intrinsic`
-needs an entry here.
+by `@[mojo_rule]` and mojo_refuse (MojoProof/Sym/RuleAttr.lean). The rules are lemmas of other
+modules, tagged here: `exec_bin`, `exec_icmp`, `exec_cast`, `exec_extract`, `exec_insertvalue`,
+`exec_extractelement`, `exec_insertelement`, `exec_gep`, `exec_load`, `exec_store`, `exec_alloca`,
+`exec_fbin`, `exec_fbinC` (with `fmul contract`, in the fragment of `coversC`), `exec_select`,
+`exec_sreg`, `exec_laneid` and `exec_minmax` (a statement's step, MojoProof/Sym/Exec.lean), and
+`SState.exit_sound` and `SState.exitAt_sound` (a terminator's step, MojoProof/Sym/Rel.lean). A
+refusal's reason is the case of `SState.stmt` or `SState.exitAt` that gives `none`. The last
+command, `mojo_rules_complete Inst Term Intrinsic`, fails the build when a constructor has neither
+a rule nor a refusal: a constructor added to `Inst`, `Term` or `Intrinsic` needs an entry here.
 -/
 
 namespace MojoProof.Sym
@@ -22,46 +22,63 @@ namespace MojoProof.Sym
 open MojoProof.LLVM
 
 attribute [mojo_rule Inst.bin] exec_bin
-attribute [mojo_rule Inst.icmp "on an integer type, before any store"] exec_icmp
+attribute [mojo_rule Inst.icmp
+  "on an integer type; after an alloca, on the memory the effects before it make \
+  (SNode.icmpAfter)"] exec_icmp
 attribute [mojo_rule Inst.cast
-  "the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr; ptrtoint before any store"]
+  "the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr; ptrtoint after an alloca \
+  on the memory the effects before it make (SNode.castAfter)"]
   exec_cast
 attribute [mojo_rule Inst.extractvalue] exec_extract
-attribute [mojo_rule Inst.gep "one index, before any store"] exec_gep
+attribute [mojo_rule Inst.insertvalue
+  "into an operand or a constant its type gives (zeroinitializer, undef or poison)"]
+  exec_insertvalue
+attribute [mojo_rule Inst.extractelement] exec_extractelement
+attribute [mojo_rule Inst.insertelement
+  "into an operand or a constant its type gives (zeroinitializer, undef or poison)"]
+  exec_insertelement
+attribute [mojo_rule Inst.gep
+  "one index, or another number on a base that is not a global; after an alloca, on the memory \
+  the effects before it make (SNode.gepAfter, SNode.gepNAfter)"]
+  exec_gep
 attribute [mojo_rule Inst.load
   "before or after a store; after one, the load from the memory the effects before it make \
   (SNode.loadAfter)"] exec_load
 attribute [mojo_rule Inst.store] exec_store
+attribute [mojo_rule Inst.alloca
+  "with SState.alloca on: the new block's pointer (SNode.fresh) and its effect (SEff.alloca), at a \
+  number no block has"] exec_alloca
 attribute [mojo_rule Inst.fbin "on a float element type, but fmul contract"] exec_fbin
 attribute [mojo_rule Inst.fbin "on a float element type, fmul contract included, with coversC"]
   exec_fbinC
 attribute [mojo_rule Inst.select "of integers"] exec_select
 attribute [mojo_rule Inst.call Intrinsic.sreg
-  "a special register: no arguments, no fast-math flags, before any store"] exec_sreg
+  "a special register: no arguments, no fast-math flags"] exec_sreg
 attribute [mojo_rule Inst.call Intrinsic.laneid
-  "the lane number: no arguments, no fast-math flags, before any store"] exec_laneid
+  "the lane number: no arguments, no fast-math flags"] exec_laneid
 attribute [mojo_rule Inst.call Intrinsic.minmax
-  "two arguments, no flags or attributes, before or after a store"] exec_minmax
+  "two arguments, no flags or attributes"] exec_minmax
 attribute [mojo_rule Term.ret "ret void"] SState.exit_sound
 attribute [mojo_rule Term.br Term.condBr "into blocks that start without a phi"] SState.exit_sound
 attribute [mojo_rule Term.br Term.condBr "into blocks that start with phis"] SState.exitAt_sound
 
-mojo_refuse Inst.icmp "on a non-integer type, or after a store" :
-  "SState.stmt takes icmp on an integer type before the block's first store only"
-mojo_refuse Inst.cast "fptoui, fptosi, inttoptr, an ill-typed cast, or ptrtoint after a store" :
-  "SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates), and ptrtoint \
-  before the block's first store only"
-mojo_refuse Inst.gep "not one index, or after a store" :
-  "SState.stmt takes a gep with one index before the block's first store only"
+mojo_refuse Inst.icmp "on a non-integer type" :
+  "SState.stmt takes icmp on an integer type only"
+mojo_refuse Inst.cast "fptoui, fptosi, inttoptr or an ill-typed cast" :
+  "SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates)"
+mojo_refuse Inst.gep "other than one index on a global" :
+  "SState.stmt takes a gep on a global with one index only"
 mojo_refuse Inst.fbin "fmul contract without coversC, or a non-float element type" :
   "SState.stmt takes a contracted fmul only with its contract flag and no fbin on a non-float \
   element type"
 mojo_refuse Inst.select "of floats, pointers or vectors" :
   "SState.stmt takes select of integers only"
-mojo_refuse Inst.fneg Inst.fcmp Inst.alloca Inst.insertvalue Inst.extractelement
-  Inst.insertelement Inst.shufflevector Inst.atomicrmw : "SState.stmt has no case for it"
+mojo_refuse Inst.alloca "without SState.alloca" :
+  "SState.stmt takes alloca only with SState.alloca on, which SState.start leaves off"
+mojo_refuse Inst.fneg Inst.fcmp Inst.shufflevector Inst.atomicrmw :
+  "SState.stmt has no case for it"
 mojo_refuse Inst.phi : "set on the edge into its block (SState.phiConds), not by SState.stmt"
-mojo_refuse Inst.call "another callee, arguments, fast-math flags, or after a store" :
+mojo_refuse Inst.call "another callee, arguments or fast-math flags" :
   "SState.stmt takes calls of special registers and of minmax only"
 mojo_refuse Term.ret "ret with a value" : "SState.exit takes ret void only"
 mojo_refuse Term.br Term.condBr "a condition or phi operand outside the fragment" :

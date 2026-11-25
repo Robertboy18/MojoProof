@@ -124,6 +124,7 @@ returns at once, and payload in the caller's memory only.
 namespace MojoProofTest.SkelStep
 
 open MojoProof MojoProof.Sem MojoProof.LLVM MojoProofTest.Pending MojoProofTest.Labels
+open GPUProof (Path Path.exists_iff)
 open MojoProofTest.SkelExec
 open MojoProofTest.Skeleton (memX blkX skel_pay)
 
@@ -870,18 +871,26 @@ in one step, to `doneX x ch o`, in which every thread has returned, which is not
 block 1 holds `x` at byte 0, and every run of one step from `runX x ch o`'s grid ends there. -/
 theorem runX_run (x : BitVec 8) (ch : Nat → Nat) (o : Nat → Nat → Nat) :
     Path (Grid.Step .one (runX x ch o).2) 1 (runX x ch o).1 (doneX x ch o) ∧
-      (doneX x ch o).Done ∧ ¬ (doneX x ch o).Bad .one (runX x ch o).2 ∧
+      GPUProof.Done sig (doneX x ch o, Launch.one, (runX x ch o).2) ∧
+      ¬ GPUProof.Bad sig (doneX x ch o, Launch.one, (runX x ch o).2) ∧
       obsX (doneX x ch o).mem = some (.byte x) ∧
       ∀ z, Path (Grid.Step .one (runX x ch o).2) 1 (runX x ch o).1 z → z = doneX x ch o := by
-  have hd : (doneX x ch o).Done := rfl
+  have hd : GPUProof.Done sig (doneX x ch o, Launch.one, (runX x ch o).2) := Grid.done_of_all rfl
+  have hs : (doneX x ch o).threads.size ≤ volume Launch.one.grid * volume Launch.one.block :=
+    Nat.le_of_eq rfl
   refine ⟨Determinism.path_advs _ [0] rfl (.nil _), hd, ?_, rfl, fun z p => ?_⟩
-  · rintro (hf | hr | hk | hr)
-    · exact done_not_faults hd hf
-    · rw [show racy (doneX x ch o).mem.trace = false from rfl] at hr
-      cases hr
-    · rw [show kept (doneX x ch o).mem.trace = true from rfl] at hk
-      cases hk
-    · exact hd.not_raceEnabled hr
+  · have ht : (doneX x ch o).mem.trace = [] := rfl
+    rintro (hf | hr | hk | hr)
+    · exact done_not_faults hs hd hf
+    · change GPUProof.racy sig ((doneX x ch o).mem.trace.map (Event.toCore Launch.one)).reverse =
+        true at hr
+      rw [ht] at hr
+      exact absurd hr (by decide +kernel)
+    · change GPUProof.kept sig ((doneX x ch o).mem.trace.map (Event.toCore Launch.one)).reverse =
+        false at hk
+      rw [ht] at hk
+      exact absurd hk (by decide +kernel)
+    · exact Grid.Done.not_raceEnabled hs hd hr
   · cases p with
     | cons s p =>
       cases p

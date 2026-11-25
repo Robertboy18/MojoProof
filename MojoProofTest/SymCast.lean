@@ -8,8 +8,9 @@ import MojoProof.Sym.Info
 The checker takes the casts `castV` evaluates (`castOk`, `SState.stmt`,
 MojoProof/Sym/Checker.lean): `trunc`, `zext` and `sext` as `SNode.cast`, the others as
 `SNode.castAt` (MojoProof/Sym/Term.lean), which names its statement and evaluates `castV` at the
-statement's operator and types; `ptrtoint` only before the block's first store. Sound by
-`exec_cast` (`SState.stmt_sound`, MojoProof/Sym/Block.lean).
+statement's operator and types, before or after a store (`ptrtoint` reads only the blocks'
+addresses, which stores keep: `SEff.run_shape`). Sound by `exec_cast` (`SState.stmt_sound`,
+MojoProof/Sym/Block.lean).
 Tests at the bfloat16 naive matrix product of the corpus (`NaiveOff.bf16`) and at gemv_kernel:
 
 * `bf16_fpext`: the value of a cast node at the loop's `fpext` (`SNode.eval_castAt`, for every

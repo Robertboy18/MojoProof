@@ -35,6 +35,7 @@ choice and one oracle family (docs/proofs/contract-off.md).
 namespace MojoProofTest.ContractOff
 
 open MojoProof MojoProof.LLVM MojoProof.Sem MojoProof.Sym
+open GPUProof
 open MojoProofTest.ScheduleOwned (obs1)
 
 -- `Array.any` recurses by well-founded recursion, so `rfl` cannot evaluate a step without this.
@@ -111,13 +112,21 @@ theorem outK_bytesIn : outK.1.BytesIn outK.1.Known :=
 
 /-- A test of one example: in the grid the run of `fmaK.contractOff` reaches, its thread has
 returned, the grid is not bad, and block 1 holds the bytes of `+0`. -/
-theorem doneQ_good : (doneAt (startAt fmaQ fmaK.contractOff)).Done ∧
-    ¬ (doneAt (startAt fmaQ fmaK.contractOff)).Bad Launch.one (startAt fmaQ fmaK.contractOff).2 ∧
+theorem doneQ_good :
+    GPUProof.Done sig
+      (doneAt (startAt fmaQ fmaK.contractOff), Launch.one, (startAt fmaQ fmaK.contractOff).2) ∧
+    ¬ GPUProof.Bad sig
+      (doneAt (startAt fmaQ fmaK.contractOff), Launch.one, (startAt fmaQ fmaK.contractOff).2) ∧
     obs1 (doneAt (startAt fmaQ fmaK.contractOff)).mem = some (leBytes 4 0) := by
-  have hd : (doneAt (startAt fmaQ fmaK.contractOff)).Done := rfl
+  have hd : GPUProof.Done sig
+      (doneAt (startAt fmaQ fmaK.contractOff), Launch.one, (startAt fmaQ fmaK.contractOff).2) :=
+    Grid.done_of_all rfl
   refine ⟨hd, fun hb => ?_, rfl⟩
-  rw [hd.bad_iff, show racy (doneAt (startAt fmaQ fmaK.contractOff)).mem.trace = false from rfl,
-    show kept (doneAt (startAt fmaQ fmaK.contractOff)).mem.trace = true from rfl] at hb
+  rw [Grid.Done.bad_iff (by decide) hd,
+    show GPUProof.racy sig ((doneAt (startAt fmaQ fmaK.contractOff)).mem.trace.map
+      (Event.toCore Launch.one)).reverse = false by decide +kernel,
+    show GPUProof.kept sig ((doneAt (startAt fmaQ fmaK.contractOff)).mem.trace.map
+      (Event.toCore Launch.one)).reverse = true by decide +kernel] at hb
   simp at hb
 
 /-- **The twin of the converse of `Kernel.Sound.contractOff` at a fusing oracle family**, a test
@@ -152,7 +161,8 @@ theorem twin :
     ¬ Kernel.Obs fmaP fmaK Launch.one argsK outK.1 obs1 (fun _ => 0)
       (fun _ => neverFuse fun _ => 1) (leBytes 4 0xa8800000) := by
   have hP : Kernel.Obs fmaP fmaK Launch.one argsK outK.1 obs1 (fun _ => 0) (fun _ _ => 1)
-      (leBytes 4 0xa8800000) := ⟨_, _, _, startP_eq, Grid.run_reach runP_eq, rfl, rfl⟩
+      (leBytes 4 0xa8800000) :=
+    ⟨_, _, _, startP_eq, Grid.run_reach runP_eq, Grid.done_of_all rfl, rfl⟩
   obtain ⟨_, hpath⟩ := Path.exists_iff.2 (Grid.run_reach (L := Launch.one) runQ_eq)
   have hS : Kernel.Sound fmaQ fmaK.contractOff Launch.one argsK outK.1
       (fun ch ω => ch = (fun _ => 0) ∧ ω = fun _ _ => 1) obs1 (· = leBytes 4 0) := by

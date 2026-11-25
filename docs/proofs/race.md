@@ -48,11 +48,11 @@ introductions (`4 i + 4 ≤ 4 j` when `i < j`, the other side when `j < i`). For
 B (`Elem.Own`). For an access whose fields are given, `Elem.Own out w cell a` unfolds to three
 implications, on the access's block, its `write` flag and its `invariant` flag. The store to `out`
 lies in `[4 k, 4 k + 4)`, which is cell `k` (`omega` on the integer offsets). Every other access
-reads (`rfl` on `write = false`), and the first implication's premise `p = out` contradicts the
-hypothesis `p ≠ out` (`omega`). The `!invariant.load` loads are to `a` and `b`, which `hne` says
-are not `out`; the other accesses have `invariant = false`, so the third premise is
-`false = true` (`contradiction`). A list of accesses is taken element by element
-(`List.forall_mem_cons`).
+reads and is not an `atomicrmw`'s (`⟨rfl, rfl⟩` on `write = false` and `atomic = none`), and the
+first implication's premise `p = out` contradicts the hypothesis `p ≠ out` (`omega`). The
+`!invariant.load` loads are to `a` and `b`, which `hne` says are not `out`; the other accesses
+have `invariant = false`, so the third premise is `false = true` (`contradiction`). A list of
+accesses is taken element by element (`List.forall_mem_cons`).
 
 C (pairwise conflicts). `Access.conflict x y` needs `x.overlaps y`, which needs the same block,
 `x.off < y.off + y.len` and `y.off < x.off + x.len`. `Access.conflict_of_apart`: a different block

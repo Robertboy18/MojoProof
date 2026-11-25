@@ -1,0 +1,28 @@
+GPU run record: a conformance test, not a proof.
+
+instruction: ldmatrix.sync.aligned.m8n8.x4.shared.b16 and ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16, one warp, the library's ld_matrix (llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.b16.p3 and llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.trans.b16.p3)
+program: tests/gpu/ldmatrix/test_ldmatrix.mojo
+program sha256: 17e6ce8175276a7a9a5ccca4a25642e344d17ee76d41318111e0fcf3c7bad333
+program origin: modular/modular@bbc13a71:max/kernels/test/gpu/layout/test_ldmatrix.mojo (sha256 6953615728b429799295750b6eed9a3d4da634e2ef803ed338cb50553471e5e0), its header and imports kept, its kernels, runners and main replaced by the kernel ldm_lanes, the input generator and a main that writes the dump
+mojo: Mojo 1.3.0.dev2026112105 (f23ed0af)
+build: mojo build -o ldm tests/gpu/ldmatrix/test_ldmatrix.mojo
+ir: mojo build --emit llvm --target-accelerator sm_80 of the program, with this Mojo, emits the kernel test_ldmatrix_test_ldmatrix_ldm_lanes_LITMutO6A6AcB_949e2f958fe49321.nvptx.ll (sha256 d8005027687d0c6065b822ed347acabb6e17740c7a3f6bf7c720c8b951e39bb7) with one call of @llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.b16.p3 and one of @llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.trans.b16.p3, both on the same lane address into a [512 x half] addrspace(3) global
+gpu: NVIDIA A100-SXM4-80GB (compute capability 8.0, sm_80), NVIDIA driver 580.167.08, one GPU selected with CUDA_VISIBLE_DEVICES
+run: ldm 20261123 dump.txt
+seed: 20261123
+inputs: for each launch, 512 16-bit words of shared memory (the word at byte x numbered x / 2), the high 16 bits of successive words of the program's xorshift64* generator (next_word; the state starts at the seed and continues across launches), copied in by the warp before a barrier; and lane R's address, row R of the four 8 x 8 matrices, the byte offset rows[R] from the start of the buffer: 16 R in launch 0 (the rows in order) and 16 (w mod 64) for a generator word w in the others, so rows may repeat and are in any order; the registers' buffer starts with every word 0x7FBADBAD, and lane l stores its 4 registers of the plain load at words 8 l to 8 l + 3 and those of the .trans load at 8 l + 4 to 8 l + 7 (element 0 of a register in its low 16 bits)
+launches: 8, each one warp (grid 1, block 32)
+dump: tests/gpu/ldmatrix/dump.txt, sha256 68c196aa67ee0e98d2551fd0734dbf552d74b9bac09853d1fa6bdc6e4c796b26: for each launch the shared words, the row offsets, the initial register word and the registers after the launch, on the GPU
+compare: lake env lean --run tests/gpu/ldmatrix/Compare.lean tests/gpu/ldmatrix/dump.txt 8
+evaluator: case 0: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 1: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 2: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 3: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 4: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 5: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 6: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: case 7: ldmatrix.x4 256 of 256 elements agree, ldmatrix.x4.trans 256 of 256 agree, 0 words unwritten
+evaluator: 8 launches: 0 elements differ, 0 words unwritten
+exit: 0
+result: agree. In all 8 launches every 16-bit element of the 4 registers of each of the 32 lanes, 256 elements a load, is the one ldmatrix 4 false (the plain load) and ldmatrix 4 true (.trans) give on the launch's shared words and row addresses: element s of register r of lane l (l = 4 g + t) is element 2 t + s of row 8 r + g of the stacked matrices, and with .trans element g of row 8 r + 2 t + s, row R read at the address lane R gave (ldm 4 t, MojoProof/Sem/TensorCore.lean). 4,096 elements in all, every register word written.
+scope: a conformance test, not a proof. One instruction in two forms (.x4, .x4.trans) at .b16, these 8 launches and these inputs (row addresses multiples of 16 within one 1,024-byte buffer of shared memory), on one GPU, compiled by this Mojo. The evaluator ran the library's ldmatrix (MojoProof/Sem/TensorCore.lean) through ldmModel (MojoProofTest/TensorCoreGpu.lean). It says nothing about .x1 and .x2, other GPUs or Mojo versions, nor about the grid's dispatch of ldmatrix, which the library does not have.

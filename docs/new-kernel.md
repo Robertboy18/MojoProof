@@ -127,13 +127,13 @@ flags and source. Leave out `--mojo` when you compiled with the version `corpus.
 When the kernel is defined in a library file that the source imports, name that file with
 `--lib <path>`; the vsub source defines its kernel, so its row's `lib` is `-`. `add` refuses a
 source whose header lacks the Apache-LLVM license line.
-`check` printed `corpus: 114 files, 0 problems`.
+`check` printed `corpus: 116 files, 0 problems`.
 
 The repository already has this row, and `add` refuses a file already in the manifest: for your
 own kernel, use your own family name.
 
 A new row changes the corpus's counts, which a test checks: in `MojoProofTest/Corpus.lean`, the
-expected message of `#mojo_corpus` (`mojo_corpus: 114 rows, 107 imported, ...` after this
+expected message of `#mojo_corpus` (`mojo_corpus: 116 rows, 109 imported, ...` after this
 example) must count your row, or step 8's build fails there with "Docstring on `#guard_msgs`
 does not match".
 

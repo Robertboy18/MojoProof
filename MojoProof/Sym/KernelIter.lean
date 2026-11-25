@@ -138,7 +138,7 @@ base in a register the loop keeps. A `List Nat`, evaluated. -/
 def LoopSeg.bases (F : Func) (L : LoopSeg) : List Nat :=
   (L.kept F).filter fun r => (L.H :: L.B.map (·.2.2)).any fun S => S.effs.any fun
     | .load _ _ p => p.baseIn S.nodes [r]
-    | .store .. => false
+    | .store .. | .alloca .. => false
 
 /-- **The facts at a valuation of a matmul kernel that rounds which only read keep.** For program
 `prog`, kernel `fn`, element type `t` with encoder `enc`, alignment `al`, block numbers `o`

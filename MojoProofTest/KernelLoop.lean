@@ -189,7 +189,7 @@ theorem invB_step {c : Ctx} (hP : c.prog.layout = cntP.layout) {n b : Nat} {tr :
   · rw [hH]
     delta cntH
     simp [Exit.dest, Exit.target, SVal.eval, hslt, Val.ofBool]
-  · rw [hdr_into]
+  · rw [show W.intoWith false 1 cntH = W.after cntH from hdr_into W]
     intro d hd
     delta cntB at hd
     simp only [List.mem_cons, List.mem_nil_iff, or_false] at hd
@@ -232,10 +232,11 @@ its last exit is `ret`, and its memory has `j` in cell `j` for every `j < n` and
 with the `n` stores. -/
 theorem invB_exit {c : Ctx} {n b : Nat} {tr : List Event} (hn : n ≤ 2 ^ 60) {W : Valuation}
     (h : invB c n b tr n W) :
-    WalkI W ((1, cntH.obls, cntH) :: exitC) ∧ (W.lastI 1 cntH exitC).2.2.exit = .ret ∧
-      ∃ me, SEff.run (W.lastI 1 cntH exitC).1
-          (vals (W.lastI 1 cntH exitC).1 (W.lastI 1 cntH exitC).2.2.nodes)
-          (W.lastI 1 cntH exitC).2.2.effs = .ok me ∧
+    WalkWith false W ((1, cntH.obls, cntH) :: exitC) ∧
+      (W.lastWith false 1 cntH exitC).2.2.exit = .ret ∧
+      ∃ me, SEff.run (W.lastWith false 1 cntH exitC).1
+          (vals (W.lastWith false 1 cntH exitC).1 (W.lastWith false 1 cntH exitC).2.2.nodes)
+          (W.lastWith false 1 cntH exitC).2.2.effs = .ok me ∧
         (∀ j < n, me.load cntP.layout c.who 1 (.int 64) ⟨b, 8 * j⟩ (some 8) =
           .ok (.bits 64 (BitVec.ofNat 64 j))) ∧ me.trace = cellTr c.who b n ++ tr := by
   obtain ⟨-, -, h4, h7, -, hm, htr⟩ := h
@@ -262,12 +263,12 @@ theorem invB_exit {c : Ctx} {n b : Nat} {tr : List Event} (hn : n ≤ 2 ^ 60) {W
 theorem invB_entry {c : Ctx} {n b k : Nat} {m : Mem} {f : Frame}
     (hfn : f.fn.blocks = cnt.blocks) (h7 : f.regs 7 = some (.bits 64 (BitVec.ofNat 64 n)))
     (h8 : f.regs 8 = some (.ptr ⟨b, 0⟩)) (hm : Cells c.who n b 0 m) :
-    WalkI (Valuation.entry c k m f) [(0, cntE.obls, cntE)] ∧
-      ((Valuation.entry c k m f).lastI 0 cntE []).2.2.exit.dest
-        ((Valuation.entry c k m f).lastI 0 cntE []).1
-        (vals ((Valuation.entry c k m f).lastI 0 cntE []).1
-          ((Valuation.entry c k m f).lastI 0 cntE []).2.2.nodes) = some 1 ∧
-      ((Valuation.entry c k m f).lastI 0 cntE []).2.2.exit.pc f.fn 1 = 1 ∧
+    WalkWith false (Valuation.entry c k m f) [(0, cntE.obls, cntE)] ∧
+      ((Valuation.entry c k m f).lastWith false 0 cntE []).2.2.exit.dest
+        ((Valuation.entry c k m f).lastWith false 0 cntE []).1
+        (vals ((Valuation.entry c k m f).lastWith false 0 cntE []).1
+          ((Valuation.entry c k m f).lastWith false 0 cntE []).2.2.nodes) = some 1 ∧
+      ((Valuation.entry c k m f).lastWith false 0 cntE []).2.2.exit.pc f.fn 1 = 1 ∧
       invB c n b m.trace 0 (Valuation.round 0 cntE [] (Valuation.entry c k m f)) := by
   have hE := Valuation.into_of_enter (V := Valuation.entry c k m f) (l := 0) (S := cntE) rfl rfl
     (enter_blocks (F := (Valuation.entry c k m f).frameAt 0 cntE) hfn (.inl ⟨rfl, rfl⟩)
@@ -473,11 +474,16 @@ theorem load_blocks {m m' : Mem} (h : m.blocks = m'.blocks) {l : Layout} {w : Wh
 no data race that keeps the promise of `!invariant.load` (the three stores of `cellTr`, evaluated)
 and blocks passing `cells3` (`postB`'s cells, read on the blocks alone, `load_blocks`). -/
 theorem endK (m' : Mem) (h : invK (volume Launch.one.grid * volume Launch.one.block) m') :
-    racy m'.trace = false ∧ kept m'.trace = true ∧ ∃ y, some m'.blocks = some y ∧
+    ((∀ a, Event.access a ∈ m'.trace →
+        a.who.thread < volume Launch.one.grid * volume Launch.one.block ∧
+          a.who.cta = a.who.thread / volume Launch.one.block) → Trace.Shaped m'.trace.reverse →
+      GPUProof.racy sig (m'.trace.map (Event.toCore Launch.one)).reverse = false) ∧
+      GPUProof.kept sig (m'.trace.map (Event.toCore Launch.one)).reverse = true ∧
+      ∃ y, some m'.blocks = some y ∧
       cells3 y = true := by
   obtain ⟨V, hw, hn, hb, hT, hc, htr⟩ := (h : invK (0 + 1) m')
   rw [hw, hb, hn, hT] at htr
-  refine ⟨by rw [htr]; decide +kernel, by rw [htr]; decide +kernel, _, rfl, ?_⟩
+  refine ⟨fun _ _ => by rw [htr]; decide +kernel, by rw [htr]; decide +kernel, _, rfl, ?_⟩
   simp only [cells3, List.all_eq_true, List.mem_range]
   intro j hj
   have e : ({ blocks := m'.blocks } : Mem).load cntKP.layout ⟨0, 0⟩ 1 (.int 64)

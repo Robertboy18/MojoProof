@@ -874,38 +874,16 @@ theorem Grid.advance_contractOff {P Q : Program} {ω : Nat → Nat → Nat} {c c
   · rfl
   · rfl
 
-/-- Grid `g` mapped by `Grid.contractOff` is done exactly when `g` is. -/
-theorem Grid.done_contractOff (g : Grid) : g.contractOff.Done ↔ g.Done := by
-  simp only [Grid.Done, Grid.contractOff, Array.all_map]
-  apply Iff.of_eq
-  congr 2
-  funext s
-  cases s <;> rfl
-
-/-- For context families related by `CtxOff`, a race is enabled in grid `g` mapped by
-`Grid.contractOff` under `c'` exactly when one is in `g` under `c`. -/
-theorem Grid.raceEnabled_contractOff {P Q : Program} {ω : Nat → Nat → Nat} {c c' : Nat → Ctx}
-    (h : CtxOff P Q ω c c') (g : Grid) : g.contractOff.RaceEnabled c' ↔ g.RaceEnabled c := by
-  have hp : ∀ n (t : Thread), t.contractOff.pending (c' n) g.mem = t.pending (c n) g.mem :=
-    fun n t => by
-      rw [h.ctx n]
-      exact Thread.pending_contractOff (c n) (by rw [h.prog n]; exact h.layout) _ t g.mem
-  constructor
-  · rintro ⟨n, t', ht, hr⟩
-    simp only [Grid.contractOff, Array.getElem?_map] at ht
-    rcases hs : g.threads[n]? with _ | (t | _ | _) <;>
-      simp only [hs, Option.map_none, Option.map_some, Status.contractOff, reduceCtorEq,
-        Option.some.injEq, Status.run.injEq] at ht
-    subst ht
-    refine ⟨n, t, hs, ?_⟩
-    rw [← hp]
-    exact hr
-  · rintro ⟨n, t, ht, hr⟩
-    refine ⟨n, t.contractOff, ?_, ?_⟩
-    · simp only [Grid.contractOff, Array.getElem?_map, ht, Option.map_some, Status.contractOff]
-    show racy (t.contractOff.pending (c' n) g.mem ++ g.mem.trace) = true
-    rw [hp]
-    exact hr
+/-- Grid `g` mapped by `Grid.contractOff` is done (the core's `Done` at `sig`) exactly when `g`
+is, for every launch and contexts. -/
+theorem Grid.done_contractOff {L : Launch} {c c' : Nat → Ctx} (g : Grid) :
+    GPUProof.Done sig (g.contractOff, L, c) ↔ GPUProof.Done sig (g, L, c') := by
+  rw [Grid.done_iff, Grid.done_iff]
+  refine forall_congr' fun n => imp_congr_right fun _ => ?_
+  simp only [Grid.contractOff, Array.getElem?_map]
+  cases g.threads[n]? with
+  | none => simp
+  | some s => cases s <;> simp [Status.contractOff]
 
 /-- `Thread.contractOff` keeps the instruction a thread is at. -/
 theorem Thread.at_contractOff (t : Thread) : t.contractOff.at = t.at := by
@@ -1083,6 +1061,78 @@ theorem Grid.fire_contractOff {P Q : Program} {ω : Nat → Nat → Nat} {c c' :
       exact Except.Rel.bind (resumeAll_contractOff _ _ _ _ _) fun _ _ e => .ok (.some (by
         subst e
         rfl))
+  case mma v =>
+    dsimp only
+    refine Except.Rel.ite (fun _ => ?_) (fun _ => .error _)
+    generalize n - n % volume L.block % 32 = base
+    have e : mmaRes L.acc ((List.range 32).map fun j => g.contractOff.threads[base + j]?)
+        t.contractOff.at v =
+          mmaRes L.acc ((List.range 32).map fun j => g.threads[base + j]?) t.at v := by
+      rw [Thread.at_contractOff]
+      unfold mmaRes
+      congr 1
+      rw [List.mapM_map, List.mapM_map]
+      refine mapM_congr fun j _ => ?_
+      simp only [Function.comp_apply, Grid.contractOff, Array.getElem?_map]
+      cases g.threads[base + j]? with
+      | none => rfl
+      | some s =>
+        cases s with
+        | run => rfl
+        | done => rfl
+        | wait u i a fn =>
+          cases i <;> first
+            | rfl
+            | simp only [Option.map, Status.contractOff, Thread.at_contractOff]
+    rw [e]
+    refine Except.Rel.bind (R := Eq) (.refl (fun _ => rfl) _) fun r₁ r₂ hr => ?_
+    subst hr
+    cases r₁ with
+    | none => exact .ok .none
+    | some y =>
+    dsimp only
+    exact Except.Rel.bind (resumeAll_contractOff _ _ _ _ _) fun _ _ e => .ok (.some (by
+      subst e
+      rfl))
+
+/-- For every launch `L` and context families related by `CtxOff`, a race is enabled in grid `g`
+mapped by `Grid.contractOff` under `c'` (the core's `RaceEnabled` at `sig`) exactly when one is in
+`g` under `c`: the same thread runs with the same pending accesses (`Thread.pending_contractOff`),
+and the same collective call completes (`Grid.fire_contractOff`), in front of one trace. -/
+theorem Grid.raceEnabled_contractOff {L : Launch} {P Q : Program} {ω : Nat → Nat → Nat}
+    {c c' : Nat → Ctx} (h : CtxOff P Q ω c c') (g : Grid) :
+    GPUProof.RaceEnabled sig (g.contractOff, L, c') ↔ GPUProof.RaceEnabled sig (g, L, c) := by
+  have hp : ∀ n (t : Thread), t.contractOff.pending (c' n) g.mem = t.pending (c n) g.mem :=
+    fun n t => by
+      rw [h.ctx n]
+      exact Thread.pending_contractOff (c n) (by rw [h.prog n]; exact h.layout) _ t g.mem
+  rw [Grid.raceEnabled_iff, Grid.raceEnabled_iff]
+  refine or_congr ⟨?_, ?_⟩ (exists_congr fun n => ?_)
+  · rintro ⟨n, t', ht, hr⟩
+    simp only [Grid.contractOff, Array.getElem?_map] at ht
+    rcases hs : g.threads[n]? with _ | (t | _ | _) <;>
+      simp only [hs, Option.map_none, Option.map_some, Status.contractOff, reduceCtorEq,
+        Option.some.injEq, Status.run.injEq] at ht
+    subst ht
+    refine ⟨n, t, hs, ?_⟩
+    rw [← hp]
+    exact hr
+  · rintro ⟨n, t, ht, hr⟩
+    refine ⟨n, t.contractOff, ?_, ?_⟩
+    · simp only [Grid.contractOff, Array.getElem?_map, ht, Option.map_some, Status.contractOff]
+    show GPUProof.racy sig ((t.contractOff.pending (c' n) g.mem ++ g.mem.trace).map
+      (Event.toCore L)).reverse = true
+    rw [hp]
+    exact hr
+  · have hr := Grid.fire_contractOff h L g n
+    generalize g.fire L c n = r₁ at hr ⊢
+    generalize g.contractOff.fire L c' n = r₂ at hr ⊢
+    cases hr with
+    | error => simp
+    | ok hr =>
+      cases hr with
+      | none => simp
+      | some => exact ⟨fun ⟨_, _, hr⟩ => ⟨_, rfl, hr⟩, fun ⟨_, _, hr⟩ => ⟨_, rfl, hr⟩⟩
 
 /-- **The lockstep bisimulation.** For every launch and context families related by `CtxOff`,
 the relation "the second grid is the first mapped by `Grid.contractOff`, and the first's frames

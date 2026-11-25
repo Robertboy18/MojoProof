@@ -112,6 +112,18 @@ def gen_cases(rng):
     cases.append({"kind": "compose", "a": ([4, 3], [1, 4]), "b": ([6], [2])})
     cases.append({"kind": "compose", "a": ([2, 4], [1, 2]), "b": ([2, 2], [1, 2])})
     cases.append({"kind": "compose", "a": ([6, 2], [1, 6]), "b": ([3], [4])})
+    # composition with B of several modes: a tile of row_major[4, 8], whose modes' terms add
+    # without carry against A's extents, and two whose terms carry
+    cases.append({"kind": "compose", "a": ([4, 8], [8, 1]), "b": ([2, [2, 2]], [1, [8, 16]])})
+    cases.append({"kind": "compose", "a": ([2, 2], [1, 10]), "b": ([2, 2], [1, 1])})
+    cases.append({"kind": "compose", "a": ([6, 2], [1, 100]), "b": ([3, 2], [2, 3])})
+    # upcast of strides that divide the factor: the docstring's row_major[4, 8], and an extent
+    # that the factor over the stride does not divide
+    cases.append({"kind": "upcast", "factor": 2, "shape": [4, 8], "stride": [8, 1]})
+    cases.append({"kind": "upcast", "factor": 2, "shape": [3], "stride": [1]})
+    # mixed coordinates of a nested layout: a scalar for a tuple mode, a tuple, and a leaf
+    cases.append({"kind": "mixed", "shape": [2, [2, 3]], "stride": [1, [2, 4]],
+                  "crds": [[1, 5], [1, [1, 2]], [0, 4], [1, 0]]})
     return cases
 
 
@@ -145,6 +157,10 @@ def emit(cases):
                 put(f"{v}(Idx[{i}])")
             put(f"{v}.cosize()")
         elif kind == "exact":
+            body.append(f"    var {v} = {layout_mojo(c['shape'], c['stride'])}")
+            for crd in c["crds"]:
+                put(f"{v}({mtree(crd)})")
+        elif kind == "mixed":
             body.append(f"    var {v} = {layout_mojo(c['shape'], c['stride'])}")
             for crd in c["crds"]:
                 put(f"{v}({mtree(crd)})")
@@ -191,7 +207,7 @@ def emit(cases):
             (as_, ad), (bs, bd) = c["a"], c["b"]
             body.append(f"    var {v} = composition({layout_mojo(as_, ad)}, "
                         f"{layout_mojo(bs, bd)})")
-            for i in range(prod(bs)):
+            for i in range(size_of(bs)):
                 put(f"{v}(Idx[{i}])")
         else:
             raise ValueError(kind)

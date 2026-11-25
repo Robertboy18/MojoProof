@@ -1,28 +1,51 @@
 # Loops by induction on the trip count (`Block.sound_loop`)
 
-Lean: `MojoProof/Sym/Loop.lean`. Tests: `MojoProofTest/SymLoop.lean`.
+Lean: `MojoProof/Sym/Loop.lean`. Tests: `MojoProofTest/SymLoop.lean`,
+`MojoProofTest/SymLoopAlloca.lean`.
 
 **Scope.** Every program `P`, function `fn`, loop path `(h, ds, S) :: B` (the header `h` from
-position `p`, after its `phi`s, through the body to the latch) that `coversPathI` accepts from `p`,
-every trip count `n`, every context of `P` and every thread whose innermost frame runs `fn` at
-block `h`'s position `p`.
+position `p`, after its `phi`s, through the body to the latch) that `coversPathWith false` accepts
+from `p`, every trip count `n`, every context of `P` and every thread whose innermost frame runs
+`fn` at block `h`'s position `p`.
 
 `Block.sound_edge`, `Block.sound_loop`, `Round.of_inv` and `Block.sound_loop_inv` take a flag
-`contract`, and `ChainWith.reach`, `ChainWith.of_iter`, `ChainWith.of_rounds`, `Runs.of_chainWith`
-and `Runs.of_chainsWith` are `Chain.reach`, `Chain.of_iter`, `Chain.of_rounds`, `Runs.of_chain` and
-`Runs.of_chains` with it (`LoopPaths`, `Runs.of_loop` and `Runs.of_loops` take none). This file
-states the `contract = false` case; with `contract = true` (blocks with `fmul contract`) read
-`coversPathWith true`, `WalkWith true`, `Valuation.lastWith true`, `Valuation.roundWith true`,
-`EdgeWith true`, `RoundWith true`, `BackWith true`, `coversChainWith true` and `ChainWith true` for
-`coversPathI`, `WalkI`, `Valuation.lastI`, `Valuation.round`, `Edge`, `Round`, `Back`, `coversChain`
-and `Chain` (docs/proofs/contract.md). The proofs are the same.
+`contract`, and so do `BackWith.enter`, `ChainWith`, `ChainWith.reach`, `ChainWith.enter`,
+`ChainWith.of_iter`, `ChainWith.of_rounds`, `Runs.of_chainWith` and `Runs.of_chainsWith`
+(`LoopPaths`, `Runs.of_loop` and `Runs.of_loops` take none). This file states the `contract = false`
+case; with `contract = true` (blocks with `fmul contract`) read `coversPathWith true`,
+`WalkWith true`, `Valuation.lastWith true`, `Valuation.roundWith true`, `EdgeWith true`,
+`RoundWith true`, `BackWith true`, `coversChainWith true` and `ChainWith true` for
+`coversPathWith false`, `WalkWith false`, `Valuation.lastWith false`, `Valuation.round`, `Edge`,
+`Round`, `BackWith false`, `coversChain` and `ChainWith false` (docs/proofs/contract.md). The proofs
+are the same.
+
+All of these but `Round.of_inv` and the `ChainWith.of_` lemmas also take a flag `alloca`, for
+blocks with `alloca`s: the path checker `coversPathAt alloca contract` (MojoProof/Sym/Path.lean)
+and the loop checkers `coversChainAt`, `LoopSeg.coversRoundAt` and `coversChainsAt`, whose cases
+with the flag off are `coversPathWith`, `coversChainWith`, `LoopSeg.coversRoundWith` and
+`coversChainsWith`, by definition. With the flag, the frame a theorem reaches has some blocks
+`bs` in front of `f`'s `alloca` blocks, `(bif alloca then bs else []) ++ f.allocas` (the blocks
+of the paths run, `Valuation.allocsWith`); with it off that is `f.allocas`. `Block.sound_edge`
+names the blocks: `f'.allocas = (Valuation.entry c t.k m f).allocsWith contract l S ps ++
+f.allocas`. `Valuation.allocsWith_cond` turns that into the `bif` form, `allocas_trans` composes
+two of them, and `Runs.of_chainsAt` is the kernel form with the flag (`Runs.of_chainsWith` is its
+case with the flag off). Each of them also says what `bs` is: the memory reached adds exactly
+the blocks `bif alloca then bs else []` to the start memory `m` (`Mem.Adds m bs m'`,
+MojoProof/Sym/Path.lean: a number is in the list exactly when `m` has no block there and `m'`
+has one, and every block of `m` is still there). A block's effects add their `alloca` blocks
+(`SEff.run_adds`), a path its blocks' (`Block.sound_pathAt_ptrs`), and `Mem.Adds.trans` composes
+two runs, so the edges, rounds and chains carry it. `Runs.of_chainsDead` is the caller's form:
+for a predicate `R` that reads only the blocks of `m`, `next` and the trace, if the last path
+leaves a memory `me` of `Q` and `R`, the thread runs to its end on a memory `m'` of `R` whose
+block at every number is `me`'s, dead where `m` has none (`Mem.Adds.foldl_setLive`). This file
+states the case with the flag off.
 
 ## Statement
 
 `Valuation.round h S B V` is the valuation at the header after one round from header valuation
-`V`: `Valuation.into` of the latch from its entry valuation (`Valuation.lastI`).
-`Round h p ds S B V` is the premise of one round: `WalkI V ((h, ds, S) :: B)`, the latch's exit
-goes to `h` (`Exit.dest`), and enters it at position `p` (`Exit.pc`). `Round` is decidable
+`V`: `Valuation.into` of the latch from its entry valuation (`Valuation.lastWith false`).
+`Round h p ds S B V` is the premise of one round: `WalkWith false V ((h, ds, S) :: B)`, the latch's
+exit goes to `h` (`Exit.dest`), and enters it at position `p` (`Exit.pc`). `Round` is decidable
 (`Round.dec`).
 
 If `Round` holds at `round^[i] (Valuation.entry c t.k m f)` for every `i < n`, the thread's steps
@@ -40,9 +63,9 @@ targets, the loop headers.
 invariant "the entry valuation is the `i`-th iterate",
 `fun i W => W = round^[i] (Valuation.entry c t.k m f)`, which holds at 0 by `rfl`. One round from
 a thread at the header whose entry valuation is the `i`-th iterate:
-- round `i`'s premises are a path's (`WalkI`), so `Block.sound_pathI` runs the path to the
-  latch's end (`Ends`, from `lastI`), and `lastI` keeps the context and the function
-  (`Valuation.lastI_k`);
+- round `i`'s premises are a path's (`WalkWith false`), so `Block.sound_pathWith_ptrs` runs the
+  path to the latch's end (`Ends`, from `lastWith false`), and `lastWith false` keeps the context
+  and the function (`Valuation.lastWith_k`);
 - the latch's exit goes to `h` (`Exit.dest`), so `Ends.edge` takes the branch, into a frame of
   `fn` at `h`'s position `Exit.pc`, which `Round` says is `p`;
 - the entry valuation there is `round` of the `i`-th iterate, the `(i + 1)`-th
@@ -53,9 +76,9 @@ The first two steps are `Block.sound_edge`; `Steps.trans_step` composes the step
 ## Dependencies
 
 `Block.sound_rounds`, `Block.sound_edge` (MojoProof/Sym/Loop.lean);
-`Block.sound_pathI`, `Ends.edge`, `Valuation.lastI_k` (MojoProof/Sym/Path.lean); `Steps.trans_step`
-(MojoProof/Sym/Block.lean); `Function.iterate_succ_apply'` (Mathlib);
-`succs` (MojoProof/Sym/Info.lean) for `backEdges`.
+`Block.sound_pathWith_ptrs`, `Ends.edge`, `Valuation.lastWith_k` (MojoProof/Sym/Path.lean);
+`Steps.trans_step` (MojoProof/Sym/Rel.lean); `Function.iterate_succ_apply'` (Mathlib); `succs`
+(MojoProof/Sym/Info.lean) for `backEdges`.
 
 ## Instances
 
@@ -64,12 +87,13 @@ through `Runs.of_loop` and `Runs.of_loops`.
 
 # Loops from an invariant (`Round.of_inv`, `Block.sound_loop_inv`, `Runs.of_loops`)
 
-Lean: `MojoProof/Sym/Loop.lean`. Tests: `MojoProofTest/SymLoop.lean`.
+Lean: `MojoProof/Sym/Loop.lean`. Tests: `MojoProofTest/SymLoop.lean`,
+`MojoProofTest/SymLoopAlloca.lean`.
 
-**Scope.** Every program `P`, function `fn`, entry path, loop path and exit path that `coversPathI`
-accepts, every trip count `n`, every invariant `I : Nat → Valuation → Prop` (indexed by the round
-number; an invariant `J` that does not depend on the round is `fun _ => J`), every predicate `Q`
-on memories, every context of `P`, and every thread with one frame of `fn`.
+**Scope.** Every program `P`, function `fn`, entry path, loop path and exit path that
+`coversPathWith false` accepts, every trip count `n`, every invariant `I : Nat → Valuation → Prop`
+(indexed by the round number; an invariant `J` that does not depend on the round is `fun _ => J`),
+every predicate `Q` on memories, every context of `P`, and every thread with one frame of `fn`.
 
 ## Statement
 
@@ -77,11 +101,11 @@ on memories, every context of `P`, and every thread with one frame of `fn`.
    `W`, `I i W` gives both `Round h p ds S B W` and `I (i + 1) (Valuation.round h S B W)`. Then
    `Round` holds at `round^[i] V` for every `i < n`, and `I n (round^[n] V)` holds. These are the
    premises of every round for trip count `n`, from the invariant alone.
-2. `Block.sound_edge` is `Block.sound_pathI` followed by the last block's edge. Take a path
-   `(l, ds, S) :: ps` that `coversPathI` accepts from `p0`, and a thread whose innermost frame `f`
-   (above `rest`) is at block `l`'s position `p0`. Suppose the path's premises hold (`WalkI`) and
-   the last block's exit goes to `d` (`Exit.dest`). Then the thread's steps reach a frame `f'`
-   above `rest` with these properties:
+2. `Block.sound_edge` is `Block.sound_pathWith_ptrs` followed by the last block's edge. Take a path
+   `(l, ds, S) :: ps` that `coversPathWith false` accepts from `p0`, and a thread whose innermost
+   frame `f` (above `rest`) is at block `l`'s position `p0`. Suppose the path's premises hold
+   (`WalkWith false`) and the last block's exit goes to `d` (`Exit.dest`). Then the thread's steps
+   reach a frame `f'` above `rest` with these properties:
    - it runs `fn` at block `d`'s position `Exit.pc fn d` (after `d`'s `phi`s for `Exit.phi`);
    - its `alloca` blocks and caller's register are `f`'s;
    - its entry valuation is `Valuation.round l S ps` of `f`'s. For a path of one block that is
@@ -92,18 +116,18 @@ on memories, every context of `P`, and every thread with one frame of `fn`.
 4. `Runs.of_loop` is the thread-level theorem. A loop `L : LoopPaths` bundles three paths of `fn`:
    the entry path `(L.l, L.ds, L.S) :: L.E` to the header `L.h`, the loop path
    `(L.h, L.dh, L.H) :: L.B` and the exit path `(L.h, L.dh, L.H) :: L.X`, both from the header's
-   position `L.p` (after its `phi`s). `L.covers P fn p0` says `coversPathI` accepts the three, the
-   entry path from `p0`. `Ret W Q ps` says a path runs from `W` to `ret` with a memory of `Q`:
-   its premises (`WalkI`), a last exit `ret`, and a memory `me` of `Q` that the last block's
-   effects make. `RetL V Q L` is the premise of the whole run from `V`:
-   - **Entry.** The entry path's premises hold from `V` (`WalkI`), and its last exit goes to `L.h`
-     (`Exit.dest`) at position `L.p` (`Exit.pc`).
+   position `L.p` (after its `phi`s). `L.covers P fn p0` says `coversPathWith false` accepts the
+   three, the entry path from `p0`. `Ret W Q ps` says a path runs from `W` to `ret` with a memory of
+   `Q`: its premises (`WalkWith false`), a last exit `ret`, and a memory `me` of `Q` that the last
+   block's effects make. `RetL V Q L` is the premise of the whole run from `V`:
+   - **Entry.** The entry path's premises hold from `V` (`WalkWith false`), and its last exit goes
+     to `L.h` (`Exit.dest`) at position `L.p` (`Exit.pc`).
    - **Loop.** For some invariant `I` and trip count `n`: `I 0` holds at the header's entry
      valuation `Valuation.round L.l L.S L.E V`, and every round `i < n` from a valuation of
      `I i` goes back to the header with `I (i + 1)` after it. For a loop with no nested loop
      (`L.inner = []`) that is equivalent to `Round` of the loop path and `I (i + 1)` at
-     `Valuation.round`, as in (1). With nested loops the round runs through them (`Chain`, in
-     the last section).
+     `Valuation.round`, as in (1). With nested loops the round runs through them
+     (`ChainWith false`, in the last section).
    - **Exit.** For every `W`, `I n W` gives `Ret W Q` of the exit path.
 
    Take a thread `t` with one frame `f` of `fn` at block `L.l`'s position `p0`, on memory `m`,
@@ -136,31 +160,32 @@ on memories, every context of `P`, and every thread with one frame of `fn`.
 
    Round `i < n`'s premise is then the preservation hypothesis at `i` and `round^[i] V`, using
    `i ≤ n`. The last conjunct is the case `i = n`.
-2. `Block.sound_loop` and `Chain.reach` use it for each round and each edge into a header.
-   - `Block.sound_pathI` gives `Ends` at the last block's entry valuation (`Valuation.lastI`).
-   - `Valuation.lastI_k` says that valuation has `f`'s context and function.
+2. `Block.sound_loop` and `ChainWith.reach` use it for each round and each edge into a header.
+   - `Block.sound_pathWith_ptrs` gives `Ends` at the last block's entry valuation
+     (`Valuation.lastWith false`).
+   - `Valuation.lastWith_k` says that valuation has `f`'s context and function.
    - `Ends.edge` takes the branch: a step into `d` at position `Exit.pc V.fn d`, with entry
      valuation `Valuation.into`. That is `Valuation.round l S ps V` by definition.
    - `Steps.trans_step` adds the branch step to the path's steps.
 3. (1) gives `Block.sound_loop`'s premise. Its conclusion's entry valuation is `round^[n]` of the
    first, which (1) says satisfies `I n`.
-4. `Runs.of_loop` is `Runs.of_chain` of the one loop (the last section), whose proof composes
+4. `Runs.of_loop` is `Runs.of_chainWith` of the one loop (the last section), whose proof composes
    three parts:
    - `Block.sound_edge` on the entry path, with `rest = []`, reaches a frame at `h`'s position
      `Exit.pc fn h`, which is `p`. Its entry valuation is `Valuation.round l S E` of `f`'s, so
      `I 0` holds there.
    - `Block.sound_rounds` reaches `h`'s position `p` again, at a valuation of `I n`; with no
      nested loop each round is `Block.sound_edge` of the loop path.
-   - The exit hypothesis there gives `WalkI` and `ret`. `Block.sound_retR` then gives the steps
-     to the `ret` and its `.done` step on the memory the effects make, which is the memory of `Q`
-     because `Except.ok` is injective.
+   - The exit hypothesis there gives `WalkWith false` and `ret`. `Block.sound_retWith` then gives
+     the steps to the `ret` and its `.done` step on the memory the effects make, which is the memory
+     of `Q` because `Except.ok` is injective.
    - The `alloca` blocks are still `f`'s (each part keeps them), and `Steps.trans` composes the
      three runs into `Runs`.
-5. `Runs.of_loops` is `Runs.of_chains` (the last section) with the witness `L.chain`:
+5. `Runs.of_loops` is `Runs.of_chainsWith` (the last section) with the witness `L.chain`:
    `coversLoops` is `coversChains` of `loops.map LoopPaths.chain` (`List.mem_map_of_mem`).
    `coversChains` gives the chosen chain's start label and `coversChain` from position 0
    (`List.all_eq_true`); the start label is `f.label` because both are the label of `fn`'s first
-   block. `Runs.of_chain` gives the run, and with `f.allocas = []` the cleanup is the identity.
+   block. `Runs.of_chainWith` gives the run, and with `f.allocas = []` the cleanup is the identity.
 6. Induction on `bs`. For `a :: bs` with `b ∉ a :: bs`, `b ≠ a`; `Mem.setLive a v` either sets
    block `a` (`Mem.set`, which changes only `a`) or leaves the memory unchanged. The load lemma
    rewrites `Mem.load`, `Mem.check`, `Mem.block` and `Mem.addr` with the block lemma.
@@ -169,9 +194,9 @@ Each round of `Block.sound_loop` is `Block.sound_edge` (the proof in the first s
 
 ## Dependencies
 
-- `Block.sound_rounds`, `Runs.of_chain`, `Runs.of_chains` (MojoProof/Sym/Loop.lean);
-- `Block.sound_pathI`, `Block.sound_retR`, `Ends.edge`, `Valuation.lastI_k`
-  (MojoProof/Sym/Path.lean); `Steps.trans`, `Steps.trans_step` (MojoProof/Sym/Block.lean);
+- `Block.sound_rounds`, `Runs.of_chainWith`, `Runs.of_chainsWith` (MojoProof/Sym/Loop.lean);
+- `Block.sound_pathWith_ptrs`, `Block.sound_retWith`, `Ends.edge`, `Valuation.lastWith_k`
+  (MojoProof/Sym/Path.lean); `Steps.trans`, `Steps.trans_step` (MojoProof/Sym/Rel.lean);
 - `Runs` (MojoProof/Sym/Sched.lean);
 - `Mem.setLive`, `Mem.set`, `Mem.load` (MojoProof/Sem/);
 - `Function.iterate_succ_apply'` (Mathlib).
@@ -247,7 +272,7 @@ count up to `2 ^ 60` and every memory with room for the cells. Four things are n
 `backEdges` uses the block order, not dominators. For the reducible loops the compiler emits the
 two agree, but this is not proved.
 
-# Loops in sequence and nested loops (`Chain`, `Chain.reach`, `Runs.of_chains`)
+# Loops in sequence and nested loops (`ChainWith`, `ChainWith.reach`, `Runs.of_chainsWith`)
 
 Lean: `MojoProof/Sym/Loop.lean`. Tests: `MojoProofTest/SymLoop.lean` (`cnt2_covers`,
 `cnt2_retLs`, `cnt2_run`, `cnt2_twins`; `nest_covers`, `nest_rounds`, `nest_retLs`, `nest_run`,
@@ -257,7 +282,7 @@ Lean: `MojoProof/Sym/Loop.lean`. Tests: `MojoProofTest/SymLoop.lean` (`cnt2_cove
 rounds, to any depth), path before them, position `p0`, and predicate `F` on the last path (or
 `Q` on memories), such that `coversChain` accepts the paths; for each loop, every trip count and
 invariant; every context of `P` and every thread whose innermost frame runs `fn` (with one frame
-for `Runs.of_chain`). The instances are two functions written in the test, `cnt2` (two loops in
+for `Runs.of_chainWith`). The instances are two functions written in the test, `cnt2` (two loops in
 sequence) and `nest` (two nested loops), each on one bound and one memory.
 
 ## Statement
@@ -265,11 +290,11 @@ sequence) and `nest` (two nested loops), each on one bound and one memory.
 Definitions (MojoProof/Sym/Loop.lean).
 
 - `Edge h p V l ds S E`: the premises of the path `(l, ds, S) :: E` from `V` hold
-  (`WalkI`), and its last block's exit goes to `h` (`Exit.dest`) at position `p` (`Exit.pc`).
-  It is decided by evaluation (`Edge.dec`, :132).
+  (`WalkWith false`), and its last block's exit goes to `h` (`Exit.dest`) at position `p`
+  (`Exit.pc`). It is decided by evaluation (`Edge.dec`, :240).
 - `Round h p ds S B V` is `Edge h p V h ds S B`: the loop path's last edge goes back into
-  its own header (`Round.dec`, :147).
-- `Back h p J V l ds S E`: `Edge h p V l ds S E` and `J (Valuation.round l S E V)`. This
+  its own header (`Round.dec`, :251).
+- `BackWith false h p J V l ds S E`: `Edge h p V l ds S E` and `J (Valuation.round l S E V)`. This
   is the end of a round: the last path goes back to the header at `p`, and `J` holds at the
   header's entry valuation after it.
 - `LoopSeg`: one loop, with fields `h p dh H B X inner`:
@@ -288,7 +313,7 @@ Definitions (MojoProof/Sym/Loop.lean).
   the one loop.
 - `coversChain P fn p0 l ds S E Ls` and `LoopSeg.coversRound P fn L` are defined
   together (`mutual`), by structural recursion on the loops:
-  - with no loop, `coversChain` is `coversPathI P fn p0 ((l, ds, S) :: E)`;
+  - with no loop, `coversChain` is `coversPathWith false P fn p0 ((l, ds, S) :: E)`;
   - with `L :: Ls`, it is that, `L.coversRound P fn`, and
     `coversChain P fn L.p L.h L.dh L.H L.X Ls`, so the path out takes the place of the path
     before for the next loop;
@@ -297,19 +322,21 @@ Definitions (MojoProof/Sym/Loop.lean).
 
   `LoopPaths.covers P fn p0 L` is `coversChain P fn p0 L.l L.ds L.S L.E [L.toLoopSeg]`.
   These are Booleans that the kernel evaluates (`decide +kernel`).
-- `Chain F Ls V l ds S E` is an inductive predicate. `F` is a predicate on a valuation
+- `ChainWith false F Ls V l ds S E` is an inductive predicate. `F` is a predicate on a valuation
   and a path, and it holds of the last path. Its two constructors are these.
-  - `Chain.last`: `F V l ds S E` gives `Chain F [] V l ds S E`.
-  - `Chain.loop I n`, for an invariant `I : Nat → Valuation → Prop` and a trip count `n`. It
-    gives `Chain F (L :: Ls) V l ds S E` from four premises:
+  - `ChainWith.last`: `F V l ds S E` gives `ChainWith false F [] V l ds S E`.
+  - `ChainWith.loop I n`, for an invariant `I : Nat → Valuation → Prop` and a trip count `n`. It
+    gives `ChainWith false F (L :: Ls) V l ds S E` from four premises:
     - `Edge L.h L.p V l ds S E`;
     - `I 0 (Valuation.round l S E V)`;
     - for every `i < n` and every `W` with `I i W`,
-      `Chain (Back L.h L.p (I (i + 1))) L.inner W L.h L.dh L.H L.B`, so the round runs the loop
-      path and the nested loops and goes back to the header with `I (i + 1)`;
-    - for every `W` with `I n W`, `Chain F Ls W L.h L.dh L.H L.X`.
-- `RetLs Q Ls V l ds S E` is `Chain` with `F V l ds S E := Ret V Q ((l, ds, S) :: E)`:
-  the last path runs to `ret` with a memory of `Q`. `RetL V Q L` is
+      `ChainWith false (BackWith false L.h L.p (I (i + 1))) L.inner W L.h L.dh L.H L.B`, so the
+      round runs
+      the loop path and the nested loops and goes back to the header with `I (i + 1)`;
+    - for every `W` with `I n W`, `ChainWith false F Ls W L.h L.dh L.H L.X`.
+- `RetLs Q Ls V l ds S E` is `RetLsWith false`, `ChainWith false` with
+  `F V l ds S E := RetWith false V Q ((l, ds, S) :: E)` (`Ret`): the last path runs to `ret`
+  with a memory of `Q`. `RetL V Q L` is
   `RetLs Q [L.toLoopSeg] V L.l L.ds L.S L.E`.
 - `coversChains P fn Cs`: every chain of `Cs` starts at the label of `fn`'s first block,
   and `coversChain` accepts it from position 0. `coversLoops P fn loops` is
@@ -323,41 +350,60 @@ Theorems.
    its entry valuation, steps to a frame of `fn` above `rest` at `h`'s position `p`, with `f`'s
    `alloca` blocks and caller's register and with `I (i + 1)` at its entry valuation. Then every
    such thread with `I 0` steps to such a frame with `I n`. A round is one loop path in
-   `Block.sound_loop`, and it runs the nested loops in `Chain.reach`.
-2. `Chain.reach`. Take `hP : c.prog = P`, `Chain F Ls V l ds S E` and
+   `Block.sound_loop`, and it runs the nested loops in `ChainWith.reach`.
+2. `ChainWith.reach`. Take `hP : c.prog = P`, `ChainWith false F Ls V l ds S E` and
    `coversChain P fn p0 l ds S E Ls = true`. Take a thread `t` on memory `m` with
    `t.frames = f :: rest`, `f.fn = fn`, `f.label = l`, `f.pc = p0` and
    `Valuation.entry c t.k m f = V`. Then `t`'s steps reach a thread `t'` on memory `m'` and a
    last path `(l', ds', S') :: E'`, such that:
    - `t'.frames = f' :: rest`, with `f'.fn = fn`, `f'.label = l'` and `f'.pc = p'`;
    - `f'.allocas = f.allocas` and `f'.dest = f.dest`;
-   - `coversPathI P fn p' ((l', ds', S') :: E') = true`;
+   - `coversPathWith false P fn p' ((l', ds', S') :: E') = true`;
    - `F (Valuation.entry c t'.k m' f') l' ds' S' E'`.
-3. `Runs.of_chain`. Take `hP`, a list `Ls`, and `coversChain P fn p0 l ds S E Ls = true`.
+3. `Runs.of_chainWith`. Take `hP`, a list `Ls`, and `coversChain P fn p0 l ds S E Ls = true`.
    Take a thread `t` with `t.frames = [f]`, `f.fn = fn`, `f.label = l`, `f.pc = p0` and
    `RetLs Q Ls (Valuation.entry c t.k m f) l ds S E`. Then
-   `∃ me, Runs c t m (f.allocas.foldl (fun m b => m.setLive b false) me) ∧ Q me`.
-   `Runs.of_loop` is `Runs.of_chain hP [L.toLoopSeg]`.
-4. `Runs.of_chains` takes `Runs.of_loops`'s premises, with `coversChains P fn Cs = true`
-   and `∃ C ∈ Cs, RetLs Q C.loops (Valuation.entry c t.k m f) C.l C.ds C.S C.E` in place of
-   theirs. It concludes `∃ m', Runs c t m m' ∧ Q m'`. `Runs.of_loops` is
-   `Runs.of_chains` with the witness `L.chain`.
-5. `Chain.of_iter` holds for every `F`, loop `L`, loops `Ls`, path `(l, ds, S) :: E`,
+   `∃ bs me, Runs c t m (((bif alloca then bs else []) ++ f.allocas).foldl
+   (fun m b => m.setLive b false) me) ∧ Q me ∧ m.Adds (bif alloca then bs else []) me`, with
+   `alloca = false` here.
+   `Runs.of_loop` is `Runs.of_chainWith hP [L.toLoopSeg]` without the flags.
+4. `Runs.of_chainsAt` takes `Runs.of_loops`'s premises, with `coversChainsAt alloca false P fn Cs
+   = true` and `∃ C ∈ Cs, RetLs Q C.loops (Valuation.entry c t.k m f) C.l C.ds C.S C.E` in place
+   of theirs. It concludes `∃ bs me, Runs c t m ((bif alloca then bs else []).foldl
+   (fun m b => m.setLive b false) me) ∧ Q me ∧ m.Adds (bif alloca then bs else []) me`.
+   `Runs.of_chainsWith` is its case with the flag
+   off, concluding `∃ m', Runs c t m m' ∧ Q m'`, and `Runs.of_loops` is `Runs.of_chainsWith` with
+   the witness `L.chain`.
+5. `ChainWith.of_iter` holds for every `F`, loop `L`, loops `Ls`, path `(l, ds, S) :: E`,
    valuation `V`, function `g` on valuations and trip count `n`. Write
    `V₀ = Valuation.round l S E V` for the header's entry valuation. Suppose these hold:
    - `Edge L.h L.p V l ds S E`;
-   - `Chain (Back L.h L.p (· = g (g^[i] V₀))) L.inner (g^[i] V₀) L.h L.dh L.H L.B` for every
-     `i < n`;
-   - `Chain F Ls (g^[n] V₀) L.h L.dh L.H L.X`.
+   - `ChainWith false (BackWith false L.h L.p (· = g (g^[i] V₀))) L.inner (g^[i] V₀) L.h L.dh
+     L.H L.B`
+     for every `i < n`;
+   - `ChainWith false F Ls (g^[n] V₀) L.h L.dh L.H L.X`.
 
-   Then `Chain F (L :: Ls) V l ds S E` holds. The invariant is "`W` is the `i`-th iterate of
-   `g`". With nested loops the round function `g` is not `Valuation.round` of the loop path.
-6. `Chain.of_rounds` is for a loop with no nested loop (`L.inner = []`). Suppose that
+   Then `ChainWith false F (L :: Ls) V l ds S E` holds. The invariant is "`W` is the `i`-th
+   iterate of `g`". With nested loops the round function `g` is not `Valuation.round` of the loop
+   path.
+6. `ChainWith.of_rounds` is for a loop with no nested loop (`L.inner = []`). Suppose that
    `Edge L.h L.p V l ds S E` holds and that, for every `i < n`, `Round L.h L.p L.dh L.H L.B`
    holds at `(Valuation.round L.h L.H L.B)^[i] (Valuation.round l S E V)`. Suppose also that
-   `Chain F Ls` holds at the `n`-th iterate after `L`'s path out. Then
-   `Chain F (L :: Ls) V l ds S E`. On a concrete valuation and `n`, the first two premises are
-   closed and decidable (`Edge.dec`, `Round.dec`).
+   `ChainWith false F Ls` holds at the `n`-th iterate after `L`'s path out. Then
+   `ChainWith false F (L :: Ls) V l ds S E`. On a concrete valuation and `n`, the first two
+   premises are closed and decidable (`EdgeWith.dec`, `RoundWith.dec`).
+7. `BackWith.enter`: take `hP`, `coversPathAt alloca false P fn p0 ((l, ds, S) :: E) = true`
+   and a thread `t` on memory `m` with `t.frames = f :: rest`, `f.fn = fn`, `f.label = l`,
+   `f.pc = p0` and `BackWith false d q J (Valuation.entry c t.k m f) l ds S E`. Then `t`'s steps
+   reach a frame `f'` of `fn` above `rest` at block `d`'s position `q`, with
+   `f'.allocas = (bif alloca then bs else []) ++ f.allocas` and `m.Adds (bif alloca then bs
+   else []) m'` for some `bs`, `f'.dest = f.dest` and `J (Valuation.entry c t'.k m' f')`.
+   `ChainWith.enter` concludes the same from `coversChainAt alloca false P fn p0 l ds S E Ls =
+   true` and `ChainWith false (BackWith false d q J) Ls (Valuation.entry c t.k m f) l ds S E`: a
+   chain whose last path out stops after its last edge, into `d` at `q`, with no second chain
+   relation. A continuation from that frame joins it (`RunsVia.of_chain`,
+   MojoProof/Sym/OblSeg.lean); the instance is gemv_kernel's chain into `%78`
+   (`bfly_at`, MojoProofTest/SymGemvTail.lean).
 
 ## Proof
 
@@ -365,32 +411,39 @@ Theorems.
    premises for `i < n`) reaches the header with `I n`. The premise at `n` then reaches it again
    with `I (n + 1)`. `Steps.trans` composes the steps, and each part keeps the `alloca` blocks
    and the caller's register.
-2. Induction on `Chain`, for every position, thread, memory and frame.
-   - `Chain.last`: there is no step. `coversChain` of no loop is `coversPathI` of the path.
-   - `Chain.loop`: `coversChain` splits into the path, `L.coversRound` and the rest.
+2. Induction on `ChainWith`, for every position, thread, memory and frame.
+   - `ChainWith.last`: there is no step. `coversChain` of no loop is `coversPathWith false` of the
+     path.
+   - `ChainWith.loop`: `coversChain` splits into the path, `L.coversRound` and the rest.
      `L.coversRound` is `coversChain` of the round's paths, by cases on `L`.
      - `Block.sound_edge` enters `L`'s header at `L.p`, with `I 0`.
      - `Block.sound_rounds` runs the `n` rounds. Each round is the induction hypothesis on the
-       round's `Chain`, which reaches its last path. There `Back` gives that path's premises,
-       its edge to `L.h` at `L.p` and `I (i + 1)`, and `Block.sound_edge` takes that edge.
+       round's `ChainWith false`, which reaches its last path. There `BackWith false` gives that
+       path's premises, its edge to `L.h` at `L.p` and `I (i + 1)`, and `BackWith.enter` takes
+       that edge.
      - The induction hypothesis on the path out, at a valuation of `I n`, reaches the last path.
 
      `Steps.trans` composes the runs.
-3. `Chain.reach` reaches the last path, where `Ret` gives `WalkI` and `ret`. `Block.sound_retR`
-   gives the steps and the `.done` step. `Except.ok.inj` matches the memory, and the `alloca`
-   blocks are `f`'s.
+3. `ChainWith.reach` reaches the last path, where `Ret` gives `WalkWith false` and `ret`.
+   `Block.sound_retWith` gives the steps and the `.done` step. `Except.ok.inj` matches the memory,
+   and the `alloca` blocks are `f`'s.
 4. `coversChains` gives the chosen chain's start label and `coversChain` from 0
    (`List.all_eq_true`). The start label is `f.label`, because both are the label of `fn`'s first
    block. With `f.allocas = []` the cleanup is the identity. For `Runs.of_loops`, `coversLoops`
    is `coversChains` of the map, and `List.mem_map_of_mem` gives the witness.
-5. `Chain.loop` with `I i W := W = g^[i] V₀`. `I 0` is `rfl`. A round from the `i`-th iterate
+5. `ChainWith.loop` with `I i W := W = g^[i] V₀`. `I 0` is `rfl`. A round from the `i`-th iterate
    ends with the `(i + 1)`-th (`Function.iterate_succ_apply'`). `I n W` is `W = g^[n] V₀`.
-6. `Chain.of_iter` with `g := Valuation.round L.h L.H L.B`. With no nested loop, a round's
-   `Chain` is `Chain.last` of `Back`: the `Round` premise and `rfl`.
+6. `ChainWith.of_iter` with `g := Valuation.round L.h L.H L.B`. With no nested loop, a round's
+   `ChainWith false` is `ChainWith.last` of `BackWith false`: the `Round` premise and `rfl`.
+7. `BackWith.enter` is `Block.sound_edge` at `BackWith`'s `EdgeWith`, the position by
+   `EdgeWith`'s last conjunct and the blocks by `Valuation.allocsWith_cond`. `ChainWith.enter`
+   is `ChainWith.reach` to the last path, then `BackWith.enter`, the blocks composed by
+   `allocas_trans`. `Block.sound_loop`'s rounds are `BackWith.enter` with `J` "the next
+   iterate".
 
 ## Dependencies
 
-`Block.sound_edge`, `Block.sound_retR`, `Steps.trans`, `Ret`, `Valuation.round`,
+`Block.sound_edge`, `Block.sound_retWith`, `Steps.trans`, `Ret`, `Valuation.round`,
 `Function.iterate_succ_apply'`, `List.all_eq_true`, `List.mem_map_of_mem`.
 
 ## Instances
@@ -411,16 +464,16 @@ Two loops in sequence:
   header. `cnt2_covers` checks `coversChains cnt2P cnt2 [cnt2C] = true` by
   `decide +kernel`.
 - `cnt2_retLs` is `RetLs` of the two loops at `frame2`'s entry valuation, with `%n = 2`
-  and `%p` and `%s` at the two 16-byte blocks of `out3`. It uses `Chain.of_rounds` with trip
-  count 2 twice, then `Chain.last`. Its premises are checked by `decide +kernel`, and so are the
+  and `%p` and `%s` at the two 16-byte blocks of `out3`. It uses `ChainWith.of_rounds` with trip
+  count 2 twice, then `ChainWith.last`. Its premises are checked by `decide +kernel`, and so are the
   effects of the last block, which leave cells 0 and 1 of both blocks holding 0 and 1
-  (`run_ok`, :644).
-- `cnt2_run` is `Runs.of_chains` with those two. The thread `⟨[frame2], 0⟩` runs on
+  (`run_ok`, :651).
+- `cnt2_run` is `Runs.of_chainsWith` with those two. The thread `⟨[frame2], 0⟩` runs on
   `out3`'s memory to its end, and in the memory it leaves cells 0 and 1 of both blocks hold 0
   and 1.
 - `cnt2_twins` has two parts.
   - The first loop alone, `RetLs Q [loop1] V 0 cntE.obls cntE []`, fails for every `Q` and
-    `V`. The invariant holds at the trip count (by induction on the rounds, each `Chain.last`).
+    `V`. The invariant holds at the trip count (by induction on the rounds, each `ChainWith.last`).
     There `Ret` needs the path out `1 → 3` to end in `ret`, but block `3`'s exit goes to header
     `4`.
   - `coversChains` refuses the chain whose second loop starts at its header's position 0 (the
@@ -447,10 +500,10 @@ Two nested loops:
   `decide +kernel`.
 - `nest_retLs` is `RetLs` of `[loopI]` at `frameT`'s entry valuation (`%n = 2`, `%p` at
   `out2`'s block), where `Q` says that cells 0 and 1 hold 1. It is proved in three parts:
-  - the outer loop by `Chain.of_iter`, with `outerT` and trip count 2;
-  - each outer round by `Chain.of_rounds` on `loopJ`, with trip count 2 (`nest_rounds`);
+  - the outer loop by `ChainWith.of_iter`, with `outerT` and trip count 2;
+  - each outer round by `ChainWith.of_rounds` on `loopJ`, with trip count 2 (`nest_rounds`);
   - the outer path out to `ret`, with the memory's cells, by `decide +kernel`.
-- `nest_run` is `Runs.of_chains` with `nest_covers` and `nest_retLs`. The thread
+- `nest_run` is `Runs.of_chainsWith` with `nest_covers` and `nest_retLs`. The thread
   `⟨[frameT], 0⟩` runs on `out2`'s memory to its end, and in the memory it leaves cells 0 and 1
   hold 1, the outer counter's last value.
 - `nest_twins` has two parts.
@@ -463,6 +516,24 @@ Two nested loops:
 
 The one-loop instances `cnt_covers`, `cnt_loops`, `cnt_retL`, `cnt_run` and `cnt_run_outC` go
 through `Runs.of_loop` and `Runs.of_loops`, which are corollaries of the theorems above.
+
+With the flag `alloca` (MojoProofTest/SymLoopAlloca.lean), on one hand-built kernel `@k` with
+gemv_kernel's header and data layout: a counting loop from 0 to 2 whose body `%4` allocates an
+`i32` each round, its locals numbered as the parser numbers them; its printed text imports back
+to the same module (`Mutate.admission`).
+
+- `loopK_covers`: `coversChainsAt true false` accepts the entry block, the loop path from the
+  header's position 1 and the path out; the body's summary has the `alloca`'s effect, and
+  `coversChainsWith false` refuses the loop.
+- `loopK_mutant`: with the flag, the checker refuses the body summary without its `alloca`
+  effect and the loop entered at the header's position 0, its `phi`.
+- `loopK_retLs` and `loopK_run`: for the context `ctx0` with the program, the thread whose one
+  frame is at `@k`'s first block and the memory `memK` (one launch block at number 1 holding the
+  `i32` 7, so the fresh numbers start at 2), `ChainWith.of_rounds` with trip count 2 and
+  `Runs.of_chainsDead (alloca := true)`: the thread runs to its end on a memory whose two
+  rounds' blocks 18 and 83 are dead (4 bytes each) and whose load of block 1 is `memK`'s, 7.
+- `loopK_inUse`: on `memK` with a block already at 18 (`memX`), the kernel decides that the
+  rounds' premises fail: the first round's `alloca` faults on the number in use.
 
 The theorems cover every program and every chain of loops, in sequence and nested, that the
 checker accepts. The first part of each twin covers every predicate, and for `cnt2_twins` every
@@ -601,7 +672,8 @@ its base in the registers `rs` (`SVal.baseIn`, MojoProof/Sym/Payload.lean: a reg
 a `getelementptr` node based at one). `LoopSeg.loadsFrom F L rs` holds when the loop path keeps
 each register of `rs` (`Func.keeps`) and each of its blocks passes `Summary.loadsIn rs`.
 `Valuation.iterate_loads`: take a set of blocks `Q` and a property `P` of memories that logging a
-read of a block of `Q` keeps (an access with `a.write = false` and `Q a.ptr.block`). If the loop
+read of a block of `Q` that is not an `atomicrmw`'s keeps (an access with `a.write = false`,
+`a.atomic = none` and `Q a.ptr.block`; a load logs such an access). If the loop
 passes `LoopSeg.loadsFrom F L rs`, the registers `rs` have values at `V` that name only blocks of
 `Q`, and `P` holds at `V`'s memory, then `P` holds after every number of rounds. Instances:
 

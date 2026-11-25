@@ -536,10 +536,11 @@ theorem memOk23 : ∃ g c, Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
 /-! ## The instance of `Kernel.skel_sound` at `L23` -/
 
 /-- The run check at `L23`: the run (fuel 64 a thread, one phase) ends in a grid whose trace is
-not racy and keeps `!invariant.load`. -/
+not racy and keeps `!invariant.load` (the core's `racy` and `kept` at `sig`). -/
 def runCheck23 (g : Grid) (c : Nat → Ctx) : Bool :=
   match g.run L23 c 64 1 with
-  | .ok z => !racy z.mem.trace && kept z.mem.trace
+  | .ok z => !GPUProof.racy sig (z.mem.trace.map (Event.toCore L23)).reverse &&
+    GPUProof.kept sig (z.mem.trace.map (Event.toCore L23)).reverse
   | .error _ => false
 
 /-- The run check passes at the start at `L23`, by kernel evaluation. -/
@@ -551,8 +552,9 @@ blocks 1 to 3 payload (`memOk23`), and it reaches a grid in which every thread h
 (`runCheck23_ok`, `Grid.run_reach`, `Grid.run_done`) and that is not bad. -/
 theorem vadd23Ok : ∃ g c z, Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
       (Kernels.vadd.args 1 2 3 (BitVec.ofNat 32 5)) mem5 ch₀ ω₀ = .ok (g, c) ∧
-    labV.MemOk (payV · = true) L23 c g ∧ ReflTransGen (Grid.Step L23 c) g z ∧ z.Done ∧
-    ¬ z.Bad L23 c := by
+    labV.MemOk (payV · = true) L23 c g ∧ ReflTransGen (Grid.Step L23 c) g z ∧
+    GPUProof.Done sig (z, L23, c) ∧
+    ¬ GPUProof.Bad sig (z, L23, c) := by
   obtain ⟨g, c, hs, hM⟩ := memOk23
   obtain ⟨g', c', hs', hr⟩ := atStart23_ok runCheck23_ok
   rw [hs] at hs'
@@ -562,15 +564,14 @@ theorem vadd23Ok : ∃ g c z, Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 L23
   next z hz =>
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at hr
     obtain ⟨hrc, hk⟩ := hr
-    have hd : z.Done := Grid.run_done hz
+    have hd : GPUProof.Done sig (z, L23, c) := Grid.run_done hz
+    have hsz := (Grid.start_reach_size hs (Grid.run_reach hz)).le
     refine ⟨g, c, z, hs, hM, Grid.run_reach hz, hd, ?_⟩
     rintro (hf | hr | hk' | hr)
-    · exact done_not_faults hd hf
-    · rw [hrc] at hr
-      cases hr
-    · rw [hk] at hk'
-      cases hk'
-    · exact hd.not_raceEnabled hr
+    · exact done_not_faults hsz hd hf
+    · exact nomatch hrc.symm.trans hr
+    · exact nomatch hk.symm.trans hk'
+    · exact Grid.Done.not_raceEnabled hsz hd hr
   next => cases hr
 
 /-- **The instance of `Kernel.skel_sound` on `vector_addition` at `L23`**: under `labV` with

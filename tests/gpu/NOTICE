@@ -1,9 +1,13 @@
 MojoProof GPU run records: notice for the files in tests/gpu/
 
-Each directory <kernel>/ holds a record of a GPU run of a corpus kernel (record.txt), the file
-the run wrote (dump.txt: its inputs and outputs) and the test driver it ran. The records are
-conformance tests, not proofs: tests/gpu/Compare.lean runs the grid evaluator on the inputs of
-the dump and compares its output buffer with the GPU's.
+Each directory <kernel>/ holds a record of a GPU run of a corpus kernel (record.txt), the file the
+run wrote (dump.txt: its inputs and outputs) and the test driver it ran. The records are conformance
+tests, not proofs: tests/gpu/Compare.lean runs the grid evaluator on the inputs of the dump and
+compares its output buffer with the GPU's. The directories mma/, ldmatrix/ and cp-async/ hold
+records of one instruction each, not of a corpus kernel. Each has its own Compare.lean, which
+compares the dump with the library's model of the instruction (MojoProofTest/TensorCoreGpu.lean,
+MojoProofTest/AsyncGpu.lean), and its own NOTICE for its driver, a modified copy of Modular's
+test_wmma.mojo, test_ldmatrix.mojo and test_async_cpy_wait_group.mojo.
 
 The drivers are modified copies of Modular's code. Each keeps Modular's header, which reads:
 

@@ -22,6 +22,7 @@ One kernel, launch and address choice; every input word and oracle for `kernel_s
 namespace MojoProofTest.SkelKernel
 
 open MojoProof MojoProof.Sem MojoProof.LLVM MojoProofTest.PayloadRun
+open GPUProof
 open MojoProofTest.SkelStep (labB)
 open MojoProofTest.ScheduleOwned (every_sound)
 
@@ -70,15 +71,16 @@ theorem kernel_six_twin :
         (fun m => some m.blocks) (fun _ => True) := by
   refine ⟨run_twin.1, fun hk => ?_⟩
   obtain ⟨_, ⟨g, c, z, e, hz, hd, -⟩, -⟩ := hk.exists_obs (ω := fun _ _ => 0) rfl
+  have ha := Grid.Done.all (Grid.start_reach_size e hz).le hd
   rw [startF_eq] at e
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj e).symm
   have h : running z = true := by
     rcases reachF true hz with rfl | hz'
     · decide +kernel
     · exact every_sound hz' running_every
-  -- `running z` is the negation of `z.Done`'s test, by unfolding.
+  -- `running z` is the negation of the test of `Grid.Done.all`, by unfolding.
   have hd' : running z = false := by
-    have e := congrArg (!·) hd
+    have e := congrArg (!·) ha
     exact e
   cases h.symm.trans hd'
 

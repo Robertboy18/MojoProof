@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-LangRef's section on `sitofp` (the quote is the first sentence of its overview). The importer reads `sitofp` as `Inst.cast` with `CastOp.sitofp` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.intToFloat`. MojoProofTest/Modelled.lean runs a kernel of it (its row `sitofp`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr; ptrtoint before any store); refused (fptoui, fptosi, inttoptr, an ill-typed cast, or ptrtoint after a store): SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates), and ptrtoint before the block's first store only.
+LangRef's section on `sitofp` (the quote is the first sentence of its overview). The importer reads `sitofp` as `Inst.cast` with `CastOp.sitofp` (`Parser.inst`); the semantics gives it a meaning in `MojoProof.Sem.exec`, with `MojoProof.Sem.intToFloat`. MojoProofTest/Modelled.lean runs a kernel of it (its row `sitofp`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): `Sym.exec_cast` (the casts castV evaluates (castOk): not fptoui, fptosi or inttoptr; ptrtoint after an alloca on the memory the effects before it make (SNode.castAfter)); refused (fptoui, fptosi, inttoptr or an ill-typed cast): SState.stmt takes the casts castOk admits (castOk_iff: those castV evaluates).
 
 ## Corpus
 
-3 of the 114 corpus files use it (10 uses).
+3 of the 116 corpus files use it (10 uses).
 
 ## Out of scope
 

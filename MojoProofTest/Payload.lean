@@ -74,13 +74,13 @@ of its function related by `Valuation.Rel` and every set of payload blocks:
   entry of `%67` after its `phi` (`%68 = phi float [%48, %51]`, `enter_rel`) are related, with
   `%68` payload in both and related by `Val.Skel`.
 
-Two runs of a returning path (`Block.sound_retI_rel`), one program, for every two contexts and
+Two runs of a returning path (`Block.sound_ret_rel`), one program, for every two contexts and
 threads of `vector_addition` at its entry block whose first takes the path `%4 → %21 → %31`
 from entry valuations related by `Valuation.Rel`, and every set of payload blocks: given start
 facts of the first run (registers `%0` to `%2` point to blocks outside it, and the struct that
 `%5` loads through `%2` points to a block in it) and that their frames have one list of
 `allocas`, both threads return and the returned memories are related by `Mem.SkelEq`
-(`vadd_runs`; the second thread's path by `WalkI.rel`, the loads and the store by
+(`vadd_runs`; the second thread's path by `WalkWith.rel`, the loads and the store by
 `Valuation.loadsOk_of_regs` and `Valuation.storesOk_of_regs`, with `%6` at `%21`'s entry by
 `vadd4_reg6`). The path's checks pass, and with `%28`
 skeleton they do not (`vadd_pathOk`). The twin of the premise on `allocas`, for every
@@ -227,15 +227,16 @@ function related at the skeleton of `vaddLab ["25", "27", "28"]` with one table 
 every set of payload blocks such that the entry block's three loads (`%5`, `%7`, `%9`, of the byval
 arguments, whose result registers are skeleton) read outside them under the first
 (`Valuation.LoadsOk`, a premise), each of its four blocks exits to one block under both, and each of
-its loads and its store has one pointer value under both. The other blocks' loads have payload
-results (`loadsOk_of_pay`). -/
+its loads and its store has a pointer (`SEff.ptr`) with one value under both. The other blocks'
+loads have payload results (`loadsOk_of_pay`). -/
 theorem vadd_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
     (h : V₁.Skel (vaddLab ["25", "27", "28"]) pay V₂) (hg : V₁.ctx.globals = V₂.ctx.globals)
     (hf : V₁.fn = Kernels.vadd.fn_0)
     (h4 : V₁.LoadsOk (vaddLab ["25", "27", "28"]) pay Kernels.vadd.b0.nodes) :
     ∀ S ∈ [Kernels.vadd.b0, Kernels.vadd.b1, Kernels.vadd.b2, Kernels.vadd.b3],
       Exit.dest V₁ (vals V₁ S.nodes) S.exit = Exit.dest V₂ (vals V₂ S.nodes) S.exit ∧
-        ∀ e ∈ S.effs, e.ptr.eval V₁ (vals V₁ S.nodes) = e.ptr.eval V₂ (vals V₂ S.nodes) := by
+        ∀ e ∈ S.effs, ∃ p, e.ptr = some p ∧
+          p.eval V₁ (vals V₁ S.nodes) = p.eval V₂ (vals V₂ S.nodes) := by
   intro S hS
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hS
   rcases hS with rfl | rfl | rfl | rfl
@@ -248,13 +249,14 @@ theorem vadd_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
 naive matmul kernel's function related at the skeleton of `labIn SymPhi.naive.fn_0 ["48", "68"]`
 (`phi_agrees`'s labelling) with one table of globals, for every set of payload blocks, the exit
 of `%51` (a branch into `%67`, which sets the `phi` `%68`) goes to one block under both, and so
-does `%67`'s, whose store has one pointer value under both. -/
+does `%67`'s, whose store has a pointer (`SEff.ptr`) with one value under both. -/
 theorem naive_skel {pay : Nat → Prop} {V₁ V₂ : Valuation}
     (h : V₁.Skel (labIn SymPhi.naive.fn_0 ["48", "68"]) pay V₂)
     (hg : V₁.ctx.globals = V₂.ctx.globals) (hf : V₁.fn = SymPhi.naive.fn_0) :
     ∀ S ∈ [SymPhi.out, SymPhi.fin],
       Exit.dest V₁ (vals V₁ S.nodes) S.exit = Exit.dest V₂ (vals V₂ S.nodes) S.exit ∧
-        ∀ e ∈ S.effs, e.ptr.eval V₁ (vals V₁ S.nodes) = e.ptr.eval V₂ (vals V₂ S.nodes) := by
+        ∀ e ∈ S.effs, ∃ p, e.ptr = some p ∧
+          p.eval V₁ (vals V₁ S.nodes) = p.eval V₂ (vals V₂ S.nodes) := by
   intro S hS
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hS
   rcases hS with rfl | rfl <;>
@@ -361,23 +363,21 @@ theorem vadd4_reg6 {V : Valuation} (hf : V.fn = Kernels.vadd.fn_0)
   rw [hi]
   simp only [Valuation.after, regVal, hl, hx]
   rfl
-
-/-- **The instance of `Block.sound_retI_rel`**: for every two contexts of `vector_addition` and
-threads of one frame each at its entry block `%4`, on memories `m₁` and `m₂`, whose frames have
-one list of `allocas`, whose first thread takes the path `%4 → %21 → %31` (`WalkI`), from entry
+/-- **The instance of `Block.sound_ret_rel`**: for every two contexts of `vector_addition` and
+threads of one frame each at its entry block `%4`, on memories `m₁` and `m₂`, whose frames have one
+list of `allocas`, whose first thread takes the path `%4 → %21 → %31` (`WalkWith false`), from entry
 valuations related by `Valuation.Rel` at `vaddLab ["25", "27", "28"]`, for every set of payload
-blocks `pay` and blocks `p0`, `p1`, `p2`, `out` such that the first frame's registers `%0` to
-`%2` point to offset 0 of `p0` to `p2`, none in `pay`, and the struct load `%5` through `%2` on
-`m₁` reads a struct whose first field points to offset 0 of `out`, in `pay` (the start
-facts of `Kernel.sound_map2`, MojoProof/Sym/Kernel.lean, give these with `pay` the one block
-`out`): both threads run the path and return, and the returned memories (each
-frame's `allocas` made dead) are related by `Mem.SkelEq`. The second thread's path premises
-follow from the first's (`WalkI.rel`; the obligations run only their blocks' effects,
-`Cond.effsIn`). The entry block's three loads read outside `pay` (`Valuation.loadsOk_of_regs`,
-through `%0` to `%2`) and block `%21`'s store of the payload sum writes to `out`
-(`Valuation.storesOk_of_regs`, a `getelementptr` on `%6`, `vadd4_reg6`). The path's checks
-(`vadd_pathOk`), `Cond.effsIn`, the bases of those pointers and the other loads and stores
-(`Valuation.loadsOk_of_pay`, `Valuation.storesOk_of_skel`) are decided by the kernel. -/
+blocks `pay` and blocks `p0`, `p1`, `p2`, `out` such that the first frame's registers `%0` to `%2`
+point to offset 0 of `p0` to `p2`, none in `pay`, and the struct load `%5` through `%2` on `m₁`
+reads a struct whose first field points to offset 0 of `out`, in `pay` (the start facts of
+`Kernel.sound_map2`, MojoProof/Sym/Kernel.lean, give these with `pay` the one block `out`): both
+threads run the path and return, and the returned memories (each frame's `allocas` made dead) are
+related by `Mem.SkelEq`. The second thread's path premises follow from the first's (`WalkWith.rel`;
+the obligations run only their blocks' effects, `Cond.effsIn`). The entry block's three loads read
+outside `pay` (`Valuation.loadsOk_of_regs`, through `%0` to `%2`) and block `%21`'s store of the
+payload sum writes to `out` (`Valuation.storesOk_of_regs`, a `getelementptr` on `%6`, `vadd4_reg6`).
+The path's checks (`vadd_pathOk`), `Cond.effsIn`, the bases of those pointers and the other loads
+and stores (`Valuation.loadsOk_of_pay`, `Valuation.storesOk_of_skel`) are decided by the kernel. -/
 theorem vadd_runs {pay : Nat → Prop} {c₁ c₂ : Sem.Ctx} (hP : c₁.prog = Kernels.vadd.prog)
     {t₁ t₂ : Sem.Thread} {m₁ m₂ : Sem.Mem} {f₁ f₂ : Sem.Frame} (ht₁ : t₁.frames = [f₁])
     (ht₂ : t₂.frames = [f₂]) (hfn : f₁.fn = Kernels.vadd.fn_0)
@@ -389,7 +389,7 @@ theorem vadd_runs {pay : Nat → Prop} {c₁ c₂ : Sem.Ctx} (hP : c₁.prog = K
       (.struct [.ptr 0, .struct [.struct [.struct []], .struct [.struct []]]]) ⟨p2, 0⟩ (some 8) =
       .ok (.agg [.ptr ⟨out, 0⟩, tl]))
     (hp0 : ¬ pay p0) (hp1 : ¬ pay p1) (hp2 : ¬ pay p2) (hout : pay out)
-    (hW₁ : WalkI (Valuation.entry c₁ t₁.k m₁ f₁)
+    (hW₁ : WalkWith false (Valuation.entry c₁ t₁.k m₁ f₁)
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddIn))
     (h : (Valuation.entry c₁ t₁.k m₁ f₁).Rel (vaddLab ["25", "27", "28"]) pay
       (Valuation.entry c₂ t₂.k m₂ f₂)) :
@@ -423,7 +423,7 @@ theorem vadd_runs {pay : Nat → Prop} {c₁ c₂ : Sem.Ctx} (hP : c₁.prog = K
       rw [vadd4_reg6 hf₁ hP hr2 hv2] at hv
       cases hv
       simpa only [Sem.Val.NamesIn] using hout
-  exact Block.sound_retI_rel hP (by decide +kernel) vadd_pathOk.1 (by decide +kernel) ht₁ ht₂ hfn
+  exact Block.sound_ret_rel hP (by decide +kernel) vadd_pathOk.1 (by decide +kernel) ht₁ ht₂ hfn
     hl₁ hl₂ hp₁ hp₂ ha hW₁ rfl h
     ⟨⟨h4, Valuation.storesOk_of_skel (by rw [hf₁]; decide +kernel)⟩,
       ⟨Valuation.loadsOk_of_pay (by rw [hf₂]; decide +kernel), hs⟩,
@@ -435,7 +435,7 @@ def allocasMem : Sem.Mem :=
   { blocks := fun b =>
       if b = 1 then some ⟨5, 4, true, false, .all, fun _ => .undef, 0, 0⟩ else none }
 
-/-- **The twin of `Block.sound_retI_rel`'s premise `ha`**: for every context, step count,
+/-- **The twin of `Block.sound_ret_rel`'s premise `ha`**: for every context, step count,
 frame, labelling and set of payload blocks, the frames `f` with `allocas` `[]` and with `[1]` have
 entry valuations on `allocasMem` related by `Valuation.Rel` (they are equal, as
 `Valuation.entry` does not read `allocas`), and the memories the return makes of `allocasMem`

@@ -8,9 +8,10 @@ Lean: `MojoProof/Sym/Block.lean` and `MojoProof/Sym/Path.lean` (the pointer fact
 `ds` and summary `S` that `covers` (or `coversWith` with an exit function meeting `hex`, or
 `coversTo` with its edge premise) accepts, every context of `P` and every thread whose innermost
 frame runs `fn` at block `lbl`'s position `p0`, with any memory and caller frames, whenever the
-conditions of `ds` hold at the entry valuation. Along a path: every path that `coversPath` or
-`coversPathI` accepts, with its premises (`Walk`, `WalkI`). The memory premises: every
-labelling, payload set and path that `coversPathI` and `pathOk` accept.
+conditions of `ds` hold at the entry valuation. Along a path: every path that
+`coversPathWith contract` accepts, for either value of the flag, with its premises
+(`WalkWith contract`). The memory premises: every labelling, payload set and path that
+`coversPathWith false` and `pathOk` accept.
 
 **What this connects.** `Labels.MemOk` (MojoProof/Sem/Labels.lean, through `Labels.MemNext` and
 `Labels.MemAt`) constrains, at each statement a running thread reaches, the value of the
@@ -23,7 +24,8 @@ every path the checkers accept.
 
 ## Statement
 
-Definitions (MojoProof/Sym/Block.lean; `Valuation.blocksI` in MojoProof/Sym/Path.lean).
+Definitions (`PtrIs`, `StoreVal`, `StoreAt` and `StmtPtrs` in MojoProof/Sym/Rel.lean, the others in
+MojoProof/Sym/Block.lean; `Valuation.blocksWith` in MojoProof/Sym/Path.lean).
 
 - `PtrIs ld st s pv`: `st` is a `load` (`ld = true`) or a `store` (`ld = false`) whose
   pointer operand `(.ptr a) q` has `evalV s (.ptr a) q = pv`.
@@ -58,10 +60,10 @@ Definitions (MojoProof/Sym/Block.lean; `Valuation.blocksI` in MojoProof/Sym/Path
     `StoreAt V.fn l pc S.nodes S.regs v`.
 
   These are the terms and values that `LoadsOk` and `StoresOk` read.
-- `Valuation.blocksI V l S ps`: the blocks of the path, each with its entry valuation
-  (`Valuation.into` of the blocks before it).
+- `Valuation.blocksWith contract V l S ps`: the blocks of the path, each with its entry valuation
+  (`Valuation.intoWith contract` of the blocks before it).
 
-Theorems (MojoProof/Sym/Block.lean; 6 and 7 in MojoProof/Sym/Path.lean).
+Theorems (MojoProof/Sym/Block.lean; 6 in MojoProof/Sym/Path.lean).
 
 1. `SState.stmt_sound` also concludes
    `StmtPtrs V vs lbl fi.pc σ σ' st (V.ctx.scope mi fi k)`. That scope is the one `exec` runs the
@@ -77,19 +79,17 @@ Theorems (MojoProof/Sym/Block.lean; 6 and 7 in MojoProof/Sym/Path.lean).
 3. `SState.stmt_mono` and `SState.run_mono`: a statement in the fragment, and a run
    of statements, keep the obligations, extend the effects and the table, and put entries in
    front of the register entries (`σf.regs = rs ++ σ.regs` for some `rs`).
-4. `Block.sound_with` without `fmul contract` (with it, `EndsWith true` in place of `Ends`;
-   docs/proofs/contract.md) and `Block.sound_to` conclude
+4. `Block.sound_withAt` without `alloca` and `fmul contract` (`EndsAt.ends`; with
+   `fmul contract`, `EndsWith true` in place of `Ends`; docs/proofs/contract.md) and
+   `Block.sound_to` conclude
    `Ends c t m f rest (Valuation.entry c t.k m f, lbl, S) ∧
    Ptrs c t m rest (Valuation.entry c t.k m f, lbl, S)`.
 5. `Block.sound_ptrs` has `Block.sound`'s premises and the conclusion `Ends … ∧ Ptrs …`.
    `Block.sound` is its first component.
-6. `Block.sound_pathI_ptrs` has `Block.sound_pathI`'s premises and concludes
-   `Ends c t m f rest ((Valuation.entry c t.k m f).lastI l S ps) ∧
-   ∀ q ∈ (Valuation.entry c t.k m f).blocksI l S ps, Ptrs c t m rest q`.
-   `Block.sound_pathI` is its first component.
-7. `Block.sound_path_ptrs` is the same for `coversPath` and `Walk`, with
-   `Valuation.last` for the last block and `Valuation.blocksI` for the pointer facts.
-   `Block.sound_path` is its first component.
+6. `Block.sound_pathWith_ptrs`, for a path that `coversPathWith contract` accepts with its
+   premises `WalkWith contract`, concludes
+   `EndsWith contract c t m f rest ((Valuation.entry c t.k m f).lastWith contract l S ps) ∧
+   ∀ q ∈ (Valuation.entry c t.k m f).blocksWith contract l S ps, Ptrs c t m rest q`.
 
 Theorems (MojoProof/Sym/PtrMem.lean). In all of them, `lab` is a labelling, `pay` a set of
 payload blocks, `c` a context, `t` a thread, `m` a memory and `rest` a list of frames, and
@@ -118,15 +118,15 @@ steps reach meets `Labels.MemNext`.
     ```
 11. `Valuation.pathMem_of_ptrs`. For every path `(l, S) :: ps` and valuation `V`: if
     `pathOk lab V.fn l S ps = true` and `Ptrs c t m rest q` for every
-    `q ∈ V.blocksI l S ps`, then `V.PathMem lab pay l S ps` (`Valuation.LoadsOk` and
+    `q ∈ V.blocksWith false l S ps`, then `V.PathMem lab pay l S ps` (`Valuation.LoadsOk` and
     `Valuation.StoresOk` at each block's entry valuation).
 12. `Block.sound_pathMem`. For every program `P`, function `fn`, path
-    `(l, ds, S) :: ps` with `coversPathI P fn p0 ((l, ds, S) :: ps) = true` and
+    `(l, ds, S) :: ps` with `coversPathWith false P fn p0 ((l, ds, S) :: ps) = true` and
     `pathOk lab fn l S ps = true`, every context `c` with `c.prog = P`, and every thread `t`
     whose innermost frame `f` (above `rest`) runs `fn` at block `l`'s position `p0`, on memory
-    `m`, with `WalkI (Valuation.entry c t.k m f) ((l, ds, S) :: ps)`: `hM` gives
+    `m`, with `WalkWith false (Valuation.entry c t.k m f) ((l, ds, S) :: ps)`: `hM` gives
     `(Valuation.entry c t.k m f).PathMem lab pay l S ps`. That is the premise `hm` of
-    `Block.sound_retI_rel`.
+    `Block.sound_ret_rel`.
 13. `Labels.MemOk.steps`. For every launch `L`, contexts `c`, grids `g₀` and `g` with
     `lab.MemOk pay L c g₀` and `g` reachable from `g₀` (`Relation.ReflTransGen (Grid.Step L c)`),
     every running thread `g.threads[n]? = some (.run t)` and every `Steps (c n) t g.mem t' m'`:
@@ -155,10 +155,9 @@ steps reach meets `Labels.MemNext`.
 3. Case analysis of `SState.stmt` (`SState.def_regs` for the statements that set a register),
    then induction on the statement list.
 4. and 5. Apply `SState.run_ptrs` from `SState.init`, whose table and effects are empty.
-6. and 7. The head block's pointer facts come from `Block.sound_ptrs` or `Block.sound_to`. Each
+6. The head block's pointer facts come from `Block.sound_atWith` or `Block.sound_toWith`. Each
    later block's facts come from the recursive call at the thread after the edge, moved back by
-   `Ptrs.pre` along `Steps.trans_step hS₁ hst₁ (.refl _ _)`. `Walk.toI` turns a `coversPath`
-   path into a `coversPathI` one.
+   `Ptrs.pre` along `Steps.trans_step hS₁ hst₁ (.refl _ _)`.
 8. A register operand is `x` itself, whose payload role is the hypothesis, or an entry of
    `regs` set to `x`, which the entries hypothesis covers; a constant term has no payload role.
 9. `PtrAt` gives the thread's state `⟨f :: rest, k⟩`, memory `m'`, block `b` and statement `st`,
@@ -169,9 +168,11 @@ steps reach meets `Labels.MemNext`.
     `Summary.agrees`, which says that each register entry of `S` with a payload term is of a
     payload register.
 11. Induction on the path. `pathOk` gives `Summary.agreesI`, whose first part is
-    `Summary.agrees`, at each block; items 9 and 10 apply at each block of `Valuation.blocksI`.
+    `Summary.agrees`, at each block; items 9 and 10 apply at each block of
+    `Valuation.blocksWith false`.
     The next block's entry valuation keeps the function (`Valuation.into_k`).
-12. `Block.sound_pathI_ptrs` gives the pointer facts of every block of the path; then item 11.
+12. `Block.sound_pathWith_ptrs` gives the pointer facts of every block of the path; then
+    item 11.
 13. `Steps.grid` (MojoProof/Sym/Sched.lean) turns the thread's steps into grid steps from `g`, to
     the grid with the reached state at index `n`. That grid is reachable from `g₀`, so
     `Labels.MemOk` gives `Labels.MemAll` there, at index `n`.
@@ -179,7 +180,7 @@ steps reach meets `Labels.MemNext`.
 ## Dependencies
 
 `SState.op_eval`, `SState.op_storeVal`, `SState.def_regs`, `SState.run_mono`, `SState.stmt_mono`,
-`step_stmt`, `Steps.trans` and `Steps.trans_step`, `Ends.edge`, `Walk.toI`; `Labels.MemNext`,
+`step_stmt`, `Steps.trans` and `Steps.trans_step`, `Ends.edgeWith`; `Labels.MemNext`,
 `Labels.MemAt` and `Labels.MemOk` (MojoProof/Sem/Labels.lean); `Valuation.LoadsOk`,
 `Valuation.StoresOk`, `Valuation.PathMem`, `Summary.agrees`, `pathOk` and `resReg`
 (MojoProof/Sym/Payload.lean); `Steps.grid` (MojoProof/Sym/Sched.lean).

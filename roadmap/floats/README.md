@@ -4,9 +4,10 @@
 
 The floating-point rules of the semantics: the rounding of the binary operations, the
 `deliver` of a result and the NaNs it may be, the `contract` flag's fused multiply-add,
-`llvm.maxnum` and `llvm.minnum`, and `rsqrt.approx`. Each card links the rule to the
-semantics' declarations and to FloatLib's, by full name (FloatLib's names are checked against
-its sources under .lake/packages). Construct cards climb the construct ladder of
+`llvm.maxnum` and `llvm.minnum`, and `rsqrt.approx`; and the contract of `ex2.approx`, Mojo's
+float32 exponential, which the semantics does not execute (inline assembly). Each card links the
+rule to the semantics' declarations and to FloatLib's, by full name (FloatLib's names are checked
+against its sources under .lake/packages). Construct cards climb the construct ladder of
 roadmap/README.md.
 
 Reference: LLVM 24.0.0git's LangRef and the PTX ISA version 9.5, the versions docs/TRUST.md
@@ -23,6 +24,8 @@ records. No copy of them is in the repository, so every quote is empty and each 
 - [maxnum-minnum](cards/maxnum-minnum.md): `maximumNumber` and `minimumNumber`, any NaN for
   a signaling NaN operand.
 - [rsqrt-approx](cards/rsqrt-approx.md): every word within PTX's documented relative error.
+- [ex2-approx](cards/ex2-approx.md): a contract from PTX's 2 ulp, a premise on the term words of
+  the exponential sums.
 
 ## Open
 

@@ -5,7 +5,7 @@ import MojoProofTest.SymInfo
 # The lane number in the block checker
 
 The checker takes a call of `llvm.nvvm.read.ptx.sreg.laneid` (`SState.stmt`,
-MojoProof/Sym/Checker.lean, node `SNode.call`; sound by `exec_laneid`, MojoProof/Sym/Block.lean).
+MojoProof/Sym/Checker.lean, node `SNode.call`; sound by `exec_laneid`, MojoProof/Sym/Exec.lean).
 Tests at the two kernels of tests/corpus/gemv/:
 
 * `call_laneid`: for every valuation, a call node whose statement calls, with no arguments, a

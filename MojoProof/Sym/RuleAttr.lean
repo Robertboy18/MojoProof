@@ -15,7 +15,8 @@ checker's step for it, or a refusal with its reason.
   and its entries are kept in a `SimplePersistentEnvExtension` (`ruleExt`), not with
   `registerTagAttribute`, whose `add` refuses a declaration of an imported module
   (`throwAttrDeclInImportedModule`); so MojoProof/Sym/Rules.lean tags the lemmas of
-  MojoProof/Sym/Block.lean. Each `Cᵢ` must be a constructor; the attribute is global.
+  MojoProof/Sym/Exec.lean and MojoProof/Sym/Rel.lean. Each `Cᵢ` must be a constructor; the
+  attribute is global.
 * `mojo_refuse C₁ … Cₙ "case" : "reason"` adds a refusal.
 * `mojo_rules_complete T₁ … Tₙ` fails, naming them, when a constructor of a type `Tᵢ` has neither
   a rule nor a refusal; it adds nothing.

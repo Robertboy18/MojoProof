@@ -31,6 +31,13 @@ require mathlib from git
 input_dir corpus where
   path := "tests/corpus"
 
+/-- The core: definitions and theorems for every machine, with no front end. Its modules import
+only `GPUProof.*`, `Mathlib.*` and `FloatLib.*` (checked by MojoProofTest/GPUProof/Imports.lean).
+-/
+@[default_target]
+lean_lib GPUProof where
+  globs := #[.submodules `GPUProof]
+
 /-- The library: the LLVM AST, parser, printer and quotation, the semantics, the certificate
 checkers and the block checker. -/
 @[default_target]
@@ -42,7 +49,8 @@ lean_lib MojoProof where
     .submodules `MojoProof.Util,
     .submodules `MojoProof.Cert,
     .submodules `MojoProof.Float,
-    .submodules `MojoProof.Sym]
+    .submodules `MojoProof.Sym,
+    .submodules `MojoProof.Tile]
 
 /-- The imported kernels (`mojo_import`) and their theorems. -/
 @[default_target]

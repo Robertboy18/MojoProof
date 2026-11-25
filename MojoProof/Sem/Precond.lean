@@ -27,11 +27,13 @@ at most the length and below `2 ^ 31`. The precondition is satisfiable for every
 it meets `Map2.Pre`, for every address choice the alignment divides whose generic addresses leave
 room for the `n` elements below `2 ^ w`.
 
-The memory both kernels' preconditions are met on, for every layout, alignment, sizes, read-only
-flags, initial bytes and address choices: `Mem.three` makes three live global blocks owned by all
-threads from the empty memory, and `Mem.three_spec` proves it closed under every list of values
-naming blocks 1 to 3 and each block a `Mem.Buffer` that fits (`Mem.Fits`) when the initial bytes
-hold no pointer and the addresses leave room. `Map2.pre_mem` and `Mat.pre_mem` are its corollaries.
+The memory both kernels' preconditions are met on, for every layout, alignment, number of
+blocks `k`, sizes, read-only flags, initial bytes and address choices: `Mem.allocs` makes `k` live
+global blocks owned by all threads from the empty memory, and `Mem.allocs_spec` proves it closed
+under every list of values naming blocks 1 to `k` and each block a `Mem.Buffer` that fits
+(`Mem.Fits`) when the initial bytes hold no pointer and the addresses leave room. `Mem.three` and
+`Mem.three_spec` are the two at `k = 3`; `Map2.pre_mem` and `Mat.pre_mem` are corollaries of
+`Mem.three_spec`.
 
 The precondition of a matmul kernel `C[r][c] = Σₖ<K A[r][k] B[c][k]` (`r < m`, `c < n`) over
 row-major buffers with row strides `sA`, `sB`, `sC`, for every layout, element type with a codec,
@@ -295,11 +297,82 @@ structure Map2.Pre (l : Layout) (t : Ty) (enc : α → Val) (al : Nat) (z : Val)
   /-- The first `n` elements of each buffer have generic addresses that do not wrap. -/
   fits : m.Fits l a (n * l.size t) ∧ m.Fits l b (n * l.size t) ∧ m.Fits l o (n * l.size t)
 
+/-- `k` live global blocks owned by all threads, from the empty memory, for every layout,
+alignment `al`, block count `k`, sizes `S`, read-only flags `R`, initial bytes `I` and address
+choices `A`, `G`: block `i + 1` (for `i < k`, allocated in the order of `i`) of `S i` bytes,
+read-only exactly if `R i`, whose first bytes are `I i` and the others undefined, at address
+`A i * al` in space 1 and `G i * al` in the generic space (wrapped to the pointer widths). At
+`k = 3` it unfolds to `Mem.three`. -/
+def Mem.allocs (l : Layout) (al : Nat) : (k : Nat) → (Fin k → Nat) → (Fin k → Bool) →
+    (Fin k → List MemByte) → (Fin k → Nat) → (Fin k → Nat) → Mem
+  | 0, _, _, _, _, _ => {}
+  | k + 1, S, R, I, A, G =>
+    ((Mem.allocs l al k (S ∘ Fin.castSucc) (R ∘ Fin.castSucc) (I ∘ Fin.castSucc)
+      (A ∘ Fin.castSucc) (G ∘ Fin.castSucc)).alloc l 1 (S (Fin.last k)) al true (R (Fin.last k))
+      .all (A (Fin.last k)) (G (Fin.last k)) (I (Fin.last k))).1
+
+/-- **`k` global blocks are closed fitting buffers**, for every layout, alignment `al`, block
+count `k`, sizes `S`, read-only flags `R`, initial bytes `I` holding no pointer byte, sizes
+`n i ≤ S i` and address choices with `A i * al < 2 ^ w₁` and `G i * al + n i ≤ 2 ^ w₀` (`w₁`,
+`w₀` the pointer widths of space 1 and of the generic space): `Mem.allocs` is closed under every
+list of values naming numbers up to `k` (`Val.bounds vs ≤ k + 1`), and its block `i + 1` is a
+`Mem.Buffer` of `n i` bytes at addresses `al` divides, writable exactly if not `R i`, that fits
+below `2 ^ w₀` for `n i` bytes (`Mem.Fits`). `Mem.three_spec` is its instance at `k = 3`. -/
+theorem Mem.allocs_spec (l : Layout) (al : Nat) {k : Nat} (S : Fin k → Nat) (R : Fin k → Bool)
+    {I : Fin k → List MemByte} (hI : ∀ i p j, MemByte.ptr p j ∉ I i) {A G n : Fin k → Nat}
+    (hn : ∀ i, n i ≤ S i) (hA : ∀ i, A i * al < 2 ^ (l.ptr 1).1)
+    (hG : ∀ i, G i * al + n i ≤ 2 ^ (l.ptr 0).1) :
+    (∀ vs : List Val, Val.bounds vs ≤ k + 1 → (Mem.allocs l al k S R I A G).Closed vs) ∧
+      ∀ i : Fin k, (Mem.allocs l al k S R I A G).Buffer (i.val + 1) (n i) al (!R i) ∧
+        (Mem.allocs l al k S R I A G).Fits l (i.val + 1) (n i) := by
+  have hnext : ∀ k S R I A G, (Mem.allocs l al k S R I A G).next = k + 1 := by
+    intro k
+    induction k with
+    | zero => intro _ _ _ _ _; rfl
+    | succ k ih => intro S R I A G; exact congrArg (· + 1) (ih _ _ _ _ _)
+  induction k with
+  | zero => exact ⟨fun vs hv => { Mem.closed_empty with vals := hv }, fun i => i.elim0⟩
+  | succ k ih =>
+    obtain ⟨hc, hb⟩ := ih (S ∘ Fin.castSucc) (R ∘ Fin.castSucc) (I := I ∘ Fin.castSucc)
+      (fun i => hI _) (A := A ∘ Fin.castSucc) (G := G ∘ Fin.castSucc) (n := n ∘ Fin.castSucc)
+      (fun i => hn _) (fun i => hA _) (fun i => hG _)
+    have hm := hnext k (S ∘ Fin.castSucc) (R ∘ Fin.castSucc) (I ∘ Fin.castSucc)
+      (A ∘ Fin.castSucc) (G ∘ Fin.castSucc)
+    refine ⟨fun vs hv => ?_, fun i => ?_⟩
+    · exact (hc [] (by simp [Val.bounds])).alloc l 1 _ al true _ .all _ _
+        (fun p j hp => absurd hp (hI _ p j)) (by rw [hm]; exact hv)
+    · have hq : ∀ q, q ≠ k + 1 → ∀ x, (Mem.allocs l al k (S ∘ Fin.castSucc) (R ∘ Fin.castSucc)
+          (I ∘ Fin.castSucc) (A ∘ Fin.castSucc) (G ∘ Fin.castSucc)).blocks q = some x →
+          (Mem.allocs l al (k + 1) S R I A G).blocks q = some x := fun q hq x hx => by
+        show (if q = _ then _ else _) = _
+        rw [hm]
+        simpa [hq] using hx
+      refine Fin.lastCases ?_ (fun i => ?_) i
+      · have ha : al ∣ A (Fin.last k) * al % 2 ^ (l.ptr 1).1 := by
+          rw [Nat.mod_eq_of_lt (hA _)]; exact Nat.dvd_mul_left al _
+        have hg : al ∣ G (Fin.last k) * al % 2 ^ (l.ptr 0).1 := by
+          rcases Nat.lt_or_eq_of_le (le_trans (Nat.le_add_right _ _) (hG (Fin.last k))) with h | h
+          · rw [Nat.mod_eq_of_lt h]; exact Nat.dvd_mul_left al _
+          · rw [h, Nat.mod_self]; exact Nat.dvd_zero al
+        have hf : G (Fin.last k) * al % 2 ^ (l.ptr 0).1 + n (Fin.last k) ≤ 2 ^ (l.ptr 0).1 :=
+          le_trans (Nat.add_le_add_right (Nat.mod_le _ _) _) (hG _)
+        have he : (Mem.allocs l al (k + 1) S R I A G).blocks (k + 1) = some
+            { space := 1, size := S (Fin.last k), live := true, readOnly := R (Fin.last k),
+              owner := .all, bytes := ByteTree.bytesOf (I (Fin.last k)),
+              addr := A (Fin.last k) * al % 2 ^ (l.ptr 1).1,
+              gaddr := G (Fin.last k) * al % 2 ^ (l.ptr 0).1 } := by
+          show (if k + 1 = _ then _ else _) = _
+          rw [hm]
+          simp
+        exact ⟨⟨_, he, rfl, rfl, rfl, (Bool.not_not _).symm, hn _, ha, hg⟩, ⟨_, he, hf⟩⟩
+      · have hi : (i.castSucc.val + 1) ≠ k + 1 := by simp only [Fin.val_castSucc]; omega
+        exact ⟨Mem.Buffer.of_block (hq _ hi) (hb i).1, Mem.Fits.of_block (hq _ hi) (hb i).2⟩
+
 /-- Three live global blocks owned by all threads, from the empty memory, for every layout,
 alignment `al`, sizes `S`, read-only flags `R`, initial bytes `I` and address choices `A`, `G`:
 block `i + 1` (for `i < 3`) of `S i` bytes, read-only exactly if `R i`, whose first bytes are
 `I i` and the others undefined, at address `A i * al` in space 1 and `G i * al` in the generic
-space (wrapped to the pointer widths). -/
+space (wrapped to the pointer widths): `Mem.allocs` at `k = 3`, unrolled. -/
 def Mem.three (l : Layout) (al : Nat) (S : Fin 3 → Nat) (R : Fin 3 → Bool)
     (I : Fin 3 → List MemByte) (A G : Fin 3 → Nat) : Mem :=
   let m₁ := (({} : Mem).alloc l 1 (S 0) al true (R 0) .all (A 0) (G 0) (I 0)).1
@@ -312,31 +385,15 @@ choices with `A i * al < 2 ^ w₁` and `G i * al + n i ≤ 2 ^ w₀` (`w₁`, `w
 space 1 and of the generic space): `Mem.three` is closed under every list of values naming numbers
 up to 3 (`Val.bounds vs ≤ 4`), and its block `i + 1` is a `Mem.Buffer` of `n i` bytes at addresses
 `al` divides, writable exactly if not `R i`, that fits below `2 ^ w₀` for `n i` bytes
-(`Mem.Fits`). -/
+(`Mem.Fits`): `Mem.allocs_spec` at `k = 3`, since `Mem.three` unfolds to `Mem.allocs` at 3. -/
 theorem Mem.three_spec (l : Layout) (al : Nat) (S : Fin 3 → Nat) (R : Fin 3 → Bool)
     {I : Fin 3 → List MemByte} (hI : ∀ i p j, MemByte.ptr p j ∉ I i) {A G n : Fin 3 → Nat}
     (hn : ∀ i, n i ≤ S i) (hA : ∀ i, A i * al < 2 ^ (l.ptr 1).1)
     (hG : ∀ i, G i * al + n i ≤ 2 ^ (l.ptr 0).1) :
     (∀ vs : List Val, Val.bounds vs ≤ 4 → (Mem.three l al S R I A G).Closed vs) ∧
       ∀ i : Fin 3, (Mem.three l al S R I A G).Buffer (i.val + 1) (n i) al (!R i) ∧
-        (Mem.three l al S R I A G).Fits l (i.val + 1) (n i) := by
-  refine ⟨fun vs hv => ?_, fun i => ?_⟩
-  · have hb : ∀ i (k : Nat) p j, MemByte.ptr p j ∈ I i → p.block < k :=
-      fun i _ p j hp => absurd hp (hI i p j)
-    exact ((Mem.closed_empty.alloc l 1 (S 0) al true (R 0) .all (A 0) (G 0) (hb 0 _) (vs' := [])
-      (by simp [Val.bounds])).alloc l 1 (S 1) al true (R 1) .all (A 1) (G 1) (hb 1 _) (vs' := [])
-      (by simp [Val.bounds])).alloc l 1 (S 2) al true (R 2) .all (A 2) (G 2) (hb 2 _) hv
-  · have ha : al ∣ A i * al % 2 ^ (l.ptr 1).1 := by
-      rw [Nat.mod_eq_of_lt (hA i)]; exact Nat.dvd_mul_left al (A i)
-    have hg : al ∣ G i * al % 2 ^ (l.ptr 0).1 := by
-      rcases Nat.lt_or_eq_of_le (le_trans (Nat.le_add_right _ _) (hG i)) with h | h
-      · rw [Nat.mod_eq_of_lt h]; exact Nat.dvd_mul_left al (G i)
-      · rw [h, Nat.mod_self]; exact Nat.dvd_zero al
-    have hf : G i * al % 2 ^ (l.ptr 0).1 + n i ≤ 2 ^ (l.ptr 0).1 :=
-      le_trans (Nat.add_le_add_right (Nat.mod_le _ _) _) (hG i)
-    have hs := hn i
-    fin_cases i
-    all_goals exact ⟨⟨_, rfl, rfl, rfl, rfl, (Bool.not_not _).symm, hs, ha, hg⟩, ⟨_, rfl, hf⟩⟩
+        (Mem.three l al S R I A G).Fits l (i.val + 1) (n i) :=
+  Mem.allocs_spec l al S R hI hn hA hG
 
 /-- The caller memory `Map2.args` names: from the empty memory, blocks 1 and 2 in space 1 holding
 `tensorBytes l t enc x` and `tensorBytes l t enc y` (read-only), and block 3 of `no` undefined

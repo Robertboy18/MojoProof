@@ -87,7 +87,8 @@ theorem sound2_seq : Grid.Sound two c2 run2.1 obs4 (· = leBytes 4 7) := by
   have hn : run2.1.threads.size = 2 := rfl
   exact Seq.start_sound_inv (P := fun k m => m = mems k) start2_eq
     (fun _ _ _ _ _ h => by cases h) (fun m m' h => by simp only [obs4, h]) rfl
-    (fun k hk => run2_runs k (hn ▸ hk)) (fun m' e => by subst e; exact ⟨rfl, rfl⟩)
+    (fun k hk => run2_runs k (hn ▸ hk))
+    (fun m' e => by subst e; exact ⟨fun _ _ => by decide +kernel, by decide +kernel⟩)
     (fun m' e => ⟨leBytes 4 7, by subst e; rfl, rfl⟩)
 
 end MojoProofTest.SymStart

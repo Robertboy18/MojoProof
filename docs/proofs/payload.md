@@ -121,9 +121,10 @@ one trace, and have a race enabled together. -/
 structure Grid.Lockstep (L : Launch) (c c' : Nat → Ctx) (S : Grid → Grid → Prop) : Prop where
   advance : ∀ {g₁ g₂}, S g₁ g₂ → ∀ n, Grid.Agree S (g₁.advance c n) (g₂.advance c' n)
   fire : ∀ {g₁ g₂}, S g₁ g₂ → ∀ n, Grid.Agree S (g₁.fire L c n) (g₂.fire L c' n)
-  done : ∀ {g₁ g₂}, S g₁ g₂ → (g₁.Done ↔ g₂.Done)
+  done : ∀ {g₁ g₂}, S g₁ g₂ → (GPUProof.Done sig (g₁, L, c) ↔ GPUProof.Done sig (g₂, L, c'))
   trace : ∀ {g₁ g₂}, S g₁ g₂ → g₁.mem.trace = g₂.mem.trace
-  race : ∀ {g₁ g₂}, S g₁ g₂ → (g₁.RaceEnabled c ↔ g₂.RaceEnabled c')
+  race : ∀ {g₁ g₂}, S g₁ g₂ →
+    (GPUProof.RaceEnabled sig (g₁, L, c) ↔ GPUProof.RaceEnabled sig (g₂, L, c'))
 ```
 
 `S` is any relation. To use invariants (W1 to W5, `Labels.MemOk`), put them into `S`, for
@@ -140,14 +141,15 @@ grids with `S g₁ g₂`:
   same thread number and the same kind of step.
 - `Grid.Lockstep.path`: `Path (Grid.Step L c) k g₁ z₁ → ∃ z₂, Path (Grid.Step L c') k g₂ z₂ ∧
   S z₁ z₂`. The converse comes from `symm`.
-- `Grid.Lockstep.bad`: `g₁.Bad L c ↔ g₂.Bad L c'`.
-- `Grid.Lockstep.sound`: for every observation `obs` with `hO : ∀ x y, S x y → x.Done →
-  obs x.mem = obs y.mem` and every `R`: `Grid.Sound L c g₁ obs R → Grid.Sound L c' g₂ obs R`.
+- `Grid.Lockstep.bad`: `GPUProof.Bad sig (g₁, L, c) ↔ GPUProof.Bad sig (g₂, L, c')`.
+- `Grid.Lockstep.sound`: for every observation `obs` with `hO : ∀ x y, S x y →
+  GPUProof.Done sig (x, L, c) → obs x.mem = obs y.mem` and every `R`: `Grid.Sound L c g₁ obs R → Grid.Sound L c' g₂ obs R`.
 - `Grid.payload_run` (the corollary T3 is used through): suppose `Grid.start prog fn L args m'
   ch ω' = .ok (g₂, c')` with `m'.BytesIn m'.Known`, and suppose `Path (Grid.Step L c) k g₁ z₁`
-  with `z₁.Done` and `¬ z₁.Bad L c`. Then there is a `z₂` with `Path (Grid.Step L c') k g₂ z₂`,
-  `z₂.Done`, `¬ z₂.Bad L c'` and `S z₁ z₂`. And for every `obs` that reads only the blocks, every
-  `R` and `y`, if `obs z₂.mem = some y` and `R y`, then `Grid.Sound L c' g₂ obs R` (by
+  with `GPUProof.Done sig (z₁, L, c)` and `¬ GPUProof.Bad sig (z₁, L, c)`. Then there is a
+  `z₂` with `Path (Grid.Step L c') k g₂ z₂`, `GPUProof.Done sig (z₂, L, c')`,
+  `¬ GPUProof.Bad sig (z₂, L, c')` and `S z₁ z₂`. And for every `obs` that reads only the
+  blocks, every `R` and `y`, if `obs z₂.mem = some y` and `R y`, then `Grid.Sound L c' g₂ obs R` (by
   `Grid.start_sound`).
 
 ### Proof
@@ -158,10 +160,10 @@ grids with `S g₁ g₂`:
   (some h₁)`. In the first case, rewrite `hS.advance hs n` with it. Cases on `g₂.advance c' n`
   leave only `.ok (some h₂)` with `S h₁ h₂`, the others being `False`. The fire case is the same.
 - `path`: induction on the path, by `step`.
-- `bad`, the four disjuncts of `Grid.Bad` in turn:
+- `bad`, the four disjuncts of the core's `Bad` at `sig` in turn:
   - `Faults`: `g₁.advance c n = .error e` makes `Grid.Agree S (.error e) (g₂.advance c' n)`, which
     forces `.error _`. The same holds for `fire`, and the other direction is by `symm`.
-  - `racy` and `kept`: rewrite by `trace`.
+  - `racy` and the core's `kept` at `sig`: rewrite by `trace`.
   - `RaceEnabled`: this is `race`.
 - `sound`, field by field. For `h₂` reachable from `g₂`, `symm.path` (through `Path.exists_iff`)
   gives an `h₁` reachable from `g₁` with `S h₁ h₂`.
@@ -175,12 +177,12 @@ grids with `S g₁ g₂`:
   - `determinate`: if `h₂` and `h₂'` are done, then `h₁` and `h₁'` are done, and `obs h₂.mem =
     obs h₁.mem = obs h₁'.mem = obs h₂'.mem` (`hO` twice, and `g₁`'s `determinate`).
   - `post`: `obs h₂.mem = obs h₁.mem = some y` with `R y`.
-- `payload_run`: `path` gives `z₂`. `done` and `bad` move `z₁.Done` and `¬ z₁.Bad`. The last part
+- `payload_run`: `path` gives `z₂`. `done` and `bad` move `z₁`'s `Done` and not `Bad`. The last part
   is `Grid.start_sound` on `g₂`'s start with the run to `z₂`.
 
-The proof uses no property of the semantics beyond the definitions of `Grid.Step`, `Grid.Bad` and
-`Grid.Sound`. It is the real-grid form of the miniature's `CRel.step`, `CRel.path`, `CRel.flip`
-and `payload_transfer`.
+The proof uses no property of the semantics beyond the definitions of `Grid.Step`, the core's `Bad`
+at `sig` and `Grid.Sound`. It is the real-grid form of the miniature's `CRel.step`, `CRel.path`,
+`CRel.flip` and `payload_transfer`.
 
 ## T3b: the skeleton relation
 
@@ -672,17 +674,18 @@ The checks above on a block summary's node table
 - Roles (`roles lab fn ns`): node `j`'s role is `SNode.pay` on the roles of nodes `0..j-1`
   (`roles_getElem?`). An entry register is payload by its label, a constant never, a node by its
   role (`SVal.pay`). A node is payload if an operand is (a `select`'s condition among them); a
-  `call`, `getelementptr` or `load` also if its statement's result register (`resReg`) is
-  labelled payload (payload enters through loads); a float operation always ((O2): its NaN
-  results read the oracle); a `load` after a `store` (`SNode.loadAfter`) always; a global's
+  `call`, `getelementptr` (with one index, or `SNode.gepN` with another number) or `load` also
+  if its statement's result register (`resReg`) is labelled payload (payload enters through
+  loads); a float operation always ((O2): its NaN results read the oracle); a `load` after a
+  `store` (`SNode.loadAfter`) always; a constant's node (`SNode.constAt`) never, and a global's
   pointer (`SNode.globalAt`) never, since the theorems below take the two valuations with one
   table of globals (`hg`). So a `getelementptr`, `load` or `store` on a global can be oblivious
   under `Summary.oblivious` below (layernorm's `%448`, `ln_store_oblivious`,
   MojoProofTest/SymSeg.lean). Nodes of the other kinds carry no statement position, so their
   labels are not read: their roles come from their operands.
 - `Summary.oblivious` is (O1) on terms: the exit condition, each effect's pointer, the
-  operands of each `getelementptr` and `load` node, and the condition of each `select` node are
-  payload-free.
+  operands of each `getelementptr` and `load` node, the condition of each `select` node and the
+  index of each `extractelement` and `insertelement` node are payload-free.
 - `Summary.agrees`: every register the summary sets whose entry is payload is labelled payload.
   It is an implication and not an equality: a register labelled payload may hold a skeleton
   value, as `Labels.Ok` allows. What T3c needs at the next block's entry is that a skeleton label
@@ -753,8 +756,9 @@ The second is a load fed to a `phi` whose result decides a branch, written as an
   `Val.namesIn_top`). A `load` reads one pointer, outside `pay` by `LoadsOk`, so `Mem.load_skel`
   gives one value. A global's pointer is the table's. A float operation is never skeleton.
 - `Summary.oblivious_skel`: an oblivious summary, under such valuations, exits to one block (or
-  to none) under both, and each effect's pointer (`SEff.ptr`) has one value under both: its exit
-  condition and pointers are payload-free, so `vals_skel` applies. The exit is `Exit.dest`, so
+  to none) under both, and each effect has a pointer (`SEff.ptr`, none for an `alloca`, so an
+  oblivious summary has none), with one value under both: its exit condition and pointers are
+  payload-free, so `vals_skel` applies. The exit is `Exit.dest`, so
   this covers a branch into blocks with `phi`s (`Exit.phi`, whose condition `oblivious` reads),
   and not only `Exit.target`'s branches. Which `phi` assignments the edge makes,
   and whether they are skeleton where the labels say so, is the next block's entry relation
@@ -784,15 +788,26 @@ block `l` of a function, and pair of valuations.
   - an integer `bin` has no flag and is not `sdiv` or `srem` (`BinOp.total`), and its second
     operand is skeleton when it is a shift amount or a divisor (`BinOp.skelB`);
   - a float operation has neither `nnan` nor `ninf`;
-  - a `getelementptr` has skeleton operands (only its result label is payload);
+  - a `getelementptr`, with any number of indices, has skeleton operands (only its result label
+    is payload);
   - a `load` has a skeleton pointer and loads a data type (`Ty.data`, read by `loadData` at the
     statement), so the bytes of a payload block decode to related values (`Mem.load_skel`);
   - a `select` has a skeleton condition (`selectV_skel` relates the results of one condition;
-    `oblivious` requires it too);
-  - `icmp`, the integer casts, `extractvalue`, `call`, the integer maxima and minima
-    (`intMinMax_skel`) always (a global's pointer is never payload);
-  - a `load` after a `store` (`SNode.loadAfter`) never: its memory is the effects' on the
-    entry memory, which the relation does not follow.
+    `oblivious` requires it too), and an `extractelement` and an `insertelement` a skeleton
+    index (`extractE_skel`, `insertE_skel`);
+  - `icmp`, the integer casts, `extractvalue`, `insertvalue` (`insertV_skel`), `call`, the
+    integer maxima and minima (`intMinMax_skel`) always (a global's pointer and a constant's
+    node are never payload);
+  - a `load` after a `store` (`SNode.loadAfter`) has a skeleton pointer, each effect it carries
+    has a pointer and it is skeleton (`SEff.ptr`), and it loads a data type. Its memory is the one its
+    effects make from the entry memory. `SNode.eval_rel` runs those effects in the two runs with
+    every block payload (`SEff.run_rel` at `fun _ => True`, from the entry memories' relation with
+    `Block.SkelEq`'s `same` dropped), so the two memories have equal shapes and payload-related
+    bytes whatever the stores write, and the two loads give `Val.Skel`-related values
+    (`Mem.load_skel`). No premise on the stores is needed: the node's role is always payload.
+    Layernorm's `%453` from statement 1 through 9 passes under the labelling whose one payload
+    register is the triple loaded from the shared-memory global, and fails with the stack slot
+    `%12` payload too (`ln_after_rel`, MojoProofTest/SymSeg.lean).
   `Summary.payOk lab fn S`: every node of `S` whose role is payload passes, on the roles of the
   nodes before it (a skeleton node is not checked: `SNode.eval_skel` covers it).
 - `Valuation.StoresOk lab pay V S`: under `V`, each `store` effect of `S` whose value operand is
@@ -877,8 +892,8 @@ the `phi` operand `splat (i32 %p)`, a constant expression on a payload register,
 ### Along a path, and two runs of a returning path (MojoProof/Sym/Payload.lean)
 
 For every labelling `lab`, payload blocks `pay`, function `fn` and path `(l, ds, S) :: ps` (the
-block checker's `coversPathI` and `WalkI`, whose blocks after the first are entered through
-`Valuation.into`).
+block checker's `coversPathWith false` and `WalkWith false`, whose blocks after the first are
+entered through `Valuation.into`).
 
 **Definitions.**
 - `pathOk lab fn l S ps`: every summary of the path is oblivious, agrees with `lab` on its exit's
@@ -891,41 +906,41 @@ block checker's `coversPathI` and `WalkI`, whose blocks after the first are ente
   path's lists hold more conditions than `S.obls`, so it is checked, by the kernel, per path.
 
 **Statements.**
-1. `Valuation.lastI_rel`: if `V₁.Rel lab pay V₂`, `V₁.fn = fn`, `pathOk` and `V₁.PathMem` hold,
-   then the entry valuations of the last block (`Valuation.lastI`) are related, the last block's
-   label and summary are one under both, and the valuations after the last block
+1. `Valuation.last_rel`: if `V₁.Rel lab pay V₂`, `V₁.fn = fn`, `pathOk` and `V₁.PathMem` hold,
+   then the entry valuations of the last block (`Valuation.lastWith false`) are related, the last
+   block's label and summary are one under both, and the valuations after the last block
    (`Valuation.after`) are related.
-2. `Block.sound_retI_rel`: for two contexts of one program and two threads of one frame each at
+2. `Block.sound_ret_rel`: for two contexts of one program and two threads of one frame each at
    block `l`'s position `p0`, whose frames have one list of `allocas` (premise `ha`), if
-   `coversPathI` accepts the path, `pathOk` holds, each obligation of the path passes
-   `Cond.effsIn` at its block's summary (premise `hd`), the first entry valuation meets `WalkI`,
-   the last block returns, the entry valuations are related and the first meets `PathMem`, then both
-   threads run the path and their next steps return (`.done`), and the two returned memories
-   (the memories at the last block's end with each frame's `allocas` made dead) are related by
-   `Mem.SkelEq pay`.
+   `coversPathWith false` accepts the path, `pathOk` holds, each obligation of the path passes
+   `Cond.effsIn` at its block's summary (premise `hd`), the first entry valuation meets
+   `WalkWith false`, the last block returns, the entry valuations are related and the first meets
+   `PathMem`, then both threads run the path and their next steps return (`.done`), and the two
+   returned memories (the memories at the last block's end with each frame's `allocas` made dead)
+   are related by `Mem.SkelEq pay`.
 3. `Cond.holds_rel`: for valuations related by `Valuation.Rel` and a summary `S` that is
    oblivious, passes `payOk` and meets `LoadsOk` and `StoresOk` under the first, every obligation
    `d` with `Cond.effsIn S d` that holds under the first on `S`'s node values holds under the
    second.
-4. `WalkI.rel`: if `V₁.Rel lab pay V₂`, `V₁.fn = fn`, `pathOk` holds, every obligation of the
-   path passes `Cond.effsIn` at its block's summary, and `V₁.PathMem` holds, then `WalkI` from
-   `V₁` gives `WalkI` from `V₂`.
+4. `WalkWith.rel`: if `V₁.Rel lab pay V₂`, `V₁.fn = fn`, `pathOk` holds, every obligation of the
+   path passes `Cond.effsIn` at its block's summary, and `V₁.PathMem` holds, then `WalkWith false`
+   from `V₁` gives `WalkWith false` from `V₂`.
 
 **Proof.**
 1. Induction on `ps`. A one-block path: `pathOk` gives `oblivious`, `agreesI` (so `agrees`, its
    first conjunct) and `payOk` at `fn = V₁.fn`, and `PathMem` gives `LoadsOk` and `StoresOk`, so
    `Valuation.after_rel`. A longer path: `Valuation.into_rel` relates the next block's entry
    valuations, which keep the function (`Valuation.into_k`), and the induction hypothesis applies
-   to the rest. `lastI`'s label and summary are the path's last, so they do not depend on the
-   valuation.
-2. `Block.sound_retR` for each thread (the second's program and function are the first's by
+   to the rest. `lastWith false`'s label and summary are the path's last, so they do not depend on
+   the valuation.
+2. `Block.sound_retWith` for each thread (the second's program and function are the first's by
    `Valuation.Rel`, and its last block is the first's by (1)): each run's steps reach the last
    block's end on the memory `me` that its effects make from its entry valuation (`SEff.run`),
    and the next step returns. That memory is `Valuation.after`'s, so (1) relates the two. The
    return sets each block of the frame's `allocas` dead in turn (`List.foldl` of
    `Mem.setLive b false`); with one list in both frames (`ha`), `Mem.foldl_setLive_skel`
    (MojoProof/Sem/Skeleton.lean; induction on the list, `Mem.setLive_skel` at each block)
-   relates the returned memories. The second run's `WalkI` is (4)'s.
+   relates the returned memories. The second run's `WalkWith false` is (4)'s.
 3. `vals_rel` relates the node values. `Cond.ok x`: `SVal.eval_rel` relates `x`'s results
    (`Except.Rel`: one fault or two values), so an `ok` under the first is an `ok` under the
    second. `Cond.bool x`: the two values are related by `Val.Skel` at least (`Labels.Rel.to`),
@@ -942,12 +957,12 @@ block checker's `coversPathI` and `WalkI`, whose blocks after the first are ente
 Why `hd`: `covers` asks only that `S.obls` be a prefix of the block's list, so a path may carry
 a `Cond.mem` of effects that are not the block's, whose pointers `oblivious` does not check.
 
-Why `ha`: `Valuation.entry` does not read a frame's `allocas`, so `Valuation.Rel`, `WalkI` and
-`PathMem` say nothing about them, and frames that differ only in `allocas` return different
-memories. Twin (MojoProofTest/Payload.lean's `allocas_twin`, for every context, step count,
-frame, labelling and `pay`): the frames with `allocas` `[]` and `[1]` have related entry
-valuations on a memory whose block 1 is live, and the returned memories are not related (block 1
-is live in one and dead in the other).
+Why `ha`: `Valuation.entry` does not read a frame's `allocas`, so `Valuation.Rel`, `WalkWith false`
+and `PathMem` say nothing about them, and frames that differ only in `allocas` return different
+memories. Twin (MojoProofTest/Payload.lean's `allocas_twin`, for every context, step count, frame,
+labelling and `pay`): the frames with `allocas` `[]` and `[1]` have related entry valuations on a
+memory whose block 1 is live, and the returned memories are not related (block 1 is live in one and
+dead in the other).
 
 `Valuation.storesOk_of_skel`: when no `store` effect has a payload value operand, `StoresOk`
 holds under every valuation (as `Valuation.loadsOk_of_pay` for `LoadsOk`).
@@ -970,17 +985,18 @@ gets from the launch's start facts; the `Bool`s are decided by the kernel.
 
 Instance (MojoProofTest/Payload.lean, one program, every two contexts, threads and memories, and
 every `pay`): `vadd_runs`, `vector_addition`'s path `%4 → %21 → %31` under
-`vaddLab ["25", "27", "28"]`, for frames with one list of `allocas`, the first thread's `WalkI`
-and every `p0`, `p1`, `p2`, `out` and struct tail `tl`. Its premises are start facts of the first
-run: the first frame's registers `%0` to `%2` point to offset 0 of `p0` to `p2`, outside `pay`,
-and the struct load `%5` through `%2` reads a struct whose first field points to offset 0 of
-`out`, in `pay` (the start facts of `Kernel.sound_map2`, MojoProof/Sym/Kernel.lean, give these with
-`pay` the one block `out`). From them, `Valuation.loadsOk_of_regs` (registers `%0` to `%2`) gives `%4`'s `LoadsOk`
-and `Valuation.storesOk_of_regs` (register `%6`, which is `out`'s pointer at `%21`'s entry by
-`vadd4_reg6`) gives `%21`'s `StoresOk`; the second thread's `WalkI` is `WalkI.rel`'s. The kernel
-decides the rest (`coversPathI`, `pathOk`, `Cond.effsIn`, the pointer bases, `loadsOk_of_pay`
-for `%21` and `%31`, `storesOk_of_skel` for `%4` and `%31`). Twin: `vadd_pathOk`, where
-`pathOk` passes under that labelling and fails with `%28` skeleton.
+`vaddLab ["25", "27", "28"]`, for frames with one list of `allocas`, the first thread's
+`WalkWith false` and every `p0`, `p1`, `p2`, `out` and struct tail `tl`. Its premises are start
+facts of the first run: the first frame's registers `%0` to `%2` point to offset 0 of `p0` to `p2`,
+outside `pay`, and the struct load `%5` through `%2` reads a struct whose first field points to
+offset 0 of `out`, in `pay` (the start facts of `Kernel.sound_map2`, MojoProof/Sym/Kernel.lean, give
+these with `pay` the one block `out`). From them, `Valuation.loadsOk_of_regs` (registers `%0` to
+`%2`) gives `%4`'s `LoadsOk` and `Valuation.storesOk_of_regs` (register `%6`, which is `out`'s
+pointer at `%21`'s entry by `vadd4_reg6`) gives `%21`'s `StoresOk`; the second thread's
+`WalkWith false` is `WalkWith.rel`'s. The kernel decides the rest (`coversPathWith false`, `pathOk`,
+`Cond.effsIn`, the pointer bases, `loadsOk_of_pay` for `%21` and `%31`, `storesOk_of_skel` for `%4`
+and `%31`). Twin: `vadd_pathOk`, where `pathOk` passes under that labelling and fails with `%28`
+skeleton.
 
 Not proved:
 - the discharge of `LoadsOk` and `StoresOk` from `Labels.MemOk` (the grid-level memory
@@ -1145,8 +1161,9 @@ These are the rows that are proved, for one operation each (on scalars or on wor
 terms: `SVal.eval_respects` is not stated here.
 
 **Definitions.**
-- `FinEq x y` on `Model fmt`: `x = y`, or neither is finite.
-- `NaNEq x y`: `x = y`, or both are NaNs.
+- `FinEq x y` on `Model fmt`: `x = y`, or neither is finite (`GPUProof.UpToNaN` at the words
+  that are not finite, GPUProof/NaN.lean).
+- `NaNEq x y`: `x = y`, or both are NaNs (`GPUProof.UpToNaN Model.isNaN`, GPUProof/NaN.lean).
 - `Est` with fields `value : ℝ`, `bound : ℝ`, `valid : Bool`, and `e.Holds w`:
   `e.valid = true → w.isFinite = true ∧ |w.toReal - e.value| ≤ e.bound` (the flag carries the
   range hypothesis).
@@ -1172,15 +1189,15 @@ with `nnan = false` and `ninf = false`:
 
 Proof.
 1. `FinEq.deliver`: if `FinEq r r'` then `FinEq (deliver r n) (deliver r' n')` for every `n`, `n'`.
-   If `r = r'` is a NaN, both deliveries are NaNs (`isNaN_deliver`), so neither is finite
-   (`Model.isFinite_eq_false_of_isNaN`); if it is not a NaN, both are `r`
-   (`deliver_of_isNaN_eq_false`). If neither is finite, a delivery is a NaN or `r` itself, so it
-   is not finite.
+   If `r = r'`, the deliveries are `NaNEq` (`NaNEq.deliver`), and a NaN is not finite
+   (`Model.isFinite_eq_false_of_isNaN`, through `GPUProof.UpToNaN.mono`); if neither is finite,
+   neither delivery is (`not_finite_deliver`).
 2. `FinEq.op`: for `f` whose finite results have finite operands, `FinEq x x'` and `FinEq y y'` give
    `FinEq (f x y) (f x' y')`. If both pairs are equal, the results are. Otherwise one of `x, x'`
    (say) is not finite on both sides, so neither result is finite. FloatLib gives the premise for
    `add`, `sub` and `mul` on IEEE formats (`Model.isFinite_of_isFinite_add`, `_sub`, `_mul`), and every
-   `FloatTy.fmt` is IEEE (`isIEEE_fmt`, by cases).
+   `FloatTy.fmt` is IEEE (`isIEEE_fmt`, by cases). It is the case of `GPUProof.UpToNaN.map₂` at the
+   words that are not finite.
 3. `floatBin_ofFloat`: on two float scalars of type `t`, with flags that pass `FastMath.check` and
    have no `nnan` or `ninf`, and no factors, `floatBin` is `.ok (.ofFloat t (deliver (f a b) (n / 3)))`
    with `fbin op = some f`, for `fadd`, `fsub`, `fmul` and `fdiv`: `contract sub a b none none n` is
@@ -1224,10 +1241,11 @@ runs have the same operands `x`, `y`: the input relation is equality, not `NaNEq
 counterexample after T5's statement).
 
 Proof. `NaNEq.deliver`: `NaNEq r r'` gives `NaNEq (deliver r n) (deliver r' n')` for every `n`, `n'`
-(as in `FinEq.deliver`: a NaN is delivered as a NaN, `isNaN_deliver`, and a word that is not a NaN
-as itself). With `n % 2 = n' % 2` both sides take the same arm of `maxnum`: `deliver` of the
-canonical NaN, or `deliver` of one word `r`, at `n / 2` and `n' / 2`; `NaNEq.deliver` with `r = r`
-closes both. The results need not be equal: `deliver` picks the NaN by `n / 2`.
+(a NaN is delivered as a NaN, `isNaN_deliver`, and a word that is not a NaN as itself;
+`FinEq.deliver` goes through it). With `n % 2 = n' % 2` both sides take the same arm of `maxnum`:
+`deliver` of the canonical NaN, or `deliver` of one word `r`, at `n / 2` and `n' / 2`;
+`NaNEq.deliver` with `r = r` closes both. The results need not be equal: `deliver` picks the NaN
+by `n / 2`.
 
 **Rows `maxnum` / `minnum` at the intrinsic, on scalars** (`intrinsic_fminmax_ofFloat`,
 `fminmax_of_not_nan`, `fminmax_nanEq`). For every `max`, type `t` whose element type is the float
@@ -1443,7 +1461,7 @@ to `vector_addition` on `L23`); and the reference run, done and not bad.
 ## Dependencies
 
 - In the tree:
-  - `Grid.Step`, `Grid.Bad`, `Grid.Sound`, `Path`, `Path.exists_iff`;
+  - `Grid.Step`, `GPUProof.Bad` at `sig`, `Grid.Sound`, `Path`, `Path.exists_iff`;
   - `Grid.start_sound` (T2's conclusion 2);
   - `exec`, `step`, `enter`, `Grid.advance`, `Grid.fire`;
   - `Mem.load`, `Mem.store`, `Mem.check`, `Mem.fresh`, `castV`, `Layout.decode`,

@@ -11,7 +11,7 @@ grid reachable from `g` meets `P` (`every_sound`, with `mem_succs`: every step's
 thread would log to follow the discipline `(T, own)` or be to a block the thread owns, and one with
 `!invariant.load` to be to an untiled block it does not own, and gives `hH` and `hI` for that
 discipline (`discB_sound`, `disc_hyps`); `noFaultB` asks no step or fire to fault and gives
-`¬ Grid.Faults` (`noFaultB_sound`).
+that the grid does not fault (`GPUProof.Faults` at `sig`, `noFaultB_sound`).
 
 The instance with no tiled block, one kernel on one launch: `start2` of
 MojoProofTest/Confluence.lean, two threads each at `%0 = alloca i32`, `store i32 7, ptr %0`,
@@ -37,8 +37,9 @@ fail (`cells_twin`).
 
 The instance of conclusion 3 (`Grid.owned_sound`), one kernel on one launch: the run of `cellK i16`
 in which thread 0 takes its four steps and then thread 1 ends in `cellDone (.int 16)`, in which
-every thread has returned; its trace meets `traceB` for `(cells, tileOf)` (the premises of
-`racy_kept_of_local` with no thread-local block, `traceB_sound` for every discipline and trace),
+every thread has returned; its trace meets `traceB` for `(cells, tileOf)` (the premises `hO`,
+`hL`, `hX` and `hI` of `racy_kept_of_local` with no thread-local block, `traceB_sound` for every
+discipline and trace),
 so the start's grid is sound for bytes 0 to 3 of block 1, 7 and 7 as 16-bit words
 (`cells_sound`). Its twin: the same schedule of `cellK i8` ends in a done grid whose trace is racy,
 so it is bad, no discipline with thread-local blocks meets the premises on its trace, and the
@@ -66,6 +67,7 @@ the promise is broken (`elem_twin_inv`).
 namespace MojoProofTest.ScheduleOwned
 
 open MojoProof.Sem MojoProof.LLVM MojoProofTest.Confluence MojoProofTest.Determinism Relation
+open GPUProof (Path Path.exists_iff Confluent)
 
 -- `Array.any` recurses by well-founded recursion, so `rfl` cannot evaluate a step without this.
 unseal Array.anyM.loop
@@ -198,8 +200,9 @@ def noFaultB (L : Launch) (c : Nat → Ctx) (g : Grid) : Bool :=
 
 /-- What `noFaultB` says, for every launch, contexts and grid: the grid does not fault. -/
 theorem noFaultB_sound {L : Launch} {c : Nat → Ctx} {g : Grid} (h : noFaultB L c g = true) :
-    ¬ g.Faults L c := by
-  rintro ⟨n, e, he⟩
+    ¬ GPUProof.Faults sig (g, L, c) := by
+  intro hf
+  obtain ⟨n, e, he⟩ := Grid.faults_iff.1 hf
   by_cases hn : n < g.threads.size
   · have := List.all_eq_true.1 h n (List.mem_range.2 hn)
     rcases he with he | he <;> simp [he] at this
@@ -218,7 +221,8 @@ theorem local2 :
 are confluent with the faults as the bad set. -/
 theorem confluent_owned2 :
     Confluent (fun x y : {g // ReflTransGen (Grid.Step two c2) run2.1 g} =>
-      Grid.Step two c2 x.1 y.1) (fun x y => x.1.Same y.1) (fun x => x.1.Faults two c2) :=
+      Grid.Step two c2 x.1 y.1) (fun x y => x.1.Same y.1)
+      (fun x => GPUProof.Faults sig (x.1, two, c2)) :=
   have hD := disc_hyps fun _ hr => every_sound hr local2
   Grid.confluent_owned start2_eq (fun _ _ _ _ _ h => by cases h) hD.1 hD.2 fun _ _ _ _ h => h
 
@@ -226,7 +230,9 @@ theorem confluent_owned2 :
 `start2`'s the trace is not racy and keeps the promise of `!invariant.load`, and the grid is bad
 exactly when it faults. -/
 theorem clean2 : ∀ g, ReflTransGen (Grid.Step two c2) run2.1 g →
-    racy g.mem.trace = false ∧ kept g.mem.trace = true ∧ (g.Bad two c2 ↔ g.Faults two c2) :=
+    GPUProof.racy sig (g.mem.trace.map (Event.toCore two)).reverse = false ∧
+      GPUProof.kept sig (g.mem.trace.map (Event.toCore two)).reverse = true ∧
+      (GPUProof.Bad sig (g, two, c2) ↔ GPUProof.Faults sig (g, two, c2)) :=
   fun _ hr =>
     have hD := disc_hyps fun _ hr => every_sound hr local2
     ⟨(Grid.owned_clean start2_eq hD.1 hD.2 (fun _ _ _ _ h => h) hr).1,
@@ -292,9 +298,11 @@ and keeps the promise of `!invariant.load`, and does not fault. -/
 theorem confluent_cells :
     Confluent (fun x y : {g // ReflTransGen (Grid.Step two (cellRun (.int 16)).2)
         (cellRun (.int 16)).1 g} => Grid.Step two (cellRun (.int 16)).2 x.1 y.1)
-      (fun x y => x.1.Same y.1) (fun x => x.1.Faults two (cellRun (.int 16)).2) ∧
+      (fun x y => x.1.Same y.1) (fun x => GPUProof.Faults sig (x.1, two, (cellRun (.int 16)).2)) ∧
     ∀ g, ReflTransGen (Grid.Step two (cellRun (.int 16)).2) (cellRun (.int 16)).1 g →
-      racy g.mem.trace = false ∧ kept g.mem.trace = true ∧ ¬ g.Faults two (cellRun (.int 16)).2 :=
+      GPUProof.racy sig (g.mem.trace.map (Event.toCore two)).reverse = false ∧
+        GPUProof.kept sig (g.mem.trace.map (Event.toCore two)).reverse = true ∧
+        ¬ GPUProof.Faults sig (g, two, (cellRun (.int 16)).2) :=
   have hs : cellStart (.int 16) = .ok ((cellRun (.int 16)).1, (cellRun (.int 16)).2) := rfl
   have hD := disc_hyps fun _ hr => by
     have := every_sound hr cells16
@@ -321,7 +329,7 @@ stores of two bytes overlap. `overlap` is reachable from the start and its trace
 every discipline whose tile map is injective on the two threads, `hH` and `hI` fail. -/
 theorem cells_twin :
     ReflTransGen (Grid.Step two (cellRun (.int 8)).2) (cellRun (.int 8)).1 overlap ∧
-    racy overlap.mem.trace = true ∧
+    GPUProof.racy sig (overlap.mem.trace.map (Event.toCore two)).reverse = true ∧
     ∀ {ι : Type} (T : Nat → Option (Tiling ι)) (own : Nat → ι),
       (∀ n k, n < 2 → k < 2 → own n = own k → n = k) →
       ¬ ((∀ g, ReflTransGen (Grid.Step two (cellRun (.int 8)).2) (cellRun (.int 8)).1 g →
@@ -332,7 +340,8 @@ theorem cells_twin :
             a.invariant = true → T a.ptr.block = none ∧ ¬ g.mem.Owned n a.ptr.block) := by
   have hr : ReflTransGen (Grid.Step two (cellRun (.int 8)).2) (cellRun (.int 8)).1 overlap :=
     Path.exists_iff.1 ⟨_, path_advs _ [0, 0, 0, 1, 1, 1] (by decide +kernel) (.nil _)⟩
-  have hk : racy overlap.mem.trace = true := by decide +kernel
+  have hk : GPUProof.racy sig (overlap.mem.trace.map (Event.toCore two)).reverse = true :=
+    by decide +kernel
   refine ⟨hr, hk, fun T own hX ⟨hH, hI⟩ => ?_⟩
   have e : (cellRun (.int 8)).1.threads.size = 2 := rfl
   have := (Grid.owned_clean
@@ -343,9 +352,10 @@ theorem cells_twin :
 
 /-! ## Conclusion 3: one run, and the discipline of its trace -/
 
-/-- The premises of `racy_kept_of_local` with no block local to a thread, as a Boolean, on a trace
-`tr`: every access follows `(T, own)` (`ownedB`) without `!invariant.load`, and two accesses to
-one tiled block by threads of one tile are by one thread. -/
+/-- The premises `hO`, `hL`, `hX` and `hI` of `racy_kept_of_local` with no block local to a
+thread, as a Boolean, on a trace `tr`: every access follows `(T, own)` (`ownedB`) without
+`!invariant.load`, and two accesses to one tiled block by threads of one tile are by one
+thread. -/
 def traceB {ι : Type} [DecidableEq ι] (T : Nat → Option (Tiling ι)) (own : Nat → ι)
     (tr : List Event) : Bool :=
   tr.all fun
@@ -355,8 +365,8 @@ def traceB {ι : Type} [DecidableEq ι] (T : Nat → Option (Tiling ι)) (own : 
       | _ => true
     | _ => true
 
-/-- What `traceB` says, for every discipline and trace: the premises of `racy_kept_of_local`
-with no block local to a thread (`loc := fun _ _ => False`). -/
+/-- What `traceB` says, for every discipline and trace: the premises `hO`, `hL`, `hX` and `hI` of
+`racy_kept_of_local` with no block local to a thread (`loc := fun _ _ => False`). -/
 theorem traceB_sound {ι : Type} [DecidableEq ι] {T : Nat → Option (Tiling ι)} {own : Nat → ι}
     {tr : List Event} (h : traceB T own tr = true) :
     (∀ a, Event.access a ∈ tr → (∀ w, ¬ (fun _ _ => False : Nat → Nat → Prop) a.ptr.block w) →
@@ -404,7 +414,7 @@ theorem cells_sound :
     (loc := fun _ _ => False) (show cellStart (.int 16) = .ok ((cellRun (.int 16)).1, (cellRun (.int 16)).2)
       from rfl) (Closed.mem_bytesIn none) (fun m m' h => by simp only [obs1, h])
     (path_advs _ [0, 0, 0, 0, 1, 1, 1, 1] (by decide +kernel) (.nil _))
-    (show (cellDone (.int 16)).Done by unfold Grid.Done; decide +kernel)
+    (Grid.done_of_all (by decide +kernel))
     hk.1 hk.2.1 hk.2.2.1 hk.2.2.2 (by decide +kernel) rfl
 
 /-- **The twin of `cells_sound`**: in `cellK i8` the threads' stores of two bytes overlap, so the
@@ -413,8 +423,9 @@ grid is bad; no discipline `(T, own)` with thread-local blocks `loc` meets the p
 `Grid.owned_sound` on its trace, and the start's grid is sound for no observation. -/
 theorem cells_sound_twin :
     ReflTransGen (Grid.Step two (cellRun (.int 8)).2) (cellRun (.int 8)).1 (cellDone (.int 8)) ∧
-    (cellDone (.int 8)).Done ∧ racy (cellDone (.int 8)).mem.trace = true ∧
-    (cellDone (.int 8)).Bad two (cellRun (.int 8)).2 ∧
+    GPUProof.Done sig (cellDone (.int 8), two, (cellRun (.int 8)).2) ∧
+    GPUProof.racy sig ((cellDone (.int 8)).mem.trace.map (Event.toCore two)).reverse = true ∧
+    GPUProof.Bad sig (cellDone (.int 8), two, (cellRun (.int 8)).2) ∧
     (∀ {ι : Type} (T : Nat → Option (Tiling ι)) (own : Nat → ι) (loc : Nat → Nat → Prop),
       let tr := (cellDone (.int 8)).mem.trace
       ¬ ((∀ a, Event.access a ∈ tr → (∀ w, ¬ loc a.ptr.block w) → Owned T own a) ∧
@@ -429,13 +440,16 @@ theorem cells_sound_twin :
   have hr : ReflTransGen (Grid.Step two (cellRun (.int 8)).2) (cellRun (.int 8)).1
       (cellDone (.int 8)) :=
     Path.exists_iff.1 ⟨_, path_advs _ [0, 0, 0, 0, 1, 1, 1, 1] (by decide +kernel) (.nil _)⟩
-  have hd : (cellDone (.int 8)).Done := by
-    unfold Grid.Done
-    decide +kernel
-  have hk : racy (cellDone (.int 8)).mem.trace = true := by decide +kernel
-  refine ⟨hr, hd, hk, hd.bad_iff.2 (.inl hk), fun T own loc ⟨hO, hL, hX, hI⟩ => ?_,
+  have hd : GPUProof.Done sig (cellDone (.int 8), two, (cellRun (.int 8)).2) :=
+    Grid.done_of_all (by decide +kernel)
+  have hk : GPUProof.racy sig ((cellDone (.int 8)).mem.trace.map (Event.toCore two)).reverse =
+      true := by decide +kernel
+  have hf := Grid.start_reach_fits
+    (show cellStart (.int 8) = .ok ((cellRun (.int 8)).1, (cellRun (.int 8)).2) from rfl) hr
+  refine ⟨hr, hd, hk, (Grid.Done.bad_iff (by decide +kernel) hd).2 (.inl hk),
+    fun T own loc ⟨hO, hL, hX, hI⟩ => ?_,
     fun obs R hS => ?_⟩
-  · have := (racy_kept_of_local hO hL hX hI).1
+  · have := racy_eq_false_of_local hf.trace hf.2 hO hL hX
     rw [hk] at this
     cases this
   · have := hS.raceFree _ hr
@@ -527,7 +541,8 @@ def doneI : Grid := advs cI gL [0, 0]
 
 /-- No grid reachable from `gL` faults or has a racy trace; the runs end within 2 steps. -/
 theorem safeL :
-    every .one cI (fun g => noFaultB .one cI g && !racy g.mem.trace) 2 gL = true := by
+    every .one cI (fun g => noFaultB .one cI g &&
+      !GPUProof.racy sig (g.mem.trace.map (Event.toCore .one)).reverse) 2 gL = true := by
   decide +kernel
 
 /-- **The twin** (`Grid.Kept` does not follow from `Grid.Safe` and `Grid.RaceFree`): no grid
@@ -536,10 +551,14 @@ reachable from
 has returned and the store has written the bytes of the `!invariant.load`, so the trace breaks its
 promise; that grid is bad and does not fault, so `Grid.owned_bad`'s conclusion fails there, and no
 discipline meets `hH` and `hI` on `startI`'s launch. -/
-theorem inv_twin : ReflTransGen (Grid.Step .one cI) runI.1 doneI ∧ doneI.Done ∧
+theorem inv_twin : ReflTransGen (Grid.Step .one cI) runI.1 doneI ∧
+    GPUProof.Done sig (doneI, Launch.one, cI) ∧
     (∀ g, ReflTransGen (Grid.Step .one cI) runI.1 g →
-      ¬ g.Faults .one cI ∧ racy g.mem.trace = false) ∧
-    kept doneI.mem.trace = false ∧ doneI.Bad .one cI ∧ ¬ doneI.Faults .one cI ∧
+      ¬ GPUProof.Faults sig (g, Launch.one, cI) ∧
+        GPUProof.racy sig (g.mem.trace.map (Event.toCore Launch.one)).reverse = false) ∧
+    GPUProof.kept sig (doneI.mem.trace.map (Event.toCore Launch.one)).reverse = false ∧
+    GPUProof.Bad sig (doneI, Launch.one, cI) ∧
+    ¬ GPUProof.Faults sig (doneI, Launch.one, cI) ∧
     ∀ {ι : Type} (T : Nat → Option (Tiling ι)) (own : Nat → ι),
       ¬ ((∀ g, ReflTransGen (Grid.Step .one cI) runI.1 g → ∀ n a, .access a ∈ g.pending cI n →
           Owned T own a ∨ g.mem.Owned n a.ptr.block) ∧
@@ -553,15 +572,19 @@ theorem inv_twin : ReflTransGen (Grid.Step .one cI) runI.1 doneI ∧ doneI.Done 
       List.all_cons, List.all_nil, stepsI.2, show g1.fire .one cI 0 = .ok none from rfl,
       Bool.and_true]
   have hS : ∀ g, ReflTransGen (Grid.Step .one cI) runI.1 g →
-      ¬ g.Faults .one cI ∧ racy g.mem.trace = false := fun _ hg => by
+      ¬ GPUProof.Faults sig (g, Launch.one, cI) ∧
+        GPUProof.racy sig (g.mem.trace.map (Event.toCore Launch.one)).reverse = false :=
+      fun _ hg => by
     rcases reachI hg with rfl | rfl | hg
     · exact ⟨noFaultB_sound (by decide +kernel), by decide +kernel⟩
     · exact ⟨noFaultB_sound h1, by decide +kernel⟩
     · have := every_sound hg safeL
       simp only [Bool.and_eq_true, Bool.not_eq_true'] at this
       exact ⟨noFaultB_sound this.1, this.2⟩
-  have hk : kept doneI.mem.trace = false := by decide +kernel
-  refine ⟨hr, rfl, hS, hk, .inr (.inr (.inl hk)), (hS _ hr).1, fun T own hD => ?_⟩
+  have hk : GPUProof.kept sig (doneI.mem.trace.map (Event.toCore Launch.one)).reverse = false := by
+    decide +kernel
+  refine ⟨hr, Grid.done_of_all rfl, hS, hk, .inr (.inr (.inl hk)), (hS _ hr).1,
+    fun T own hD => ?_⟩
   obtain ⟨hH, hI⟩ := hD
   have := (Grid.owned_clean startI_eq hH hI (fun n k h₁ h₂ _ => by
     have e : runI.1.threads.size = 1 := rfl
@@ -587,25 +610,42 @@ theorem mem_elemTr {o : Nat → Int} {a : Access} (h : Event.access a ∈ elemTr
         a = ⟨⟨0, 0⟩, ⟨2, 0⟩, 4, false, none, true⟩ := by
   simpa [elemTr, elemAcc] using h
 
-/-- **Instance of `racy_kept_of_cells`** (one trace): with the stores at offsets `4 n + 8`, each
-in its thread's cell of 4 bytes from `4 n + 8`, the trace of the two threads is not racy and
-keeps the promise of `!invariant.load`. The cells start at 8, not at `4 n`, so
-`racy_kept_pointwise` does not apply. -/
-theorem elem_clean : racy (elemTr (4 * · + 8)) = false ∧ kept (elemTr (4 * · + 8)) = true :=
-  racy_kept_of_cells (out := 1) (w := 4) (cell := (4 * · + 8))
+/-- The premises of `racy_iff` on `elemTr` with the stores at offsets `4 n + 8`, at `two`: every
+access is by a thread of `two` in its block of threads, and the trace is shaped
+(`Trace.Shaped`, oldest first). -/
+theorem elem_fits :
+    (∀ a, Event.access a ∈ elemTr (4 * · + 8) → a.who.thread < volume two.grid * volume two.block ∧
+      a.who.cta = a.who.thread / volume two.block) ∧ Trace.Shaped (elemTr (4 * · + 8)).reverse := by
+  refine ⟨fun a ha => ?_, fun a ha hi => ?_, fun p a hp ho _ => ?_⟩
+  · rcases mem_elemTr ha with rfl | rfl | rfl | rfl <;> decide
+  · rcases mem_elemTr (List.mem_reverse.1 ha) with rfl | rfl | rfl | rfl <;> revert hi <;> decide
+  · rcases mem_elemTr (List.mem_reverse.1 (List.mem_of_getElem? hp)) with rfl | rfl | rfl | rfl <;>
+      simp at ho
+
+/-- **Instance of `racy_kept_of_cells`** (one trace): at `two`, with the stores at offsets
+`4 n + 8`, each in its thread's cell of 4 bytes from `4 n + 8`, the trace of the two threads is
+not racy (it has the premises of `racy_iff`, `elem_fits`) and keeps the promise of
+`!invariant.load`. The cells start at 8, not at `4 n`, so `racy_kept_pointwise` does not
+apply. -/
+theorem elem_clean :
+    GPUProof.racy sig ((elemTr (4 * · + 8)).map (Event.toCore two)).reverse = false ∧
+      GPUProof.kept sig ((elemTr (4 * · + 8)).map (Event.toCore two)).reverse = true :=
+  have h := racy_kept_of_cells (L := two) (out := 1) (w := 4) (cell := (4 * · + 8))
     (fun i j h => by beta_reduce; omega)
     (fun a ha => by rcases mem_elemTr ha with rfl | rfl | rfl | rfl <;> decide)
     (fun a ha => by rcases mem_elemTr ha with rfl | rfl | rfl | rfl <;> decide)
     (fun a ha => by rcases mem_elemTr ha with rfl | rfl | rfl | rfl <;> decide)
+  ⟨h.1 elem_fits.1 elem_fits.2, h.2⟩
 
 /-- The tiling of `elemTr`'s output: block 1 in two cells of 4 bytes from offset 8. -/
 def elemCells (b : Nat) : Option (Tiling (Fin 2)) := if b = 1 then some (.strided 8 2 4) else none
 
-/-- **Instance of `racy_eq_false_of_owned`** on the same trace: every access follows
-`(elemCells, tileOf)` (`ownedB`, by evaluation), and threads with one tile are one thread, so the
-trace is not racy, as `elem_clean` says. -/
-theorem elem_owned : racy (elemTr (4 * · + 8)) = false :=
-  racy_eq_false_of_owned (T := elemCells) (own := tileOf)
+/-- **Instance of `racy_eq_false_of_owned`** on the same trace, at `two`: it has the premises of
+`racy_iff` (`elem_fits`), every access follows `(elemCells, tileOf)` (`ownedB`, by evaluation),
+and threads with one tile are one thread, so the trace is not racy, as `elem_clean` says. -/
+theorem elem_owned :
+    GPUProof.racy sig ((elemTr (4 * · + 8)).map (Event.toCore two)).reverse = false :=
+  racy_eq_false_of_owned (T := elemCells) (own := tileOf) elem_fits.1 elem_fits.2
     (fun a ha => ownedB_sound (by
       rcases mem_elemTr ha with rfl | rfl | rfl | rfl <;> decide +kernel))
     fun a e ha he _ _ ho => by
@@ -613,14 +653,17 @@ theorem elem_owned : racy (elemTr (4 * · + 8)) = false :=
         rcases mem_elemTr he with rfl | rfl | rfl | rfl <;>
         first | rfl | exact absurd ho (by decide)
 
-/-- **Twin of the cell premise**: with both stores at offset 8, thread 1's store is outside its
-cell, and the trace is racy. -/
-theorem elem_twin_cell : racy (elemTr fun _ => 8) = true := by decide
+/-- **Twin of the cell premise**: at `two`, with both stores at offset 8, thread 1's store is
+outside its cell, and the trace is racy. -/
+theorem elem_twin_cell :
+    GPUProof.racy sig ((elemTr fun _ => 8).map (Event.toCore two)).reverse = true := by
+  decide +kernel
 
 /-- **Twin of the `!invariant.load` premise**: after a further `!invariant.load` of the output's
 bytes 8 to 11, which thread 0 stores, the trace breaks the promise of `!invariant.load`. -/
 theorem elem_twin_inv :
-    kept (.access ⟨⟨0, 0⟩, ⟨1, 8⟩, 4, false, none, true⟩ :: elemTr (4 * · + 8)) = false := by
-  decide
+    GPUProof.kept sig ((.access ⟨⟨0, 0⟩, ⟨1, 8⟩, 4, false, none, true⟩ :: elemTr (4 * · + 8)).map
+      (Event.toCore Launch.one)).reverse = false := by
+  decide +kernel
 
 end MojoProofTest.ScheduleOwned

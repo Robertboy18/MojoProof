@@ -9,13 +9,15 @@ form a DAG stored as a node table: one node (`SNode`) per distinct float constan
 statement that defines a value, in the statements' order, whose operands (`SVal`) are atoms or
 earlier nodes by index, so a value used twice is one node referred to twice (the table has as
 many nodes as the block has distinct float constants and value-defining statements, and one more
-for each `getelementptr` on a global, whatever the sharing).
+for each global or constant operand that has a node of its own, `SNode.globalAt` and
+`SNode.constAt`, whatever the sharing).
 
 * `SVal`: an operand. Atoms are the registers at the block entry (kernel arguments and values
   from earlier blocks alike, `SVal.reg`) and integer constants (`SVal.int`); `SVal.node j` is
   the `j`-th node of the table.
 * `SNode`: a node. Integer operators with their width, integer casts, integer `icmp`,
-  `extractvalue`, `getelementptr`, float operators with their flags and the step number whose oracle
+  `extractvalue`, `getelementptr` (`SNode.gep` with one index, `SNode.gepN` with any other
+  number), float operators with their flags and the step number whose oracle
   numbers they read (`SNode.fbin`, `n` steps after the block entry), memory reads from the entry
   memory (`SNode.load`), calls of a special register or of the lane number (`SNode.call`), integer
   `select` with its width (`SNode.select`) and the integer maximum and minimum (`SNode.minmax`, the
@@ -28,20 +30,27 @@ for each `getelementptr` on a global, whatever the sharing).
   `fptoui`, `fptosi` or `inttoptr`; with the step number whose oracle numbers a float cast
   reads), and the pointer of a global a statement's operand names (`SNode.globalAt`, the
   checker's node for the base of a `getelementptr` on a global; its value is the context's
-  address of the global, `Ctx.globals`), and memory reads after a `store` (`SNode.loadAfter`:
-  from the memory the block's effects before the read make, which the node carries). A node whose
-  instruction has a type the node does not
-  hold (a `getelementptr`'s source type, a `load`'s type, a call's declaration, a cast's types)
-  or a name (a global's) names the statement by its block label and position, and its value reads
-  the type or the name there.
+  address of the global, `Ctx.globals`), memory reads after a `store` (`SNode.loadAfter`: from
+  the memory the block's effects before the read make, which the node carries), reads of the
+blocks' addresses and sizes after an `alloca` (`SNode.icmpAfter`, `SNode.castAfter`,
+`SNode.gepAfter`, `SNode.gepNAfter`: on the memory the effects before them make), and the constant
+  a statement's operand is when its type alone gives its value (`SNode.constAt`, at a
+  `zeroinitializer`, `undef` or `poison`, `tyConst`; the checker's node for a stored one and for
+  the aggregate or vector an `insertvalue` or `insertelement` starts from), `insertvalue`
+  (`SNode.insert`), and `extractelement` and `insertelement` (`SNode.eltAt`, `SNode.insEltAt`). A
+  node whose instruction has a type the node does not hold (a `getelementptr`'s source type, a
+  `load`'s type, a call's declaration, a cast's types, a constant's type, a vector type) or a name
+  (a global's) names the statement by its block label and position, and its value reads the type
+  or the name there.
 * `SNode.eval`, `SVal.eval`, `vals`: the value of a node given the values of the nodes before it,
   under a `Valuation` (the context, the function, the thread's step count, the memory, registers and
   `fmul contract` operands at the block entry), computed by the semantics' own operations (`intBin`,
-  `icmpV`, `intCast`, `castV`, `extractV`, `withAttrs`, `gep`, `Mem.load`, `floatBin`, `selectV`,
-  `intMinMax`, `floatLit`), faults included, with the `fmul contract` operands of an `fbinP` node's
-  operands from their terms (`prodVal`, `SVal.prodsWith`); `vals V ns` is the list of the values of
-  table `ns`, each node evaluated once, from the values before it (a fold over the table), so a
-  float constant's literal is evaluated once however often the block uses it.
+  `icmpV`, `intCast`, `castV`, `extractV`, `insertV`, `extractE`, `insertE`, `withAttrs`, `gep`,
+  `Mem.load`, `floatBin`, `selectV`, `intMinMax`, `floatLit`), faults included, with the
+  `fmul contract` operands of an `fbinP` node's operands from their terms (`prodVal`,
+  `SVal.prodsWith`); `vals V ns` is the list of the values of table `ns`, each node evaluated
+  once, from the values before it (a fold over the table), so a float constant's literal is
+  evaluated once however often the block uses it.
 * `scanSnoc f ns`: the list each of whose entries is `f` of the entries before it and the next
   element of `ns` (the fold `vals` is, at `SNode.eval`, and `roles`, MojoProof/Sym/Payload.lean,
   at `SNode.pay`). Proved for every `f` and list: `scanSnoc_fold`, `scanSnoc_length` (one entry per
@@ -60,7 +69,8 @@ Proved, for every valuation and table: `vals_fold`, `vals_length` (one value per
 value on the values before it), the `scanSnoc` lemmas at `SNode.eval`; `vals_flit` (a float
 constant node's value is its literal's, `floatLit`), `SNode.eval_castAt` (a cast node's value is
 `castV` at its statement's operator and types), `SNode.eval_globalAt` (a global's node is the
-context's address of the global), `SNode.eval_bitcast` (a `bitcast` node between
+context's address of the global), `SNode.eval_constAt` (a constant's node has a value exactly
+when `evalV` gives the constant that value), `SNode.eval_bitcast` (a `bitcast` node between
 scalar types of the same width keeps its operand's word, by `bitcast_bits`, for every layout and
 word), `SVal.eval_before` (an operand that refers to nodes of a prefix has the same value on the
 longer table) and its corollary `SVal.eval_append`; and the effect-run lemmas
@@ -93,7 +103,17 @@ inductive SEff where
   | load (lbl pc : Nat) (p : SVal)
   /-- The `store` at position `pc` of block `lbl` of `v` through `p`. -/
   | store (lbl pc : Nat) (v p : SVal)
+  /-- The `alloca` at position `pc` of block `lbl`, the `n`-th statement after the block entry,
+  with the count term `cnt` (`none`: one element): a new block at number
+  `V.mem.fresh thread (V.k + n)` (`SEff.apply`). -/
+  | alloca (lbl pc n : Nat) (cnt : Option SVal)
   deriving DecidableEq, Repr, Inhabited, Lean.ToExpr
+
+/-- The constants whose type alone gives their value (`evalV`): `zeroinitializer`, `undef` and
+`poison`. -/
+def tyConst : Value → Bool
+  | .zero | .undef | .poison => true
+  | _ => false
 
 /-- A node of the table (see the module docstring). -/
 inductive SNode where
@@ -145,6 +165,38 @@ inductive SNode where
   effects `es` make from the entry memory (`SEff.run`): a `load` after a `store` of the block,
   whose effects before it are `es`. -/
   | loadAfter (lbl pc : Nat) (p : SVal) (es : List SEff)
+  /-- The constant that operand `i` (`Inst.operands`) of the statement at position `pc` of block
+  `lbl` is, when its type alone gives its value (`tyConst`: `zeroinitializer`, `undef` or
+  `poison`): the value `evalV` gives the constant at the operand's type. It names the statement,
+  not the type, so the node's equality compares numbers only. -/
+  | constAt (lbl pc i : Nat)
+  /-- `insertvalue` of `b` into the aggregate `a` at indices `is`. -/
+  | insert (is : List Nat) (a b : SVal)
+  /-- The `extractelement` at position `pc` of block `lbl`, of lane `i` of the vector `a`, at the
+  statement's vector type (`extractE`). -/
+  | eltAt (lbl pc : Nat) (a i : SVal)
+  /-- The `insertelement` at position `pc` of block `lbl`, of `e` into lane `i` of the vector `a`,
+  at the statement's vector type (`insertE`). -/
+  | insEltAt (lbl pc : Nat) (a e i : SVal)
+  /-- The `getelementptr` at position `pc` of block `lbl`, on base `base` and indices `idx`: the
+  checker's node for one with other than one index (`SNode.gep` has one). -/
+  | gepN (lbl pc : Nat) (base : SVal) (idx : List SVal)
+  /-- The pointer to offset 0 of the block that an `alloca` `n` statements after the block entry
+  makes: number `V.mem.fresh thread (V.k + n)` (`Mem.fresh`, as `exec` numbers it). -/
+  | fresh (n : Nat)
+  /-- `icmp p` of integers of width `w`, as `icmp`, on the memory the effects `es` make from the
+  entry memory (`SEff.run`): an `icmp` after an `alloca` of the block, whose effects before it are
+  `es`. -/
+  | icmpAfter (p : ICmp) (w : Nat) (a b : SVal) (es : List SEff)
+  /-- The cast at position `pc` of block `lbl` on `a`, as `castAt`, on the memory the effects `es`
+  make from the entry memory: a `ptrtoint` after an `alloca` of the block. -/
+  | castAfter (lbl pc n : Nat) (a : SVal) (es : List SEff)
+  /-- The `getelementptr` at position `pc` of block `lbl`, as `gep`, on the memory the effects
+  `es` make from the entry memory: a `getelementptr` with one index after an `alloca`. -/
+  | gepAfter (lbl pc : Nat) (base idx : SVal) (es : List SEff)
+  /-- The `getelementptr` at position `pc` of block `lbl`, as `gepN`, on the memory the effects
+  `es` make from the entry memory: one with other than one index after an `alloca`. -/
+  | gepNAfter (lbl pc : Nat) (base : SVal) (idx : List SVal) (es : List SEff)
   deriving DecidableEq, Repr, Inhabited
 
 /-- The operand terms of node `nd` when it is an `fmul contract` (an `fbin` or `fbinP` node with
@@ -214,6 +266,16 @@ def SVal.prodsWith (V : Valuation) (vs : List (Except Fault Val)) (x : SVal) :
   | none => x.prods V
   | some pq => prodVal V vs pq
 
+/-- The number of elements an `alloca`'s effect with count operand `cnt` makes, given the values
+`vs` of the nodes: 1 without a count, the count's value as a number otherwise (as `exec` reads
+an `alloca`'s count). -/
+def SEff.count (V : Valuation) (vs : List (Except Fault Val)) : Option SVal → Except Fault Nat
+  | none => pure 1
+  | some x => do
+    match ← x.eval V vs with
+    | .bits _ b => pure b.toNat
+    | _ => throw (.unsupported "alloca count that is not a number")
+
 /-- Effect `e` on memory `m` under valuation `V`, given the values `vs` of the nodes. -/
 def SEff.apply (V : Valuation) (vs : List (Except Fault Val)) (m : Mem) : SEff → Except Fault Mem
   | .load lbl pc p => match V.stmt lbl pc with
@@ -228,14 +290,113 @@ def SEff.apply (V : Valuation) (vs : List (Except Fault Val)) (m : Mem) : SEff �
       m.store V.ctx.prog.layout V.ctx.who a t x (← (← p.eval V vs).addr?)
         (some (al.getD (V.ctx.prog.layout.align t)))
     | _ => throw (.unsupported "symbolic store at no store")
+  | .alloca lbl pc n cnt => match V.stmt lbl pc with
+    | some ⟨res, .alloca t _ al, _⟩ => do
+      let c ← SEff.count V vs cnt
+      let b := V.mem.fresh V.ctx.who.thread (V.k + n)
+      if (m.blocks b).isSome then throw (.unsupported "alloca number in use")
+      let l := V.ctx.prog.layout
+      pure (m.alloc l l.allocaSpace (c * l.size t) (al.getD (l.align t))
+        (!(res.any (lifetimeStarted V.ctx V.fn))) false (.thread V.ctx.who.thread)
+        (V.ctx.addr (Nat.pair (V.k + n) 0)) (V.ctx.addr (Nat.pair (V.k + n) 1)) (num := some b)).1
+    | _ => throw (.unsupported "symbolic alloca at no alloca")
 
 /-- The memory effects `es`, in order, from the entry memory, given the values `vs` of the
 nodes. -/
 def SEff.run (V : Valuation) (vs : List (Except Fault Val)) (es : List SEff) : Except Fault Mem :=
   es.foldlM (SEff.apply V vs) V.mem
 
+/-- The number of the block that effect `e` makes, under valuation `V`: an `alloca`'s
+(`V.mem.fresh` of the thread at step count `V.k + n`), none for a `load` or a `store`. -/
+def SEff.block? (V : Valuation) : SEff → Option Nat
+  | .alloca _ _ n _ => some (V.mem.fresh V.ctx.who.thread (V.k + n))
+  | _ => none
+
+/-- The numbers of the blocks that the effects `es` make, newest first (the order of a frame's
+`allocas`). -/
+def SEff.blocks (V : Valuation) (es : List SEff) : List Nat :=
+  (es.filterMap (SEff.block? V)).reverse
+
+/-- `SEff.blocks` of the effects `es` and then `e`: `e`'s block, if any, then those of `es`. -/
+theorem SEff.blocks_snoc (V : Valuation) (es : List SEff) (e : SEff) :
+    SEff.blocks V (es ++ [e]) = (e.block? V).toList ++ SEff.blocks V es := by
+  cases h : e.block? V <;>
+    simp [SEff.blocks, List.filterMap_append, h]
+
+/-- Whether the effects `es` have an `alloca`'s (`SEff.alloca`). -/
+def SEff.allocates (es : List SEff) : Bool :=
+  es.any fun | .alloca .. => true | _ => false
+
+/-- Effects without an `alloca`'s make no block: for every valuation `V`, effects `es` with
+`SEff.allocates es = false` have `SEff.blocks V es = []`. -/
+theorem SEff.blocks_eq_nil {V : Valuation} {es : List SEff} (h : SEff.allocates es = false) :
+    SEff.blocks V es = [] := by
+  simp only [SEff.allocates, List.any_eq_false] at h
+  simp only [SEff.blocks, List.reverse_eq_nil_iff, List.filterMap_eq_nil_iff]
+  intro e he
+  cases e with
+  | alloca => exact absurd rfl (h _ he)
+  | _ => rfl
+
 /-- The value of node `nd` under valuation `V`, given the values `vs` of the nodes before it,
-with the faults of the instruction it stands for. -/
+for the nodes of `SNode.eval`'s last case (`constAt`, `insert`, `eltAt`, `insEltAt`, `gepN`,
+`fresh`, `icmpAfter`, `castAfter`, `gepAfter` and `gepNAfter`), with the faults of the instruction
+each stands for; a fault for the others, which `SNode.eval` takes before. (`SNode.eval` takes
+these ten in one case, which keeps its unfolding small.) -/
+def SNode.evalMore (V : Valuation) (vs : List (Except Fault Val)) : SNode → Except Fault Val
+  | .constAt lbl pc i => match V.stmt lbl pc with
+    | some st => match st.inst.operands[i]? with
+      | some (.mk t .zero) => match V.ctx.prog.layout.zero t with
+        | some v => pure v
+        | none => throw (.unsupported "zeroinitializer of this type")
+      | some (.mk t .undef) => pure (fill .undef t)
+      | some (.mk t .poison) => pure (fill .poison t)
+      | _ => throw (.unsupported "symbolic constant at no constant operand")
+    | none => throw (.unsupported "symbolic constant at no statement")
+  | .insert is a b => do insertV (← a.eval V vs) (← b.eval V vs) is
+  | .eltAt lbl pc a i => match V.stmt lbl pc with
+    | some ⟨_, .extractelement (.mk t _) _, _⟩ => do extractE t (← a.eval V vs) (← i.eval V vs)
+    | _ => throw (.unsupported "symbolic extractelement at no extractelement")
+  | .insEltAt lbl pc a e i => match V.stmt lbl pc with
+    | some ⟨_, .insertelement (.mk t _) _ _, _⟩ => do
+      insertE t (← a.eval V vs) (← e.eval V vs) (← i.eval V vs)
+    | _ => throw (.unsupported "symbolic insertelement at no insertelement")
+  | .gepN lbl pc base idx => match V.stmt lbl pc with
+    | some ⟨_, .gep fl src (.mk (.ptr a) _) _, _⟩ => do
+      let is ← idx.mapM (·.eval V vs)
+      MojoProof.Sem.gep V.ctx.prog.layout V.mem fl src a is (← base.eval V vs)
+    | _ => throw (.unsupported "symbolic getelementptr at no getelementptr")
+  | .fresh n => pure (.ptr ⟨V.mem.fresh V.ctx.who.thread (V.k + n), 0⟩)
+  | .icmpAfter p w a b es => do
+    let x ← a.eval V vs
+    let y ← b.eval V vs
+    let m ← SEff.run V vs es
+    icmpV V.ctx.prog.layout m p (.int w) x y
+  | .castAfter lbl pc n a es => match V.stmt lbl pc with
+    | some ⟨_, .cast op (.mk s _) t, _⟩ => do
+      let x ← a.eval V vs
+      let m ← SEff.run V vs es
+      castV V.ctx.prog.layout m op s x t fun i => V.ctx.oracle (Nat.pair (V.k + n) i)
+    | _ => throw (.unsupported "symbolic cast at no cast")
+  | .gepAfter lbl pc base idx es => match V.stmt lbl pc with
+    | some ⟨_, .gep fl src (.mk (.ptr a) _) [_], _⟩ => do
+      let i ← idx.eval V vs
+      let b ← base.eval V vs
+      let m ← SEff.run V vs es
+      MojoProof.Sem.gep V.ctx.prog.layout m fl src a [i] b
+    | _ => throw (.unsupported "symbolic getelementptr at no getelementptr")
+  | .gepNAfter lbl pc base idx es => match V.stmt lbl pc with
+    | some ⟨_, .gep fl src (.mk (.ptr a) _) _, _⟩ => do
+      let is ← idx.mapM (·.eval V vs)
+      let b ← base.eval V vs
+      let m ← SEff.run V vs es
+      MojoProof.Sem.gep V.ctx.prog.layout m fl src a is b
+    | _ => throw (.unsupported "symbolic getelementptr at no getelementptr")
+  | _ => throw (.unsupported "a node SNode.eval takes before its last case")
+
+/-- The value of node `nd` under valuation `V`, given the values `vs` of the nodes before it,
+with the faults of the instruction it stands for; `SNode.evalMore`'s for the nodes of its last
+case. -/
 def SNode.eval (V : Valuation) (vs : List (Except Fault Val)) : SNode → Except Fault Val
   | .bin op fl w a b => do lanes2 (fun _ => intBin w op fl) (← a.eval V vs) (← b.eval V vs)
   | .icmp p w a b => do
@@ -298,6 +459,7 @@ def SNode.eval (V : Valuation) (vs : List (Except Fault Val)) : SNode → Except
       bif md.any (·.1 == "noundef") && !v.defined then throw (.ub "noundef load not defined")
       else pure v
     | _ => throw (.unsupported "symbolic load at no load")
+  | nd => nd.evalMore V vs
 
 section scan
 
@@ -416,6 +578,22 @@ theorem SNode.eval_globalAt {V : Valuation} {vs : List (Except Fault Val)} {lbl 
     (SNode.globalAt lbl pc i).eval V vs = .ok (.ptr p) := by
   simp only [SNode.eval, hs, ho, hg]
   rfl
+
+/-- **A constant's node**: for every valuation `V`, node values `vs`, and statement `st` at
+position `pc` of block `lbl` whose operand `i` (`Inst.operands`) is a constant `w` at type `t` that
+its type alone gives (`tyConst`: `zeroinitializer`, `undef` or `poison`), the node
+`.constAt lbl pc i` has value `v` exactly when `evalV` gives the operand `v`, for every value `v`
+and every scope of the program's layout. -/
+theorem SNode.eval_constAt {V : Valuation} {vs : List (Except Fault Val)} {lbl pc i : Nat}
+    {st : Stmt} {t : Ty} {w : Value} {s : Scope} (hs : V.stmt lbl pc = some st)
+    (ho : st.inst.operands[i]? = some (.mk t w)) (hw : tyConst w = true)
+    (hl : s.layout = V.ctx.prog.layout) {v : Val} :
+    (SNode.constAt lbl pc i).eval V vs = .ok v ↔ evalV s t w = .ok v := by
+  suffices h : (SNode.constAt lbl pc i).eval V vs = evalV s t w by rw [h]
+  cases w <;> simp only [tyConst, Bool.false_eq_true] at hw <;>
+    simp only [SNode.eval, SNode.evalMore, hs, ho, evalV, hl]
+  generalize V.ctx.prog.layout.zero t = z
+  cases z <;> rfl
 
 /-- **A scalar `bitcast` of the same width keeps the word**: for every layout `l`, source type `s`
 of width `w` under `l`, scalar target type `t` (an integer, float or pointer type) of width `w`
@@ -542,6 +720,7 @@ theorem SEff.run_append {V : Valuation} {vs : List (Except Fault Val)} {es : Lis
 def SEff.before (n : Nat) : SEff → Bool
   | .load _ _ p => p.before n
   | .store _ _ v p => v.before n && p.before n
+  | .alloca _ _ _ cnt => cnt.all (·.before n)
 
 /-- **Effects that refer to nodes of `vs` only run the same on every longer table**: for every
 valuation, node values `vs` and `us` and effects `es` whose operands refer to nodes before
@@ -559,6 +738,12 @@ theorem SEff.run_before {V : Valuation} {vs : List (Except Fault Val)} {es : Lis
     | store lbl pc v p =>
       simp only [SEff.before, Bool.and_eq_true] at he
       simp only [SEff.apply, SVal.eval_before he.1, SVal.eval_before he.2]
+    | alloca lbl pc n cnt =>
+      cases cnt with
+      | none => rfl
+      | some x =>
+        simp only [SEff.before, Option.all_some] at he
+        simp only [SEff.apply, SEff.count, SVal.eval_before he]
   unfold SEff.run
   generalize V.mem = m
   induction es generalizing m with

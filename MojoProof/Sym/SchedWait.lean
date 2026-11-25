@@ -1,5 +1,6 @@
 import MojoProof.Sym.Sched
 import MojoProof.Sym.Segment
+import MojoProof.Sem.Bfly
 
 /-!
 # Schedules through collective calls: threads in turn to their waits, then the collectives
@@ -18,8 +19,6 @@ collectives, then resumes.
   run a segment gives (`Waits`, `Seg.sound`, MojoProof/Sym/Segment.lean) is one.
 * `Seq.ToWait`: threads in turn, each to its wait (`Turns` of `ToWait`); `Seq.ToWait.grid`
   (`Turns.grid`). `Turns.of_inv` with `ToWait.trace` gives one by an invariant.
-* `resumeAll_eq`: the waiting threads `ns` resumed, each with the value its callee's return
-  attributes give.
 * `Grid.fire_barrier`: when every thread of block of threads `b` waits at the barrier with one
   number below 16 and at one instruction, the fire resumes them with no value and logs the
   block's `.barrier`. `Grid.fire_barriers`: the barriers of blocks `0` to `B - 1` fired in turn.
@@ -27,13 +26,27 @@ collectives, then resumes.
   mask and one instruction, the fire resumes lane `j` with the value of lane
   `shflSource mode j b c` (PTX ISA 9.5, section 9.7.10.6), `poison` when that lane is not one of
   the warp's, under the callee's return attributes; the memory is unchanged.
-* `Grid.start_size`: the start's grid has `volume L.grid * volume L.block` threads.
-* `Seq.start_sound_bar`: a start whose threads run in turn to one barrier, then (resumed) in turn
-  to their ends, is sound (`Grid.Sound`): `Seq.ToWait.grid`, `Grid.fire_barriers`, `Seq.grid` and
-  `Grid.start_sound`. The per-thread premises have the forms the segments give: the run to the
-  barrier is `Waits.toWait` of `Seg.sound`, and the run after it is from the resumed thread with
-  no value on the memory the schedule reaches, the value and memory `Seg.through` takes as the
-  collective's delivery `w 0`.
+* `Fires`: a phase of collectives, from every grid whose threads have statuses `s` on memory `m`
+  to one whose threads run `t` on memory `m'`. `Fires.barriers` (`Grid.fire_barriers`): every
+  block's threads at one barrier; `Fires.shfls` (`Grid.fire_shfl`, every warp in turn): every
+  warp's lanes at one shuffle, each resumed with the value of lane `shflSource mode j b c` under
+  the callee's return attributes, for every block size, so for every width the shuffles allow.
+* `Sched`: a schedule of any number of phases, each threads in turn to their waits (`Seq.ToWait`)
+  and then a fire (`Fires`), and last threads in turn to their ends (`Seq`). `Sched.grid`: it is a
+  run of grid steps to a finished grid. `Sched.start_sound`: a start whose threads (`Grid.thread`)
+  have a schedule whose final memory is kept, race-free when its trace has the premises of
+  `racy_iff`, and observed as `y` with `R y` is sound (`Grid.Sound`), through `Grid.start_sound`.
+* `Seq.start_sound_bar`: the case of `Sched.start_sound` at one barrier phase. The per-thread
+  premises have the forms the segments give: the run to the barrier is `Waits.toWait` of
+  `Seg.sound`, and the run after it is from the resumed thread with no value on the memory the
+  schedule reaches, the value and memory `Seg.through` takes as the collective's delivery `w 0`.
+* `bflyRoundsAt_of_shfl`: for every combination per round and lane, `k ≤ 5` and offsets below
+  `2 ^ k`, lanes whose value after round `r` combines their value with that of lane
+  `shflSource .bfly l m 31` hold, after all rounds, `bflyRoundsAt` of their first values
+  (`shflSource_bfly`); with one combining operation, `bflyRounds`.
+* `Seq.ToWait.of_runTo`, `Seq.of_runTo`: threads in turn whose evaluator runs (`runTo`) reach
+  their waits or ends give `Seq.ToWait` and `Seq`, so a concrete schedule is computed, not
+  written out.
 
 The values a schedule delivers are the semantics' (`Grid.fire`); which lanes read which is
 `shflSource`, not a model of it.
@@ -42,6 +55,7 @@ The values a schedule delivers are the semantics' (`Grid.fire`); which lanes rea
 namespace MojoProof.Sym
 
 open MojoProof.LLVM MojoProof.Sem
+open GPUProof
 
 /-- A run of thread `t` in context `c` to a collective call, from memory `m`: steps that continue
 it, to thread `u` on memory `m'`, then a step that waits at a call of the collective intrinsic `i`
@@ -172,32 +186,39 @@ theorem Seq.ToWait.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {s :
       ∃ k, Path (Grid.Step L c) k g ⟨ns.foldl (fun ts n => ts.set! n (s n)) g.threads, m'⟩ :=
   Turns.grid (s := s) (fun hr hg hm => Sym.ToWait.grid hr hg hm) h
 
-/-- **The waiting threads resumed.** For every layout `l`, memory `m`, results `v` and array of
-statuses `ts` in which each of the distinct threads `ns` waits, from thread `u k`, at a call whose
-callee's return attributes take `v k` to `r k` in `m` (`withAttrs`): `resumeAll` sets each
-thread `k` of `ns` running `(u k).resume (r k)` (`Thread.resume`), in turn. -/
-theorem resumeAll_eq {l : Layout} {m : Mem} {v : Nat → Option Val} {u : Nat → Thread}
-    {r : Nat → Option Val} :
-    ∀ {ns : List Nat} {ts : Array Status}, ns.Nodup →
-      (∀ k ∈ ns, ∃ i as d, ts[k]? = some (.wait (u k) i as d) ∧
-        (v k).mapM (withAttrs l m d.ret d.retAttrs) = .ok (r k)) →
-      resumeAll l m ts ns v =
-        .ok (ns.foldl (fun ts k => ts.set! k (.run ((u k).resume (r k)))) ts)
-  | [], _, _, _ => rfl
-  | n :: ns, ts, hd, h => by
-    obtain ⟨i, as, d, hn, hv⟩ := h n List.mem_cons_self
-    have hd' := List.nodup_cons.1 hd
-    have e := resumeAll_eq (ns := ns) (ts := ts.set! n (.run ((u n).resume (r n)))) hd'.2
-      fun k hk => by
-        obtain ⟨i, as, d, hk', hv⟩ := h k (List.mem_cons_of_mem _ hk)
-        refine ⟨i, as, d, ?_, hv⟩
-        rw [Array.set!_eq_setIfInBounds,
-          Array.getElem?_setIfInBounds_ne (fun e => hd'.1 (by subst e; exact hk))]
-        exact hk'
-    unfold resumeAll at e ⊢
-    rw [List.foldlM_cons, hn]
-    simp only [bind, Except.bind, hv, pure, Except.pure]
-    exact e
+/-- **Threads in turn to their waits, computed.** For every contexts `c`, fuel, threads `t`,
+statuses `s`, memories `mem` indexed by the number of threads that have run, and number `N`: if
+each thread `k < N`'s evaluator run (`runTo`) from `mem k` waits at a call, at the status `s k`,
+leaving `mem (k + 1)`, then threads `0` to `N - 1` run in turn to their waits (`Seq.ToWait`)
+from `mem 0` to `mem N` (`Turns.of_inv`, `ToWait.of_runTo`). -/
+theorem Seq.ToWait.of_runTo {c : Nat → Ctx} {fuel : Nat} {t : Nat → Thread} {s : Nat → Status}
+    {mem : Nat → Mem} {N : Nat}
+    (h : ∀ k < N, ∃ u i as d, s k = .wait u i as d ∧
+      runTo (c k) fuel (t k) (mem k) = some (u, mem (k + 1), .wait i as d)) :
+    ∃ Es, Seq.ToWait c t s (List.range N) (mem 0) Es (mem N) := by
+  obtain ⟨Es, m', hs, rfl⟩ := Turns.of_inv (R := fun n m m' => Sym.ToWait (c n) (t n) m (s n) m')
+    (P := fun k m => m = mem k) (N := N) (fun hr => hr.trace) (fun k hk m hm => by
+      obtain ⟨u, i, as, d, e, hr⟩ := h k hk
+      subst hm
+      refine ⟨mem (k + 1), ?_, rfl⟩
+      show Sym.ToWait (c k) (t k) (mem k) (s k) (mem (k + 1))
+      rw [e]
+      exact Sym.ToWait.of_runTo hr) rfl
+  exact ⟨Es, hs⟩
+
+/-- **Threads in turn to their ends, computed.** For every contexts `c`, fuel, threads `t`,
+memories `mem` indexed by the number of threads that have run, and number `N`: if each thread
+`k < N`'s evaluator run (`runTo`) from `mem k` returns, leaving `mem (k + 1)`, then threads `0`
+to `N - 1` run in turn to their ends (`Seq`) from `mem 0` to `mem N` (`Seq.of_inv`,
+`Runs.of_runTo`). -/
+theorem Seq.of_runTo {c : Nat → Ctx} {fuel : Nat} {t : Nat → Thread} {mem : Nat → Mem} {N : Nat}
+    (h : ∀ k < N, ∃ u m₁, runTo (c k) fuel (t k) (mem k) = some (u, m₁, .done (mem (k + 1)))) :
+    ∃ Es, Seq c t (List.range N) (mem 0) Es (mem N) := by
+  obtain ⟨Es, m', hs, rfl⟩ := Seq.of_inv (P := fun k m => m = mem k) (fun k hk m hm => by
+      obtain ⟨u, m₁, hr⟩ := h k hk
+      subst hm
+      exact ⟨mem (k + 1), Runs.of_runTo hr, rfl⟩) rfl
+  exact ⟨Es, hs⟩
 
 /-- The threads of block of threads `b`, for blocks of `s > 0` threads, are those `j` with
 `j / s = b`. -/
@@ -419,35 +440,106 @@ theorem Grid.fire_shfl {L : Launch} {c : Nat → Ctx} {g : Grid} {n : Nat} {mode
     obtain ⟨hj', hM, hB, hC, hat, -⟩ := hw j hj
     simp only [hj', hM, hB, hC, hat, and_self, ↓reduceIte]
 
-/-- **The start's number of threads**: for every program, kernel, launch, arguments, memory,
-address choice and oracle, the grid `Grid.start` gives has `volume L.grid * volume L.block`
-threads. -/
-theorem Grid.start_size {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
-    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
-    (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) :
-    g.threads.size = volume L.grid * volume L.block := by
-  unfold Grid.start at h
-  simp only [bind, Except.bind] at h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  rename_i v2 h2
-  cases h
-  have := foldlM_idx_inv (P := fun i (r : Mem × Array Status) => r.2.size = i) _
-    (fun i k r r' _ hs hr => by
-      simp only [pure, Except.pure] at hs
-      split at hs
-      · cases hs
-      · split at hs
-        · cases hs
-        · cases hs
-          simp [hr]) h2 rfl
-  simpa using this
+/-- A phase's collectives, from the statuses `s` of `N` threads on memory `m` to the threads `t`
+on memory `m'`, for launch `L` and contexts `c`: from every grid of `N` threads at the statuses
+`s` (thread `n` at `s n`) whose memory is `m`, a run of grid steps reaches a grid of `N` threads
+in which thread `n` runs `t n`, with memory `m'`. -/
+def Fires (L : Launch) (c : Nat → Ctx) (N : Nat) (s : Nat → Status) (m : Mem) (t : Nat → Thread)
+    (m' : Mem) : Prop :=
+  ∀ g : Grid, g.threads.size = N → (∀ n < N, g.threads[n]? = some (s n)) → g.mem = m →
+    ∃ g', (∃ k, Path (Grid.Step L c) k g g') ∧ g'.threads.size = N ∧
+      (∀ n < N, g'.threads[n]? = some (.run (t n))) ∧ g'.mem = m'
+
+/-- A schedule of threads `0` to `N - 1` through collective calls, for launch `L` and contexts
+`c`, from the threads `t` on memory `m` to the memory `m'` they end on: phases, each the threads
+in turn to their waits (`Seq.ToWait`) and the phase's collectives (`Fires`), then the threads in
+turn to their ends (`Seq`). -/
+inductive Sched (L : Launch) (c : Nat → Ctx) (N : Nat) : (Nat → Thread) → Mem → Mem → Prop
+  /-- The threads in turn to their ends. -/
+  | ends {t : Nat → Thread} {m m' : Mem} {Es : List (List Event)} :
+      Seq c t (List.range N) m Es m' → Sched L c N t m m'
+  /-- The threads in turn to their waits, at the statuses `s` on `m₁`, the collectives from
+  there to the threads `t'` on `m₂`, then the schedule from there. -/
+  | wait {t : Nat → Thread} {s : Nat → Status} {m m₁ m₂ m' : Mem} {Es : List (List Event)}
+      {t' : Nat → Thread} :
+      Seq.ToWait c t s (List.range N) m Es m₁ → Fires L c N s m₁ t' m₂ → Sched L c N t' m₂ m' →
+        Sched L c N t m m'
+
+/-- **A schedule through collective calls, in a grid.** For every launch `L`, contexts `c`, number
+`N`, threads `t` and memories: a schedule (`Sched`) from `t` on `m` to `m'` is, from every grid
+of `N` threads in which thread `n` runs `t n` and whose memory is `m`, a run of grid steps to a
+done grid (the core's `Done` at `sig`) with memory `m'` (`Seq.ToWait.grid`, each phase's `Fires`,
+`Seq.grid`, `Grid.done_foldl`). -/
+theorem Sched.grid {L : Launch} {c : Nat → Ctx} {N : Nat} {t : Nat → Thread} {m m' : Mem}
+    (h : Sched L c N t m m') : ∀ {g : Grid}, g.threads.size = N →
+      (∀ n < N, g.threads[n]? = some (.run (t n))) → g.mem = m →
+      ∃ z, (∃ k, Path (Grid.Step L c) k g z) ∧ GPUProof.Done sig (z, L, c) ∧ z.mem = m' := by
+  induction h with
+  | ends hs =>
+    intro g hsz hg hm
+    exact ⟨_, Seq.grid hs List.nodup_range (fun n hn => hg n (List.mem_range.1 hn)) hm,
+      Grid.done_foldl _ fun j hj => List.mem_range.2 (hsz ▸ hj), rfl⟩
+  | @wait t s _ m₁ _ _ _ _ hw hf _ ih =>
+    intro g hsz hg hm
+    obtain ⟨_, hp₁⟩ := hw.grid (L := L) List.nodup_range
+      (fun n hn => hg n (List.mem_range.1 hn)) hm
+    obtain ⟨g₂, hp₂, hsz₂, hg₂, hm₂⟩ := hf ⟨(List.range N).foldl (fun ts n => ts.set! n (s n))
+      g.threads, m₁⟩ (by dsimp only; rw [foldl_set_size, hsz]) (fun n hn => by
+        dsimp only
+        rw [foldl_set_getElem?]
+        simp only [List.mem_range, hn, ↓reduceIte, hg n hn, Option.map_some]) rfl
+    obtain ⟨z, hp₃, hd, hz⟩ := ih hsz₂ hg₂ hm₂
+    exact ⟨z, Path.exists_iff.2 ((Path.exists_iff.1 ⟨_, hp₁⟩).trans
+      ((Path.exists_iff.1 hp₂).trans (Path.exists_iff.1 hp₃))), hd, hz⟩
+
+/-- **A start through collective calls, sound.** For every program, kernel `fn`, launch `L`,
+arguments, address choice and oracle whose start (`Grid.start`) gives grid `g₀` and contexts `c`,
+on a caller's memory `m` meeting `Mem.BytesIn`, and every observation `obs` that reads only the
+blocks: if the threads of `g₀` (`Grid.thread`) on `g₀`'s memory have a schedule through
+collective calls (`Sched`: phases of runs in turn to waits and the phase's collectives, then runs
+in turn to the ends) to `m'`, and `m'`'s trace keeps the promise of `!invariant.load` (the
+core's `GPUProof.kept` at `sig`), has no data race (the core's `racy` at `sig`) when it has the
+premises of `racy_iff`, and has `obs m' = some y` with `R y`, then `g₀` is sound
+(`Grid.Sound`): `Sched.grid`, `Grid.start_threads`, `Grid.Done.bad_iff` (with
+`Grid.start_reach_size`), `Grid.start_reach_fits` (the finished grid, reachable, has the
+premises of `racy_iff`) and `Grid.start_sound`. -/
+theorem Sched.start_sound {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
+    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
+    {β : Type} {obs : Mem → Option β} {R : β → Prop}
+    (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') {m' : Mem}
+    (hs : Sched L c g₀.threads.size (Grid.thread g₀) g₀.mem m')
+    (hr : ((∀ a, Sem.Event.access a ∈ m'.trace → a.who.thread < volume L.grid * volume L.block ∧
+        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped m'.trace.reverse →
+      GPUProof.racy sig (m'.trace.map (Event.toCore L)).reverse = false))
+    (hk : GPUProof.kept sig (m'.trace.map (Event.toCore L)).reverse = true)
+    {y : β} (hy : obs m' = some y) (hR : R y) : Grid.Sound L c g₀ obs R := by
+  obtain ⟨z, ⟨_, hp⟩, hd, rfl⟩ := Sched.grid (g := g₀) hs rfl (Grid.start_threads h) rfl
+  have hf := Grid.start_reach_fits h (Path.exists_iff.1 ⟨_, hp⟩)
+  exact Grid.start_sound h hm hO hp hd (fun hb => ((Grid.Done.bad_iff
+    (Grid.start_reach_size h (Path.exists_iff.1 ⟨_, hp⟩)).le hd).1 hb).elim
+    (fun h' => Bool.false_ne_true ((hr hf.trace hf.2).symm.trans h'))
+    fun h' => Bool.false_ne_true (h'.symm.trans hk)) hy hR
+
+/-- **The barriers as a phase's collectives.** For every launch `L` with blocks of
+`volume L.block > 0` threads, contexts `c`, number `B` of blocks, `N = B * volume L.block` and
+memory `m`: if every thread `n < N` waits, from thread `u n`, at a barrier call with argument
+`x n` and callee `d n`, every `x n` is the number `bar (n / volume L.block) < 16` of its block,
+and every `u n` is at the instruction the first thread of its block is at, then the blocks'
+barriers take the threads, resumed with no value (`Thread.resume`), to the memory `m` with the
+blocks' `.barrier`s logged in turn (`Fires`, by `Grid.fire_barriers`). -/
+theorem Fires.barriers {L : Launch} {c : Nat → Ctx} {N B : Nat} {u : Nat → Thread}
+    {x : Nat → Val} {d : Nat → Func} {bar : Nat → Nat} {m : Mem} (hs : 0 < volume L.block)
+    (hN : N = B * volume L.block)
+    (hx : ∀ n < N, (x n).word? = some (bar (n / volume L.block)) ∧ bar (n / volume L.block) < 16 ∧
+      (u n).at = (u (n / volume L.block * volume L.block)).at) :
+    Fires L c N (fun n => .wait (u n) .barrier [x n] (d n)) m (fun n => (u n).resume none)
+      ((List.range B).foldl (fun m b => m.log (.barrier b)) m) := by
+  intro g hsz hg hm
+  subst hN
+  obtain ⟨g', hp, hsz', hj, hm'⟩ := Grid.fire_barriers (c := c) (u := u) (x := x) (d := d)
+    (bar := bar) hs B (g := g) fun n hn => ⟨hg n hn, hx n hn⟩
+  exact ⟨g', hp, hsz'.trans hsz, fun n hn => by rw [hj, ite_eq_left hn], by rw [hm', hm]⟩
 
 /-- **A start through one barrier, sound.** For every program, kernel `fn`, launch `L`,
 arguments, address choice and oracle whose start (`Grid.start`) gives grid `g₀` and contexts `c`,
@@ -459,9 +551,10 @@ threads of `g₀`), each from its thread in `g₀` (`Grid.thread`), run in turn 
 is at the instruction the first thread of its block is at; the threads resumed with no value
 (`Thread.resume`) then run in turn to their ends (`Seq`) from `m₁` with the `volume L.grid`
 blocks' `.barrier`s logged, to `m'`; and
-`m'`'s trace has no data race (`racy`), keeps the promise of `!invariant.load` (`kept`) and has
-`obs m' = some y` with `R y`: then `g₀` is sound (`Grid.Sound`). By `Seq.ToWait.grid`,
-`Grid.fire_barriers`, `Seq.grid`, `Grid.done_foldl`, `Grid.Done.bad_iff` and `Grid.start_sound`. -/
+`m'`'s trace keeps the promise of `!invariant.load` (the core's `GPUProof.kept` at `sig`), has
+no data race (the core's `racy` at `sig`) when it has the premises of `racy_iff`, and has
+`obs m' = some y` with `R y`: then `g₀` is sound (`Grid.Sound`).
+`Sched.start_sound` at the schedule of one phase, `Fires.barriers` (`Grid.start_size`). -/
 theorem Seq.start_sound_bar {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
     {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
@@ -477,39 +570,159 @@ theorem Seq.start_sound_bar {prog : Program} {fn : Func} {L : Launch} {args : Li
     {Es₂ : List (List Event)} {m' : Mem}
     (hs : Seq c (fun n => (u n).resume none) (List.range g₀.threads.size)
       ((List.range (volume L.grid)).foldl (fun m b => m.log (.barrier b)) m₁) Es₂ m')
-    (hr : racy m'.trace = false) (hk : kept m'.trace = true)
-    {y : β} (hy : obs m' = some y) (hR : R y) : Grid.Sound L c g₀ obs R := by
-  have hN := Grid.start_size h
-  have hg : ∀ n ∈ List.range g₀.threads.size,
-      g₀.threads[n]? = some (.run (Grid.thread g₀ n)) := fun n hn => by
-    have hn := List.mem_range.1 hn
-    obtain ⟨-, _, t, -, e⟩ := Grid.start_run h n _ (Array.getElem?_eq_getElem hn)
-    have e' : g₀.threads[n]? = some (.run t) := by rw [Array.getElem?_eq_getElem hn, e]
-    unfold Grid.thread
-    rw [e']
-  obtain ⟨k₁, hp₁⟩ := hw.grid (L := L) List.nodup_range hg rfl
-  obtain ⟨g₂, hp₂, hsz, hj, hm₂⟩ := Grid.fire_barriers (c := c) (u := u) (x := x) (d := d)
-    (bar := bar) hs0 (volume L.grid) (g := ⟨(List.range g₀.threads.size).foldl
-      (fun ts n => ts.set! n (.wait (u n) .barrier [x n] (d n))) g₀.threads, m₁⟩) fun n hn => by
-    rw [← hN] at hn
-    obtain ⟨h1, h2, h3⟩ := hx n hn
-    refine ⟨?_, h1, h2, h3⟩
-    dsimp only
-    rw [foldl_set_getElem? (fun n => .wait (u n) .barrier [x n] (d n))]
-    simp only [List.mem_range, hn, ↓reduceIte, hg n (List.mem_range.2 hn), Option.map_some]
-  have hg₂ : ∀ n ∈ List.range g₀.threads.size,
-      g₂.threads[n]? = some (.run ((u n).resume none)) := fun n hn => by
-    rw [hj]
-    simp only [← hN, List.mem_range.1 hn, ↓reduceIte]
-  obtain ⟨k₃, hp₃⟩ := Seq.grid (L := L) hs List.nodup_range hg₂ hm₂
-  obtain ⟨_, hp⟩ := Path.exists_iff.2 ((Path.exists_iff.1 ⟨_, hp₁⟩).trans
-    ((Path.exists_iff.1 hp₂).trans (Path.exists_iff.1 ⟨_, hp₃⟩)))
-  have hd := Grid.done_foldl m' (ns := List.range g₀.threads.size) (ts := g₂.threads)
-    fun j hj => by
-      rw [hsz, foldl_set_size (fun n => .wait (u n) .barrier [x n] (d n))] at hj
-      exact List.mem_range.2 hj
-  exact Grid.start_sound h hm hO hp hd (fun hb => ((Grid.Done.bad_iff hd).1 hb).elim
-    (fun h' => Bool.false_ne_true (hr.symm.trans h'))
-    fun h' => Bool.false_ne_true (h'.symm.trans hk)) hy hR
+    (hr : ((∀ a, Sem.Event.access a ∈ m'.trace → a.who.thread < volume L.grid * volume L.block ∧
+        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped m'.trace.reverse →
+      GPUProof.racy sig (m'.trace.map (Event.toCore L)).reverse = false))
+    (hk : GPUProof.kept sig (m'.trace.map (Event.toCore L)).reverse = true)
+    {y : β} (hy : obs m' = some y) (hR : R y) : Grid.Sound L c g₀ obs R :=
+  Sched.start_sound h hm hO (.wait hw (Fires.barriers hs0 (Grid.start_size h) hx) (.ends hs)) hr hk
+    hy hR
+
+/-- **A shuffle as a phase's collectives.** For every launch `L` with blocks of
+`volume L.block > 0` threads, contexts `c`, number `B` of blocks, `N = B * volume L.block`, mode
+`mode` and memory `m`: write `p n = n % volume L.block % 32` for thread `n`'s lane and `n - p n`
+for its warp's first thread. If every thread `n < N` waits, from thread `u n`, at a shuffle of mode
+`mode` with member mask `M n` (the full mask `2^32 - 1`), value `A n`, lane operand `O n` of
+number `b n`, clamp `C n` of number `cl n` and callee `d n`, at the instruction its warp's first
+thread is at, and its callee's return attributes take the value its warp's lane
+`shflSource mode (p n) (b n) (cl n)` offers (`shflVal` over its warp's lanes `warpLanes L n`, the
+value `A` of thread `n - p n + j` at lane `j`; `poison` for a lane not of the warp) to `r n` in
+`m` (`withAttrs`, in the layout of the context of `n - p n`), then the warps' shuffles take each
+thread `n`, resumed with `r n` (`Thread.resume`), to the same memory `m` (`Fires`, by
+`Grid.fire_shfl` at the warps' first threads in turn). -/
+theorem Fires.shfls {L : Launch} {c : Nat → Ctx} {N B : Nat} {mode : Shfl} {m : Mem}
+    {u : Nat → Thread} {M A O C : Nat → Val} {b cl : Nat → Nat} {d : Nat → Func}
+    {r : Nat → Option Val} (hs : 0 < volume L.block) (hN : N = B * volume L.block)
+    (hw : ∀ n < N, (M n).word? = some (2 ^ 32 - 1) ∧ (O n).word? = some (b n) ∧
+      (C n).word? = some (cl n) ∧ (u n).at = (u (n - n % volume L.block % 32)).at ∧
+      (some (shflVal (warpLanes L n) (fun j => A (n - n % volume L.block % 32 + j))
+        (shflSource mode (n % volume L.block % 32) (b n) (cl n)))).mapM
+        (withAttrs (c (n - n % volume L.block % 32)).prog.layout m (d n).ret (d n).retAttrs) =
+          .ok (r n)) :
+    Fires L c N (fun n => .wait (u n) (.shfl mode) [M n, A n, O n, C n] (d n)) m
+      (fun n => (u n).resume (r n)) m := by
+  intro g hsz hg hm
+  beta_reduce at hg ⊢
+  -- `s` threads a block; a thread's warp starts at `n - n % s % 32`, a multiple of 32 in its block
+  generalize hS : volume L.block = s at hs hN hw
+  have hbase : ∀ n, (n - n % s % 32) % s = n % s - n % s % 32 := fun n => by
+    have h1 := Nat.mod_add_div n s
+    have h2 := Nat.mod_le (n % s) 32
+    have h3 := Nat.mod_lt n hs
+    rw [show n - n % s % 32 = n % s - n % s % 32 + s * (n / s) by omega,
+      Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt (by omega)]
+  -- a lane `j` of the warp that starts at `k`
+  have hlane : ∀ k j, k % s % 32 = 0 → j < 32 → k % s + j < s →
+      (k + j) % s = k % s + j ∧ (k + j) / s = k / s := fun k j _ _ hj => by
+    have h1 := Nat.mod_add_div k s
+    rw [show k + j = k % s + j + s * (k / s) by omega, Nat.add_mul_mod_self_left,
+      Nat.add_mul_div_left _ _ hs, Nat.mod_eq_of_lt hj, Nat.div_eq_of_lt hj, Nat.zero_add]
+    exact ⟨rfl, rfl⟩
+  have hmem : ∀ k n, k % s % 32 = 0 → (n ∈ (warpLanes L k).map (k + ·) ↔ n - n % s % 32 = k) :=
+    fun k n hk => by
+      simp only [List.mem_map, warpLanes, hS, List.mem_filter, List.mem_range, decide_eq_true_eq]
+      constructor
+      · rintro ⟨j, ⟨hj, hj'⟩, rfl⟩
+        have := (hlane k j hk hj (by omega)).1
+        rw [this]
+        omega
+      · intro e
+        have := hbase n
+        rw [e] at this
+        have := Nat.mod_lt n hs
+        have := Nat.mod_le (n % s) 32
+        have := Nat.mod_le n s
+        exact ⟨n % s % 32, ⟨Nat.mod_lt _ (by decide), by omega⟩, by omega⟩
+  -- the warps whose first thread is below `k` fired
+  have key : ∀ k ≤ N, ∃ g', (∃ i, Path (Grid.Step L c) i g g') ∧ g'.threads.size = N ∧
+      (∀ n < N, g'.threads[n]? = some (if n - n % s % 32 < k then .run ((u n).resume (r n))
+        else .wait (u n) (.shfl mode) [M n, A n, O n, C n] (d n))) ∧ g'.mem = m := by
+    intro k
+    induction k with
+    | zero => exact fun _ => ⟨g, ⟨0, .nil _⟩, hsz, fun n hn => by simp [hg n hn], hm⟩
+    | succ k ih =>
+      intro hk
+      obtain ⟨g₁, hp, hsz₁, hst, hm₁⟩ := ih (by omega)
+      by_cases hl : k % s % 32 = 0
+      · have hf := Grid.fire_shfl (L := L) (c := c) (g := g₁) (n := k) (mode := mode)
+          (u := fun j => u (k + j)) (M := fun j => M (k + j)) (A := fun j => A (k + j))
+          (B := fun j => O (k + j)) (C := fun j => C (k + j)) (b := fun j => b (k + j))
+          (cl := fun j => cl (k + j)) (d := fun j => d (k + j)) (r := fun j => r (k + j))
+          (by rw [hS]; exact hs) fun j hj => by
+            rw [hS, hl, Nat.sub_zero, Nat.add_zero]
+            have hj' := hj
+            simp only [warpLanes, hS, List.mem_filter, List.mem_range, decide_eq_true_eq] at hj'
+            obtain ⟨hj1, hj2⟩ := hj'
+            obtain ⟨e1, e2⟩ := hlane k j hl hj1 (by omega)
+            have e3 : (k + j) % s % 32 = j := by rw [e1]; omega
+            have e4 : k + j - (k + j) % s % 32 = k := by rw [e3]; omega
+            have hkj : k + j < N := by
+              rw [hN, ← Nat.div_lt_iff_lt_mul hs, e2, Nat.div_lt_iff_lt_mul hs, ← hN]
+              omega
+            have e5 : warpLanes L (k + j) = warpLanes L k := by
+              unfold warpLanes
+              rw [hS, e3, e1, hl, Nat.add_sub_cancel, Nat.sub_zero]
+            obtain ⟨hM, hO, hC, hat, hr⟩ := hw (k + j) hkj
+            rw [e4] at hat hr
+            rw [e5, e3] at hr
+            refine ⟨?_, hM, hO, hC, hat, by rw [hm₁]; exact hr⟩
+            rw [hst _ hkj, e4, ite_eq_right (Nat.lt_irrefl k)]
+        beta_reduce at hf
+        rw [hS, hl, Nat.sub_zero] at hf
+        have e : (warpLanes L k).foldl (fun ts j => ts.set! (k + j)
+            (.run ((u (k + j)).resume (r (k + j))))) g₁.threads =
+            ((warpLanes L k).map (k + ·)).foldl (fun ts n => ts.set! n
+              (.run ((u n).resume (r n)))) g₁.threads := by
+          rw [List.foldl_map]
+        refine ⟨_, Path.exists_iff.2 ((Path.exists_iff.1 hp).tail ⟨k, .inr hf⟩), ?_,
+          fun n hn => ?_, hm₁⟩
+        · dsimp only
+          rw [e, foldl_set_size, hsz₁]
+        · dsimp only
+          rw [e, foldl_set_getElem?, hst n hn]
+          by_cases hb : n - n % s % 32 = k
+          · simp [(hmem k n hl).2 hb, hb]
+          · have hb' : n - n % s % 32 < k + 1 ↔ n - n % s % 32 < k := by omega
+            simp [mt (hmem k n hl).1 hb, hb']
+      · refine ⟨g₁, hp, hsz₁, fun n hn => ?_, hm₁⟩
+        rw [hst n hn]
+        have hb : n - n % s % 32 ≠ k := fun e => hl (by
+          have := hbase n
+          rw [e] at this
+          rw [this]
+          omega)
+        have hb' : n - n % s % 32 < k + 1 ↔ n - n % s % 32 < k := by omega
+        simp only [hb']
+  obtain ⟨g', hp, hsz', hj, hm'⟩ := key N le_rfl
+  exact ⟨g', hp, hsz', fun n hn => by rw [hj n hn, ite_eq_left (by omega)], hm'⟩
+
+/-- **The butterfly rounds of the shuffles.** For every carrier, combination `F r l` per round `r`
+and lane `l`, width `2 ^ k` with `k ≤ 5` (at most a warp), offsets `ms` below `2 ^ k`, values
+`v r l` of lane `l` at round `r` and first values `w` that are the lanes' values at round 0 below
+`2 ^ k`: if at every round `r` each lane `l < 2 ^ k` combines, by `F r l`, its value with that of
+the lane a butterfly shuffle with offset `ms[r]` and clamp 31 reads (`shflSource`, which is
+`l ^^^ ms[r]` by `shflSource_bfly`), then after the rounds each lane `l < 2 ^ k` holds the
+butterfly rounds of `w` (`bflyRoundsAt`, MojoProof/Sem/Bfly.lean). With one combining operation
+`combine`, `F` is `fun _ _ => combine` and the rounds are `bflyRounds combine`. -/
+theorem bflyRoundsAt_of_shfl {β : Type} {k : Nat} (hk : k ≤ 5) :
+    ∀ {ms : List Nat}, (∀ m ∈ ms, m < 2 ^ k) →
+      ∀ {F : Nat → Nat → β → β → β} {v : Nat → Nat → β} {w : Nat → β},
+      (∀ l < 2 ^ k, v 0 l = w l) → (∀ r (hr : r < ms.length), ∀ l < 2 ^ k,
+        v (r + 1) l = F r l (v r l) (v r (shflSource .bfly l ms[r] 31))) →
+      ∀ l < 2 ^ k, v ms.length l = bflyRoundsAt F ms w l := by
+  have h32 : 2 ^ k ≤ 32 := Nat.pow_le_pow_right (by decide) hk
+  intro ms
+  induction ms with
+  | nil => exact fun _ _ v w h0 _ l hl => h0 l hl
+  | cons a ms ih =>
+    intro hm F v w h0 h l hl
+    have ha := hm a List.mem_cons_self
+    refine ih (fun m hm' => hm m (List.mem_cons_of_mem a hm')) (F := fun r => F (r + 1))
+      (v := fun r => v (r + 1)) (w := fun l => F 0 l (w l) (w (l ^^^ a))) (fun l hl => ?_)
+      (fun r hr l hl => h (r + 1) (by simp only [List.length_cons]; omega) l hl) l hl
+    have hx : l ^^^ a < 2 ^ k := Nat.xor_lt_two_pow hl ha
+    show v (0 + 1) l = F 0 l (w l) (w (l ^^^ a))
+    rw [h 0 (by simp) l hl, List.getElem_cons_zero, shflSource_bfly (by omega) (by omega),
+      h0 l hl, h0 _ hx]
 
 end MojoProof.Sym

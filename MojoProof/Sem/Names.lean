@@ -18,6 +18,9 @@ with `Mem.BytesIn S` gives a value that names only numbers of `S` (`Mem.load_nam
 (`Mem.store_bytesIn`, by `encode_namesIn`), and so do an allocation whose initial bytes name only
 numbers of `S` and changes of liveness (`Mem.alloc_bytesIn`, `Mem.foldl_setLive_bytesIn`). The
 number of an allocation's block is known after it (`Mem.alloc_known`).
+
+`Mem.Known` and `Mem.BytesIn` are defined in MojoProof/Sem/SigDef.lean, with `sig`, which
+reaches them.
 -/
 
 namespace MojoProof.Sem
@@ -334,9 +337,6 @@ section Memory
 
 variable {S T : Nat → Prop}
 
-/-- Number `b` is below `next` or has a block in `m`: the numbers a closed grid names. -/
-def Mem.Known (m : Mem) (b : Nat) : Prop := b < m.next ∨ (m.blocks b).isSome
-
 /-- A memory that keeps every block of `m` knows every number `m` knows. -/
 theorem Mem.Keeps.known {m m' : Mem} (h : m.Keeps m') : ∀ b, m.Known b → m'.Known b := by
   rintro b (hb | hb)
@@ -352,10 +352,6 @@ theorem Mem.Keeps.known {m m' : Mem} (h : m.Keeps m') : ∀ b, m.Known b → m'.
 theorem Mem.Known.below {m : Mem} {b : Nat} (h : m.Known b) (hn : m.blocks b = none) :
     b < m.next :=
   h.resolve_right (by simp [hn])
-
-/-- Every pointer byte below the size of a block of `m` names a number of `S`. -/
-def Mem.BytesIn (S : Nat → Prop) (m : Mem) : Prop :=
-  ∀ c b i p j, m.blocks c = some b → i < b.size → b.bytes i = .ptr p j → S p.block
 
 /-- If every pointer byte of `m` names a number of `S` (below the size of its block), it names
 a number of every `T` that has every number of `S`. -/

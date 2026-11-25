@@ -10,11 +10,12 @@ are in MojoProof/Sem/Rmw.lean, from `rmw_comm`. Instances and twins: MojoProofTe
 - `racy_halving`: every trace, number of threads per block of threads, cell width and stride
   sequence. It is a statement about `racy`, not about a program.
 - `racy_dropBlocks`: every trace and selector of blocks whose accesses are atomics of one
-  operation on the same bytes.
+  commuting operation on the same bytes.
 - `Grid.sound_halving`: every program, kernel, launch, arguments, address choice and oracle, on a
   caller's memory whose pointer bytes name known numbers, given one run to a done grid whose trace
   has the halving access pattern. That the reduction kernel's runs have this pattern is not proved
-  (Gaps); one hand-built kernel's run is checked (`red_sound`).
+  (Gaps); a hand-built kernel's runs are checked for every launch and tree size the evaluator's
+  checks accept (`red_sound_of`), decided at two sizes (`red_sound`, `red_sound28`).
 - `rmw_add_perm`: every width, number of operands and value of each, and every order.
 
 No reduction tree is defined here: the value the tree computes is not stated.
@@ -65,23 +66,25 @@ theorem racy_halving {tr : List Event} {B w : Nat} {s : Nat → Nat} {ofSh : Nat
 Those follow the discipline `G` (`Owned`, Trace.lean), each thread its own tile.
 
 **Blocks of atomics.** The output word is updated by thread 0 of every block of threads with
-`atomicrmw add`. `Access.conflict` exempts two atomics of one operation at one pointer with one
-length, but `Owned` and the writer form do not: no discipline gives the threads 0 of two blocks
+`atomicrmw add`. `Access.conflict` exempts two atomics of one commuting operation
+(`RmwOp.commutes`) at one pointer with one length, but `Owned` and the writer form do not: no discipline gives the threads 0 of two blocks
 of threads one tile. `racy_dropBlocks` removes such blocks from the trace first.
 
 ```lean
 def dropBlocks (A : Nat → Bool) : List Event → List Event
 theorem racy_dropBlocks {A : Nat → Bool} {tr : List Event}
     (hA : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, A x.1.ptr.block = true →
-      x.1.ptr.block = y.1.ptr.block → x.1.atomic.isSome = true ∧ x.1.atomic = y.1.atomic ∧
-        x.1.ptr = y.1.ptr ∧ x.1.len = y.1.len)
+      x.1.ptr.block = y.1.ptr.block → x.1.atomic.any RmwOp.commutes = true ∧
+        x.1.atomic = y.1.atomic ∧ x.1.ptr = y.1.ptr ∧ x.1.len = y.1.len)
     (h : racy (dropBlocks A tr) = false) : racy tr = false
 ```
 
 `dropBlocks A tr` is `tr` without its accesses to the blocks `A` selects; barriers are kept, so the
 other accesses keep their phases (`phases_dropBlocks`).
 
-On a run, `Grid.sound_halving` takes a selector `A` with `hA`, and the halving pattern for the
+On a run, `Grid.sound_halving` takes a selector `A` with `hA`, which asks only that the
+accesses be atomics of one operation (`isSome`), since every operation of a run's atomics
+commutes (`Grid.start_reach_commutes`), and the halving pattern for the
 accesses to the other blocks, with `B = volume L.block` and `ofSh = Mem.ctaOf`. It drops the first
 two conjuncts: `Grid.start_reach_cta` proves them of every reachable grid. Its other premises are
 those of `Grid.start_sound_of_racy`: the run ends in a grid in which every thread has returned, no
@@ -132,19 +135,22 @@ words modulo 2³², whatever the order and the number of blocks.
    `c = k % B` and `c < s p`, the writer is `k % B`. If the access is a read with `s p ≤ c`,
    nobody writes the byte.
 4. **Blocks of atomics** (`racy_dropBlocks`). A race gives `x`, `y` that clash. They overlap, so
-   they are of one block. If `A` selects it, `hA` makes them atomics of one operation at one
-   pointer with one length, which do not conflict. Otherwise both are accesses of
+   they are of one block. If `A` selects it, `hA` makes them atomics of one commuting operation at
+   one pointer with one length, which do not conflict. Otherwise both are accesses of
    `dropBlocks A tr` with the same phases (`phases_dropBlocks`, by induction on the trace), so
    they clash there.
-5. **On a run** (`Grid.sound_halving`): `racy_dropBlocks`, then `racy_halving` on the trace
-   without the selected blocks.
+5. **On a run** (`Grid.sound_halving`): `racy_dropBlocks`, whose commuting operation
+   `Grid.start_reach_commutes` gives (an update by `rmw` succeeds only by a commuting operation,
+   `rmw_commutes`), then `racy_halving` on the trace without the selected blocks.
    - `Grid.start_reach_cta`: in every grid reachable from the start's, every access is by thread
      `k` of block of threads `k / volume L.block` (`Grid.start_ctx`). An access to a block whose
      owner is `.cta β` is by a thread of `β`: the owner admits it (`Grid.advance_admits`), and no
      step changes an owner (`Grid.start_reach_changes`).
    - `Grid.start_sound_of_racy`: `Grid.start_sound` needs the done grid not to be bad. A done grid
      is bad only if its trace is racy or breaks `!invariant.load` (`Grid.Done.bad_iff`). The
-     second is `kept_of_split` with the blocks some write touches.
+     second is `kept_of_split` with the blocks some write touches: an `atomicrmw`'s read, which
+     writes for the core's `kept`, has its write right after it (`Trace.Shaped.writes`,
+     `Grid.start_reach_shaped`).
 6. **The atomic sum.**
    - `rmw_perm` is by induction on the permutation. A swap of two neighbours is `rmw_comm`. An
      update of a scalar that succeeds gives a scalar (`rmw_scalar`), so the rest of the list
@@ -176,20 +182,24 @@ All in MojoProofTest/Shared.lean.
   by thread 0 of block of threads 0 and thread 4 of block of threads 1, has no race
   (`racy_dropBlocks` with block 1 selected).
 - **Its twin.** With thread 4's update a plain store, the trace is racy (by `decide`).
-- **A run** (`red_sound`), one kernel on one launch. The hand-built kernel `redK true` runs on two
-  blocks of four threads, on a caller's memory holding the output word 0, passed as the pointer
-  argument. In each block of threads:
-  - thread `t` stores its `%tid.x` to cell `t` of the shared global `@sh` (`[4 x i32]`), then a
-    barrier;
-  - threads 0 and 1 add cells 2 and 3 into cells 0 and 1, then a barrier;
-  - thread 0 adds cell 1 into cell 0 and adds the result, 6, into the output word by `atomicrmw
+- **A run** (`red_sound_of`), for every launch, level count `k` and output word that the
+  evaluator's checks accept. The hand-built kernel `redK k true`, the tree of `2 ^ k` threads,
+  runs on a caller's memory holding the output word 0, passed as the pointer argument. In each
+  block of threads:
+  - thread `t` stores its `%tid.x` to cell `t` of the shared global `@sh` (`[2 ^ k x i32]`), then
+    a barrier;
+  - at level `j < k` the threads below `2 ^ (k - j)` add the cell that far above into their own,
+    then a barrier;
+  - thread 0 adds cell 1 into cell 0 and adds the result into the output word by `atomicrmw
     add`.
 
-  The evaluator's run (`Grid.run`, `Grid.run_reach`) ends with every thread returned and the word
-  12. Its trace meets the premises of `Grid.sound_halving` at 4-byte cells, the strides 4, 2, 1
-  and the output block selected (checked by `decide +kernel`). The two `atomicrmw`s, by different
+  The checks (`redOk`): the evaluator's run (`Grid.run`, `Grid.run_reach`) ends with every thread
+  returned and the given word, and its trace meets the premises of `Grid.sound_halving` at 4-byte
+  cells, the strides `2 ^ k / 2 ^ p` and the output block selected. They are decided
+  (`decide +kernel`) on two blocks of four threads (`k = 2`, the word 12, `red_sound`) and on two
+  blocks of eight threads (`k = 3`, the word 56, `red_sound28`). The two `atomicrmw`s, by different
   blocks of threads on one word, are the accesses `racy_dropBlocks` drops. So the start's grid is
-  sound for the output word, and every schedule observes 12. The kernel does not reduce `phases`'
+  sound for the output word, and every schedule observes it. The kernel does not reduce `phases`'
   hash map at block of threads 1, so the checks go through `phasesF`, the same phases computed
   with a function (`phasesF_eq`, for every trace).
 - **Its twin** (`red_twin`). Without the second barrier, thread 0 reads cell 1 in the phase in
@@ -210,7 +220,8 @@ All in MojoProofTest/Shared.lean.
 
 ## Dependencies
 
-- `phases`, `clash`, `racy_iff`, `mem_phases` (MojoProof/Sem/Race.lean);
+- `phases` (MojoProof/Sem/SigDef.lean); `clash`, `mem_phases` (MojoProof/Sem/Race.lean); `racy_iff`
+  (MojoProof/Sem/RaceSig.lean);
 - `Tiling`, `Owned`, `Tiling.at`, `Owned.at`, `racy_eq_false_of_writers`, `kept_of_split`
   (MojoProof/Sem/Trace.lean);
 - `Grid.start_ctx` (MojoProof/Sem/Grid.lean), `Grid.advance_admits` (Confluence.lean),

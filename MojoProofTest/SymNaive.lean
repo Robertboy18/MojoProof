@@ -94,27 +94,27 @@ theorem skip_body_covers :
       true := by
   decide +kernel
 
-/-- **A trip up to the latch, and its twin**: the path checker with `phi`s accepts `%46 → %50`
-from `%46`'s position 2, and refuses `%46 → %50 → %52` (the checker without `fmul contract`
-refuses the latch `%52`, `latch_refused`). -/
+/-- **A trip up to the latch, and its twin**: the path checker (`coversPathWith false`) accepts
+`%46 → %50` from `%46`'s position 2, and refuses `%46 → %50 → %52` (the checker without
+`fmul contract` refuses the latch `%52`, `latch_refused`). -/
 theorem trip1_covers :
-    coversPathI naive.prog naive.fn_0 2
+    coversPathWith false naive.prog naive.fn_0 2
       [(naive.fn_0.b_3.label, hdr.obls, hdr), (naive.fn_0.b_4.label, body.obls, body)] = true ∧
-    coversPathI naive.prog naive.fn_0 2
+    coversPathWith false naive.prog naive.fn_0 2
       [(naive.fn_0.b_3.label, hdr.obls, hdr), (naive.fn_0.b_4.label, body.obls, body),
         (naive.fn_0.b_6.label, SymContract.latch.obls, SymContract.latch)] = false := by
   decide +kernel
 
 /-- **A trip of the loop to the latch's end** (`Block.sound_pathC`): for every context `c` of
 `naive`'s program and thread whose innermost frame `f` (above frames `rest`) is at the loop head
-`%46`'s position 2, with memory `m`: if the premises of `%46 → %50` hold (`WalkI`: among them,
-the head branches to `%50`) and the latch's obligations hold at its entry valuation, the thread's
-steps run `%46`, `%50` and the latch `%52`, which ends with the table's `fmul contract` operands
-(`EndsC`). -/
+`%46`'s position 2, with memory `m`: if the premises of `%46 → %50` hold (`WalkWith false`:
+among them, the head branches to `%50`) and the latch's obligations hold at its entry valuation,
+the thread's steps run `%46`, `%50` and the latch `%52`, which ends with the table's
+`fmul contract` operands (`EndsC`). -/
 theorem trip1_latch {c : Ctx} (hP : c.prog = naive.prog) {t : Thread} {m : Mem} {f : Frame}
     {rest : List Frame} (ht : t.frames = f :: rest) (hfn : f.fn = naive.fn_0)
     (hl : f.label = naive.fn_0.b_3.label) (hp : f.pc = 2)
-    (hW : WalkI (Valuation.entry c t.k m f)
+    (hW : WalkWith false (Valuation.entry c t.k m f)
       [(naive.fn_0.b_3.label, hdr.obls, hdr), (naive.fn_0.b_4.label, body.obls, body)])
     (hds : ∀ d ∈ SymContract.latch.obls, d.Holds
       (((Valuation.entry c t.k m f).into naive.fn_0.b_3.label hdr).into naive.fn_0.b_4.label body)
@@ -135,7 +135,7 @@ after its two `phi`s (position 2) with the entry valuation `Valuation.intoC` of 
 theorem trip1_round {c : Ctx} (hP : c.prog = naive.prog) {t : Thread} {m : Mem} {f : Frame}
     {rest : List Frame} (ht : t.frames = f :: rest) (hfn : f.fn = naive.fn_0)
     (hl : f.label = naive.fn_0.b_3.label) (hp : f.pc = 2)
-    (hW : WalkI (Valuation.entry c t.k m f)
+    (hW : WalkWith false (Valuation.entry c t.k m f)
       [(naive.fn_0.b_3.label, hdr.obls, hdr), (naive.fn_0.b_4.label, body.obls, body)])
     (hds : ∀ d ∈ SymContract.latch.obls, d.Holds
       (((Valuation.entry c t.k m f).into naive.fn_0.b_3.label hdr).into naive.fn_0.b_4.label body)

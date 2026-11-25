@@ -1,16 +1,24 @@
-import MojoProof.Sem.OneRun
-import MojoProof.Sem.Race
+import GPUProof.Sound
+import MojoProof.Sem.RaceSig
 import MojoProof.Sem.Buffer
 
 /-!
 # Traces and grids through the one-run theorem
 
-Proved for every trace (the predicates `racy` and `kept` of MojoProof/Sem/Spec.lean):
+Proved for every launch and trace, with a race the core's `racy` at `sig` and the promise of
+`!invariant.load` the core's `GPUProof.kept` at `sig`, both of the trace's core events, oldest
+first; the theorems about races are for every trace whose accesses are by threads of the launch
+in their blocks of threads and that is shaped (the premises of `racy_iff`,
+MojoProof/Sem/RaceSig.lean):
 
-* a racy trace stays racy, and a trace that breaks the promise of `!invariant.load` stays broken,
-  when an event is added (`racy_cons`, `kept_cons`); `kept` is a property of the set of events
-  (`kept_iff`, `kept_perm`); loads with `!invariant.load` outside the blocks written keep it
-  (`kept_of_split`);
+* a trace that breaks the promise of `!invariant.load` stays broken when an event is added
+  (`kept_cons`; a racy trace stays racy, `racy_cons`, and the kinds and overlap lemmas below are
+  in MojoProof/Sem/RaceSig.lean); the core's `kept` at `sig` is a property of
+  the set of events: no access that writes for the core (`GPUProof.Kind.writes`: a write or an
+  `atomicrmw`'s read, `Access.kind_writes`) overlaps a frozen read (an `!invariant.load` that
+  neither writes nor is atomic, `Access.kind_frozen`) of the trace (`kept_sig_iff`, `kept_perm`;
+  overlap is a common byte, `Access.overlaps_iff_bytes`); loads with `!invariant.load` outside a
+  set of blocks that holds the accesses that write for the core keep it (`kept_of_split`);
 * ownership gives race freedom: if each access lies in its thread's tile of a `Tiling` of its
   block, or reads a block nobody writes (`Owned`), and threads that share a tiled block have
   different tiles, the trace has no race, whatever its barriers (`racy_eq_false_of_owned`).
@@ -30,33 +38,40 @@ Proved for every trace (the predicates `racy` and `kept` of MojoProof/Sem/Spec.l
   Offsets that are apart and in bounds are a tiling (`Tiling.ofApart`), so the row-major tiles
   of an output tensor (MojoProof/Sem/Buffer.lean) are one. Instance: the strided tiling of a
   buffer of `n` elements of `w` bytes (`Tiling.strided`, by `apart_stride`).
-  The trace lemma of an elementwise kernel (`racy_kept_of_cells`, every trace): if every access
+  The trace lemma of an elementwise kernel (`racy_kept_of_cells`): if every access
   to an output block lies in its thread's cell, the cells being `w` bytes apart (`Apart`), every
-  access to another block is a read, and no access with `!invariant.load` is to the output block,
-  the trace has no race and keeps `!invariant.load`. Its case of cells `k * w`: a trace whose
-  writes are thread `k`'s element `k` of one buffer and whose other accesses are reads of other
-  blocks (`racy_kept_pointwise`). Statements about traces, not about a kernel; instances in
-  MojoProofTest/ScheduleOwned.lean.
+  access to another block is a read that is not an `atomicrmw`'s, and no access with
+  `!invariant.load` is to the output block, the trace keeps `!invariant.load` and, under the
+  premises of `racy_iff`, has no race.
+  Its case of cells `k * w`: a trace whose writes are thread `k`'s element `k` of one buffer and
+  whose other accesses are reads of other blocks (`racy_kept_pointwise`). Statements about
+  traces, not about a kernel; instances in MojoProofTest/ScheduleOwned.lean.
 
 Proved for every program, launch and observation:
 
 * `Grid.sound_of_one_run`: all seven fields of `Grid.Sound` from one run of a step relation on
   any state type that projects onto `Grid.Step` and lifts its steps, when that relation is
-  `Confluent` (MojoProof/Sem/OneRun.lean) up to an equivalence that preserves `Done` and the
-  observation, with faults, racy traces and broken `!invariant.load` promises bad, and the run
-  ends in a state whose grid has returned, is not bad and has an observation that satisfies `R`.
+  `Confluent` (GPUProof/OneRun.lean) up to an equivalence that preserves the core's `Done` at
+  `sig` and the observation, with faults, racy traces and broken `!invariant.load` promises bad,
+  done grids without a step, and the run ends in a state whose grid is done, is not bad and has
+  an observation that satisfies `R`. It is the core's one-run theorem `GPUProof.Clean.of_lift`
+  at `sig`, observing the grid's memory, along `x ↦ (π x, L, c)` (`sig_step_iff`), carried back
+  to the grid by `Grid.Sound.of_clean`.
   The confluence is a hypothesis; no kernel's is proved here. The proof is in
   docs/proofs/adapter.md.
 
 Instances on the real `Grid.Step`:
 
-* `Grid.sound_one`: a grid of one thread whose step returns, from and to memories whose traces
-  have no race and keep `!invariant.load`, is sound for every observation defined on the final
-  memory and relation its value satisfies (the states are the reachable grids);
-* `Grid.sound_returning`: a grid of `N` threads that each return in one step without changing
+* `Grid.sound_commuting`: a grid of `N` threads that each return in one step with a change of
+  memory `f n`, where the changes of two threads commute and keep the trace, from every memory with
+  a property `P` that the changes keep, is sound for every observation and relation its value
+  after all the changes satisfies, when the start's trace has no race and keeps
+  `!invariant.load`, for every `N`, launch of at least `N` threads, contexts, threads and memory;
+* `Grid.sound_returning`: its case of threads that each return in one step without changing
   memory, whose trace has no race and keeps `!invariant.load`, is sound for every observation
-  defined on that memory and relation its value satisfies, for every `N` (the states are the
-  sets of returned threads; the diamond holds for every pair of threads);
+  defined on that memory and relation its value satisfies, for every `N` and launch of at least
+  `N` threads (the states are the sets of returned threads; the diamond holds for every pair of
+  threads);
 * `Kernel.sound_ret_launch`: the kernel `define void @k() { ret void }` is sound on every launch,
   for every closed memory (`Mem.Closed`), address choice and oracle.
 -/
@@ -64,70 +79,67 @@ Instances on the real `Grid.Step`:
 namespace MojoProof.Sem
 
 open LLVM Relation
+open GPUProof
 
 section Trace
 
-/-- A racy trace stays racy when an event is added. -/
-theorem racy_cons (e : Event) {tr : List Event} (h : racy tr = true) : racy (e :: tr) = true := by
-  cases e with
-  | access a => simp [racy, h]
-  | barrier k => simpa [racy] using h
-
-/-- `kept` by membership: no write of the trace overlaps a load with `!invariant.load` of it. -/
-theorem kept_iff {tr : List Event} : kept tr = true ↔
-    ∀ a e, Event.access a ∈ tr → a.invariant = true → Event.access e ∈ tr → e.write = true →
-      a.overlaps e = false := by
-  simp only [kept, List.all_eq_true]
+/-- **The core's `kept` at `sig` by members**, for every launch `L` and trace `tr` (newest
+first): the core's `kept` of its core events, oldest first, holds exactly when no access of `tr`
+that writes for the core (`Kind.writes`: a write or an `atomicrmw`'s read) overlaps a frozen read
+of `tr` (`Access.kind_frozen`: a load with `!invariant.load`), before or after it. -/
+theorem kept_sig_iff {L : Launch} {tr : List Event} :
+    GPUProof.kept sig (tr.map (Event.toCore L)).reverse = true ↔
+      ∀ w a, Event.access w ∈ tr → Event.access a ∈ tr → w.kind.writes = true →
+        a.kind = .frozen → a.overlaps w = false := by
+  rw [GPUProof.kept_iff]
+  simp only [GPUProof.Kept, List.mem_reverse, List.mem_map]
   constructor
-  · intro h a e ha hi he hw
-    have h1 := h (.access e) he
-    simp only [hw, Bool.not_true, Bool.false_or, List.all_eq_true, List.mem_filterMap] at h1
-    have h2 := h1 a ⟨.access a, ha, by simp [hi]⟩
-    simpa using h2
-  · intro h x hx
-    cases x with
-    | barrier k => rfl
-    | access e =>
-      cases hw : e.write with
-      | false => simp [hw]
-      | true =>
-        simp only [hw, Bool.not_true, Bool.false_or, List.all_eq_true, List.mem_filterMap]
-        rintro a ⟨y, hy, hya⟩
-        cases y with
-        | barrier k => simp at hya
-        | access b =>
-          by_cases hb : b.invariant = true
-          · simp only [hb, ite_true, Option.some.injEq] at hya
-            subst hya
-            simp [h b e hy hb hx hw]
-          · simp [hb] at hya
+  · intro h w a hw ha hww haf
+    rw [Bool.eq_false_iff]
+    intro ho
+    obtain ⟨l, hl, hl'⟩ := Access.overlaps_iff_bytes.1 ho
+    exact h w.toCore a.toCore ⟨_, hw, rfl⟩ ⟨_, ha, rfl⟩ hww haf l hl hl'
+  · rintro h _ _ ⟨⟨w⟩ | ⟨⟩, hw, ⟨⟩⟩ ⟨⟨a⟩ | ⟨⟩, ha, ⟨⟩⟩ hww haf l hl hl'
+    have := h w a hw ha hww haf
+    rw [Bool.eq_false_iff] at this
+    exact this (Access.overlaps_iff_bytes.2 ⟨l, hl, hl'⟩)
 
-/-- A broken `!invariant.load` promise stays broken when an event is added. -/
-theorem kept_cons (e : Event) {tr : List Event} (h : kept tr = false) : kept (e :: tr) = false := by
-  cases hk : kept (e :: tr) with
+/-- A trace that breaks the promise of `!invariant.load` (the core's `kept` at `sig`) breaks it
+when an event is added, for every launch, event and trace. -/
+theorem kept_cons {L : Launch} (e : Event) {tr : List Event}
+    (h : GPUProof.kept sig (tr.map (Event.toCore L)).reverse = false) :
+    GPUProof.kept sig ((e :: tr).map (Event.toCore L)).reverse = false := by
+  cases hk : GPUProof.kept sig ((e :: tr).map (Event.toCore L)).reverse with
   | false => rfl
   | true =>
-    have : kept tr = true := kept_iff.2 fun a e' ha hi he hw =>
-      kept_iff.1 hk a e' (List.mem_cons_of_mem _ ha) hi (List.mem_cons_of_mem _ he) hw
+    have : GPUProof.kept sig (tr.map (Event.toCore L)).reverse = true :=
+      kept_sig_iff.2 fun w a hw ha hww haf =>
+        kept_sig_iff.1 hk w a (List.mem_cons_of_mem _ hw) (List.mem_cons_of_mem _ ha) hww haf
     rw [this] at h
     cases h
 
-/-- `kept` does not depend on the order of the trace. -/
-theorem kept_perm {tr tr' : List Event} (h : tr.Perm tr') : kept tr = kept tr' := by
-  rw [Bool.eq_iff_iff, kept_iff, kept_iff]
+/-- The core's `kept` at `sig` does not depend on the order of the trace, for every launch and
+pair of traces. -/
+theorem kept_perm {L : Launch} {tr tr' : List Event} (h : tr.Perm tr') :
+    GPUProof.kept sig (tr.map (Event.toCore L)).reverse =
+      GPUProof.kept sig (tr'.map (Event.toCore L)).reverse := by
+  rw [Bool.eq_iff_iff, kept_sig_iff, kept_sig_iff]
   constructor
-  · intro k a e ha hi he hw
-    exact k a e (h.mem_iff.2 ha) hi (h.mem_iff.2 he) hw
-  · intro k a e ha hi he hw
-    exact k a e (h.mem_iff.1 ha) hi (h.mem_iff.1 he) hw
+  · intro k w a hw ha hww haf
+    exact k w a (h.mem_iff.2 hw) (h.mem_iff.2 ha) hww haf
+  · intro k w a hw ha hww haf
+    exact k w a (h.mem_iff.1 hw) (h.mem_iff.1 ha) hww haf
 
-/-- If loads with `!invariant.load` stay outside a set `W` of blocks and writes stay inside it,
-the trace keeps the promise. -/
-theorem kept_of_split {W : Nat → Prop} {tr : List Event}
+/-- If loads with `!invariant.load` stay outside a set `W` of blocks and the accesses that write
+for the core (`Kind.writes`: writes and `atomicrmw`s' reads) stay inside it, the trace keeps the
+promise (the core's `kept` at `sig`), for every launch, set of blocks and trace. -/
+theorem kept_of_split {L : Launch} {W : Nat → Prop} {tr : List Event}
     (hi : ∀ a, Event.access a ∈ tr → a.invariant = true → ¬ W a.ptr.block)
-    (hw : ∀ e, Event.access e ∈ tr → e.write = true → W e.ptr.block) : kept tr = true :=
-  kept_iff.2 fun a e ha hia he hwe => by
-    have hb : a.ptr.block ≠ e.ptr.block := fun hb => hi a ha hia (hb ▸ hw e he hwe)
+    (hw : ∀ e, Event.access e ∈ tr → e.kind.writes = true → W e.ptr.block) :
+    GPUProof.kept sig (tr.map (Event.toCore L)).reverse = true :=
+  kept_sig_iff.2 fun e a he ha hwe haf => by
+    have hb : a.ptr.block ≠ e.ptr.block := fun hb =>
+      hi a ha ((Access.kind_frozen a).1 haf).2.2 (hb ▸ hw e he hwe)
     simp [Access.overlaps, hb]
 
 /-- A family of byte intervals inside an extent: in bounds and pairwise disjoint. -/
@@ -230,16 +242,19 @@ theorem Owned.at {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι}
     obtain ⟨t1, t2⟩ := h.tile t hT
     exact .inl (Tiling.at_eq (by omega) (by omega))
 
-/-- **One writer per byte and barrier interval gives race freedom** (`racy`, every trace). `W p b i`
-is the writer of byte `i` of block `b` in phase `p` (`phases`), a tile of type `ι` or `none` for a
-byte nobody writes in that phase, and `own p` maps each thread to its tile. If at each of its
+/-- **One writer per byte and barrier interval gives race freedom** (the core's `racy` at `sig`,
+for every launch and trace with the premises of `racy_iff`). `W p b i` is the writer of byte `i`
+of block `b` in phase `p` (`phases`), a tile of type `ι` or `none` for a byte nobody writes in
+that phase, and `own p` maps each thread to its tile. If at each of its
 bytes every access is by the byte's writer, or is a read of a byte with no writer, accesses of one
 block by two blocks of threads see one writer map of it, and two accesses of a block with a
 writer, with one tile, by different blocks of threads or in one phase, are by one thread, the
 trace has no race. Unlike `racy_eq_false_of_phased`, a thread may read bytes outside its tile.
 -/
 theorem racy_eq_false_of_writers {ι : Type} {W : Nat → Nat → Int → Option ι}
-    {own : Nat → Nat → ι} {tr : List Event}
+    {own : Nat → Nat → ι} {L : Launch} {tr : List Event}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse)
     (hW : ∀ x ∈ (phases tr).1, ∀ i : Int, x.1.ptr.off ≤ i → i < x.1.ptr.off + x.1.len →
       W x.2 x.1.ptr.block i = some (own x.2 x.1.who.thread) ∨
         (x.1.write = false ∧ W x.2 x.1.ptr.block i = none))
@@ -248,10 +263,10 @@ theorem racy_eq_false_of_writers {ι : Type} {W : Nat → Nat → Int → Option
     (hX : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, x.1.ptr.block = y.1.ptr.block →
       (∃ i, W x.2 x.1.ptr.block i ≠ none) → (x.1.who.cta ≠ y.1.who.cta ∨ x.2 = y.2) →
       own x.2 x.1.who.thread = own y.2 y.1.who.thread → x.1.who.thread = y.1.who.thread) :
-    racy tr = false := by
-  cases h : racy tr
+    GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false := by
+  cases h : GPUProof.racy sig (tr.map (Event.toCore L)).reverse
   · rfl
-  obtain ⟨x, hx, y, hy, hc⟩ := racy_iff.1 h
+  obtain ⟨x, hx, y, hy, hc⟩ := (racy_iff hU hs).1 h
   simp only [clash, Bool.and_eq_true, bne_iff_ne, ne_eq, Bool.or_eq_true, beq_iff_eq] at hc
   obtain ⟨⟨ht, hc⟩, hk⟩ := hc
   simp only [Access.conflict, Access.overlaps, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq,
@@ -271,56 +286,69 @@ theorem racy_eq_false_of_writers {ι : Type} {W : Nat → Nat → Int → Option
   · simp [hx'] at hy'
   · simp [wx, wy] at hw
 
-/-- **Ownership per barrier interval gives race freedom** (`racy`, every trace). The tiling
+/-- **Ownership per barrier interval gives race freedom** (the core's `racy` at `sig`, for every
+launch and trace with the premises of `racy_iff`). The tiling
 `T p` and the tile map `own p` may change with the phase `p` (`phases`). If every access follows
 the discipline of its phase, accesses of one block by two blocks of threads see one tiling of it,
 and two accesses of a tiled block with one tile, by different blocks of threads or in one phase,
 are by one thread, the trace has no race. `racy_eq_false_of_writers` with the writer of a byte the
 tile of `T p` that holds it (`Owned.at`). -/
 theorem racy_eq_false_of_phased {ι : Type} {T : Nat → Nat → Option (Tiling ι)}
-    {own : Nat → Nat → ι} {tr : List Event}
+    {own : Nat → Nat → ι} {L : Launch} {tr : List Event}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse)
     (hO : ∀ x ∈ (phases tr).1, Owned (T x.2) (own x.2) x.1)
     (hG : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, x.1.who.cta ≠ y.1.who.cta →
       x.1.ptr.block = y.1.ptr.block → T x.2 x.1.ptr.block = T y.2 x.1.ptr.block)
     (hX : ∀ x ∈ (phases tr).1, ∀ y ∈ (phases tr).1, x.1.ptr.block = y.1.ptr.block →
       T x.2 x.1.ptr.block ≠ none → (x.1.who.cta ≠ y.1.who.cta ∨ x.2 = y.2) →
       own x.2 x.1.who.thread = own y.2 y.1.who.thread → x.1.who.thread = y.1.who.thread) :
-    racy tr = false :=
-  racy_eq_false_of_writers (W := fun p b i => (T p b).bind (·.at i)) (own := own)
+    GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false :=
+  racy_eq_false_of_writers (W := fun p b i => (T p b).bind (·.at i)) (own := own) hU hs
     (fun x hx _ h1 h2 => (hO x hx).at h1 h2)
     (fun x hx y hy hc hb => by simp only [hG x hx y hy hc hb])
     fun x hx y hy hb ⟨_, hi⟩ hk ho => hX x hx y hy hb (fun hT => hi (by simp [hT])) hk ho
 
-/-- **Ownership gives race freedom** (`racy`, every trace). If every access of a trace
+/-- **Ownership gives race freedom** (the core's `racy` at `sig`, for every launch and trace with
+the premises of `racy_iff`). If every access of a trace
 follows the discipline `(T, own)`, and threads that access one tiled block have different tiles,
 the trace has no race, whatever its barriers. The discipline of `racy_eq_false_of_phased` that
 does not depend on the phase. -/
-theorem racy_eq_false_of_owned {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι} :
-    ∀ {tr : List Event}, (∀ a, Event.access a ∈ tr → Owned T own a) →
+theorem racy_eq_false_of_owned {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι}
+    {L : Launch} {tr : List Event}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse) :
+    (∀ a, Event.access a ∈ tr → Owned T own a) →
       (∀ a e, Event.access a ∈ tr → Event.access e ∈ tr → a.ptr.block = e.ptr.block →
         T a.ptr.block ≠ none → own a.who.thread = own e.who.thread →
-          a.who.thread = e.who.thread) → racy tr = false := fun h hi =>
-  racy_eq_false_of_phased (T := fun _ => T) (own := fun _ => own) (fun _ hx => h _ (mem_phases hx))
+          a.who.thread = e.who.thread) →
+            GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false := fun h hi =>
+  racy_eq_false_of_phased (T := fun _ => T) (own := fun _ => own) hU hs
+    (fun _ hx => h _ (mem_phases hx))
     (fun _ _ _ _ _ _ => rfl) fun _ hx _ hy hb hT _ ho =>
       hi _ _ (mem_phases hx) (mem_phases hy) hb hT ho
 
 /-- **The trace lemma of an elementwise kernel** (every trace, output block `out`, width `w` and
 cell map `cell` whose cells are `w` bytes apart, `Apart`): if every access of the trace to `out`
 lies in its thread's cell, the `w` bytes from `cell` of its thread number, every access to another
-block is a read, and no access with `!invariant.load` is to `out`, the trace is not racy and keeps
-the promise of `!invariant.load`. `racy_kept_pointwise` is its case of cells `k * w`, each access
-the whole cell. -/
-theorem racy_kept_of_cells {tr : List Event} {out w : Nat} {cell : Nat → Nat}
+block is a read that is not an `atomicrmw`'s, and no access with `!invariant.load` is to `out`,
+the trace keeps the promise of `!invariant.load` (the core's `kept` at `sig`, for every launch),
+and under the premises of `racy_iff` it is not racy. `racy_kept_pointwise` is its case of cells
+`k * w`, each access the whole cell. -/
+theorem racy_kept_of_cells {L : Launch} {tr : List Event} {out w : Nat} {cell : Nat → Nat}
     (hap : Apart cell w)
     (hc : ∀ a, Event.access a ∈ tr → a.ptr.block = out →
       (cell a.who.thread : Int) ≤ a.ptr.off ∧ a.ptr.off + a.len ≤ cell a.who.thread + w)
-    (hr : ∀ a, Event.access a ∈ tr → a.ptr.block ≠ out → a.write = false)
+    (hr : ∀ a, Event.access a ∈ tr → a.ptr.block ≠ out → a.write = false ∧ a.atomic = none)
     (hi : ∀ a, Event.access a ∈ tr → a.invariant = true → a.ptr.block ≠ out) :
-    racy tr = false ∧ kept tr = true := by
-  refine ⟨?_, kept_of_split (W := (· = out)) hi fun e he hw => ?_⟩
-  · cases h : racy tr
+    ((∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped tr.reverse →
+      GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false) ∧
+      GPUProof.kept sig (tr.map (Event.toCore L)).reverse = true := by
+  refine ⟨fun hU hs => ?_, kept_of_split (W := (· = out)) hi fun e he hw => ?_⟩
+  · cases h : GPUProof.racy sig (tr.map (Event.toCore L)).reverse
     · rfl
-    obtain ⟨x, hx, y, hy, hc'⟩ := racy_iff.1 h
+    obtain ⟨x, hx, y, hy, hc'⟩ := (racy_iff hU hs).1 h
     simp only [clash, Bool.and_eq_true, bne_iff_ne, ne_eq, Bool.or_eq_true, beq_iff_eq] at hc'
     obtain ⟨⟨ht, hc'⟩, -⟩ := hc'
     have hx' := mem_phases hx
@@ -333,23 +361,29 @@ theorem racy_kept_of_cells {tr : List Event} {out w : Nat} {cell : Nat → Nat}
       obtain ⟨e1, e2⟩ := hc _ hy' (hb ▸ ho)
       rcases hap _ _ ht with h | h <;> omega
     · rcases hw with hw | hw
-      · simp [hr _ hx' ho] at hw
-      · simp [hr _ hy' (hb ▸ ho)] at hw
+      · simp [(hr _ hx' ho).1] at hw
+      · simp [(hr _ hy' (hb ▸ ho)).1] at hw
   · by_contra hb
-    simp [hr e he hb] at hw
+    obtain ⟨h1, h2⟩ := hr e he hb
+    simp [Access.kind_writes, h1, h2] at hw
 
-/-- Instance, for every trace, element count `n` and element width `w`: if every access is a read
-of a block other than `out`, or an access without `!invariant.load` by a thread `k < n` to
-exactly the bytes `[k * w, k * w + w)` of `out`, the trace has no race and keeps the promise of
-`!invariant.load`. This is the access pattern of a pointwise kernel with one element per thread;
-it is a statement about traces, not about a kernel. `racy_kept_of_cells` with the cells `k * w`
-(`apart_stride`). -/
-theorem racy_kept_pointwise {out n w : Nat} {tr : List Event}
-    (h : ∀ a, Event.access a ∈ tr → (a.ptr.block ≠ out ∧ a.write = false) ∨
+/-- Instance, for every launch, trace, element count `n` and element width `w`: if every access
+is a read, not an `atomicrmw`'s, of a block other than `out`, or an access without
+`!invariant.load` by a thread `k < n` to exactly the bytes `[k * w, k * w + w)` of `out`, the
+trace keeps the promise of `!invariant.load` (the core's `kept` at `sig`) and under the premises
+of `racy_iff` has no race. This is
+the access pattern of a pointwise kernel with one element per thread; it is a statement about
+traces, not about a kernel. `racy_kept_of_cells` with the cells `k * w` (`apart_stride`). -/
+theorem racy_kept_pointwise {L : Launch} {out n w : Nat} {tr : List Event}
+    (h : ∀ a, Event.access a ∈ tr → (a.ptr.block ≠ out ∧ a.write = false ∧ a.atomic = none) ∨
       (a.ptr.block = out ∧ a.invariant = false ∧ a.who.thread < n ∧
         a.ptr.off = ((a.who.thread * w : Nat) : Int) ∧ a.len = w)) :
-    racy tr = false ∧ kept tr = true :=
-  racy_kept_of_cells (out := out) (cell := (· * w)) (by simpa using apart_stride 0 (le_refl w))
+    ((∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped tr.reverse →
+      GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false) ∧
+      GPUProof.kept sig (tr.map (Event.toCore L)).reverse = true :=
+  racy_kept_of_cells (out := out) (cell := (· * w))
+    (by simpa using apart_stride 0 (le_refl w))
     (fun a ha hb => by
       rcases h a ha with ⟨hb', -⟩ | ⟨-, -, -, ho, hl⟩
       · exact absurd hb hb'
@@ -384,140 +418,52 @@ theorem Grid.step_one {t : Thread} {M M' : Mem} (h : step (c 0) t M = .ok (.done
     | succ n => simp [Grid.advance, pure, Except.pure] at hs
   · cases n <;> simp [Grid.fire, pure, Except.pure] at hs
 
-/-- A grid in which every thread has returned does not fault. -/
-theorem done_not_faults {g : Grid} (h : g.Done) : ¬ g.Faults L c := by
-  rintro ⟨n, e, hf⟩
-  rcases h.get n with hn | hn <;> simp [Grid.advance, Grid.fire, hn, pure, Except.pure] at hf
+/-- A done grid with at most the launch's number of threads does not fault. -/
+theorem done_not_faults {g : Grid} (hs : g.threads.size ≤ volume L.grid * volume L.block)
+    (h : GPUProof.Done sig (g, L, c)) : ¬ GPUProof.Faults sig (g, L, c) := by
+  intro hf
+  obtain ⟨n, e, hf⟩ := Grid.faults_iff.1 hf
+  rcases Grid.Done.get hs h n with hn | hn <;>
+    simp [Grid.advance, Grid.fire, hn, pure, Except.pure] at hf
 
 /-- **`Grid.Sound` from one run** (all seven fields of `Grid.Sound`). `rc` is a step
 relation on states `γ` (for example the grids reachable from the start, or grids with extra
 ghost state) that projects onto `Grid.Step` and lifts every grid step. If `rc` is confluent up to
 `e` with `Bad` persistent; faults, racy traces and traces that break `!invariant.load` are bad;
-and `e` preserves `Done` and the observation; then one run of `rc` from `x₀` to a state whose
-grid is done, is not bad and observes `y` with `R y` makes the grid of `x₀` sound. -/
+a state whose grid is done (the core's `Done` at `sig`) has no step; and `e` preserves `Done` and
+the observation; then one run of `rc` from `x₀` to a state whose grid is done, is not bad and
+observes `y` with `R y` makes the grid of `x₀` sound. It is `GPUProof.Clean.of_lift` at `sig`
+along `x ↦ (π x, L, c)`, whose steps are `rc`'s by `sig_step_iff`, for the observation
+`obs` of the grid's memory, carried back to the grid by `Grid.Sound.of_clean`. -/
 theorem Grid.sound_of_one_run {γ : Type*} {π : γ → Grid} {rc e : γ → γ → Prop} {Bad : γ → Prop}
     (hc : Confluent rc e Bad)
     (proj : ∀ {x x'}, rc x x' → Grid.Step L c (π x) (π x'))
     (lift : ∀ {x g'}, Grid.Step L c (π x) g' → ∃ x', rc x x' ∧ π x' = g')
-    (hF : ∀ x, (π x).Faults L c → Bad x)
-    (hT : ∀ x, racy (π x).mem.trace = true → Bad x)
-    (hK : ∀ x, kept (π x).mem.trace = false → Bad x)
-    (hD : ∀ {x x'}, e x x' → (π x).Done → (π x').Done)
+    (hF : ∀ x, GPUProof.Faults sig (π x, L, c) → Bad x)
+    (hT : ∀ x, GPUProof.racy sig ((π x).mem.trace.map (Event.toCore L)).reverse = true →
+      Bad x)
+    (hK : ∀ x, GPUProof.kept sig ((π x).mem.trace.map (Event.toCore L)).reverse = false → Bad x)
+    (hfin : ∀ {x g'}, GPUProof.Done sig (π x, L, c) → ¬ Grid.Step L c (π x) g')
+    (hD : ∀ {x x'}, e x x' → GPUProof.Done sig (π x, L, c) → GPUProof.Done sig (π x', L, c))
     {β : Type} {obs : Mem → Option β} {R : β → Prop}
     (hO : ∀ {x x'}, e x x' → obs (π x).mem = obs (π x').mem)
-    {n : Nat} {x₀ z : γ} (run : Path rc n x₀ z) (hz : (π z).Done) (hb : ¬ Bad z)
-    {y : β} (hy : obs (π z).mem = some y) (hR : R y) :
+    {n : Nat} {x₀ z : γ} (run : Path rc n x₀ z) (hz : GPUProof.Done sig (π z, L, c))
+    (hb : ¬ Bad z) {y : β} (hy : obs (π z).mem = some y) (hR : R y) :
     Grid.Sound L c (π x₀) obs R := by
-  have hzn : Normal rc z := fun b hr => Grid.Done.final hz (proj hr)
-  have up : ∀ g, ReflTransGen (Grid.Step L c) (π x₀) g → ∃ x, ReflTransGen rc x₀ x ∧ π x = g := by
-    intro g hg
-    induction hg with
-    | refl => exact ⟨x₀, .refl, rfl⟩
-    | tail _ hs ih =>
-      obtain ⟨x, hx, rfl⟩ := ih
-      obtain ⟨x', hr, rfl⟩ := lift hs
-      exact ⟨x', hx.tail hr, rfl⟩
-  obtain ⟨hacc, hnb, hdet, hprog⟩ := hc.one_run run hzn hb
-  have final : ∀ g, ReflTransGen (Grid.Step L c) (π x₀) g → g.Done → obs g.mem = some y := by
-    intro g hg hd
-    obtain ⟨x, hx, rfl⟩ := up g hg
-    rw [← hO (hdet x hx fun b hr => Grid.Done.final hd (proj hr))]
-    exact hy
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro g hg hf
-    obtain ⟨x, hx, rfl⟩ := up g hg
-    exact hnb x hx (hF x hf)
-  · intro g hg
-    obtain ⟨x, hx, rfl⟩ := up g hg
-    exact Bool.eq_false_iff.mpr fun ht => hnb x hx (hT x ht)
-  · intro g hg
-    obtain ⟨x, hx, rfl⟩ := up g hg
-    cases hk : kept (π x).mem.trace with
-    | true => rfl
-    | false => exact absurd (hK x hk) (hnb x hx)
-  · intro g hg hnd
-    obtain ⟨x, hx, rfl⟩ := up g hg
-    obtain ⟨m, z', _, hp, he⟩ := hprog x hx
-    cases hp with
-    | nil => exact absurd (hD he hz) hnd
-    | cons hr _ => exact ⟨_, proj hr⟩
-  · have : ∀ x, Acc (fun b a => rc a b) x → Acc (fun g' g => Grid.Step L c g g') (π x) := by
-      intro x hx
-      induction hx with
-      | intro x _ ih =>
-        refine ⟨_, fun g' hs => ?_⟩
-        obtain ⟨x', hr, rfl⟩ := lift hs
-        exact ih x' hr
-    exact this x₀ hacc
-  · intro g g' hg hg' hd hd'
-    rw [final g hg hd, final g' hg' hd']
-  · intro g hg hd
-    exact ⟨y, final g hg hd, hR⟩
-
-/-- A grid of one thread whose step returns, with memory `M'`, is sound for every observation
-defined on `M'` and relation `R` its value satisfies, when the traces of `M` and `M'` have no
-race and keep `!invariant.load`. An instance of every premise of `Grid.sound_of_one_run`: the
-states are the reachable grids, and `Bad` is a fault, a racy trace or a broken
-`!invariant.load` promise. -/
-theorem Grid.sound_one {t : Thread} {M M' : Mem} (h : step (c 0) t M = .ok (.done M'))
-    {β : Type} {obs : Mem → Option β} {R : β → Prop} {y : β} (hy : obs M' = some y) (hR : R y)
-    (hM : racy M.trace = false) (hM' : racy M'.trace = false)
-    (kM : kept M.trace = true) (kM' : kept M'.trace = true) :
-    Grid.Sound L c ⟨#[.run t], M⟩ obs R := by
-  let g₀ : Grid := ⟨#[.run t], M⟩
-  let z₀ : Grid := ⟨#[.done], M'⟩
-  have hd : z₀.Done := by simp [z₀, Grid.Done]
-  have reach : ∀ g, ReflTransGen (Grid.Step L c) g₀ g → g = g₀ ∨ g = z₀ := by
-    intro g hr
-    induction hr with
-    | refl => exact .inl rfl
-    | tail _ hs ih =>
-      rcases ih with rfl | rfl
-      · exact .inr (Grid.step_one h hs)
-      · exact absurd hs (Grid.Done.final hd)
-  have hstep : Grid.Step L c g₀ z₀ := by
-    refine ⟨0, .inl ?_⟩
-    simp only [g₀, Grid.advance, List.getElem?_toArray, List.getElem?_cons_zero, h, bind,
-      Except.bind, pure, Except.pure]
-    rfl
-  have nf : ¬ g₀.Faults L c := by
-    rintro ⟨n, e, hf⟩
-    cases n with
-    | zero => simp [g₀, Grid.advance, Grid.fire, h, bind, Except.bind, pure, Except.pure] at hf
-    | succ n => simp [g₀, Grid.advance, Grid.fire, pure, Except.pure] at hf
-  let γ := { g : Grid // ReflTransGen (Grid.Step L c) g₀ g }
-  let rc : γ → γ → Prop := fun a b => Grid.Step L c a.1 b.1
-  have nb : ∀ g, ReflTransGen (Grid.Step L c) g₀ g →
-      ¬ (g.Faults L c ∨ racy g.mem.trace = true ∨ kept g.mem.trace = false) := by
-    intro g hg hbad
-    rcases reach g hg with rfl | rfl
-    · rcases hbad with hf | ht | hk
-      · exact nf hf
-      · simp [g₀, hM] at ht
-      · simp [g₀, kM] at hk
-    · rcases hbad with hf | ht | hk
-      · exact done_not_faults hd hf
-      · simp [z₀, hM'] at ht
-      · simp [z₀, kM'] at hk
-  have hc : Confluent rc Eq
-      (fun x : γ => x.1.Faults L c ∨ racy x.1.mem.trace = true ∨ kept x.1.mem.trace = false) := by
-    refine ⟨fun _ => rfl, Eq.symm, Eq.trans, ?_, ?_, ?_, ?_⟩
-    · rintro a _ b rfl hr
-      exact ⟨b, hr, rfl⟩
-    · rintro a _ rfl hb
-      exact hb
-    · rintro ⟨a, ha⟩ ⟨b, hb⟩ hbad hr
-      exact absurd hbad (nb a ha)
-    · rintro ⟨a, ha⟩ ⟨b, hb⟩ ⟨c', hc'⟩ hr hr'
-      rcases reach a ha with rfl | rfl
-      · exact .inl (Subtype.ext ((Grid.step_one h hr).trans (Grid.step_one h hr').symm))
-      · exact absurd hr (Grid.Done.final hd)
-  exact Grid.sound_of_one_run (π := fun x : γ => x.1) (x₀ := ⟨g₀, .refl⟩)
-    (z := ⟨z₀, .single hstep⟩) hc (fun hr => hr)
-    (fun {x g'} hs => ⟨⟨g', x.2.tail hs⟩, hs, rfl⟩) (fun _ hf => .inl hf)
-    (fun _ ht => .inr (.inl ht)) (fun _ hk => .inr (.inr hk))
-    (fun he hd' => he ▸ hd') (fun he => he ▸ rfl) (.cons hstep (.nil _)) hd
-    (nb z₀ (.single hstep)) hy hR
+  obtain ⟨hC, h⟩ := GPUProof.Clean.of_lift (S := sig) (π := fun x => (π x, L, c))
+    (obs := fun s => obs s.1.mem) hc (fun hr => sig_step_iff.2 ⟨_, rfl, proj hr⟩)
+    (fun hs => by
+      obtain ⟨g', rfl, hg⟩ := sig_step_iff.1 hs
+      obtain ⟨x', hr, rfl⟩ := lift hg
+      exact ⟨x', hr, rfl⟩)
+    hF hT hK (fun hd hs => by
+      obtain ⟨_, -, hg⟩ := sig_step_iff.1 hs
+      exact hfin hd hg) hD hO run hz hb
+  have final : ∀ g, ReflTransGen (Grid.Step L c) (π x₀) g → GPUProof.Done sig (g, L, c) →
+      obs g.mem = some y := fun g hg hd => (h (g, L, c) (sig_reach_iff.2 ⟨g, rfl, hg⟩) hd).trans hy
+  exact Grid.Sound.of_clean hC
+    (fun g g' hg hg' hd hd' => (final g hg hd).trans (final g' hg' hd').symm)
+    fun g hg hd => ⟨y, final g hg hd, hR⟩
 
 /-! ### A grid of any number of threads, through the one-run theorem -/
 
@@ -555,12 +501,13 @@ section Returning
 
 variable {N : Nat} {ts : Nat → Thread} {M : Mem}
 
-/-- If every thread's step returns at once without changing `M`, thread `n`'s step in
-`retGrid N ts M D` marks it returned when it is below `N` and running, and is `none` otherwise. -/
-theorem retGrid_advance (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.done M)) (D : Nat → Bool)
-    (n : Nat) :
+/-- If every thread `n < N`'s step from `M` returns at once with memory `f n`, thread `n`'s step
+in `retGrid N ts M D` marks it returned over memory `f n` when it is below `N` and running, and is
+`none` otherwise; for every `N`, threads, memory, `f` and `D`. -/
+theorem retGrid_advance {f : Nat → Mem} (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.done (f n)))
+    (D : Nat → Bool) (n : Nat) :
     (retGrid N ts M D).advance c n =
-      if n < N ∧ D n = false then .ok (some (retGrid N ts M (Function.update D n true)))
+      if n < N ∧ D n = false then .ok (some (retGrid N ts (f n) (Function.update D n true)))
       else .ok none := by
   by_cases hn : n < N
   · cases hD : D n with
@@ -602,16 +549,126 @@ theorem retGrid_fire (D : Nat → Bool) (n : Nat) : (retGrid N ts M D).fire L c 
       simp [hn]
     simp [Grid.fire, e, pure, Except.pure]
 
-/-- **A grid of `N` returning threads is sound, by the one-run theorem.** If every thread `n < N`
-returns in one step from memory `M` without changing it, the grid of these threads is sound
-(all seven fields) for every observation defined on `M` and relation `R` its value satisfies,
-when the trace of `M` has no race and keeps `!invariant.load`: the states are the sets of returned
-threads, two threads' steps commute (the diamond, for every pair of threads), and the run in
-thread order is the one run. For every `N`, launch and contexts. -/
-theorem Grid.sound_returning (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.done M))
-    {β : Type} {obs : Mem → Option β} {R : β → Prop} {y : β} (hy : obs M = some y) (hR : R y)
-    (hM : racy M.trace = false) (kM : kept M.trace = true) :
+/-- The memory of `M` after the steps `f k` of the threads `k` of `l` with `D k`, the last of
+`l` first. -/
+private def retMem (l : List Nat) (f : Nat → Mem → Mem) (M : Mem) (D : Nat → Bool) : Mem :=
+  l.foldr (fun k m => if D k then f k m else m) M
+
+section Commuting
+
+variable {f : Nat → Mem → Mem} {P : Mem → Prop}
+
+private theorem retMem_P (hP : ∀ n, n < N → ∀ m, P m → P (f n m)) (hM : P M) {l : List Nat}
+    (hl : ∀ k ∈ l, k < N) (D : Nat → Bool) : P (retMem l f M D) := by
+  induction l with
+  | nil => exact hM
+  | cons k l ih =>
+    have := ih fun j hj => hl j (List.mem_cons_of_mem _ hj)
+    simp only [retMem, List.foldr_cons] at this ⊢
+    split
+    · exact hP k (hl k (by simp)) _ this
+    · exact this
+
+private theorem retMem_trace (hP : ∀ n, n < N → ∀ m, P m → P (f n m))
+    (hT : ∀ n, n < N → ∀ m, P m → (f n m).trace = m.trace) (hM : P M) {l : List Nat}
+    (hl : ∀ k ∈ l, k < N) (D : Nat → Bool) : (retMem l f M D).trace = M.trace := by
+  induction l with
+  | nil => rfl
+  | cons k l ih =>
+    have hl' : ∀ j ∈ l, j < N := fun j hj => hl j (List.mem_cons_of_mem _ hj)
+    have e := ih hl'
+    have p := retMem_P hP hM hl' D
+    simp only [retMem, List.foldr_cons] at e p ⊢
+    split
+    · rw [hT k (hl k (by simp)) _ p, e]
+    · exact e
+
+private theorem retMem_update_not_mem {l : List Nat} {n : Nat} (hn : n ∉ l) (D : Nat → Bool)
+    (v : Bool) : retMem l f M (Function.update D n v) = retMem l f M D := by
+  induction l with
+  | nil => rfl
+  | cons k l ih =>
+    have hk : k ≠ n := fun h => hn (h ▸ by simp)
+    have e := ih fun h => hn (List.mem_cons_of_mem _ h)
+    simp only [retMem, List.foldr_cons, Function.update_apply, hk, ite_false] at e ⊢
+    rw [e]
+
+private theorem retMem_update (hP : ∀ n, n < N → ∀ m, P m → P (f n m))
+    (hc : ∀ i j, i < N → j < N → i ≠ j → ∀ m, P m → f i (f j m) = f j (f i m)) (hM : P M)
+    {l : List Nat} (hl : l.Nodup) (hlN : ∀ k ∈ l, k < N) {D : Nat → Bool} {n : Nat} (hn : n ∈ l)
+    (hD : D n = false) : retMem l f M (Function.update D n true) = f n (retMem l f M D) := by
+  induction l with
+  | nil => cases hn
+  | cons k l ih =>
+    obtain ⟨hk, hl'⟩ := List.nodup_cons.1 hl
+    have hlN' : ∀ j ∈ l, j < N := fun j hj => hlN j (List.mem_cons_of_mem _ hj)
+    rcases List.mem_cons.1 hn with rfl | hn'
+    · have e := retMem_update_not_mem (f := f) (M := M) hk D true
+      simp only [retMem, List.foldr_cons, Function.update_self, ite_true, hD] at e ⊢
+      rw [e]
+      rfl
+    · have hne : k ≠ n := fun h => hk (h ▸ hn')
+      have e := ih hl' hlN' hn'
+      have p := retMem_P hP hM hlN' D
+      simp only [retMem, List.foldr_cons, Function.update_apply, hne, ite_false] at e p ⊢
+      rw [e]
+      split
+      · exact hc k n (hlN k (by simp)) (hlN n (by simp [hn'])) hne _ p
+      · rfl
+
+/-- **A grid of `N` threads whose steps return and commute is sound, by the one-run theorem.**
+For every `N`, launch `L` of at least `N` threads, contexts `c`, threads `ts`, memory `M` and
+memory changes `f`: let `P` be a property of memories that `M` has and every `f n` with `n < N`
+keeps. If, from every memory with `P`, thread `n < N`'s step returns at once with memory
+`f n m`, the changes of two distinct threads commute and each keeps the trace, the grid of these
+threads is sound (all seven fields) for every observation and relation `R` that the observation
+`y` of the memory after all `N` changes, `(List.range N).foldr f M`, satisfies, when the trace of
+`M` has no race and keeps `!invariant.load`. The states are the sets of returned threads, the
+memory of a set is that of its threads' changes (in any order, by the commuting), two threads'
+steps commute (the diamond, for every pair of threads), and the run in thread order is the one
+run. -/
+theorem Grid.sound_commuting (hN : N ≤ volume L.grid * volume L.block) (hM : P M)
+    (hP : ∀ n, n < N → ∀ m, P m → P (f n m))
+    (h : ∀ n, n < N → ∀ m, P m → step (c n) (ts n) m = .ok (.done (f n m)))
+    (hc : ∀ i j, i < N → j < N → i ≠ j → ∀ m, P m → f i (f j m) = f j (f i m))
+    (hT : ∀ n, n < N → ∀ m, P m → (f n m).trace = m.trace)
+    {β : Type} {obs : Mem → Option β} {R : β → Prop} {y : β}
+    (hy : obs ((List.range N).foldr f M) = some y) (hR : R y)
+    (hM' : GPUProof.racy sig (M.trace.map (Event.toCore L)).reverse = false)
+    (kM : GPUProof.kept sig (M.trace.map (Event.toCore L)).reverse = true) :
     Grid.Sound L c (retGrid N ts M fun _ => false) obs R := by
+  have hr : ∀ k ∈ List.range N, k < N := fun k hk => List.mem_range.1 hk
+  have hPD := retMem_P (f := f) hP hM hr
+  have upd : ∀ {D : Nat → Bool} {n}, n < N → D n = false →
+      retMem (List.range N) f M (Function.update D n true) = f n (retMem (List.range N) f M D) :=
+    fun hn hD => retMem_update hP hc hM List.nodup_range hr (List.mem_range.2 hn) hD
+  have adv : ∀ D, (retGrid N ts (retMem (List.range N) f M D) D).advance c = fun n =>
+      if n < N ∧ D n = false then
+        .ok (some (retGrid N ts (retMem (List.range N) f M (Function.update D n true))
+          (Function.update D n true)))
+      else .ok none := fun D => funext fun n => by
+    rw [retGrid_advance (fun n hn => h n hn _ (hPD D))]
+    split
+    · rename_i hcond
+      rw [upd hcond.1 hcond.2]
+    · rfl
+  have e0 : retMem (List.range N) f M (fun _ => false) = M := by
+    simp only [retMem, Bool.false_eq_true, ite_false]
+    generalize List.range N = l
+    induction l with
+    | nil => rfl
+    | cons _ _ ih => exact ih
+  have eN : retMem (List.range N) f M (fun i => decide (i < N)) = (List.range N).foldr f M := by
+    unfold retMem
+    generalize hl : List.range N = l
+    have hl' : ∀ k ∈ l, k < N := hl ▸ hr
+    clear hl
+    induction l with
+    | nil => rfl
+    | cons k l ih =>
+      simp only [List.foldr_cons, hl' k (by simp), decide_true, ite_true]
+      rw [ih fun j hj => hl' j (List.mem_cons_of_mem _ hj)]
+  rw [← e0]
   let rc : (Nat → Bool) → (Nat → Bool) → Prop := fun D D' =>
     ∃ n, n < N ∧ D n = false ∧ D' = Function.update D n true
   have hc : Confluent rc Eq (fun _ => False) := by
@@ -631,13 +688,13 @@ theorem Grid.sound_returning (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.d
           .inl (Function.update_comm hij true true D)⟩)
         · simp [Ne.symm hij, hDj]
         · simp [hij, hDi]
-  have proj : ∀ {D D'}, rc D D' → Grid.Step L c (retGrid N ts M D) (retGrid N ts M D') := by
+  let π : (Nat → Bool) → Grid := fun D => retGrid N ts (retMem (List.range N) f M D) D
+  have proj : ∀ {D D'}, rc D D' → Grid.Step L c (π D) (π D') := by
     rintro D _ ⟨n, hn, hD, rfl⟩
-    exact ⟨n, .inl (by simp only [retGrid_advance h, hn, hD, and_self, ite_true])⟩
-  have lift : ∀ {D g'}, Grid.Step L c (retGrid N ts M D) g' →
-      ∃ D', rc D D' ∧ retGrid N ts M D' = g' := by
+    exact ⟨n, .inl (by simp only [π, adv, hn, hD, and_self, ite_true])⟩
+  have lift : ∀ {D g'}, Grid.Step L c (π D) g' → ∃ D', rc D D' ∧ π D' = g' := by
     rintro D g' ⟨n, hs | hs⟩
-    · rw [retGrid_advance h] at hs
+    · simp only [π, adv] at hs
       split at hs
       · rename_i hcond
         cases hs
@@ -645,12 +702,14 @@ theorem Grid.sound_returning (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.d
       · cases hs
     · rw [retGrid_fire] at hs
       cases hs
-  have nf : ∀ D, ¬ (retGrid N ts M D).Faults L c := by
-    rintro D ⟨n, e, hf | hf⟩
-    · rw [retGrid_advance h] at hf
+  have nf : ∀ D, ¬ GPUProof.Faults sig (π D, L, c) := by
+    intro D hf
+    obtain ⟨n, e, hf | hf⟩ := Grid.faults_iff.1 hf
+    · simp only [π, adv] at hf
       split at hf <;> cases hf
     · rw [retGrid_fire] at hf
       cases hf
+  have tr : ∀ D, (π D).mem.trace = M.trace := fun D => retMem_trace hP hT hM hr D
   have path : ∀ m k, k + m = N →
       Path rc m (fun i => decide (i < k)) (fun i => decide (i < N)) := by
     intro m
@@ -674,14 +733,36 @@ theorem Grid.sound_returning (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.d
       simp
     rw [← e0]
     exact path N 0 (Nat.zero_add N)
-  have hd : (retGrid N ts M fun i => decide (i < N)).Done := by
-    rw [Grid.Done, Array.all_eq_true]
+  have hd : GPUProof.Done sig (π fun i => decide (i < N), L, c) := by
+    refine Grid.done_of_all ?_
+    rw [Array.all_eq_true]
     intro i hi
-    simp [retGrid]
-  exact Grid.sound_of_one_run (π := retGrid N ts M) hc proj lift (fun D hf => nf D hf)
-    (fun D ht => Bool.noConfusion (hM.symm.trans ht))
-    (fun D hk => Bool.noConfusion (kM.symm.trans hk))
-    (fun he hd' => he ▸ hd') (fun he => he ▸ rfl) run hd id hy hR
+    simp [π, retGrid]
+  exact Grid.sound_of_one_run (π := π) hc proj lift (fun D hf => nf D hf)
+    (fun D ht => by rw [tr D] at ht; exact Bool.noConfusion (hM'.symm.trans ht))
+    (fun D hk => by rw [tr D] at hk; exact Bool.noConfusion (kM.symm.trans hk))
+    (Grid.Done.final (by simpa [π, retGrid] using hN))
+    (fun he hd' => he ▸ hd') (fun he => he ▸ rfl) run hd id
+    (show obs (retMem (List.range N) f M _) = some y by rw [eN]; exact hy) hR
+
+end Commuting
+
+/-- **A grid of `N` returning threads is sound, by the one-run theorem.** If every thread `n < N`
+returns in one step from memory `M` without changing it, the grid of these threads is sound
+(all seven fields) for every observation defined on `M` and relation `R` its value satisfies,
+when the trace of `M` has no race and keeps `!invariant.load`. For every `N`, launch of at least
+`N` threads and contexts. `Grid.sound_commuting` with no change of memory (`f n m = m`, at the
+memories equal to `M`). -/
+theorem Grid.sound_returning (hN : N ≤ volume L.grid * volume L.block)
+    (h : ∀ n, n < N → step (c n) (ts n) M = .ok (.done M))
+    {β : Type} {obs : Mem → Option β} {R : β → Prop} {y : β} (hy : obs M = some y) (hR : R y)
+    (hM : GPUProof.racy sig (M.trace.map (Event.toCore L)).reverse = false)
+    (kM : GPUProof.kept sig (M.trace.map (Event.toCore L)).reverse = true) :
+    Grid.Sound L c (retGrid N ts M fun _ => false) obs R :=
+  Grid.sound_commuting (f := fun _ m => m) (P := (· = M)) hN rfl (fun _ _ _ hm => hm)
+    (fun n hn _ hm => hm ▸ h n hn) (fun _ _ _ _ _ _ _ => rfl) (fun _ _ _ _ => rfl)
+    (by generalize List.range N = l; induction l with | nil => exact hy | cons _ _ ih => exact ih)
+    hR hM kM
 
 end Returning
 
@@ -768,8 +849,11 @@ theorem Kernel.sound_ret_launch (L : Launch) {m : Mem} (hm : m.Closed []) :
   obtain ⟨g, c, hs, htr, hsz, hall⟩ := start_ret L hm ch oracle
   refine ⟨g, c, hs, ?_⟩
   rw [eq_retGrid (ts := fun _ => retThread) hsz hall]
-  exact Grid.sound_returning (fun n _ => step_retThread (c n) g.mem) rfl trivial
-    (by rw [htr]; rfl) (by rw [htr]; rfl)
+  exact Grid.sound_returning le_rfl (fun n _ => step_retThread (c n) g.mem) rfl trivial
+    (Bool.eq_false_iff.2 fun hr => by
+      obtain ⟨_, _, _, _, _, hi, -⟩ := (GPUProof.racy_iff sig).1 hr
+      simp [htr] at hi)
+    ((GPUProof.kept_iff sig).2 fun _ _ hw => by simp [htr] at hw)
 
 end Grid
 

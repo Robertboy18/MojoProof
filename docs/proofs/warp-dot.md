@@ -1,9 +1,10 @@
-# The warp's dot product: strided loops and a butterfly (`stride`, `warpDot`, `warpBound`, `sum_stride`, `length_stride`, `bfly_stride`, `bfly_matVec`, `bfly_vecMat`, `bfly_stride_error`, `warpDot_error`, `warpDot_matVec`, `warpDot_vecMat`, `bflyRounds_nanEq`, `bfly_stride_nanEq`, `warpDot_nanEq`, `warpDot_eq`)
+# The warp's dot product: strided loops and a butterfly (`stride`, `groupDot`, `warpDot`, `sum_stride`, `length_stride`, `bfly_stride`, `bfly_matVec`, `bfly_vecMat`, `bfly_stride_error`, `groupDot_error`, `groupDot_matVec`, `groupDot_vecMat`, `warpDot_error`, `warpDot_matVec`, `warpDot_vecMat`, `bflyRounds_nanEq`, `bfly_stride_nanEq`, `groupDot_nanEq`, `groupDot_eq`, `warpDot_nanEq`, `warpDot_eq`, `bflyRoundsAt_nanEq`, `bflyDeliver_nanEq`, `bflyDeliver_error`)
 
-Lean: proved, for every format, length, flag and oracle as stated below, in
+Lean: proved, for every format, length, group of `2 ^ k` lanes, flag and oracle as stated below, in
 MojoProof/Sem/WarpDot.lean, and `gevm_kernel`'s transposition through shared memory in
-MojoProof/Sem/Transpose.lean (its own section below). Instances: MojoProofTest/WarpDot.lean, a test
-of one example (binary32, 40 pairs), and MojoProofTest/Transpose.lean. The loop is `dotLoop`
+MojoProof/Sem/Transpose.lean (its own section below). Instances: MojoProofTest/WarpDot.lean, tests
+of one example each (binary32, 40 pairs, over 32 lanes and over 8), and
+MojoProofTest/Transpose.lean. The loop is `dotLoop`
 (MojoProof/Sem/Matmul.lean), the rounds and their tree are `bflyRounds` and `bflyTree`
 (MojoProof/Sem/Bfly.lean, see bfly.md), the exact values are TorchLean's `contract … .matVec` and
 `contract … .vecMat`, and the bounds and the reference words are FloatLib's. The statements are
@@ -29,17 +30,24 @@ value being the output.
 ## Statements
 
 Write `stride w l xs` for the elements of `xs` at the positions `≡ l (mod w)`, in order, and
-`warpDot c o ps` for lane 0's value after the rounds of FloatLib's `Model.add` at `warpOffsets`
-from lane `l`'s value `dotLoop c (o l) (+0) (stride 32 l ps)`, with the `contract` flag `c` and
-lane `l`'s oracle numbers `o l`. A kernel's `fadd` of a round goes through `deliver`, which
-changes only a NaN result (`nanEq_deliver`); `warpDot` adds without it. Write `u` for FloatLib's
+`groupDot k c o ps` for lane 0's value after the rounds of FloatLib's `Model.add` at
+`bflyOffsets k` (bfly.md) from lane `l`'s value `dotLoop c (o l) (+0) (stride (2 ^ k) l ps)`, with
+the `contract` flag `c` and lane `l`'s oracle numbers `o l`: the dot product over a group of
+`2 ^ k` lanes. `warpDot` is by definition `groupDot 5`, the warp's 32 lanes. A kernel's `fadd` of a
+round goes through `deliver`, which changes only a NaN result (`nanEq_deliver`); `groupDot` adds
+without it. Write `u` for FloatLib's
 unit roundoff `Model.unitRoundoffAt fmt`, `η` for its underflow allowance
-`Model.underflowErrorAt fmt`, and
+`Model.underflowErrorAt fmt`, and `E(W, d, L)` for the error of
+`GPUProof.laneGrade (.ieee fmt) W d L n a x ga gx` at the real values `a k`, `x k` of the words and
+the grades `⟨0, 0⟩` (spec.md), which is
 
 ```
-warpBound fmt n d w T = ((1 + u) ^ (n + d + 1) - 1) T
-                       + w (1 + u) ^ d (2 + u) η ((1 + u) ^ n - 1) / u.
+E(W, d, L) = ((1 + u) ^ (L + d) - 1) T + W (1 + u) ^ d (2 + u) η ((1 + u) ^ L - 1) / u,
 ```
+
+with `T = Σₖ |aₖ xₖ|`. The bound of statements 5 and 6 is this one, `laneGrade`'s, the same as
+the graded `GPUProof.Approx` statements of MojoProof/Tile/MatVec.lean (`stride_approx`,
+`bfly_approx`, `groupDot_approx`).
 
 1. `sum_stride`: in every commutative monoid, for every `w > 0`, map `g` and list `xs`,
    `Σ_{l<w} Σ g (stride w l xs) = Σ g xs`.
@@ -55,15 +63,16 @@ warpBound fmt n d w T = ((1 + u) ^ (n + d + 1) - 1) T
    the rounds of `+` over the lanes' exact sums of the strided lists of `matVecPairs A v i` give
    entry `i` of `contract A' v' _ _ [m] .matVec`, and `bfly_vecMat`: those of `vecMatPairs v A j`
    give entry `j` of `contract v' A' _ _ [n] .vecMat`, for every `ms`, `w`, `l` of statement 3.
-5. `bfly_stride_error`: in every IEEE format, for every flag `c`, oracle family `o`, list `ps`,
-   offsets, lane and width of statement 3, and every `n` at least the length of each strided list:
-   if lane `l`'s value `r` after the rounds of `Model.add` over the loops `dotLoop c (o j) (+0)
-   (stride w j ps)` is finite, then `|r - Σ aₖ bₖ| ≤ warpBound fmt n ms.length w T`, with
-   `T = Σ |aₖ bₖ|`.
-6. `warpDot_error`: for `K` pairs, `warpDot c o ps`, if finite, is within
-   `warpBound fmt ⌈K / 32⌉ 5 32 T` of `Σ aₖ bₖ`; `warpDot_matVec` and `warpDot_vecMat`: the same
-   against TorchLean's real entries at `matVecPairs A v i` (`⌈n / 32⌉`) and `vecMatPairs v A j`
-   (`⌈m / 32⌉`).
+5. `bfly_stride_error`: in every IEEE format, for every flag `c`, oracle family `o`, words `w k`,
+   `v k` for `k < n` (the pairs `ps`), offsets, lane and width `W` of statement 3, and every `L`
+   at least the length of each strided list: if lane `l`'s value `r` after the rounds of
+   `Model.add` over the loops `dotLoop c (o j) (+0) (stride W j ps)` is finite, then
+   `|r - Σ wₖ vₖ| ≤ E(W, ms.length, L)`.
+6. `groupDot_error`: in every IEEE format, for every `k` and `n` pairs, `groupDot k c o ps`, if
+   finite, is within `E(2 ^ k, k, ⌈n / 2 ^ k⌉)` of `Σ wₖ vₖ`; `groupDot_matVec` and
+   `groupDot_vecMat`: the same against TorchLean's real entries at `matVecPairs A v i`
+   (`⌈n / 2 ^ k⌉`) and `vecMatPairs v A j` (`⌈m / 2 ^ k⌉`). `warpDot_error`, `warpDot_matVec` and
+   `warpDot_vecMat` are their cases `k = 5`: `E(32, 5, ⌈n / 32⌉)`.
 7. `bflyRounds_nanEq`: in every format, for all operations `f`, `g` such that `f x y` and `g x' y'`
    are `NaNEq` (same word or both NaNs) whenever `x, x'` and `y, y'` are, all offsets, values `v`,
    `v'` that are lane by lane `NaNEq`, and every lane, the rounds of `f` over `v` and of `g` over
@@ -73,12 +82,27 @@ warpBound fmt n d w T = ((1 + u) ^ (n + d + 1) - 1) T
    with the contraction off (`c` false, or no oracle number 2 modulo 3), the value of statement 5
    and FloatLib's `Model.reduceAlong fmt fmt` along `bflyTree ms l` of the in-order dot products
    `Model.dotInOrder fmt fmt (stride w j ps)` are `NaNEq`.
-8. `warpDot_nanEq`: statement 7 at a warp, `warpDot c o ps` against FloatLib's reduction along
-   `bflyTree warpOffsets 0`; `warpDot_eq`: when FloatLib's word is not a NaN, `warpDot c o ps` is
-   that word, bit for bit, and one is a NaN exactly when the other is.
+8. `groupDot_nanEq`: statement 7 at a group of `2 ^ k` lanes, `groupDot k c o ps` against
+   FloatLib's reduction along `bflyTree (bflyOffsets k) 0` of the in-order dot products of the
+   lists `stride (2 ^ k) j ps`; `groupDot_eq`: when FloatLib's word is not a NaN,
+   `groupDot k c o ps` is that word, bit for bit, and one is a NaN exactly when the other is.
+   `warpDot_nanEq` and `warpDot_eq` are their cases `k = 5`, along `bflyTree warpOffsets 0`.
+9. Write `bflyRoundsAt F ms v` (bfly.md) for the rounds in which lane `l` of round `r` (counted
+   from `0`) combines by `F r l`; `bflyRounds f ms v` is by definition its case `F r l = f`.
+   `bflyRoundsAt_nanEq`: in every format, for every family `F` and
+   operation `g` such that `F r l x y` and `g x' y'` are `NaNEq` whenever `x, x'` and `y, y'` are,
+   for every round and lane, and values and lanes as in statement 7, the rounds of `F` over `v`
+   and of `g` over `v'` are `NaNEq`. `bflyDeliver_nanEq`: in every format, for every oracle family
+   `o` by round and lane, the rounds of `deliver (Model.add x y) (o r l)`, the semantics' `fadd`
+   with its own oracle number in every round and lane, are `NaNEq` to those of `Model.add`.
+   `bflyDeliver_error`: in every IEEE format, for every such `o`, values, offsets `ms`, lane `l`
+   and width `w` with lane `l`'s tree over the lanes below `w`, each once: if the lane's
+   delivered value is finite, it is the `Model.add` rounds' value, every value below `w` is
+   finite, and it is within `((1 + u) ^ ms.length - 1) · Σ_{j<w} |v j|` of `Σ_{j<w} v j`.
 
-With `K` pairs the bound's exponent is `⌈K / 32⌉ + 6`, against `K + 1` for the sequential loop
-(`dotBound`), and its underflow term has `32 (1 + u) ^ 5` loops of `⌈K / 32⌉` iterations.
+With `K` pairs the bound's exponent is `⌈K / 32⌉ + 5`, against `K` for the sequential loop
+(`GPUProof.dotGrade`, `laneGrade` at one lane and depth `0`), and its underflow term has
+`32 (1 + u) ^ 5` loops of `⌈K / 32⌉` iterations.
 
 ## Proofs
 
@@ -93,21 +117,28 @@ With `K` pairs the bound's exponent is `⌈K / 32⌉ + 6`, against `K + 1` for t
    statement 1.
 4. TorchLean's `getScalar_contract_vecMat` and `dotSum_ofFn`, as for `matVec_cell_real`; then
    statement 3.
-5. `bfly_add_error` (bfly.md, statement 6) gives that each lane's loop is finite and
-   `|r - Σ_j vⱼ| ≤ (D - 1) Σ_j |vⱼ|`, `D = (1 + u) ^ ms.length`. Each loop has at most `n`
-   iterations, so by `dotLoop_error` and monotony `|vⱼ - Pⱼ| ≤ (G - 1) Qⱼ + E`, with `Pⱼ`, `Qⱼ` the
-   exact and absolute sums of list `j`, `G = (1 + u) ^ (n + 1)` and
-   `E = (2 + u) η ((1 + u) ^ n - 1) / u`. Summing over `j` with statement 1,
-   `|Σ vⱼ - Σ aₖ bₖ| ≤ (G - 1) T + w E` and `Σ |vⱼ| ≤ G T + w E`; so
-   `|r - Σ aₖ bₖ| ≤ (D - 1)(G T + w E) + (G - 1) T + w E = (D G - 1) T + w D E`, which is
-   `warpBound fmt n ms.length w T` (`ring`, `linarith`).
-6. Statement 5 at `leaves_warp 0` and `length_stride_le`; then `matVec_cell_real` or
-   `vecMat_cell_real` and the pairs' length.
-7. Induction on the offsets: one round is the premise on `f` and `g` at lane `j` and lane `j ^^^ m`;
-   at `Model.add` the premise is `NaNEq.op` at `fadd`, and at `deliver` it is `nanEq_deliver`
-   followed by `NaNEq.op`. Then `eval_bflyTree` on FloatLib's side, `dotLoop_nanEq` at each lane,
-   and `cast_self_nanEq` for `reduceAlong`'s final cast to the same format.
-8. Statement 7 at `warpOffsets`, `w = 32`, `l = 0`; `NaNEq.eq_isNaN`.
+5. Lane `l`'s value is `treeDot` (dot.md) along `bflyTree ms l` (`eval_bflyTree`), whose depth
+   is `ms.length` (`depth_bflyTree`), over the lists `stride W j ps`; their sums over the lanes
+   are the sums over the pairs (statement 1). So it is dot.md's `treeDot_error` at the real values
+   with the grades `⟨0, 0⟩`, each word within `0` of its own real value. There is no induction
+   here: the loops' bound (`lanes_error`) and the tree's (`Float.sum_error`) are combined once, in
+   `treeDot_error`.
+6. Statement 5 at `leaves_offsets k 0` (bfly.md, statement 3), `length_stride_le` and
+   `(bflyOffsets k).length = k`; then `matVec_cell_real` or `vecMat_cell_real` and the pairs'
+   length. The warp's statements are the general ones at `k = 5`, where `2 ^ 5` reduces to 32.
+7. Statement 9's `bflyRoundsAt_nanEq` at one operation in every round and lane, which is
+   `bflyRounds` by definition; at `Model.add` the premise is `NaNEq.op` at `fadd`, and at `deliver` it
+   is `nanEq_deliver` followed by `NaNEq.op`. Then `eval_bflyTree` on FloatLib's side,
+   `dotLoop_nanEq` at each lane, and `cast_self_nanEq` for `reduceAlong`'s final cast to the same
+   format.
+8. Statement 7 at `bflyOffsets k`, `w = 2 ^ k`, `l = 0`; `NaNEq.eq_isNaN`. The warp's are the
+   case `k = 5`.
+9. Induction on the offsets, generalizing the family: one round is the premise at round `0` on
+   lane `j` and lane `j ^^^ m`, and the later rounds are the family shifted by one round.
+   `bflyDeliver_nanEq`: the premise is
+   `nanEq_deliver` followed by `NaNEq.op` at `fadd`. `bflyDeliver_error`: a finite value is not a
+   NaN, so `NaNEq.eq_isNaN` makes it the `Model.add` rounds' value; then `bfly_add_error` (bfly.md,
+   statement 6).
 
 ## Instances
 
@@ -121,10 +152,21 @@ times `(1, 1)`, the pairs of entry 0 of the product of the vector `[2 ^ 24, 1, �
   different words, so statement 8's reference is the tree's reduction, not the sequential fold
   that TorchLean's binary32 `contract` computes.
 - `eq40`: statement 8 with the `contract` flag under the oracle numbers `(0, 0)`.
-- `error40`: statement 6 (`warpDot_vecMat`) at `m = 40`, with the finite premise by evaluation.
+- `error40`: statement 6 (`warpDot_vecMat`) at `m = 40`, with the finite premise by evaluation:
+  the bound is `E(32, 5, 2)`, `laneGrade (.ieee .binary32) 32 5 2 40`'s error.
+- `eq8`, `error8`: statements 8 (`groupDot_eq`) and 6 (`groupDot_vecMat`) over a group of 8 lanes
+  (`k = 3`, 5 pairs per lane), the second without the `contract` flag, with the finite premise by
+  evaluation: the bound is `E(8, 3, 5)`, `laneGrade (.ieee .binary32) 8 3 5 40`'s error.
+- `mutant_exact`: the roundoff terms cannot be dropped. At `L = d = 0`, `E(32, 0, 0)` is `0`, and
+  the warp's word without the `contract` flag (`2 ^ 24 + 38`, `vals40`) is not the exact sum
+  `2 ^ 24 + 39`, so statement 6's conclusion fails at that bound.
 - `deliver5`: statement 7 at `f x y = deliver (Model.add x y) 7` and `g = Model.add`, over lane 5
   holding the quiet NaN `0x7fc00000` and the other lanes `1` (`nan5`): lane 0's delivered value
   is a NaN, because `Model.add`'s is (by evaluation).
+- `deliverAt5`, `deliverAt_ones`: statement 9's `bflyDeliver_nanEq` and `bflyDeliver_error` with
+  the oracle number `32 r + l + 7` in round `r` at lane `l` (`oracleAt`): over `nan5` lane 0's
+  value is a NaN; over 32 lanes `1` (`ones32`) it is finite (by evaluation), so it is the
+  `Model.add` rounds' value and within `((1 + u) ^ 5 - 1) · 32` of `32`.
 
 ## The transposition through shared memory (`tpose`, `tpose_lt`, `tpose_tpose`, `tpose_bijOn`, `Launch.tpose_env`, `Tiling.tpose`, `racy_tpose`, `warpDot_tpose`)
 
@@ -198,8 +240,7 @@ loop computes `dotLoop` of the strided lists, which needs `K` and `N` multiples 
   run stores and loads the transposed cells (the cells' arithmetic, the race freedom of a trace
   that does, and the values each warp then reduces are proved, in the section above); both
   kernels are outside the block checker's fragment from their entry block (bfly.md).
-- That the kernel's rounds, whose `fadd` goes through `deliver` at each lane's own oracle number,
-  give `warpDot` up to NaNs: `bflyRounds_nanEq` carries `deliver` through the rounds at one oracle
-  number for every lane and round, since `bflyRounds` applies one operation everywhere; rounds
-  whose operation depends on the lane and the round are not defined.
+- That the oracle numbers a grid run draws for the rounds' `fadd` are a family `o r l` by round
+  and lane of statement 9: statement 9 holds for every such family, and that a run computes the
+  rounds at all is the item above.
 - Any bound when the result is infinite or a NaN.

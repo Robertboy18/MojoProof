@@ -1,9 +1,14 @@
 # The fast race check finds every race (`fast_sound`)
 
-Lean: `MojoProof/Sem/Race.lean`.
+Lean: `MojoProof/Sem/Race.lean` (`fast`, `clash`), `MojoProof/Sem/RaceSig.lean` (`racy_iff`,
+`fast_sound`).
 
-**Scope.** Every trace. Only `fast tr = false → racy tr = false` is proved. The converse (`fast` reports
-only real races) is not; the tests compare the two on every trace that is short enough for `racy`.
+**Scope.** Every launch `L` and every trace `tr` by threads of `L` in their blocks of threads that is
+shaped (`Trace.Shaped tr.reverse`), `racy_iff`'s premises. `racy tr` below is the core's `racy` at
+`sig` of `tr`'s core events, oldest first (`GPUProof.racy sig ((tr.map (Event.toCore L)).reverse)`);
+MojoProof has no `racy` of its own. Only `fast tr = false → racy tr = false` is proved. The converse
+(`fast` reports only real races) is not; the tests compare the two on every trace that is short
+enough for `racy`.
 
 ## Definitions
 
@@ -11,7 +16,7 @@ only real races) is not; the tests compare the two on every trace that is short 
   barriers of its block of threads that are older than it. The second component counts the barriers of
   each block of threads over the whole trace.
 - `clash x y`: the accesses are by different threads, they conflict (overlap, at least one writes, not
-  both atomic of one operation on the same bytes), and they are by different blocks of threads or have the same phase.
+  both atomic of one commuting operation on the same bytes), and they are by different blocks of threads or have the same phase.
 - `Access.bytes a`: the pairs `(block, offset)` that `a` touches. `bucket` adds an access to the list of
   each of its bytes.
 - `fast tr`: some write `x` has a byte `b` such that some access in `b`'s list clashes with `x`.
@@ -55,5 +60,7 @@ hypothesis.
 
 ## Dependencies
 
-- `Access.races`, `racy`, `Access.conflict`, `Access.overlaps` (`MojoProof/Sem/Spec.lean`);
+- `Access.races`, `Access.conflict`, `Access.overlaps` (`MojoProof/Sem/Spec.lean`);
+- `GPUProof.racy` at `sig`, by positions (`racy_sig_rev`, `pos_iff_phases`,
+  `MojoProof/Sem/RaceSig.lean`);
 - `Std.HashMap` and its lemma `getD_insert`.

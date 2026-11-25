@@ -4,7 +4,7 @@ target datalayout = "e-p3:32:32-p4:32:32-p5:32:32-p6:32:32-p7:32:32-p101:32:32-i
 target triple = "nvptx64-nvidia-cuda"
 
 ; Function Attrs: norecurse
-define dso_local ptx_kernel void @conformance_kern_TileTensor_T6A6AoA6A6AcB_b9ed84dca575b755(ptr noundef nonnull readonly byval({ ptr, { { {} }, { {} } } }) %0) #0 {
+define dso_local ptx_kernel void @conformance_kern_TileTensor_T6A6AoA6A6AcB_8dc2ab4e34a24cee(ptr noundef nonnull readonly byval({ ptr, { { {} }, { {} } } }) %0) #0 {
   %2 = load { ptr, { { {} }, { {} } } }, ptr %0, align 8
   %3 = extractvalue { ptr, { { {} }, { {} } } } %2, 0
   store i64 0, ptr %3, align 8
@@ -652,6 +652,62 @@ define dso_local ptx_kernel void @conformance_kern_TileTensor_T6A6AoA6A6AcB_b9ed
   store i64 6, ptr %324, align 8
   %325 = getelementptr inbounds i64, ptr %3, i32 322
   store i64 12, ptr %325, align 8
+  %326 = getelementptr inbounds i64, ptr %3, i32 323
+  store i64 0, ptr %326, align 8
+  %327 = getelementptr inbounds i64, ptr %3, i32 324
+  store i64 8, ptr %327, align 8
+  %328 = getelementptr inbounds i64, ptr %3, i32 325
+  store i64 2, ptr %328, align 8
+  %329 = getelementptr inbounds i64, ptr %3, i32 326
+  store i64 10, ptr %329, align 8
+  %330 = getelementptr inbounds i64, ptr %3, i32 327
+  store i64 4, ptr %330, align 8
+  %331 = getelementptr inbounds i64, ptr %3, i32 328
+  store i64 12, ptr %331, align 8
+  %332 = getelementptr inbounds i64, ptr %3, i32 329
+  store i64 6, ptr %332, align 8
+  %333 = getelementptr inbounds i64, ptr %3, i32 330
+  store i64 14, ptr %333, align 8
+  %334 = getelementptr inbounds i64, ptr %3, i32 331
+  store i64 0, ptr %334, align 8
+  %335 = getelementptr inbounds i64, ptr %3, i32 332
+  store i64 1, ptr %335, align 8
+  %336 = getelementptr inbounds i64, ptr %3, i32 333
+  store i64 1, ptr %336, align 8
+  %337 = getelementptr inbounds i64, ptr %3, i32 334
+  store i64 2, ptr %337, align 8
+  %338 = getelementptr inbounds i64, ptr %3, i32 335
+  store i64 0, ptr %338, align 8
+  %339 = getelementptr inbounds i64, ptr %3, i32 336
+  store i64 2, ptr %339, align 8
+  %340 = getelementptr inbounds i64, ptr %3, i32 337
+  store i64 4, ptr %340, align 8
+  %341 = getelementptr inbounds i64, ptr %3, i32 338
+  store i64 3, ptr %341, align 8
+  %342 = getelementptr inbounds i64, ptr %3, i32 339
+  store i64 5, ptr %342, align 8
+  %343 = getelementptr inbounds i64, ptr %3, i32 340
+  store i64 7, ptr %343, align 8
+  %344 = getelementptr inbounds i64, ptr %3, i32 341
+  store i64 4, ptr %344, align 8
+  %345 = getelementptr inbounds i64, ptr %3, i32 342
+  store i64 4, ptr %345, align 8
+  %346 = getelementptr inbounds i64, ptr %3, i32 343
+  store i64 4, ptr %346, align 8
+  %347 = getelementptr inbounds i64, ptr %3, i32 344
+  store i64 1, ptr %347, align 8
+  %348 = getelementptr inbounds i64, ptr %3, i32 345
+  store i64 1, ptr %348, align 8
+  %349 = getelementptr inbounds i64, ptr %3, i32 346
+  store i64 1, ptr %349, align 8
+  %350 = getelementptr inbounds i64, ptr %3, i32 347
+  store i64 11, ptr %350, align 8
+  %351 = getelementptr inbounds i64, ptr %3, i32 348
+  store i64 11, ptr %351, align 8
+  %352 = getelementptr inbounds i64, ptr %3, i32 349
+  store i64 8, ptr %352, align 8
+  %353 = getelementptr inbounds i64, ptr %3, i32 350
+  store i64 1, ptr %353, align 8
   ret void
 }
 

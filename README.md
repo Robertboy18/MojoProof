@@ -38,14 +38,27 @@ Each line says how far it reaches. Every statement, with all its premises, is in
 - **Three kernels end to end**: `vector_addition` from `max/examples`, a vector multiply and a vector
   subtraction, each proved by one `mojo_kernel` command from its spec (`vadd.correct`,
   `vmul.correct`, `vsub.correct`).
-- **A kernel with a loop**, one kernel: Modular's naive matrix product meets the kernel theorem, and
-  for K ≤ 768 each finite output cell is within FloatLib's dot-product error bound of the exact
-  matrix product (`NaiveKernel.correct`, `NaiveKernel.matmul_error`). A loop invariant of a thread
-  in bounds and its three premises are proved by hand; `mojo_kernel` generates the rest.
+- **A kernel with a loop**, one family: Modular's naive matrix product meets the kernel theorem at
+  every row stride, and for every K up to the input strides each finite output cell is within
+  FloatLib's dot-product error bound of the exact matrix product (`NaiveFam.sound`,
+  `NaiveFam.matmul_error`; at the corpus's strides `NaiveKernel.correct`,
+  `NaiveKernel.matmul_error`). A loop invariant of a thread in bounds, its three premises and the
+  family's run are proved by hand; for the corpus's one program `mojo_kernel` generates the run.
 - **Layout laws**, every layout meeting each premise: on a transcription of Mojo's layout library,
-  the offsets of `crd2idx`, `coalesce`, `row_major`, `zipped_divide`, `blocked_product`, `upcast`,
-  `Swizzle` and `composition` with a single-mode layout follow their algebraic laws
+  the offsets of `crd2idx` (mixed coordinates included), `coalesce`, `row_major`,
+  `zipped_divide`, `blocked_product`, `upcast` (strides that divide the factor included),
+  `Swizzle`, `is_affine`, `composition` with a layout of any number of modes whose terms do not
+  carry, the placement of a bit-linear layout as a `BitLayout`, and the two-level layout of a
+  swizzle follow their algebraic laws
   ([docs/proofs/layout-laws.md](docs/proofs/layout-laws.md)).
+- **A tile layer**, every kernel of the `map2` and `mat` clauses: the kernel theorem gives that a
+  complete run computes what a small tile program computes, and the tile matrix product meets
+  TorchLean's matrix product at every format and size (`map2_refines`, `mat_refines`,
+  `dot_meets`; [docs/proofs/tile.md](docs/proofs/tile.md)).
+- **Float bounds of reductions and normalizations**, every IEEE format and reduction tree: sums,
+  butterflies, Welford statistics, softmax (masked too), log-sum-exp, layer norm and RMS norm, each
+  finite result within a stated error of the exact or TorchLean's real value
+  ([docs/proofs/float-reductions.md](docs/proofs/float-reductions.md)).
 
 ## Quick start
 

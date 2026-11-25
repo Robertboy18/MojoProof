@@ -23,7 +23,7 @@ open Lean (Name)
 open MojoProof MojoProof.LLVM
 
 -- Every row of the corpus.
-/-- info: mojo_corpus: 114 rows, 107 imported, 7 refused as REFUSALS.tsv lists -/
+/-- info: mojo_corpus: 116 rows, 109 imported, 7 refused as REFUSALS.tsv lists -/
 #guard_msgs in
 #mojo_corpus
 

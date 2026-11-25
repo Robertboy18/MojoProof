@@ -147,6 +147,7 @@ MojoProofTest/PayloadRun.lean (`six_inst`, `sum_inst`).
 namespace MojoProof.Sem
 
 open LLVM
+open GPUProof
 
 /-- Results of one step in two runs, related under labelling `lab` and payload blocks `pay` for a
 thread whose next statement's result is payload when `p` (`Thread.payRes`): `next` with threads
@@ -1099,6 +1100,49 @@ theorem Grid.fire_skel {lab : Labels} {pay : Nat → Prop} {L : Launch} {prog : 
       rw [hpay]
       exact Option.Rel.mapM (R := Labels.Rel (t₁.payRes lab) Val.Skel)
         (fun _ _ hx => withAttrs_rel hg.mem _ _ _ hx hr) (.some (hsrc _))
+  case mma v =>
+    dsimp only
+    refine Except.Rel.ite (fun _ => ?_) (fun _ => .error _)
+    generalize n - n % volume L.block % 32 = base
+    have e : mmaRes L.acc ((List.range 32).map fun j => g₂.threads[base + j]?) t₂.at v =
+        mmaRes L.acc ((List.range 32).map fun j => g₁.threads[base + j]?) t₁.at v := by
+      rw [← ht.at]
+      unfold mmaRes
+      congr 1
+      rw [List.mapM_map, List.mapM_map]
+      refine mapM_congr fun j _ => ?_
+      have hk := hg.threads (base + j)
+      simp only [Function.comp_apply]
+      generalize g₁.threads[base + j]? = o₁ at hk ⊢
+      generalize g₂.threads[base + j]? = o₂ at hk ⊢
+      cases hk with
+      | none => rfl
+      | @some y₁ y₂ hy =>
+      cases y₁ <;> cases y₂
+      all_goals try exact (hy : False).elim
+      all_goals try rfl
+      rename_i u₁ j₁ b₁ h₁ u₂ j₂ b₂ h₂
+      obtain ⟨hu, e₃, -, hB⟩ := hy
+      cases j₁ <;> subst e₃
+      all_goals try rfl
+      have hb : b₂ = b₁ := by
+        simp only [Labels.Rel] at hB
+        split at hB <;> exact hB.symm
+      subst hb
+      simp only [hu.at]
+    rw [e]
+    refine Except.Rel.bind (R := Eq) (.refl (fun _ => rfl) _) fun r₁ r₂ hr => ?_
+    subst hr
+    cases r₁ with
+    | none => exact .ok .none
+    | some y =>
+    dsimp only
+    refine Except.Rel.bind (resumeAll_skel _ hg.threads fun k t i a fn _ => ?_)
+      fun _ _ h => .ok (.some ⟨h, hg.mem⟩)
+    refine Option.Rel.mapM (R := Eq) (fun x _ hx => ?_) (.some rfl)
+    subst hx
+    rw [withAttrs_shape (hg.mem.sameShape fun _ => True) (Val.namesIn_top x)]
+    exact .refl (Labels.Rel.refl Val.Skel.refl _) _
 
 /-- For every set of payload blocks, an allocation at `next` in related memories gives one fault,
 or related memories and one block number. -/
@@ -1280,15 +1324,13 @@ theorem Grid.Agree.imp {S S' : Grid → Grid → Prop} {a b : Except Fault (Opti
   rcases a with _ | (_ | g₁) <;> rcases b with _ | (_ | g₂)
   all_goals first | exact hS g₁ g₂ rfl h | exact h
 
-/-- Grids related by `Grid.SkelRel` are done together: related statuses have one constructor. -/
-theorem Grid.SkelRel.done {lab : Labels} {pay : Nat → Prop} {g₁ g₂ : Grid}
-    (h : g₁.SkelRel lab pay g₂) : g₁.Done ↔ g₂.Done := by
-  have e (g : Grid) : g.Done ↔ ∀ (n : Nat) (s : Status), g.threads[n]? = some s →
-      (s matches .done) = true := by
-    simp only [Grid.Done, Array.all_eq_true_iff_forall_mem, Array.mem_iff_getElem?]
-    exact ⟨fun H n s hs => H s ⟨n, hs⟩, fun H s ⟨n, hs⟩ => H n s hs⟩
-  rw [e, e]
-  refine forall_congr' fun n => ?_
+/-- Grids related by `Grid.SkelRel` are done together (the core's `Done` at `sig`), for every launch
+and contexts: related statuses have one constructor. -/
+theorem Grid.SkelRel.done {lab : Labels} {pay : Nat → Prop} {L : Launch} {c₁ c₂ : Nat → Ctx}
+    {g₁ g₂ : Grid} (h : g₁.SkelRel lab pay g₂) :
+    GPUProof.Done sig (g₁, L, c₁) ↔ GPUProof.Done sig (g₂, L, c₂) := by
+  rw [Grid.done_iff, Grid.done_iff]
+  refine forall_congr' fun n => imp_congr_right fun _ => ?_
   have ht := h.threads n
   generalize g₁.threads[n]? = s₁ at ht ⊢
   generalize g₂.threads[n]? = s₂ at ht ⊢
@@ -1329,24 +1371,31 @@ theorem Grid.skel_lockstep {lab : Labels} {pay : Nat → Prop} {prog : Program} 
   race := by
     rintro x y ⟨hr, hg⟩
     have hw := Grid.start_reach_framesOk h hL hfn hr
-    unfold Grid.RaceEnabled
-    refine exists_congr fun n => ?_
-    have hp := (Grid.start_ctx h n).1
-    have ht := hg.threads n
-    have hwn := hw n
-    rw [hc n, ← hg.mem.trace]
-    generalize x.threads[n]? = s₁ at ht hwn ⊢
-    generalize y.threads[n]? = s₂ at ht ⊢
-    cases ht with
-    | none => simp
-    | @some a b hs =>
-    cases a <;> cases b
-    all_goals try exact (hs : False).elim
-    all_goals try (simp; done)
-    rename_i t₁ t₂
-    simp only [Option.some.injEq, Status.run.injEq, exists_eq_left']
-    rw [Thread.pending_skel (c := c₁ n) hs hg.mem (by rw [hp]; exact hL)
-      (by rw [hp]; exact hwn _ rfl)]
+    rw [Grid.raceEnabled_iff, Grid.raceEnabled_iff]
+    refine or_congr (exists_congr fun n => ?_) (exists_congr fun n => ?_)
+    · have hp := (Grid.start_ctx h n).1
+      have ht := hg.threads n
+      have hwn := hw n
+      rw [hc n, ← hg.mem.trace]
+      generalize x.threads[n]? = s₁ at ht hwn ⊢
+      generalize y.threads[n]? = s₂ at ht ⊢
+      cases ht with
+      | none => simp
+      | @some a b hs =>
+      cases a <;> cases b
+      all_goals try exact (hs : False).elim
+      all_goals try (simp; done)
+      rename_i t₁ t₂
+      simp only [Option.some.injEq, Status.run.injEq, exists_eq_left']
+      rw [Thread.pending_skel (c := c₁ n) hs hg.mem (by rw [hp]; exact hL)
+        (by rw [hp]; exact hwn _ rfl)]
+    · have ha := Grid.fire_skel (L := L) hc (fun n => (Grid.start_ctx h n).1) hL hg hw
+        (Grid.start_reach_atCalls h hr) n
+      rw [← hg.mem.trace]
+      generalize x.fire L c₁ n = r₁ at ha ⊢
+      generalize y.fire L c₂ n = r₂ at ha ⊢
+      rcases r₁ with _ | _ | _ <;> rcases r₂ with _ | _ | _ <;>
+        first | exact (ha : False).elim | simp
 
 /-- **T3b's run.** For every labelling `lab`, payload blocks `pay`, program `prog` that passes
 `Labels.Ok` under `lab`, kernel `fn` that is the module's function of its name, launch, arguments,
@@ -1364,10 +1413,11 @@ theorem Grid.skel_run {lab : Labels} {pay : Nat → Prop} {prog : Program} {fn :
     {g₁ : Grid} {c₁ : Nat → Ctx} (h : Grid.start prog fn L args m₁ ch o₁ = .ok (g₁, c₁))
     (hm : m₁.SkelEq pay m₂) (hk : m₁.BytesIn m₁.Known) (hL : Labels.Ok prog lab = true)
     (hfn : prog.module.funcs.find? (·.name == fn.name) = some fn) (hM : lab.MemOk pay L c₁ g₁)
-    {k : Nat} {z₁ : Grid} (run : Path (Grid.Step L c₁) k g₁ z₁) (hz : z₁.Done)
-    (hb : ¬ z₁.Bad L c₁) :
+    {k : Nat} {z₁ : Grid} (run : Path (Grid.Step L c₁) k g₁ z₁)
+    (hz : GPUProof.Done sig (z₁, L, c₁)) (hb : ¬ GPUProof.Bad sig (z₁, L, c₁)) :
     ∃ g₂ c₂ z₂, Grid.start prog fn L args m₂ ch o₂ = .ok (g₂, c₂) ∧
-      Path (Grid.Step L c₂) k g₂ z₂ ∧ z₂.Done ∧ ¬ z₂.Bad L c₂ ∧ z₁.SkelRel lab pay z₂ ∧
+      Path (Grid.Step L c₂) k g₂ z₂ ∧ GPUProof.Done sig (z₂, L, c₂) ∧
+      ¬ GPUProof.Bad sig (z₂, L, c₂) ∧ z₁.SkelRel lab pay z₂ ∧
       ∀ {β : Type} {obs : Mem → Option β} {R : β → Prop},
         (∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') →
         ∀ {y : β}, obs z₂.mem = some y → R y → Grid.Sound L c₂ g₂ obs R := by
@@ -1391,7 +1441,7 @@ theorem Grid.Sound.of_blocks {L : Launch} {c : Nat → Ctx} {g : Grid} {β : Typ
     {obs : Mem → Option β} {R : β → Prop}
     (h : Grid.Sound L c g (fun m => some m.blocks) (fun _ => True))
     (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') {z : Grid}
-    (hz : Relation.ReflTransGen (Grid.Step L c) g z) (hd : z.Done) {y : β}
+    (hz : Relation.ReflTransGen (Grid.Step L c) g z) (hd : GPUProof.Done sig (z, L, c)) {y : β}
     (hy : obs z.mem = some y) (hR : R y) : Grid.Sound L c g obs R where
   safe := h.safe
   raceFree := h.raceFree
@@ -1420,8 +1470,9 @@ theorem Grid.skel_six {lab : Labels} {pay : Nat → Prop} {prog : Program} {fn :
     {g₁ : Grid} {c₁ : Nat → Ctx} (h : Grid.start prog fn L args m₁ ch o₁ = .ok (g₁, c₁))
     (hk : m₁.BytesIn m₁.Known) (hL : Labels.Ok prog lab = true)
     (hfn : prog.module.funcs.find? (·.name == fn.name) = some fn) (hM : lab.MemOk pay L c₁ g₁)
-    {z₁ : Grid} (run : Relation.ReflTransGen (Grid.Step L c₁) g₁ z₁) (hz : z₁.Done)
-    (hb : ¬ z₁.Bad L c₁) {m₂ : Mem} (hm : m₁.SkelEq pay m₂) (o₂ : Nat → Nat → Nat) :
+    {z₁ : Grid} (run : Relation.ReflTransGen (Grid.Step L c₁) g₁ z₁)
+    (hz : GPUProof.Done sig (z₁, L, c₁)) (hb : ¬ GPUProof.Bad sig (z₁, L, c₁)) {m₂ : Mem}
+    (hm : m₁.SkelEq pay m₂) (o₂ : Nat → Nat → Nat) :
     ∃ g₂ c₂, Grid.start prog fn L args m₂ ch o₂ = .ok (g₂, c₂) ∧
       Grid.Sound L c₂ g₂ (fun m => some m.blocks) (fun _ => True) := by
   obtain ⟨_, p⟩ := Path.exists_iff.2 run
@@ -1447,8 +1498,8 @@ theorem Kernel.skel_sound {lab : Labels} {pay : Nat → Prop} {prog : Program} {
     (hL : Labels.Ok prog lab = true)
     (hfn : prog.module.funcs.find? (·.name == fn.name) = some fn) {A : (Nat → Nat) → Prop}
     (H : ∀ ch, A ch → ∃ o₁ g₁ c₁ z₁, Grid.start prog fn L args m₁ ch o₁ = .ok (g₁, c₁) ∧
-      lab.MemOk pay L c₁ g₁ ∧ Relation.ReflTransGen (Grid.Step L c₁) g₁ z₁ ∧ z₁.Done ∧
-      ¬ z₁.Bad L c₁)
+      lab.MemOk pay L c₁ g₁ ∧ Relation.ReflTransGen (Grid.Step L c₁) g₁ z₁ ∧
+      GPUProof.Done sig (z₁, L, c₁) ∧ ¬ GPUProof.Bad sig (z₁, L, c₁))
     {m₂ : Mem} (hm : m₁.SkelEq pay m₂) :
     Kernel.Sound prog fn L args m₂ (fun ch _ => A ch) (fun m => some m.blocks)
       (fun _ => True) := by
@@ -1468,7 +1519,8 @@ theorem Kernel.Sound.of_blocks {prog : Program} {fn : Func} {L : Launch} {args :
     (h : Kernel.Sound prog fn L args m adm (fun m => some m.blocks) (fun _ => True))
     (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m')
     (hR : ∀ ch o g c, adm ch o → Grid.start prog fn L args m ch o = .ok (g, c) →
-      ∃ z, Relation.ReflTransGen (Grid.Step L c) g z ∧ z.Done ∧ ∃ y, obs z.mem = some y ∧ R y) :
+      ∃ z, Relation.ReflTransGen (Grid.Step L c) g z ∧ GPUProof.Done sig (z, L, c) ∧
+        ∃ y, obs z.mem = some y ∧ R y) :
     Kernel.Sound prog fn L args m adm obs R := by
   intro ch o ha
   obtain ⟨g, c, e, hs⟩ := h ch o ha

@@ -14,9 +14,11 @@ through shared memory", has the informal argument. Proved here:
 - `tpose n t = n (t % n) + t / n`, the transposed position of `t` in an `n × n` square stored by
   rows, for every `n`: it maps `[0, n * n)` into itself (`tpose_lt`) and is an involution there
   (`tpose_tpose`), so a bijection of `[0, n * n)` onto itself (`tpose_bijOn`).
-- `Launch.tpose_env`, for every valid launch with `ntid.x = 1024` and every thread number `k`:
-  the block has 1024 threads, `tid.x` is `k % 1024`, the lane number is `k % 32`, and the cell
-  `32 · laneid + tid.x / 32` the kernel stores to is `tpose 32 (k % 1024)`.
+- `Launch.warps_env`, for every `W`, every launch with `ntid.x = 32 * W` and every thread number
+  `k`: `tid.x` is `k % (32 * W)`, the lane number is `k % 32`, and the cell
+  `32 · laneid + tid.x / 32` the kernel stores to is `tpose 32 (k % (32 * W))`.
+  `Launch.tpose_env` is its instance at `W = 32` on a valid launch, whose block then has 1024
+  threads (`Launch.Valid.volume_max`).
 - `Tiling.tpose n w β`, for every `n > 0`, cell width `w` and block of threads `β`: the cells of
   `w` bytes at `tpose n (k % (n * n)) * w` of the threads `k` of `β` (those with
   `k / (n * n) = β`), and empty tiles for the other threads, are a tiling.
@@ -33,9 +35,11 @@ through shared memory", has the informal argument. Proved here:
   definition. With `P l = vecMatPairs v A (32 β + l)`, warp `w`'s value is `warpDot` of column
   `32 β + w`'s pairs, so `warpDot_vecMat` bounds it.
 
-That a grid run of gevm_kernel stores and loads these cells, and that its trace meets the premises
-of `racy_tpose`, is not proved. The instances (one thread, one trace, one column) are in
-MojoProofTest/Transpose.lean.
+That a thread's runs of gevm_kernel's segments before and after its barrier store and load these
+cells, and that a trace of such runs meets the access premise of `Grid.sound_cells` at `tpose 32`,
+is in MojoProofTest/SegEvents.lean. That a whole grid run of gevm_kernel does, and that its trace
+meets the premises of `racy_tpose`, is not proved. The instances (one thread, one trace, one
+column) are in MojoProofTest/Transpose.lean.
 -/
 
 namespace MojoProof.Sem
@@ -71,26 +75,45 @@ theorem tpose_bijOn (n : Nat) : Set.BijOn (tpose n) (Set.Iio (n * n)) (Set.Iio (
   Set.InvOn.bijOn ⟨fun _ h => tpose_tpose h, fun _ h => tpose_tpose h⟩ (fun _ h => tpose_lt h)
     fun _ h => tpose_lt h
 
-/-- **gevm_kernel's store cell on every launch of 1024 threads per block.** For every valid launch
-with `ntid.x = 1024` and every thread number `k`, of every block: the block has 1024 threads,
-`tid.x` is `k % 1024`, the lane number is `k % 32`, and `32 · laneid + tid.x / 32` (the kernel's
-`%62`, lane times 32 plus warp) is `tpose 32 (k % 1024)`. -/
+/-- **The store cell of a block of warps, on every launch.** For every `W`, every launch whose
+blocks have `ntid.x = 32 * W` (any `ntid.y` and `ntid.z`) and every thread number `k`, of every
+block: `tid.x` is `k % (32 * W)`, the lane number is `k % 32`, and `32 · laneid + tid.x / 32`
+(gevm_kernel's `%62`, lane times 32 plus warp) is `tpose 32 (k % (32 * W))`: both read `k` modulo
+the block's volume, a multiple of `32 * W`. -/
+theorem Launch.warps_env {L : Launch} {W : Nat} (hx : L.block .x = 32 * W) (k : Nat) :
+    (L.env k).sreg .tid .x = k % (32 * W) ∧ (L.env k).laneid = k % 32 ∧
+      32 * (L.env k).laneid + (L.env k).sreg .tid .x / 32 = tpose 32 (k % (32 * W)) := by
+  have hd : 32 * W ∣ volume L.block :=
+    ⟨L.block .y * L.block .z, by simp only [volume, hx, Nat.mul_assoc]⟩
+  have ht : (L.env k).sreg .tid .x = k % (32 * W) := by
+    simp only [Launch.env, coord, hx]
+    exact Nat.mod_mod_of_dvd k hd
+  have hl : (L.env k).laneid = k % 32 := by
+    simp only [Launch.env]
+    exact Nat.mod_mod_of_dvd k (Nat.dvd_trans (Nat.dvd_mul_right 32 W) hd)
+  refine ⟨ht, hl, ?_⟩
+  rw [ht, hl, tpose, Nat.mod_mod_of_dvd k (Nat.dvd_mul_right 32 W)]
+
+/-- **A valid block of 1024 threads in `x` is the whole block**, for every valid launch with
+`ntid.x = 1024`, PTX's limit of threads per block: `ntid.y = ntid.z = 1`, so the block has 1024
+threads. -/
+theorem Launch.Valid.volume_max {L : Launch} (h : L.Valid) (hx : L.block .x = 1024) :
+    volume L.block = 1024 := by
+  have h1 := h.threads
+  have hp := Nat.mul_pos (h.block_pos .y) (h.block_pos .z)
+  simp only [volume, hx, Nat.mul_assoc] at h1 ⊢
+  generalize L.block .y * L.block .z = a at h1 hp ⊢
+  omega
+
+/-- **gevm_kernel's store cell on every launch of 1024 threads per block**, the instance of
+`Launch.warps_env` at `W = 32` with `Launch.Valid.volume_max`: for every valid launch with
+`ntid.x = 1024` and every thread number `k`, of every block, the block has 1024 threads, `tid.x`
+is `k % 1024`, the lane number is `k % 32`, and `32 · laneid + tid.x / 32` is
+`tpose 32 (k % 1024)`. -/
 theorem Launch.tpose_env {L : Launch} (h : L.Valid) (hx : L.block .x = 1024) (k : Nat) :
     volume L.block = 1024 ∧ (L.env k).sreg .tid .x = k % 1024 ∧ (L.env k).laneid = k % 32 ∧
-      32 * (L.env k).laneid + (L.env k).sreg .tid .x / 32 = tpose 32 (k % 1024) := by
-  have hv : volume L.block = 1024 := by
-    have h1 := h.threads
-    have hp := Nat.mul_pos (h.block_pos .y) (h.block_pos .z)
-    simp only [volume, hx, Nat.mul_assoc] at h1 ⊢
-    generalize L.block .y * L.block .z = a at h1 hp ⊢
-    omega
-  have ht : (L.env k).sreg .tid .x = k % 1024 := by
-    simp only [Launch.env, coord, hv, hx, Nat.mod_mod]
-  have hl : (L.env k).laneid = k % 32 := by
-    simp only [Launch.env, hv]
-    exact Nat.mod_mod_of_dvd k (by decide)
-  refine ⟨hv, ht, hl, ?_⟩
-  rw [ht, hl, tpose, Nat.mod_mod_of_dvd k (by decide : 32 ∣ 1024)]
+      32 * (L.env k).laneid + (L.env k).sreg .tid .x / 32 = tpose 32 (k % 1024) :=
+  ⟨h.volume_max hx, Launch.warps_env (W := 32) hx k⟩
 
 /-- **The tiling of a block of threads' transposed cells.** For every `n > 0`, cell width `w` and
 block of threads `β`: thread `k` of `β` (`k / (n * n) = β`) has the `w` bytes at
@@ -126,25 +149,29 @@ def Tiling.tpose (n w β : Nat) (hn : 0 < n) : Tiling Nat where
     · exact .inl (stride_lt w h)
     · exact .inr (stride_lt w h)
 
-/-- **The transposition through shared memory has no race** (`racy`, every trace). For every
-`n > 0`, cell width `w`, map `ofSh` from a memory block to the block of threads whose shared array
-it is (`none` for other blocks), and discipline `G` (`Owned`) of the other blocks: if every
-access `x` (with its phase, `phases`) to block `β`'s shared array is by a thread `k` of `β`
-(`x.who.cta = β` and `k / (n * n) = β`), in phase 0 is the `w` bytes at
-`tpose n (k % (n * n)) * w`, and in later phases is a read, and every access to another block
-follows `G` with each thread its own tile, the trace has no race. `racy_eq_false_of_phased` at the
-discipline `Tiling.tpose` in phase 0, untiled after the barrier, `G` elsewhere, and `own := id`.
+/-- **The transposition through shared memory has no race** (the core's `racy` at `sig`, every
+launch and trace whose accesses are by threads of the launch in their blocks of threads and that
+is shaped, the premises of `racy_iff`). For every `n > 0`, cell width `w`, map `ofSh` from a
+memory block to the block of threads whose shared array it is (`none` for other blocks), and
+discipline `G` (`Owned`) of the other blocks: if every access `x` (with its phase, `phases`) to
+block `β`'s shared array is by a thread `k` of `β` (`x.who.cta = β` and `k / (n * n) = β`), in
+phase 0 is the `w` bytes at `tpose n (k % (n * n)) * w`, and in later phases is a read, and every
+access to another block follows `G` with each thread its own tile, the trace has no race.
+`racy_eq_false_of_phased` at the discipline `Tiling.tpose` in phase 0, untiled after the barrier,
+`G` elsewhere, and `own := id`.
 At `n = 32` and `w = 4` it is gevm_kernel's discipline on every launch with `ntid.x = 1024`, at
 every block of threads (`Launch.tpose_env`: the block of thread `k` is `k / 1024`). -/
-theorem racy_tpose {tr : List Event} {n w : Nat} (hn : 0 < n) {ofSh : Nat → Option Nat}
-    {G : Nat → Option (Tiling Nat)}
+theorem racy_tpose {L : Launch} {tr : List Event}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse)
+    {n w : Nat} (hn : 0 < n) {ofSh : Nat → Option Nat} {G : Nat → Option (Tiling Nat)}
     (hS : ∀ x ∈ (phases tr).1, ∀ β, ofSh x.1.ptr.block = some β →
       x.1.who.cta = β ∧ x.1.who.thread / (n * n) = β ∧
         (x.2 = 0 → x.1.ptr.off = ((tpose n (x.1.who.thread % (n * n)) * w : Nat) : Int) ∧
           x.1.len = w) ∧ (x.2 ≠ 0 → x.1.write = false))
     (hG : ∀ x ∈ (phases tr).1, ofSh x.1.ptr.block = none → Owned G id x.1) :
-    racy tr = false := by
-  refine racy_eq_false_of_phased (own := fun _ => id)
+    GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false := by
+  refine racy_eq_false_of_phased (own := fun _ => id) hU hs
     (T := fun p b => match ofSh b with
       | some β => if p = 0 then some (Tiling.tpose n w β hn) else none
       | none => G b) (fun x hx => ?_) (fun x hx y hy hc hb => ?_) fun _ _ _ _ _ _ _ ho => ho

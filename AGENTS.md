@@ -17,7 +17,7 @@ These are the commands of CONTRIBUTING.md's "Building and checking". Run them fr
 root; run `lake exe cache get` once first, for the prebuilt Mathlib files.
 
 ```
-lake build                               # the library MojoProof and the kernels MojoProofKernels
+lake build                               # the core GPUProof, MojoProof and MojoProofKernels
 lake build MojoProofTest                 # every test module
 lake test                                # the test runner mojoproof_test
 python3 scripts/corpus.py check          # each corpus file against tests/corpus/MANIFEST.tsv

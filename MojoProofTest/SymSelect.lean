@@ -18,12 +18,12 @@ the naive matmul kernel (`naive`, MojoProofTest/SymPhi.lean), which computes the
   the `select`'s operands swapped, is refused.
 * `head`, `head_regs`: the block from position 9 (the maximum, the special-register reads, the
   index arithmetic, the `getelementptr`, the compares, the `select` and the branch), run by
-  `Block.sound` under the context `ctxS i` (thread `i` of `launch4` of MojoProofTest/SymRun.lean,
-  with `naive`'s program) on `mem0` at the frame `frameS k rows cols` (`%15 = k`, `%13 = rows`,
-  `%14 = cols`, `%10` pointing at block 1): with `k = -3` and the matrix `4 × 1`, every thread
-  `i < 4` ends with `%16 = 0` (the maximum of `-3` and 0) and `%43 = 0` (row `i < 4` and column
-  `0 < 1`: the `select` gives `%42`, false); with `k = 5` and the matrix `2 × 1`, thread 3 ends
-  with `%16 = 5` and `%43 = 1` (row `3 ≥ 2`: the `select` gives `true`).
+  `Block.sound` under the context `ctxS i` (thread `i` of `launch2 1 1 4 1`, as `ctx4 i` of
+  MojoProofTest/SymRun.lean, with `naive`'s program) on `mem0` at the frame `frameS k rows cols`
+  (`%15 = k`, `%13 = rows`, `%14 = cols`, `%10` pointing at block 1): with `k = -3` and the matrix
+  `4 × 1`, every thread `i < 4` ends with `%16 = 0` (the maximum of `-3` and 0) and `%43 = 0` (row
+  `i < 4` and column `0 < 1`: the `select` gives `%42`, false); with `k = 5` and the matrix `2 × 1`,
+  thread 3 ends with `%16 = 5` and `%43 = 1` (row `3 ≥ 2`: the `select` gives `true`).
 * `head_unsigned`: the twin of the semantics, an unsigned maximum node of the same operands gives
   `2 ^ 64 - 3` at `k = -3`, not 0.
 * `head_payload`: the checks of MojoProof/Sym/Payload.lean on `head` with its exit replaced by
@@ -86,7 +86,7 @@ theorem head_covers :
     covers naive.prog naive.fn_0 naive.fn_0.b_0.label 9 head.obls head = true := by
   decide +kernel
 
-/-- The context of thread `i` of `launch4` (`ctx4 i`) with `naive`'s program. -/
+/-- The context of thread `i` of `launch2 1 1 4 1` (`ctx4 i`) with `naive`'s program. -/
 def ctxS (i : Nat) : Ctx := { ctx4 i with prog := naive.prog }
 
 /-- The frame at `%6`'s position 9 with `%15 = k` (64 bits), the matrix's rows `%13 = rows` and
@@ -124,7 +124,7 @@ theorem headAt.run {i : Nat} {k : Int} {rows cols a b : Nat} (h : headAt i k row
     rfl rfl rfl h.1
   exact ⟨fe, me, hS, by rw [hr]; exact h.2.1, by rw [hr]; exact h.2.2⟩
 
-/-- **The maximum and the `select` on a run**: for every thread `i < 4` of `launch4`, from
+/-- **The maximum and the `select` on a run**: for every thread `i < 4` of `launch2 1 1 4 1`, from
 `frameS (-3) 4 1` the thread runs `head` to its terminator with `%16 = 0` (the signed maximum of
 `-3` and 0) and `%43 = 0` (row `i < 4` and column `0 < 1`, so the `select` gives `%42`, false);
 thread 3 from `frameS 5 2 1` ends with `%16 = 5` and `%43 = 1` (row `3 ≥ 2`, so the `select`

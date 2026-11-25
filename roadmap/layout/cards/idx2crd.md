@@ -31,4 +31,4 @@ Other layouts, and hierarchical layouts from `zipped_divide` (line 551), beyond 
 
 ## Open
 
-Orders of the modes that are neither increasing nor decreasing, and hierarchical layouts.
+Orders of the modes that are neither increasing nor decreasing, and hierarchical layouts. At an extent 0, `idx2crd_flat`'s leaf `(x / d) % 0` is `x / d` in the model and 0 in Mojo, whose idx2crd takes the remainder with `umod` (coord.mojo:1966-1967), so there the law describes the model and not Mojo (from the source; the conformance tests have no such case).

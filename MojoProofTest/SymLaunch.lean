@@ -12,10 +12,10 @@ memory closed for the arguments, address choice and oracle, `Grid.start` returns
 `Start.memV` is closed for `Start.argsV` (`memV_closed`; blocks 1, 2, 3 and size 4), so the premise
 `Mem.Closed` holds of a memory, and `vadd` starts on every launch on `memV` (`vadd_starts_memV`).
 
-The twin of the premise on `byval` arguments: with the size in place of the first buffer
-(`argsB`), `memV` is closed for the arguments, but on `two2` the start faults for every address
-choice and oracle, since the size does not encode as the buffer's type (`byval_twin`). With the
-size left out (`argsV.take 3`, three values for four parameters), `vadd` starts on `two2` on
+The twin of the premise on `byval` arguments: with the size in place of the first buffer (`argsB`),
+`memV` is closed for the arguments, but on `launch2 2 1 2 1` the start faults for every address
+choice and oracle, since the size does not encode as the buffer's type (`byval_twin`). With the size
+left out (`argsV.take 3`, three values for four parameters), `vadd` starts on `launch2 2 1 2 1` on
 `memV` (`short_starts`): the start does not compare the number of arguments with the number of
 parameters.
 -/
@@ -65,19 +65,21 @@ theorem vadd_starts_memV (L : Launch) (ch : Nat → Nat) (oracle : Nat → Nat �
 def argsB : List Val := [.bits 32 (BitVec.ofNat 32 4), buf 2, buf 3, .bits 32 (BitVec.ofNat 32 4)]
 
 /-- **The twin of the premise on `byval` arguments.** `memV` is closed for `argsB`, but `vadd` on
-`two2` on `argsB` faults, for every address choice and oracle: the size does not encode as the
-first parameter's `byval` type. -/
+`launch2 2 1 2 1` on `argsB` faults, for every address choice and oracle: the size does not encode
+as the first parameter's `byval` type. -/
 theorem byval_twin (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
-    memV.Closed argsB ∧ Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 two2 argsB memV ch oracle =
-      .error (.unsupported "byval argument not of its type") :=
+    memV.Closed argsB ∧
+      Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 (launch2 2 1 2 1) argsB memV ch oracle =
+        .error (.unsupported "byval argument not of its type") :=
   ⟨{ memV_closed with vals := by decide }, rfl⟩
 
 /-- **The start does not count the arguments.** `vadd` has four parameters, `argsV.take 3` three
-values, and `vadd` on `two2` starts on them on `memV`, for every address choice and oracle. -/
+values, and `vadd` on `launch2 2 1 2 1` starts on them on `memV`, for every address choice and
+oracle. -/
 theorem short_starts (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
     Kernels.vadd.fn_0.params.length = 4 ∧ (argsV.take 3).length = 3 ∧ ∃ g c,
-      Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 two2 (argsV.take 3) memV ch oracle =
-        .ok (g, c) :=
+      Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 (launch2 2 1 2 1) (argsV.take 3) memV ch
+        oracle = .ok (g, c) :=
   ⟨rfl, rfl, _, _, rfl⟩
 
 end MojoProofTest.SymLaunch

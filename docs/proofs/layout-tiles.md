@@ -1,11 +1,20 @@
 # Written tiles give the tensor (`Block.holds_of_tiles`)
 
 Lean: proved, in MojoProof/Sem/Buffer.lean: `stride_lt`, `Apart`, `Apart.comp`, `apart_stride`,
-`apart_rowMajor`, `rowMajor_inb`, `Block.holds_of_tiles`, `Block.read_puts`, `Block.holds_puts`;
-in MojoProof/Sem/Trace.lean: `Tiling.ofApart`, `Tiling.strided`. Instances: MojoProofTest/Tiles.lean
-and the `vector_addition` check in MojoProofTest/Eval.lean.
+`apart_rowMajor`, `rowMajor_inb`, `Block.holds_of_tiles`, `Block.read_cells_none`, `Block.read_cells`,
+`Block.read_puts`, `Block.cells_bytes`, `Block.holds_cells`, `Block.holds_puts`; in
+MojoProof/Sem/Trace.lean: `Tiling.ofApart`, `Tiling.strided`. Instances: MojoProofTest/Tiles.lean and
+the `vector_addition` check in MojoProofTest/Eval.lean.
 
 **Where the Lean differs from the statements below.**
+- The writes are proved once, through a cell map: writers `k : ι` (a list `ks`, in order, with
+  repetitions), each writing its bytes `bs k` at tile `off j` for `cell k = some j` and nothing for
+  `cell k = none`. A tile with one writer in `ks` reads that writer's bytes (`Block.read_cells`), a tile
+  with none its own (`Block.read_cells_none`); the writes change only the bytes (`Block.cells_bytes`);
+  and when the writers cover every tile, the block holds the tensor of a writer's value at each tile
+  (`Block.holds_cells`). `Block.read_puts` and `Block.holds_puts` are the cell map `some`. The threads
+  of a round that each store at their cell (`Turns.cells`, MojoProof/Sym/SegTrace.lean) are the
+  general case.
 - `Block.read_puts` is stated for every index type `ι` with decidable equality and every `n` (bytes
   `bs i` of length `n` at offsets `n` apart), not only for coordinates and `l.stored t`. For a tile not in
   the list it is the frame, so corollary 2 (`Block.puts_frame`, a byte frame) is not stated: nothing uses
@@ -79,19 +88,21 @@ for every `i`" is the corollary `Block.holds_puts` below. That corollary is wher
 `l.decode t bs = some (enc (f i))`. By `hw i`, `bs = blk.read (off i) (l.stored t)`, so the read decodes to
 `enc (f i)`, which is `enc ((Tensor.Rep.ofFn f) i)` by `Tensor.Rep.get_ofFn`.
 
-**`Block.holds_puts`.**
-- Lemma (`read_puts`), by induction on `is`, generalizing `blk`:
-  `(is.foldl ...).read (off i) (l.stored t)` is `bs i` if `i ∈ is`, and `blk.read (off i) (l.stored t)`
-  otherwise. For `j :: is`, the fold is `is.foldl ... (blk.put (off j) (bs j))`, and the induction
-  hypothesis is used at the block `blk.put (off j) (bs j)`.
-  - If `i ∈ is`, it gives `bs i`.
-  - If `i ∉ is`, it gives `(blk.put (off j) (bs j)).read (off i) (l.stored t)`. Then:
-    - if `i = j`, this is `bs i` by `Block.read_put_self`, because `(bs j).length = l.stored t` (from
-      `hbs` and `hc.round`, since `encode` is a function);
-    - if `i ≠ j` (so `i ∉ j :: is`), it is `blk.read (off i) (l.stored t)` by `Block.read_put_apart`, by
-      `hap i j`.
-- `Block.put` keeps `size`, so `hin` holds for the folded block. Every `i` is in `is`, so the lemma gives
-  `hw` with `hbs`, and `Block.holds_of_tiles` applies.
+**`Block.holds_cells`, and so `Block.holds_puts`.**
+- Lemma (`read_cells_none`), by induction on `ks`, generalizing `blk`: if no `k` of `ks` has
+  `cell k = some i`, the fold keeps `blk.read (off i) n`. For `k :: ks`, the induction hypothesis at the
+  block after `k`'s write leaves that write; it is nothing for `cell k = none`, and for `cell k = some j`
+  it is at `off j` with `j ≠ i`, apart from `off i` by `hap i j` (`Block.read_put_apart`).
+- Lemma (`read_cells`), by induction on `ks`: if `cell k = some i`, `k ∈ ks`, and every `k'` of `ks`
+  with `cell k' = some i` is `k`, the fold reads `bs k` at `off i`. For `k' :: ks`: if `k ∈ ks`, the
+  induction hypothesis. Otherwise `k' = k`; no element of `ks` maps to `i`, so `read_cells_none` leaves
+  `k`'s write, which reads `bs k` by `Block.read_put_self`, as `(bs k).length = n`.
+- `Block.read_puts` is the two lemmas at `cell := some`, split on `i ∈ is`.
+- `Block.holds_cells`: choose a writer `wr i ∈ ks` with `cell (wr i) = some i` for every tile. The
+  writes keep `size` (`cells_bytes`), so `hin` holds for the folded block; `read_cells` at `wr i` gives
+  `hw` with `hbs`, the lengths `l.stored t` from `hbs` and `hc.round`; and `Block.holds_of_tiles`
+  applies at `f i := val (wr i)`.
+- `Block.holds_puts` is `Block.holds_cells` at `cell := some` and `val := f`: there `wr i = i`.
 
 **`Block.puts_frame`.** By induction on `is`: `Block.put` at `off j` changes only the bytes from `off j` to
 `off j + (bs j).length`, and `(bs j).length = l.stored t`.

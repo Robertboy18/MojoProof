@@ -13,60 +13,76 @@ The data are a state type `γ`, a projection `π : γ → Grid`, relations `rc` 
 - `hc : Confluent rc e Bad` (`one-run.md`);
 - `proj`: `rc x x'` gives `Grid.Step L c (π x) (π x')`;
 - `lift`: `Grid.Step L c (π x) g'` gives `x'` with `rc x x'` and `π x' = g'`;
-- `hF`, `hT`, `hK`: if `π x` faults, its trace is `racy`, or its trace is not `kept`, then `Bad x`;
-- `hD`: `e x x'` and `(π x).Done` give `(π x').Done`;
+- `hF`, `hT`, `hK`: if `π x` faults, its trace is `racy`, or the core's `kept` at `sig` of its
+  trace's core events (`GPUProof.kept sig (((π x).mem.trace.map (Event.toCore L)).reverse)`) is
+  false, then `Bad x`;
+- `hfin`: if `GPUProof.Done sig (π x, L, c)` (every thread of the launch has returned), `π x` has no
+  `Grid.Step`;
+- `hD`: `e x x'` and `GPUProof.Done sig (π x, L, c)` give `GPUProof.Done sig (π x', L, c)`;
 - `hO`: `e x x'` gives `obs (π x).mem = obs (π x').mem`;
-- `run : Path rc n x₀ z`, `hz : (π z).Done`, `hb : ¬ Bad z`, `hy : obs (π z).mem = some y`, `hR : R y`.
+- `run : Path rc n x₀ z`, `hz : GPUProof.Done sig (π z, L, c)`, `hb : ¬ Bad z`, `hy : obs (π z).mem = some y`, `hR : R y`.
 
 Conclusion: `Grid.Sound L c (π x₀) obs R`, all seven fields (`safe`, `raceFree`, `kept`, `progress`,
 `terminates`, `determinate`, `post`).
 
 ## Proof
 
-**`z` is normal for `rc`.** A step `rc z x'` projects (`proj`) to a step from the done grid `π z`, which
-`Grid.Done.final` excludes.
+The one-run argument is `GPUProof.Clean.of_lift`'s (`GPUProof/Sound.lean`, docs/proofs/theorem0.md),
+for every machine; this theorem is its case at `sig` along `x ↦ (π x, L, c)`, with the observation
+`fun s => obs s.1.mem` of the grid's whole memory. A step at `sig` from `(g, L, c)` is a grid step
+with `(L, c)` kept (`sig_step_iff`), so `proj`, `lift` and `hfin` give the core's projection, lift
+and `hfin`; `hF`, `hT`, `hK`, `hD` and `hO` are already stated at `sig`.
 
-**Lifting reachability (`up`).** Every grid that `Grid.Step` reaches from `π x₀` is `π x` for some `x` that
-`rc` reaches from `x₀`. The proof is by induction on reachability, using `lift` at each step.
+**`Clean.of_lift`'s argument.**
 
-**One run.** `Confluent.one_run` with `run`, the normality of `z` and `hb` gives four facts:
+- `z` is normal for `rc`: a step `rc z x'` projects to a step from the done `π z`, which `hfin`
+  excludes.
+- Lifting reachability (`ReflTransGen.of_lift`): every state that the core's steps reach from
+  `π x₀` is `π x` for some `x` that `rc` reaches from `x₀`, by induction, using `lift` at each step.
+- `Confluent.one_run` with `run`, the normality of `z` and `hb` gives four facts: `rc` is well
+  founded from `x₀`; no `x` reachable from `x₀` is bad; every normal `x` reachable from `x₀` is
+  `e`-equivalent to `z`; every reachable `x` reaches some `z'` equivalent to `z`.
+- `Clean`'s fields: a fault, a racy trace or a broken promise at a reachable `π x` would make `x`
+  bad (`hF`, `hT`, `hK`); if `π x` is not done, the run from `x` to a `z'` equivalent to `z` is not
+  empty (else `hD` with `hz` makes `π x` done), and its first step projects; termination is `Acc`
+  carried along `π` (`Acc.of_lift`).
+- A reachable done state is `π x` with `x` normal, so `e z x`, and `hO` gives it the observation
+  of `π z`.
 
-- `rc` is well founded from `x₀`;
-- no `x` reachable from `x₀` is bad;
-- every normal `x` reachable from `x₀` is `e`-equivalent to `z`;
-- every reachable `x` reaches some `z'` equivalent to `z`.
-
-**Final grids (`final`).** A done grid `g` reachable from `π x₀` is `π x` with `x` reachable (`up`). `x` is
-normal, because a step would project to a step from a done grid. So `e z x`, and `hO` gives
-`obs g.mem = obs (π z).mem = some y`.
-
-**The seven fields.**
-
-- `safe`, `raceFree`, `kept`: a reachable grid is `π x` with `x` reachable. A fault, a racy trace or a
-  broken promise would make `x` bad (`hF`, `hT`, `hK`), which `one_run` excludes.
-- `progress`: if `π x` is not done, `x` reaches some `z'` equivalent to `z`. If that run is empty, `e z x`,
-  and `hD` with `hz` makes `π x` done, which is a contradiction. Otherwise its first step `rc x x₁` projects
-  to a grid step.
-- `terminates`: `Acc` of the converse of `rc` at `x₀` gives `Acc` of the converse of `Grid.Step` at `π x₀`,
-  by induction on `Acc`: every grid step from `π x` lifts to an `rc` step from `x`.
-- `determinate`: two reachable done grids both observe `y` (`final`).
-- `post`: `final` and `hR`.
+**Back to the grid (`Grid.Sound.of_clean`, `MojoProof/Sem/Spec.lean`).** Every grid that `π x₀`
+reaches gives a state that `(π x₀, L, c)` reaches (`sig_reach_iff`), so `safe`, `raceFree` and
+`kept` are `Clean`'s; a grid that is not done has a step because its state has one
+(`sig_step_iff`); `terminates` is `Clean`'s, along `g ↦ (g, L, c)`. `determinate` and `post`: a
+reachable done grid observes `obs (π z).mem = some y`, and `R y`.
 
 ## Dependencies
 
-- `Confluent`, `Path`, `Confluent.one_run` (`MojoProof/Sem/OneRun.lean`);
-- `Grid.Step`, `Grid.Faults`, `Grid.Done`, `Grid.Done.final`, `Grid.Sound`, `racy`, `kept`
-  (`MojoProof/Sem/Grid.lean`, `MojoProof/Sem/Spec.lean`);
+- `Confluent`, `Path`, `Confluent.one_run` (`GPUProof/OneRun.lean`); `GPUProof.Clean.of_lift`
+  (`GPUProof/Sound.lean`);
+- `Grid.Step`, `Grid.faults_iff`, `Grid.Sound`, `racy` (`MojoProof/Sem/Grid.lean`,
+  `MojoProof/Sem/Spec.lean`); `sig_step_iff`, `sig_reach_iff` and `Grid.Sound.of_clean`
+  (`MojoProof/Sem/Spec.lean`); `GPUProof.Faults` and `GPUProof.Done` (`GPUProof/Run.lean`) and
+  `GPUProof.kept` (`GPUProof/Race.lean`) at `sig`;
 - `Relation.ReflTransGen` (Mathlib).
 
 ## Instances in the tree
 
-- `Grid.sound_one`: one thread whose step returns. `γ` is the subtype of grids reachable from the start
-  grid, `rc` is `Grid.Step` on it, `e` is `=`, and `Bad` is a fault, a racy trace or a broken
-  `!invariant.load` promise: the case where `γ` is the reachable grids.
-- `Grid.sound_returning`: `N` threads that each return in one step without changing memory, for every `N`.
+- `Grid.start_sound` (`MojoProof/Sem/Determinism.lean`): a launch's start grid. `γ` is the subtype of
+  grids reachable from the start grid, `rc` is `Grid.Step` on it, `e` is `Grid.Same`, and `Bad` is a
+  fault, a racy trace or a broken `!invariant.load` promise: the case where `γ` is the reachable grids.
+- `Grid.sound_commuting`: `N` threads that each return in one step with a change of memory `f n`, for every
+  `N`, launch of at least `N` threads, contexts, threads and memory `M`, when, at every memory with a property
+  `P` that `M` has and every `f n` keeps, the step of thread `n < N` returns with memory `f n m`, the changes
+  of two distinct threads commute and each keeps the trace; the observation is that of
+  `(List.range N).foldr f M`, and `M`'s trace has no race and keeps `!invariant.load`. `γ` is the set of
+  returned threads, the memory of a set is that of its threads' changes, `rc` returns one thread, `e` is `=`,
+  and `Bad` is empty. Its instance with changes is `MojoProofTest.Close.sound_dead`: 2 and 3 threads, each
+  ending its own `alloca` block (`Mem.setLive`), on one memory of 3 live blocks.
+- `Grid.sound_returning`: its case of `N` threads that each return in one step without changing memory
+  (`f n m = m`, `P` is `· = M`), for every `N`.
   `γ` is the set of returned threads, `rc` returns one thread, `e` is `=`, and `Bad` is empty. The diamond
-  is proved for every pair of threads.
+  is proved for every pair of threads. Its instance at one thread is `MojoProofTest.Close.sound_one_ret`:
+  one thread of `ret void` on the empty memory at `Launch.one`, its premises by `decide`.
 - `Kernel.sound_ret_launch`: the kernel `ret void` on every launch and every closed memory (`Mem.Closed`,
   which the start's check needs), through `Grid.sound_returning`.
 

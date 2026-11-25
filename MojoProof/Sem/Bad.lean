@@ -1,28 +1,51 @@
 import MojoProof.Sem.Confluence
 
 /-!
-# T2's bad grids: `Grid.RaceEnabled`, `Grid.Bad`, `bad_eqv` and `bad_step`
+# T2's bad grids: `bad_eqv` and `bad_step` at the core's `Bad` at `sig`
 
-The bad grids of T2 (docs/proofs/schedule.md, "Definitions the proof adds"): a grid is bad
-(`Grid.Bad`) if it faults, its trace has a data race or breaks the promise of `!invariant.load`,
-or a race is enabled (`Grid.RaceEnabled`: the trace with some running thread's pending accesses
-in front is racy). Proved here:
+The bad grids of T2 (docs/proofs/schedule.md, "Definitions the proof adds") are the core's
+`GPUProof.Bad` at `sig`: a grid is bad if it faults, its trace has a data race or breaks the
+promise of `!invariant.load` (the core's `racy` and `kept` at `sig`), or a race is enabled (the
+core's `GPUProof.RaceEnabled` at `sig`). Proved here:
 
+- `Grid.raceEnabled_iff`: the core's enabled race at `sig`, at the grid: the trace with some
+  running thread's pending accesses in front is racy, or some collective call completes and the
+  trace is racy.
 - `Stmt.pending_retrace`, `Thread.pending_retrace`: for every context, scope or memory and trace,
   the pending accesses read no trace.
+- The number of threads: a step keeps it (`Grid.Step.size`, `Grid.reach_size`), and the start's
+  grid and every grid reachable from it have `volume L.grid * volume L.block` threads
+  (`Grid.start_size`, `Grid.start_reach_size`); the accesses of a reachable grid's trace with a
+  thread's pending accesses or a fire's in front are by the launch's threads in their blocks of
+  threads (`Grid.start_reach_pending`).
+- The shape (`Trace.Shaped`, MojoProof/Sem/RaceSig.lean): a statement's, a thread's and a fire's
+  pending events are shaped (`Stmt.pending_shaped`, `Grid.pending_shaped`, `Grid.fired_shaped`),
+  the start's trace is empty (`Grid.start_trace`), and every grid reachable from the start's has
+  a shaped trace, with any thread's pending events or a fire's in front
+  (`Grid.start_reach_shaped`).
+- `Grid.Fits`: the premises of `racy_iff` at a grid, for its trace with any thread's pending
+  accesses in front; `Grid.Fits.racy_iff`, `Grid.Fits.racy_iff_trace`: `racy_iff` there;
+  `Grid.start_reach_fits`: every grid reachable from the start's has them.
 - `Grid.Same.raceEnabled` and so `Grid.Same.bad` (`bad_eqv` of `Confluent`): for every launch,
-  contexts and grids, a grid the same as a bad grid (`Grid.Same`) is bad.
+  contexts and pair of grids with the premises of `racy_iff` (`Grid.Fits`), a grid the same as a
+  bad grid (`Grid.Same`) is bad.
 - `Grid.Step.trace`: for every launch and contexts, a step puts events in front of the trace;
   `kept_append`: a trace that breaks the promise breaks it with events in front.
 - `Grid.Step.raceEnabled`: for every launch, contexts and closed grid in which no collective call
-  that completes logs a barrier of a running thread's block of threads, a step from a grid with
-  an enabled race gives a racy trace (the step of the racing thread, which logs its pending
-  accesses) or a grid with the race still enabled (by L1c, `Grid.pending_reach`, and L13,
-  `racy_insert`).
-- `Grid.Step.bad_trace`: `bad_step` for the three parts of `Grid.Bad` other than faults, under the
-  premises of `Grid.Step.raceEnabled`; `Grid.start_reach_bad_trace`: the same for a step from
-  every grid reachable from the start's, for every program, kernel, launch, arguments, address
-  choice and oracle, on a caller's memory whose pointer bytes name known numbers
+  that completes logs a barrier of a running thread's block of threads (so when the blocks of
+  threads are not empty and the contexts put each running thread `n` in block of threads
+  `n / volume L.block`, `Grid.fired_run`), both grids having the premises of `racy_iff`
+  (`Grid.Fits`), a step from a grid with an enabled race gives a racy trace (the step of the racing
+  thread, which logs its pending accesses, or any step after a collective call's race) or a grid
+  with the race still enabled (by L1c, `Grid.pending_reach`, and L13, `racy_insert`).
+  `Grid.Step.raceEnabled_of_ctx`: the same for every launch, closed grid and contexts that put
+  each running thread `n` in block of threads `n / volume L.block`, as the start's do, with no
+  premise on barriers or blocks of threads: under `Grid.Fits` a running thread's racing accesses
+  are by threads below `volume L.grid * volume L.block`, so the blocks of threads are not empty.
+- `Grid.Step.bad_trace`: `bad_step` for the three parts of `GPUProof.Bad` other than faults,
+  under the premises of `Grid.Step.raceEnabled`; `Grid.start_reach_bad_trace`: the same for a
+  step from every grid reachable from the start's, for every program, kernel, launch, arguments,
+  address choice and oracle, on a caller's memory whose pointer bytes name known numbers
   (`Grid.start_reach_closed`, `Grid.start_reach_fired`).
 
 - `races_mem`, `racy_conflict`: an access races with events in front of a trace that hold, with no
@@ -68,19 +91,54 @@ without it, an update by a pointer faults before another thread's update and suc
 
 namespace MojoProof.Sem
 
-open MojoProof.LLVM
+open MojoProof.LLVM Relation
 
-/-- Some running thread `n` of grid `g` has pending accesses that make the trace racy when put in
-front of it (T2's `RaceEnabled`): its step would log them there. This includes every grid with a
-running thread whose trace is already racy. -/
-def Grid.RaceEnabled (c : Nat → Ctx) (g : Grid) : Prop :=
-  ∃ (n : Nat) (t : Thread), g.threads[n]? = some (.run t) ∧
-    racy (t.pending (c n) g.mem ++ g.mem.trace) = true
-
-/-- Grid `g` is bad: it faults, its trace has a data race or breaks the promise of
-`!invariant.load`, or a race is enabled (T2's `Bad`). -/
-def Grid.Bad (L : Launch) (c : Nat → Ctx) (g : Grid) : Prop :=
-  g.Faults L c ∨ racy g.mem.trace = true ∨ kept g.mem.trace = false ∨ g.RaceEnabled c
+/-- **The core's enabled race at `sig`, at the grid** (`GPUProof.RaceEnabled sig`), for every
+launch, contexts and grid: some running thread `n` has pending accesses that make the trace racy
+(the core's `racy` at `sig` of the core events at launch `L`, oldest first) when put in front of
+it, as its step would log them there; or some collective call completes and the trace is racy (the
+barrier it logs in front keeps `racy`, `racy_barriers`). -/
+theorem Grid.raceEnabled_iff {L : Launch} {c : Nat → Ctx} {g : Grid} :
+    GPUProof.RaceEnabled sig (g, L, c) ↔
+      (∃ (n : Nat) (t : Thread), g.threads[n]? = some (.run t) ∧
+        GPUProof.racy sig ((t.pending (c n) g.mem ++ g.mem.trace).map (Event.toCore L)).reverse =
+          true) ∨
+      ∃ (n : Nat) (g' : Grid), g.fire L c n = .ok (some g') ∧
+        GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse = true := by
+  have hr : ∀ E : List Event,
+      GPUProof.racy sig (sig.trace (g, L, c) ++ (E.map (Event.toCore L)).reverse) =
+        GPUProof.racy sig ((E ++ g.mem.trace).map (Event.toCore L)).reverse := fun E => by
+    show GPUProof.racy sig ((g.mem.trace.map (Event.toCore L)).reverse ++ _) = _
+    rw [← List.reverse_append, ← List.map_append]
+  have hf : ∀ n, GPUProof.racy sig ((g.fired L n ++ g.mem.trace).map (Event.toCore L)).reverse =
+      GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse := fun n =>
+    racy_barriers fun _ ha => nomatch Grid.mem_fired ha
+  unfold GPUProof.RaceEnabled
+  refine or_congr ⟨?_, ?_⟩ ⟨?_, ?_⟩
+  · rintro ⟨n | j, hn, hra⟩
+    · obtain ⟨u, hu⟩ := hn
+      have hu' : sigStatus g n = .run u := hu
+      rcases ht : g.threads[n]? with _ | (t | _ | _) <;> simp [sigStatus, ht] at hu'
+      subst hu'
+      have hp : g.pending c n = t.pending (c n) g.mem := by simp only [Grid.pending, ht]
+      exact ⟨n, t, ht, by rw [← hp]; exact (hr (g.pending c n)).symm.trans hra⟩
+    · exact j.elim
+  · rintro ⟨n, t, ht, hra⟩
+    have hp : g.pending c n = t.pending (c n) g.mem := by simp only [Grid.pending, ht]
+    exact ⟨.thread n, ⟨t, show sigStatus g n = _ by simp only [sigStatus, ht]⟩,
+      (hr (g.pending c n)).trans (by rw [hp]; exact hra)⟩
+  · rintro ⟨n, s', hfire, hra⟩
+    have hfire' : (g.fire L c n).map (Option.map (·, L, c)) = .ok (some s') := hfire
+    cases hg : g.fire L c n with
+    | error => simp [hg, Except.map] at hfire'
+    | ok o =>
+      rcases o with _ | g' <;> simp [hg, Except.map] at hfire'
+      exact ⟨n, g', hg, (hf n).symm.trans ((hr (g.fired L n)).symm.trans hra)⟩
+  · rintro ⟨n, g', hg, hra⟩
+    refine ⟨n, (g', L, c), ?_, (hr (g.fired L n)).trans ((hf n).trans hra)⟩
+    show (g.fire L c n).map (Option.map (·, L, c)) = .ok (some (g', L, c))
+    rw [hg]
+    rfl
 
 /-- The pending accesses of a statement read no trace. -/
 theorem Stmt.pending_retrace (c : Ctx) (s : Scope) (tr : List Event) (st : Stmt) :
@@ -94,26 +152,255 @@ theorem Thread.pending_retrace (c : Ctx) (t : Thread) (m : Mem) (tr : List Event
     fun _ _ => rfl
   simp only [Thread.pending, hs, Stmt.pending_retrace]
 
-/-- For every contexts, a grid the same as one with an enabled race has the race enabled: the
-same thread runs with the same pending accesses (`Thread.pending_retrace`) in front of a trace
-that is the same (L11), so racy too (L12). -/
-theorem Grid.Same.raceEnabled {c : Nat → Ctx} {g₁ g₂ : Grid} (h : g₁.Same g₂)
-    (he : g₁.RaceEnabled c) : g₂.RaceEnabled c := by
-  obtain ⟨n, t, ht, hr⟩ := he
-  refine ⟨n, t, h.1 ▸ ht, ?_⟩
-  have e : t.pending (c n) g₂.mem = t.pending (c n) g₁.mem := by
-    rw [h.eq_retrace]
-    exact Thread.pending_retrace _ _ _ _
-  rw [e, ← (h.2.2.2.append _).racy]
-  exact hr
+/-! ## The premises of `racy_iff` at a grid -/
+
+/-- **The events a statement would log are shaped**, oldest first, for every context, scope and
+statement (`Stmt.pending`): none, one access that is not an `atomicrmw`'s with its
+`!invariant.load` only on a load, or an `atomicrmw`'s read and write. -/
+theorem Stmt.pending_shaped (c : Ctx) (s : Scope) (st : Stmt) :
+    Trace.Shaped (st.pending c s).reverse := by
+  unfold LLVM.Stmt.pending
+  dsimp only
+  split
+  all_goals (repeat' split)
+  all_goals first
+    | exact Trace.shaped_nil
+    | exact Trace.shaped_single fun a ha => by cases ha; simp
+    | exact Trace.shaped_rmw rfl rfl
+
+/-- The events thread `n` of grid `g` would log are shaped, oldest first, for every contexts,
+grid and thread number (`Grid.pending`). -/
+theorem Grid.pending_shaped (c : Nat → Ctx) (g : Grid) (n : Nat) :
+    Trace.Shaped (g.pending c n).reverse := by
+  unfold Grid.pending Thread.pending
+  repeat' split
+  all_goals first | exact Stmt.pending_shaped .. | exact Trace.shaped_nil
+
+/-- The events a fire of thread `n` of grid `g` would log are shaped, for every launch, grid and
+thread number (`Grid.fired`: none, or one barrier). -/
+theorem Grid.fired_shaped (L : Launch) (g : Grid) (n : Nat) :
+    Trace.Shaped (g.fired L n).reverse := by
+  unfold Grid.fired
+  split
+  · exact Trace.shaped_single fun _ h => nomatch h
+  · exact Trace.shaped_nil
+
+/-- **A step keeps the number of threads**, for every launch, contexts and grids: a thread's step
+sets its own status (`Grid.advance_set`), and a collective call that completes resumes its
+members (`Grid.fire_frame`, `resumeAll_size`). -/
+theorem Grid.Step.size {L : Launch} {c : Nat → Ctx} {g g' : Grid} (h : Grid.Step L c g g') :
+    g'.threads.size = g.threads.size := by
+  obtain ⟨n, h | h⟩ := h
+  · obtain ⟨t, s, m, -, rfl, -, -⟩ := Grid.advance_set h
+    exact Array.size_set! ..
+  · obtain ⟨P, v, -, -, hr, -⟩ := Grid.fire_frame h
+    exact resumeAll_size hr
+
+/-- **Every grid reachable from `g` has `g`'s number of threads**, for every launch, contexts and
+grids. From the start's grid, that is `volume L.grid * volume L.block` (`Grid.start_size`,
+`Grid.start_reach_size`). -/
+theorem Grid.reach_size {L : Launch} {c : Nat → Ctx} {g g' : Grid}
+    (hr : ReflTransGen (Grid.Step L c) g g') : g'.threads.size = g.threads.size := by
+  induction hr with
+  | refl => rfl
+  | tail _ hs ih => exact hs.size.trans ih
+
+/-- **The start's number of threads**: for every program, kernel, launch, arguments, memory,
+address choice and oracle, the grid `Grid.start` gives has `volume L.grid * volume L.block`
+threads. -/
+theorem Grid.start_size {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
+    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) :
+    g.threads.size = volume L.grid * volume L.block := by
+  unfold Grid.start at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  rename_i v2 h2
+  cases h
+  have := foldlM_idx_inv (P := fun i (r : Mem × Array Status) => r.2.size = i) _
+    (fun i k r r' _ hs hr => by
+      simp only [pure, Except.pure] at hs
+      split at hs
+      · cases hs
+      · split at hs
+        · cases hs
+        · cases hs
+          simp [hr]) h2 rfl
+  simpa using this
+
+/-- **Every grid reachable from the start's has the launch's number of threads**, for every
+program, kernel, launch, arguments, memory, address choice and oracle: `Grid.reach_size` and
+`Grid.start_size`. -/
+theorem Grid.start_reach_size {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
+    (hr : ReflTransGen (Grid.Step L c) g₀ g) : g.threads.size = volume L.grid * volume L.block :=
+  (Grid.reach_size hr).trans (Grid.start_size h)
+
+/-- The trace of the grid that `Grid.start` gives is empty, for every program, kernel, launch,
+arguments, memory and choices. -/
+theorem Grid.start_trace {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
+    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) : g.mem.trace = [] := by
+  unfold Grid.start at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  cases h
+  rfl
+
+/-- **The traces of reachable grids are shaped**, oldest first, for every program, kernel,
+launch, arguments, memory, address choice and oracle: at every grid reachable from the start's,
+the trace, the trace with a thread's pending events, and the trace with a fire's. -/
+theorem Grid.start_reach_shaped {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
+    (hr : ReflTransGen (Grid.Step L c) g₀ g) (n : Nat) :
+    Trace.Shaped g.mem.trace.reverse ∧ Trace.Shaped (g.pending c n ++ g.mem.trace).reverse ∧
+      Trace.Shaped (g.fired L n ++ g.mem.trace).reverse := by
+  have ht : Trace.Shaped g.mem.trace.reverse := by
+    induction hr with
+    | refl => rw [Grid.start_trace h]; exact Trace.shaped_nil
+    | tail _ hs ih =>
+      obtain ⟨k, hs | hs⟩ := hs
+      · obtain ⟨t, s, m', -, rfl, htr, -⟩ := Grid.advance_set hs
+        simp only [htr, List.reverse_append]
+        exact ih.append (Grid.pending_shaped c _ k)
+      · obtain ⟨_, _, _, _, _, hm, _⟩ := Grid.fire_frame hs
+        simp only [hm, List.reverse_append]
+        exact ih.append (Grid.fired_shaped L _ k)
+  refine ⟨ht, ?_, ?_⟩ <;> rw [List.reverse_append]
+  · exact ht.append (Grid.pending_shaped c g n)
+  · exact ht.append (Grid.fired_shaped L g n)
+
+/-- **The accesses a step would log are by their thread, in its block of threads** (W4 for the
+pending accesses, for the core's blocks of threads), for every program, kernel, launch,
+arguments, memory, address choice and oracle: in every grid `g` reachable from the start's, for
+every thread number `n`, the trace with `n`'s pending accesses in front, and the trace with the
+barrier that the completion of `n`'s collective call would log in front, have every access by a
+thread below the number of threads, in the block of threads of its number (`Grid.ByThreads`). -/
+theorem Grid.start_reach_pending {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
+    (hr : ReflTransGen (Grid.Step L c) g₀ g) (n : Nat) :
+    (g.retrace (g.pending c n ++ g.mem.trace)).ByThreads L ∧
+      (g.retrace (g.fired L n ++ g.mem.trace)).ByThreads L := by
+  have hg := Grid.start_reach_byThreads h hr
+  refine ⟨fun a ha => ?_, fun a ha => ?_⟩
+  · rcases List.mem_append.1 ha with ha | ha
+    · have hn : n < g.threads.size := by
+        unfold Grid.pending at ha
+        split at ha
+        · rename_i e
+          exact (Array.getElem?_eq_some_iff.1 e).1
+        · cases ha
+      rw [Grid.pending_who ha, (Grid.start_ctx h n).2.1]
+      exact ⟨hn, rfl⟩
+    · exact hg a ha
+  · rcases List.mem_append.1 ha with ha | ha
+    · cases Grid.mem_fired ha
+    · exact hg a ha
+
+/-- The premises of `racy_iff` at grid `g`, for launch `L` and contexts `c`: for every thread
+number `n`, the trace with `n`'s pending accesses in front has every access by a thread of `L` in
+its block of threads, and the trace is shaped (`Trace.Shaped`, oldest first; so is the trace with
+pending accesses in front, `Grid.pending_shaped`). Every grid reachable from a start has them
+(`Grid.start_reach_fits`). -/
+def Grid.Fits (L : Launch) (c : Nat → Ctx) (g : Grid) : Prop :=
+  (∀ n a, Event.access a ∈ g.pending c n ++ g.mem.trace →
+      a.who.thread < volume L.grid * volume L.block ∧ a.who.cta = a.who.thread / volume L.block) ∧
+    Trace.Shaped g.mem.trace.reverse
+
+/-- **`racy_iff` at a running thread's pending accesses**, for every launch, contexts and grid with
+the premises of `racy_iff` (`Grid.Fits`): the trace with running thread `n`'s pending accesses in
+front is racy exactly when two accesses of its `phases` clash. -/
+theorem Grid.Fits.racy_iff {L : Launch} {c : Nat → Ctx} {g : Grid} (h : g.Fits L c) {n : Nat}
+    {t : Thread} (ht : g.threads[n]? = some (.run t)) :
+    GPUProof.racy sig ((t.pending (c n) g.mem ++ g.mem.trace).map (Event.toCore L)).reverse =
+        true ↔
+      ∃ x ∈ (phases (t.pending (c n) g.mem ++ g.mem.trace)).1,
+        ∃ y ∈ (phases (t.pending (c n) g.mem ++ g.mem.trace)).1, clash x y = true := by
+  have e : g.pending c n = t.pending (c n) g.mem := by simp only [Grid.pending, ht]
+  refine MojoProof.Sem.racy_iff (fun a ha => h.1 n a (by rw [e]; exact ha)) ?_
+  rw [List.reverse_append, ← e]
+  exact h.2.append (Grid.pending_shaped c g n)
+
+/-- The first premise of `racy_iff` at a grid's trace, for every launch, contexts and grid with
+the premises of `racy_iff` (`Grid.Fits`): every access of the trace is by a thread of `L` in its
+block of threads. -/
+theorem Grid.Fits.trace {L : Launch} {c : Nat → Ctx} {g : Grid} (h : g.Fits L c) :
+    ∀ a, Event.access a ∈ g.mem.trace →
+      a.who.thread < volume L.grid * volume L.block ∧ a.who.cta = a.who.thread / volume L.block :=
+  fun a ha => h.1 0 a (List.mem_append_right _ ha)
+
+/-- **`racy_iff` at a grid's trace**, for every launch, contexts and grid with the premises of
+`racy_iff` (`Grid.Fits`): the trace is racy exactly when two accesses of its `phases` clash. -/
+theorem Grid.Fits.racy_iff_trace {L : Launch} {c : Nat → Ctx} {g : Grid} (h : g.Fits L c) :
+    GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse = true ↔
+      ∃ x ∈ (phases g.mem.trace).1, ∃ y ∈ (phases g.mem.trace).1, clash x y = true :=
+  MojoProof.Sem.racy_iff h.trace h.2
+
+/-- **The premises of `racy_iff` at reachable grids**, for every program, kernel, launch,
+arguments, memory, address choice and oracle: every grid reachable from the start's has them
+(`Grid.Fits`), by `Grid.start_reach_pending` with `Grid.start_reach_size`, and
+`Grid.start_reach_shaped`. -/
+theorem Grid.start_reach_fits {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
+    (hr : Relation.ReflTransGen (Grid.Step L c) g₀ g) : g.Fits L c :=
+  ⟨fun n a ha => have hb := (Grid.start_reach_pending h hr n).1 a ha
+      ⟨(show a.who.thread < g.threads.size from hb.1).trans_eq (Grid.start_reach_size h hr),
+        hb.2⟩,
+    (Grid.start_reach_shaped h hr 0).1⟩
+
+/-! ## `bad_eqv` and `bad_step` -/
+
+/-- For every launch and contexts, a grid the same as one with an enabled race (the core's
+`RaceEnabled` at `sig`, `Grid.raceEnabled_iff`) has the race enabled, if both grids have the
+premises of `racy_iff` (`Grid.Fits`): the same thread runs with the same pending accesses
+(`Thread.pending_retrace`) in front of a trace that is the same (L11), so two of their accesses
+clash by phases there too (L12, `Trace.Same.clash`); or the same collective call completes
+(`Grid.fire_retrace`) and the trace that is the same is racy. The premises are needed at both
+grids: `Trace.Same` does not keep `Trace.Shaped`. -/
+theorem Grid.Same.raceEnabled {L : Launch} {c : Nat → Ctx} {g₁ g₂ : Grid} (h : g₁.Same g₂)
+    (hf₁ : g₁.Fits L c) (hf₂ : g₂.Fits L c) (he : GPUProof.RaceEnabled sig (g₁, L, c)) :
+    GPUProof.RaceEnabled sig (g₂, L, c) := by
+  rcases Grid.raceEnabled_iff.1 he with ⟨n, t, ht, hr⟩ | ⟨n, g₁', hg, hr⟩
+  · have ht₂ : g₂.threads[n]? = some (.run t) := h.1 ▸ ht
+    refine Grid.raceEnabled_iff.2 (.inl ⟨n, t, ht₂, ?_⟩)
+    have e : t.pending (c n) g₂.mem = t.pending (c n) g₁.mem := by
+      rw [h.eq_retrace]
+      exact Thread.pending_retrace _ _ _ _
+    rw [hf₂.racy_iff ht₂, e, ← (h.2.2.2.append _).clash, ← hf₁.racy_iff ht]
+    exact hr
+  · obtain ⟨g₂', hg₂, -⟩ :=
+      (h.map (F := (·.fire L c n)) (Grid.fire_retrace L c g₁ · n)).2.2 _ hg
+    exact Grid.raceEnabled_iff.2
+      (.inr ⟨n, g₂', hg₂, hf₂.racy_iff_trace.2 (h.2.2.2.clash.1 (hf₁.racy_iff_trace.1 hr))⟩)
 
 /-- **`bad_eqv`** (T2, docs/proofs/schedule.md). For every launch and contexts, a grid the same as
-a bad grid is bad: faults by `Grid.Same.faults`, the trace by L12, an enabled race by
+a bad grid is bad, if both grids have the premises of `racy_iff` (`Grid.Fits`): faults by
+`Grid.Same.faults`, the trace by L12 (`Trace.Same.clash`, `Trace.Same.kept`), an enabled race by
 `Grid.Same.raceEnabled`. -/
 theorem Grid.Same.bad {L : Launch} {c : Nat → Ctx} {g₁ g₂ : Grid} (h : g₁.Same g₂)
-    (hb : g₁.Bad L c) : g₂.Bad L c :=
-  hb.imp h.faults.1 <| Or.imp (fun hr => h.2.2.2.racy.symm.trans hr) <|
-    Or.imp (fun hk => h.2.2.2.kept.symm.trans hk) h.raceEnabled
+    (hf₁ : g₁.Fits L c) (hf₂ : g₂.Fits L c) (hb : GPUProof.Bad sig (g₁, L, c)) :
+    GPUProof.Bad sig (g₂, L, c) :=
+  hb.imp h.faults.1 <|
+    Or.imp (fun hr => hf₂.racy_iff_trace.2 (h.2.2.2.clash.1 (hf₁.racy_iff_trace.1 hr))) <|
+    Or.imp (fun hk => h.2.2.2.kept.symm.trans hk) (h.raceEnabled hf₁ hf₂)
 
 /-- For every launch and contexts, a step puts events in front of the trace: a thread's step its
 pending accesses (`Grid.advance_pending`), a collective call's completion its events
@@ -126,28 +413,40 @@ theorem Grid.Step.trace {L : Launch} {c : Nat → Ctx} {g g' : Grid} (h : Grid.S
   · obtain ⟨_, _, _, _, _, e⟩ := Grid.fire_trace h
     exact ⟨_, e⟩
 
-/-- A trace that breaks the promise of `!invariant.load` breaks it with events in front. -/
-theorem kept_append {tr : List Event} (h : kept tr = false) :
-    ∀ E : List Event, kept (E ++ tr) = false
+/-- A trace that breaks the promise of `!invariant.load` (the core's `kept` at `sig`) breaks it
+with events in front, for every launch and pair of traces. -/
+theorem kept_append {L : Launch} {tr : List Event}
+    (h : GPUProof.kept sig (tr.map (Event.toCore L)).reverse = false) :
+    ∀ E : List Event, GPUProof.kept sig ((E ++ tr).map (Event.toCore L)).reverse = false
   | [] => h
   | e :: E => kept_cons e (kept_append h E)
 
 /-- **`bad_step` for an enabled race.** For every launch, contexts and closed grid `g` in which no
-collective call that completes logs a barrier of a running thread's block of threads (`hw`): if a
-race is enabled at thread `n` and `g` steps, the trace after is racy, or a race is still
-enabled. If `n` steps, it logs its pending accesses `P` (L1a). Otherwise `n` runs with the same
-`P` (L1c, `Grid.pending_reach`), and the step puts in front of the trace another thread's
-accesses or a call's events, none a barrier of `n`'s block of threads, so `P` still races (L13,
-`racy_insert`). -/
+collective call that completes logs a barrier of a running thread's block of threads (`hw`, which
+holds when the blocks of threads are not empty and the contexts put each running thread `n` in block
+of threads `n / volume L.block`, `Grid.fired_run`), with the grid after the step, having the
+premises of `racy_iff` (`Grid.Fits`): if a race is enabled (the core's `RaceEnabled` at `sig`) and
+`g` steps, the trace after is racy, or a race is still enabled. A race enabled by a collective call
+that completes has a racy trace, which stays racy with the step's events in front (`racy_append`).
+At a running thread `n`: if `n` steps, it logs its pending accesses `P` (L1a). Otherwise `n` runs
+with the same `P` (L1c, `Grid.pending_reach`), and the step puts in front of the trace another
+thread's accesses or a call's events, none a barrier of `n`'s block of threads, so two accesses
+still clash by phases (L13, `racy_insert`). -/
 theorem Grid.Step.raceEnabled {L : Launch} {c : Nat → Ctx} {g g' : Grid} (hg : g.Closed c)
     (hw : ∀ n k t gf, g.threads[n]? = some (.run t) → g.fire L c k = .ok (some gf) →
       .barrier (c n).who.cta ∉ g.fired L k)
-    (hs : Grid.Step L c g g') (he : g.RaceEnabled c) :
-    racy g'.mem.trace = true ∨ g'.RaceEnabled c := by
-  obtain ⟨n, t, ht, hr⟩ := he
+    (hf : g.Fits L c) (hf' : g'.Fits L c) (hs : Grid.Step L c g g')
+    (he : GPUProof.RaceEnabled sig (g, L, c)) :
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L)).reverse = true ∨
+      GPUProof.RaceEnabled sig (g', L, c) := by
+  rcases Grid.raceEnabled_iff.1 he with ⟨n, t, ht, hr⟩ | ⟨-, -, -, hr⟩
+  swap
+  · obtain ⟨E, hE⟩ := hs.trace
+    exact .inl (by rw [hE]; exact racy_append hr E)
   have hP : ∀ e ∈ t.pending (c n) g.mem, ∃ a, e = .access a ∧ a.who = (c n).who :=
     Thread.pending_who
-  have hp' : t.pending (c n) g'.mem = t.pending (c n) g.mem := Grid.pending_reach hg (.single hs) ht
+  have hp' : t.pending (c n) g'.mem = t.pending (c n) g.mem :=
+    Grid.pending_reach hg (.single hs) ht
   obtain ⟨k, hk | hk⟩ := hs
   · obtain ⟨tk, s, mk, htk, rfl, htr, -⟩ := Grid.advance_set hk
     by_cases hkn : k = n
@@ -156,57 +455,98 @@ theorem Grid.Step.raceEnabled {L : Launch} {c : Nat → Ctx} {g g' : Grid} (hg :
       rw [show mk.trace = _ from htr]
       simp only [Grid.pending, ht]
       exact hr
-    · refine .inr ⟨n, t, ?_, ?_⟩
-      · simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne hkn, ht]
-      · rw [hp']
-        show racy (t.pending (c n) g.mem ++ mk.trace) = true
-        rw [htr, ← List.append_assoc]
-        refine racy_insert (fun hb => ?_) hP hr
-        unfold Grid.pending at hb
-        rw [htk] at hb
-        obtain ⟨_, e, -⟩ := Thread.pending_who _ hb
-        cases e
+    · have ht' : (g.threads.set! k s)[n]? = some (.run t) := by
+        simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne hkn, ht]
+      refine .inr (Grid.raceEnabled_iff.2 (.inl ⟨n, t, ht', (hf'.racy_iff ht').2 ?_⟩))
+      rw [hp']
+      show ∃ x ∈ (phases (t.pending (c n) g.mem ++ mk.trace)).1,
+        ∃ y ∈ (phases (t.pending (c n) g.mem ++ mk.trace)).1, clash x y = true
+      rw [htr, ← List.append_assoc]
+      refine racy_insert (fun hb => ?_) hP ((hf.racy_iff ht).1 hr)
+      unfold Grid.pending at hb
+      rw [htk] at hb
+      obtain ⟨_, e, -⟩ := Thread.pending_who _ hb
+      cases e
   · obtain ⟨P, _, hPw, -, hPr, hPm, -⟩ := Grid.fire_frame hk
     have hnP : n ∉ P := fun hp => by
       obtain ⟨_, _, _, _, e⟩ := hPw n hp
       rw [ht] at e
       cases e
-    refine .inr ⟨n, t, (resumeAll_getElem? hPr hnP).trans ht, ?_⟩
+    have ht' := (resumeAll_getElem? hPr hnP).trans ht
+    refine .inr (Grid.raceEnabled_iff.2 (.inl ⟨n, t, ht', (hf'.racy_iff ht').2 ?_⟩))
     rw [hp', hPm]
-    show racy (t.pending (c n) g.mem ++ (g.fired L k ++ g.mem.trace)) = true
+    show ∃ x ∈ (phases (t.pending (c n) g.mem ++ (g.fired L k ++ g.mem.trace))).1,
+      ∃ y ∈ (phases (t.pending (c n) g.mem ++ (g.fired L k ++ g.mem.trace))).1, clash x y = true
     rw [← List.append_assoc]
-    exact racy_insert (hw n k t _ ht hk) hP hr
+    exact racy_insert (hw n k t _ ht hk) hP ((hf.racy_iff ht).1 hr)
+
+/-- **`bad_step` for an enabled race, in contexts like the start's.** For every launch, closed
+grid `g` and contexts that put each running thread `n` of `g` in block of threads
+`n / volume L.block`, as the start's do (`Grid.start_ctx`), with the grid after the step, having
+the premises of `racy_iff` (`Grid.Fits`): if a race is enabled (the core's `RaceEnabled` at `sig`)
+and `g` steps, the trace after is racy, or a race is still enabled. A race enabled by a collective
+call that completes has a racy trace (`racy_append`). Otherwise a running thread's pending
+accesses make the trace racy, so there is an access by a thread below
+`volume L.grid * volume L.block` (`Grid.Fits`), the blocks of threads are not empty, and
+`Grid.fired_run` gives `Grid.Step.raceEnabled`'s premise on barriers. -/
+theorem Grid.Step.raceEnabled_of_ctx {L : Launch} {c : Nat → Ctx} {g g' : Grid} (hg : g.Closed c)
+    (hc : ∀ n t, g.threads[n]? = some (.run t) → (c n).who.cta = n / volume L.block)
+    (hf : g.Fits L c) (hf' : g'.Fits L c) (hs : Grid.Step L c g g')
+    (he : GPUProof.RaceEnabled sig (g, L, c)) :
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L)).reverse = true ∨
+      GPUProof.RaceEnabled sig (g', L, c) := by
+  rcases Grid.raceEnabled_iff.1 he with ⟨n, t, ht, hr⟩ | ⟨-, -, -, hr⟩
+  swap
+  · obtain ⟨E, hE⟩ := hs.trace
+    exact .inl (by rw [hE]; exact racy_append hr E)
+  obtain ⟨x, hx, -⟩ := (hf.racy_iff ht).1 hr
+  have e : g.pending c n = t.pending (c n) g.mem := by simp only [Grid.pending, ht]
+  have hpos : 0 < volume L.block := Nat.pos_of_ne_zero fun h0 => by
+    have := (hf.1 n x.1 (by rw [e]; exact mem_phases hx)).1
+    simp [h0] at this
+  exact hs.raceEnabled hg (fun k _ u _ hk hfk => Grid.fired_run hpos (hc k u hk) hk hfk) hf hf' he
 
 /-- **`bad_step` without faults.** For every launch, contexts and closed grid in which no
-collective call that completes logs a barrier of a running thread's block of threads: a step from
-a grid whose trace is racy or breaks the promise of `!invariant.load`, or that has an enabled
-race, gives a grid with one of the three. The trace gets events in front (`Grid.Step.trace`;
-`racy_append`, `kept_append`), and an enabled race is `Grid.Step.raceEnabled`. -/
+collective call that completes logs a barrier of a running thread's block of threads, with the
+grid after the step, having the premises of `racy_iff` (`Grid.Fits`): a step from a grid whose
+trace is racy or breaks the promise of `!invariant.load`, or that has an enabled race, gives a
+grid with one of the three. The trace gets events in front (`Grid.Step.trace`; `racy_append`,
+`kept_append`), and an enabled race is `Grid.Step.raceEnabled`. -/
 theorem Grid.Step.bad_trace {L : Launch} {c : Nat → Ctx} {g g' : Grid} (hg : g.Closed c)
     (hw : ∀ n k t gf, g.threads[n]? = some (.run t) → g.fire L c k = .ok (some gf) →
       .barrier (c n).who.cta ∉ g.fired L k)
-    (hs : Grid.Step L c g g')
-    (hb : racy g.mem.trace = true ∨ kept g.mem.trace = false ∨ g.RaceEnabled c) :
-    racy g'.mem.trace = true ∨ kept g'.mem.trace = false ∨ g'.RaceEnabled c := by
+    (hf : g.Fits L c) (hf' : g'.Fits L c) (hs : Grid.Step L c g g')
+    (hb : GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse = true ∨
+      GPUProof.kept sig (g.mem.trace.map (Event.toCore L)).reverse = false ∨
+        GPUProof.RaceEnabled sig (g, L, c)) :
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L)).reverse = true ∨
+      GPUProof.kept sig (g'.mem.trace.map (Event.toCore L)).reverse = false ∨
+      GPUProof.RaceEnabled sig (g', L, c) := by
   obtain ⟨E, hE⟩ := hs.trace
   rcases hb with hb | hb | hb
   · exact .inl (by rw [hE]; exact racy_append hb E)
   · exact .inr (.inl (by rw [hE]; exact kept_append hb E))
-  · exact (hs.raceEnabled hg hw hb).imp_right .inr
+  · exact (hs.raceEnabled hg hw hf hf' hb).imp_right .inr
 
 /-- **`bad_step` without faults, from the start.** For every program, kernel, launch, arguments,
 address choice and oracle, on a caller's memory every pointer byte of whose blocks names a number
 below `next` or with a block, in every grid reachable from the start's: `Grid.Step.bad_trace`,
-whose grid is closed (`Grid.start_reach_closed`) and in which no collective call that completes
-logs a barrier of a running thread's block of threads (`Grid.start_reach_fired`). -/
+whose grid is closed (`Grid.start_reach_closed`), in which no collective call that completes
+logs a barrier of a running thread's block of threads (`Grid.start_reach_fired`), and which with
+the grid after has the premises of `racy_iff` (`Grid.start_reach_fits`). -/
 theorem Grid.start_reach_bad_trace {prog : Program} {fn : Func} {L : Launch} {args : List Val}
     {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g g' : Grid} {c : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
     (hr : Relation.ReflTransGen (Grid.Step L c) g₀ g) (hs : Grid.Step L c g g')
-    (hb : racy g.mem.trace = true ∨ kept g.mem.trace = false ∨ g.RaceEnabled c) :
-    racy g'.mem.trace = true ∨ kept g'.mem.trace = false ∨ g'.RaceEnabled c :=
+    (hb : GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse = true ∨
+      GPUProof.kept sig (g.mem.trace.map (Event.toCore L)).reverse = false ∨
+        GPUProof.RaceEnabled sig (g, L, c)) :
+    GPUProof.racy sig (g'.mem.trace.map (Event.toCore L)).reverse = true ∨
+      GPUProof.kept sig (g'.mem.trace.map (Event.toCore L)).reverse = false ∨
+      GPUProof.RaceEnabled sig (g', L, c) :=
   hs.bad_trace (Grid.start_reach_closed h hm hr)
-    (fun _ _ _ _ hn hf => Grid.start_reach_fired h hr hn hf) hb
+    (fun _ _ _ _ hn hf => Grid.start_reach_fired h hr hn hf) (Grid.start_reach_fits h hr)
+    (Grid.start_reach_fits h (hr.tail hs)) hb
 
 /-- An access races with events `X` in front of a trace if `X` has no barrier of its block of
 threads and an access by another thread that conflicts with it. -/
@@ -224,40 +564,35 @@ theorem races_mem {a b : Access} {tr : List Event} :
     rw [List.cons_append, Access.races, beq_eq_false_iff_ne.2 hk, Bool.or_false]
     exact races_mem (fun h => hX (List.mem_cons_of_mem _ h)) (by simpa using hb) ht hc
 
-/-- **The race of a conflict** (the diamond's conflict case, docs/proofs/schedule.md). A trace
+/-- **The race of a conflict** (the diamond's conflict case, docs/proofs/schedule.md). In a trace
 with events `P` in front, one of them the access `a`, after events `Q` with an access by another
-thread that conflicts with `a`, is racy if neither `P` nor `Q` has a barrier of `a`'s block of
-threads. -/
+thread that conflicts with `a`, two accesses clash by phases if neither `P` nor `Q` has a barrier
+of `a`'s block of threads (so the trace is racy under the premises of `racy_iff`). -/
 theorem racy_conflict {a b : Access} {tr Q : List Event} (hQ : .barrier a.who.cta ∉ Q)
     (hb : .access b ∈ Q) (ht : b.who.thread ≠ a.who.thread) (hc : a.conflict b = true) :
-    ∀ {P : List Event}, .barrier a.who.cta ∉ P → .access a ∈ P → racy (P ++ Q ++ tr) = true
+    ∀ {P : List Event}, .barrier a.who.cta ∉ P → .access a ∈ P →
+      ∃ x ∈ (phases (P ++ Q ++ tr)).1, ∃ y ∈ (phases (P ++ Q ++ tr)).1, clash x y = true
   | [], _, ha => by simp at ha
   | e :: P, hP, ha => by
     have hP' : .barrier a.who.cta ∉ P := fun h => hP (List.mem_cons_of_mem _ h)
+    simp only [List.cons_append]
     rcases List.mem_cons.1 ha with rfl | ha
-    · have h := races_mem (tr := tr) (fun h => (List.mem_append.1 h).elim hP' hQ)
-        (List.mem_append_right P hb) ht hc
-      simp only [List.cons_append, racy, Bool.or_eq_true]
-      exact .inl h
-    · exact racy_cons e (racy_conflict hQ hb ht hc hP' ha)
+    · rw [clash_access]
+      exact .inl (races_mem (tr := tr) (fun h => (List.mem_append.1 h).elim hP' hQ)
+        (List.mem_append_right P hb) ht hc)
+    · exact clash_append (racy_conflict hQ hb ht hc hP' ha) [e]
 
-/-- `Access.conflict` is symmetric. -/
-theorem Access.conflict_comm (a e : Access) : a.conflict e = e.conflict a := by
-  rw [Bool.eq_iff_iff]
-  simp only [Access.conflict, Access.overlaps, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq,
-    Bool.or_eq_true, Bool.not_eq_true']
-  grind
-
-/-- **The diamond's conflict case** (docs/proofs/schedule.md). For every closed grid: if the step
-of thread `k` succeeds and one of its pending accesses conflicts with one of a running thread `n`
-of another thread number, the grid after has a race enabled. `k`'s step logs its pending
-accesses, `n` runs with the same pending accesses (L1c, `Thread.pending_shape`), and neither has
-a barrier (`racy_conflict`). -/
-theorem Grid.advance_raceEnabled {c : Nat → Ctx} {g g' : Grid} {n k : Nat} {t : Thread}
-    (hg : g.Closed c) (hw : (c n).who.thread ≠ (c k).who.thread)
+/-- **The diamond's conflict case** (docs/proofs/schedule.md). For every launch and closed grid,
+the grid after having the premises of `racy_iff` (`Grid.Fits`): if the step of thread `k`
+succeeds and one of its pending accesses conflicts with one of a running thread `n` of another
+thread number, the grid after has a race enabled. `k`'s step logs its pending accesses, `n` runs
+with the same pending accesses (L1c, `Thread.pending_shape`), and neither has a barrier
+(`racy_conflict`). -/
+theorem Grid.advance_raceEnabled {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n k : Nat}
+    {t : Thread} (hg : g.Closed c) (hf : g'.Fits L c) (hw : (c n).who.thread ≠ (c k).who.thread)
     (ht : g.threads[n]? = some (.run t)) (hk : g.advance c k = .ok (some g'))
     {a a' : Access} (ha : .access a ∈ g.pending c n) (ha' : .access a' ∈ g.pending c k)
-    (hc : a.conflict a' = true) : g'.RaceEnabled c := by
+    (hc : a.conflict a' = true) : GPUProof.RaceEnabled sig (g', L, c) := by
   have hkn : k ≠ n := by
     rintro rfl
     exact hw rfl
@@ -271,13 +606,15 @@ theorem Grid.advance_raceEnabled {c : Nat → Ctx} {g g' : Grid} {n k : Nat} {t 
       cases e
     · cases hb
   have hn : g.pending c n = t.pending (c n) g.mem := by simp only [Grid.pending, ht]
-  refine ⟨n, t, ?_, ?_⟩
-  · simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne hkn, ht]
-  · rw [hp]
-    show racy (t.pending (c n) g.mem ++ mk.trace) = true
-    rw [htr, ← List.append_assoc, ← hn]
-    exact racy_conflict (hnb k _) ha'
-      (by rw [Grid.pending_who ha, Grid.pending_who ha']; exact hw.symm) hc (hnb n _) ha
+  have ht' : (g.threads.set! k s)[n]? = some (.run t) := by
+    simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne hkn, ht]
+  refine Grid.raceEnabled_iff.2 (.inl ⟨n, t, ht', (hf.racy_iff ht').2 ?_⟩)
+  rw [hp]
+  show ∃ x ∈ (phases (t.pending (c n) g.mem ++ mk.trace)).1,
+    ∃ y ∈ (phases (t.pending (c n) g.mem ++ mk.trace)).1, clash x y = true
+  rw [htr, ← List.append_assoc, ← hn]
+  exact racy_conflict (hnb k _) ha'
+    (by rw [Grid.pending_who ha, Grid.pending_who ha']; exact hw.symm) hc (hnb n _) ha
 
 /-- A step of thread `n` that faults: `n` runs, and its step faults. -/
 theorem Grid.advance_error {c : Nat → Ctx} {g : Grid} {n : Nat} {x : Fault}
@@ -377,18 +714,18 @@ theorem Grid.advance_fault_atomic {c : Nat → Ctx} {g g' : Grid} {n k : Nat} {x
 
 /-- **`bad_step` for a fault of a thread's step.** For every launch, contexts and closed grid `g`
 whose threads own their allocas, and in whose contexts every thread other than `n` has a thread
-number other than `n`'s: if thread `n`'s step faults and `g` steps, the grid after faults or has
-a race enabled. The
-stepping thread `k` is not `n`, whose step faults. If a write of `k`'s overlaps an access of
-`n`'s and the two conflict, a race is enabled (`Grid.advance_raceEnabled`). If they do not
+number other than `n`'s, the grid after the step having the premises of `racy_iff`
+(`Grid.Fits`): if thread `n`'s step faults and `g` steps, the grid after faults or has a race
+enabled. The stepping thread `k` is not `n`, whose step faults. If a write of `k`'s overlaps an
+access of `n`'s and the two conflict, a race is enabled (`Grid.advance_raceEnabled`). If they do not
 conflict, they are by `atomicrmw`s at one pointer and size, and `n`'s step still faults
 (`Grid.advance_fault_atomic`). If no write of `k`'s overlaps an access of `n`'s, `n`'s step still
 faults (`Grid.advance_fault`); after a collective call it faults too
 (`Grid.advance_fault_fire`). -/
 theorem Grid.Step.advance_fault {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n : Nat} {x : Fault}
     (hg : g.Closed c) (ho : g.Owns c) (hw : ∀ k, k ≠ n → (c n).who.thread ≠ (c k).who.thread)
-    (hs : Grid.Step L c g g') (he : g.advance c n = .error x) :
-    g'.Faults L c ∨ g'.RaceEnabled c := by
+    (hf : g'.Fits L c) (hs : Grid.Step L c g g') (he : g.advance c n = .error x) :
+    GPUProof.Faults sig (g', L, c) ∨ GPUProof.RaceEnabled sig (g', L, c) := by
   obtain ⟨k, hk | hk⟩ := hs
   · have hkn : k ≠ n := by
       rintro rfl
@@ -398,17 +735,19 @@ theorem Grid.Step.advance_fault {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n 
         a.overlaps a' = true ∧ a'.write = true
     · obtain ⟨a, a', ha, ha', hov, hwr⟩ := hx
       cases hc : a.conflict a'
-      · have hex : a.atomic.isSome ∧ a.atomic = a'.atomic ∧ a.ptr = a'.ptr ∧ a.len = a'.len := by
+      · have hex : a.atomic.any RmwOp.commutes ∧ a.atomic = a'.atomic ∧ a.ptr = a'.ptr ∧
+            a.len = a'.len := by
           simpa [Access.conflict, hov, hwr, and_assoc] using hc
-        obtain ⟨y, hy⟩ := Grid.advance_fault_atomic hg (Ne.symm hkn) hk he ha ha' hex.1
-          (hex.2.1 ▸ hex.1) hex.2.2.1 hex.2.2.2
-        exact .inl ⟨n, y, .inl hy⟩
+        have hs := Option.isSome_of_any hex.1
+        obtain ⟨y, hy⟩ := Grid.advance_fault_atomic hg (Ne.symm hkn) hk he ha ha' hs
+          (hex.2.1 ▸ hs) hex.2.2.1 hex.2.2.2
+        exact .inl (Grid.faults_iff.2 ⟨n, y, .inl hy⟩)
       obtain ⟨t, ht, -⟩ := Grid.advance_error he
-      exact .inr (Grid.advance_raceEnabled hg (hw k hkn) ht hk ha ha' hc)
+      exact .inr (Grid.advance_raceEnabled hg hf (hw k hkn) ht hk ha ha' hc)
     · simp only [not_exists, not_and, Bool.not_eq_true] at hx
       obtain ⟨y, hy⟩ := Grid.advance_fault hg ho (hw k hkn) hx hk he
-      exact .inl ⟨n, y, .inl hy⟩
-  · exact .inl ⟨n, x, .inl (Grid.advance_fault_fire hk he)⟩
+      exact .inl (Grid.faults_iff.2 ⟨n, y, .inl hy⟩)
+  · exact .inl (Grid.faults_iff.2 ⟨n, x, .inl (Grid.advance_fault_fire hk he)⟩)
 
 /-! ## Faults at a collective call -/
 
@@ -639,6 +978,74 @@ theorem Grid.fire_error_advance {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n 
               · cases he
         · simp only [h32, ↓reduceIte] at hg'
           cases hg'
+    · rename_i v
+      by_cases hw : n % volume L.block - n % volume L.block % 32 + 32 ≤ volume L.block
+      · simp only [hw, ↓reduceIte, bind, Except.bind, pure, Except.pure] at he hg'
+        generalize n - n % volume L.block % 32 = base at he hg'
+        split at hg'
+        · cases hg'
+        rename_i r' hr'
+        split at he
+        · rename_i e₀ hr
+          unfold mmaRes at hr hr'
+          simp only [List.mapM_map, bind, Except.bind, pure, Except.pure] at hr hr'
+          split at hr'
+          · cases hr'
+          rename_i xs' hxs'
+          split at hr
+          · rename_i e₁ hxe
+            obtain ⟨j, -, e₂, hje, y, hjy⟩ := mapM_error hxe hxs'
+            by_cases hjk : base + j = k
+            · simp only [Function.comp_apply, hjk, htk] at hje; cases hje
+            · simp only [Function.comp_apply, hset _ hjk] at hjy hje
+              rw [hjy] at hje
+              cases hje
+          rename_i xs hxs
+          have hkl : ∀ j ∈ List.range 32, base + j ≠ k := fun j hj e => by
+            obtain ⟨o, ho, hop⟩ := mapM_ok_mem hxs hj
+            simp only [Function.comp_apply, e, htk] at ho
+            cases ho
+            split at hr
+            all_goals first
+              | cases hr
+              | (obtain ⟨w, hw', -⟩ := mapM_id_mem hop ‹_›
+                 cases hw')
+          have e2 : (Except.ok xs' : Except Fault _) = .ok xs := by
+            rw [← hxs', ← hxs]
+            exact mapM_congr fun j hj => by simp only [Function.comp_apply, hset _ (hkl j hj)]
+          cases e2
+          cases hr.symm.trans hr'
+        · rename_i r hr
+          rcases r with _ | y
+          · cases he
+          dsimp only at he
+          obtain ⟨x, hy, hx⟩ := mmaRes_ok hr
+          have hkl : ∀ j ∈ List.range 32, base + j ≠ k := fun j hj e => by
+            obtain ⟨t', fn', e', -⟩ := hx j (by simpa using hj)
+            simp only [List.getElem_map, List.getElem_range, e, htk] at e'; cases e'
+          have e3 : (List.range 32).map (fun j => (g.threads.set! k s)[base + j]?) =
+              (List.range 32).map (fun j => g.threads[base + j]?) :=
+            List.map_congr_left fun j hj => hset _ (hkl j hj)
+          rw [e3, hr] at hr'
+          cases hr'
+          dsimp only at hg'
+          have hkP : k ∉ (List.range 32).map (base + ·) := fun h => by
+            obtain ⟨j, hj, e⟩ := List.mem_map.1 h
+            exact hkl j hj e
+          rw [resumeAll_set_eq hkP, ← resumeAll_shape hsh _ (fun p _ x hx' => ?_)] at hg'
+          · split at he
+            · rename_i hr₂
+              simp only [hr₂] at hg'
+              cases hg'
+            · cases he
+          · cases hx'
+            obtain ⟨rs, e, hrs⟩ := mmaGrid_agg hy (p - base)
+            rw [e]
+            exact Val.allNamesIn_iff.2 fun r hr => by
+              obtain ⟨w, b, rfl⟩ := hrs r hr
+              trivial
+      · simp only [hw, ↓reduceIte] at hg'
+        cases hg'
     all_goals cases hg'
 
 /-- **A lane's collective call completes `n`'s.** In contexts with one layout: if the call of a
@@ -839,12 +1246,39 @@ theorem Grid.fire_error_fire {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n j :
               · cases he
         · simp only [h32, ↓reduceIte] at hg'
           cases hg'
+    · rename_i v
+      by_cases hw : n % volume L.block - n % volume L.block % 32 + 32 ≤ volume L.block
+      · simp only [hw, ↓reduceIte, bind, Except.bind, pure, Except.pure] at he hg'
+        have hl32 : ∀ j ∈ List.range 32, n - n % volume L.block % 32 + j ∉ P := fun j hj =>
+          hlP j (List.mem_filter.2 ⟨hj, decide_eq_true (by rw [List.mem_range] at hj; omega)⟩)
+        have e3 : (List.range 32).map (fun j => g'.threads[n - n % volume L.block % 32 + j]?) =
+            (List.range 32).map (fun j => g.threads[n - n % volume L.block % 32 + j]?) :=
+          List.map_congr_left fun j hj => hset _ (hl32 j hj)
+        rw [e3] at hg'
+        split at hg'
+        · cases hg'
+        rename_i r' hr'
+        rw [hr'] at he
+        rcases r' with _ | y
+        · cases he
+        dsimp only at he hg'
+        split at hg'
+        · cases hg'
+        rename_i ts' hts'
+        obtain ⟨ts, hts, -⟩ := resumeAll_agree hkeep (fun p hp => by
+          obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hp
+          exact (hset _ (hl32 j hj)).symm) hts'
+        simp only [hts] at he
+        cases he
+      · simp only [hw, ↓reduceIte] at hg'
+        cases hg'
     all_goals cases hg'
 
 /-- **`bad_step`.** For every launch, contexts with one layout (`hl`) and closed grid `g` whose
 threads own their allocas, have different thread numbers in their contexts and are such that no
-collective call that completes logs a barrier of a running thread's block of threads: if `g` is
-bad, the grid after a step is bad. `Grid.Step.advance_fault` for a fault of a thread's step,
+collective call that completes logs a barrier of a running thread's block of threads, with the
+grid after the step, having the premises of `racy_iff` (`Grid.Fits`): if `g` is bad, the grid
+after a step is bad. `Grid.Step.advance_fault` for a fault of a thread's step,
 `Grid.fire_error_advance` and `Grid.fire_error_fire` for a fault at a collective call,
 `Grid.Step.bad_trace` for the rest. `hl` is needed (twin MojoProofTest/Bad.lean
 `fire_fault_twin`). -/
@@ -852,33 +1286,36 @@ theorem Grid.Step.bad {L : Launch} {c : Nat → Ctx} {g g' : Grid} (hg : g.Close
     (hd : ∀ n k, n ≠ k → (c n).who.thread ≠ (c k).who.thread)
     (hw : ∀ n k t gf, g.threads[n]? = some (.run t) → g.fire L c k = .ok (some gf) →
       .barrier (c n).who.cta ∉ g.fired L k)
-    (hl : ∀ n p, (c n).prog.layout = (c p).prog.layout)
-    (hs : Grid.Step L c g g') (hb : g.Bad L c) : g'.Bad L c := by
-  rcases hb with ⟨n, e, he | he⟩ | hb
-  · exact (hs.advance_fault hg ho (fun k hk => hd n k (Ne.symm hk)) he).elim .inl
+    (hl : ∀ n p, (c n).prog.layout = (c p).prog.layout) (hf : g.Fits L c) (hf' : g'.Fits L c)
+    (hs : Grid.Step L c g g') (hb : GPUProof.Bad sig (g, L, c)) :
+    GPUProof.Bad sig (g', L, c) := by
+  rcases hb.imp_left Grid.faults_iff.1 with ⟨n, e, he | he⟩ | hb
+  · exact (hs.advance_fault hg ho (fun k hk => hd n k (Ne.symm hk)) hf' he).elim .inl
       fun h => .inr (.inr (.inr h))
   · obtain ⟨k, hk | hk⟩ := hs
     · obtain ⟨e', he'⟩ := Grid.fire_error_advance hg hk he
-      exact .inl ⟨n, e', .inr he'⟩
+      exact .inl (Grid.faults_iff.2 ⟨n, e', .inr he'⟩)
     · obtain ⟨e', he'⟩ := Grid.fire_error_fire (hl · n) hk he
-      exact .inl ⟨n, e', .inr he'⟩
-  · exact .inr (hs.bad_trace hg hw hb)
+      exact .inl (Grid.faults_iff.2 ⟨n, e', .inr he'⟩)
+  · exact .inr (hs.bad_trace hg hw hf hf' hb)
 
 /-- **`bad_step` from the start.** For every program, kernel, launch, arguments, address choice
 and oracle, on a caller's memory every pointer byte of whose blocks names a number below `next` or
 with a block, in every grid reachable from the start's: `Grid.Step.bad`, whose contexts have one
 program and so one layout and give thread `n` the number `n` (`Grid.start_ctx`), whose grid is
 closed (`Grid.start_reach_closed`), has its threads own their allocas (`Grid.start_owns`,
-`Grid.reach_owns`) and has no collective call that completes log a barrier of a running thread's
-block of threads (`Grid.start_reach_fired`). -/
+`Grid.reach_owns`), has no collective call that completes log a barrier of a running thread's
+block of threads (`Grid.start_reach_fired`), and with the grid after has the premises of
+`racy_iff` (`Grid.start_reach_fits`). -/
 theorem Grid.start_reach_bad {prog : Program} {fn : Func} {L : Launch} {args : List Val}
     {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ g g' : Grid} {c : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
-    (hr : Relation.ReflTransGen (Grid.Step L c) g₀ g) (hs : Grid.Step L c g g') (hb : g.Bad L c) :
-    g'.Bad L c :=
+    (hr : Relation.ReflTransGen (Grid.Step L c) g₀ g) (hs : Grid.Step L c g g')
+    (hb : GPUProof.Bad sig (g, L, c)) : GPUProof.Bad sig (g', L, c) :=
   hs.bad (Grid.start_reach_closed h hm hr) (Grid.reach_owns hr (Grid.start_owns h c))
     (fun n k hnk => by rw [(Grid.start_ctx h n).2.1, (Grid.start_ctx h k).2.1]; exact hnk)
     (fun _ _ _ _ hn hf => Grid.start_reach_fired h hr hn hf)
-    (fun n p => by rw [(Grid.start_ctx h n).1, (Grid.start_ctx h p).1]) hb
+    (fun n p => by rw [(Grid.start_ctx h n).1, (Grid.start_ctx h p).1])
+    (Grid.start_reach_fits h hr) (Grid.start_reach_fits h (hr.tail hs)) hb
 
 end MojoProof.Sem

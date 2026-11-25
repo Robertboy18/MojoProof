@@ -32,7 +32,10 @@ Proved here, for every layout, type, codec, shape, offset map and tensor:
   (`Block.holds_of_tiles`; the premise is per tile, with no order); so writing those encodings
   tile by tile, in any order and with repetitions, gives a block that holds `ofFn f` when the
   tiles are apart and in the block (`Block.holds_puts`, from `Block.read_puts`: after such
-  writes a tile holds its last bytes, or the block's own if it was not written);
+  writes a tile holds its last bytes, or the block's own if it was not written); more generally,
+  writes through a cell map from writers to cells (`Block.read_cells`, `Block.read_cells_none`)
+  that cover every cell, with one writer per cell, give the tensor of the writers' values
+  (`Block.holds_cells`; `Block.cells_bytes`: they change only the bytes);
 * stride arithmetic, proved once (`stride_lt`): offsets at stride `w` are `n ≤ w` apart
   (`apart_stride`; at base 0 and `n = w`, the cells `w i` of `w` bytes, `apart_mul`), and stay
   apart under an injective reindexing (`Apart.comp`); so row-major
@@ -402,50 +405,123 @@ theorem Block.holds_of_tiles {blk : Block} (hc : l.Codec t enc) {f : Shape.Coord
   rw [Tensor.Rep.get_ofFn, he]
   exact ⟨hin i, hd⟩
 
+/-- **Writes through a cell map miss a cell no writer maps to**, for every `ι`, `κ`, offsets
+`off : κ → Nat` that are `n` apart, cell map `cell : ι → Option κ` and bytes `bs k` of length
+`n`: writing `bs k` at `off j` for each `k` of `ks` with `cell k = some j`, in `ks`'s order (and
+nothing for `cell k = none`), keeps the `n` bytes at `off i` when no `k` of `ks` maps to `i`. -/
+theorem Block.read_cells_none {ι κ : Type} {off : κ → Nat} {n : Nat} (hap : Apart off n)
+    {cell : ι → Option κ} {bs : ι → List MemByte} (hl : ∀ k, (bs k).length = n) {i : κ} :
+    ∀ (ks : List ι) (blk : Block), (∀ k ∈ ks, cell k ≠ some i) →
+      (ks.foldl (fun b k => (cell k).elim b fun j => b.put (off j) (bs k)) blk).read (off i) n =
+        blk.read (off i) n
+  | [], _, _ => rfl
+  | k :: ks, blk, h => by
+    rw [List.foldl_cons,
+      Block.read_cells_none hap hl ks _ fun k' hk' => h k' (List.mem_cons_of_mem _ hk')]
+    cases hc : cell k with
+    | none => rfl
+    | some j =>
+      have hij : i ≠ j := fun e => h k (List.mem_cons_self ..) (e ▸ hc)
+      simp only [Option.elim]
+      rw [Block.read_put_apart]
+      have := hap i j hij
+      rw [hl k]
+      omega
+
+/-- **Writes through a cell map leave a cell its one writer's bytes**, for every `ι`, `κ`,
+offsets `off : κ → Nat` that are `n` apart, cell map `cell` and bytes `bs k` of length `n`: after
+the writes of `Block.read_cells_none`, the `n` bytes at `off i` are `bs k` when `k` is in `ks`,
+maps to `i`, and is the only element of `ks` that does (it may occur more than once). -/
+theorem Block.read_cells {ι κ : Type} {off : κ → Nat} {n : Nat} (hap : Apart off n)
+    {cell : ι → Option κ} {bs : ι → List MemByte} (hl : ∀ k, (bs k).length = n) {i : κ}
+    {k : ι} (hk : cell k = some i) :
+    ∀ (ks : List ι) (blk : Block), k ∈ ks → (∀ k' ∈ ks, cell k' = some i → k' = k) →
+      (ks.foldl (fun b k => (cell k).elim b fun j => b.put (off j) (bs k)) blk).read (off i) n =
+        bs k
+  | [], _, hm, _ => absurd hm List.not_mem_nil
+  | k' :: ks, blk, hm, hu => by
+    rw [List.foldl_cons]
+    by_cases hks : k ∈ ks
+    · exact Block.read_cells hap hl hk ks _ hks fun k'' h => hu k'' (List.mem_cons_of_mem _ h)
+    · obtain rfl : k' = k := by
+        rcases List.mem_cons.1 hm with h | h
+        · exact h.symm
+        · exact absurd h hks
+      rw [Block.read_cells_none hap hl ks _ fun k'' hk'' hc =>
+        hks (hu k'' (List.mem_cons_of_mem _ hk'') hc ▸ hk'')]
+      simp only [hk, Option.elim]
+      rw [← hl k', Block.read_put_self]
+
 /-- Writes of `n` bytes `bs i` at offsets `off i` that are `n` apart, for the indices of `is` in
 its order: the `n` bytes at `off i` are then `bs i` if `i` is in `is`, and the block's own if
-not. -/
+not. The cell map `some` of `Block.read_cells` and `Block.read_cells_none`. -/
 theorem Block.read_puts {ι : Type} [DecidableEq ι] {off : ι → Nat} {n : Nat}
     (hap : Apart off n) {bs : ι → List MemByte} (hl : ∀ i, (bs i).length = n) (is : List ι)
     (blk : Block) (i : ι) :
     (is.foldl (fun b j => b.put (off j) (bs j)) blk).read (off i) n =
       if i ∈ is then bs i else blk.read (off i) n := by
-  induction is generalizing blk with
-  | nil => rfl
-  | cons j is ih =>
-    rw [List.foldl_cons, ih]
-    by_cases hi : i ∈ is
-    · simp [hi]
-    · by_cases hij : i = j
-      · subst hij
-        simp only [hi, ite_false, List.mem_cons_self, ite_true]
-        rw [← hl i, Block.read_put_self]
-      · rw [ite_eq_right hi, ite_eq_right (by simp [hij, hi]), Block.read_put_apart]
-        have := hap i j hij
-        rw [hl j]
-        omega
+  split
+  · exact Block.read_cells (cell := some) hap hl rfl is blk ‹_› fun _ _ h => Option.some.inj h
+  · exact Block.read_cells_none (cell := some) hap hl is blk fun k hk h =>
+      ‹i ∉ is› (Option.some.inj h ▸ hk)
+
+/-- Writes through a cell map change only the bytes: for every `ι`, `κ`, offsets, cell map, bytes
+and list `ks`, the block after the writes of `Block.read_cells_none` is `blk` with other bytes. -/
+theorem Block.cells_bytes {ι κ : Type} {off : κ → Nat} {cell : ι → Option κ}
+    {bs : ι → List MemByte} :
+    ∀ (ks : List ι) (blk : Block), ∃ β,
+      ks.foldl (fun b k => (cell k).elim b fun j => b.put (off j) (bs k)) blk =
+        { blk with bytes := β }
+  | [], blk => ⟨blk.bytes, rfl⟩
+  | k :: ks, blk => by
+    obtain ⟨β, hβ⟩ := Block.cells_bytes (off := off) (bs := bs) ks
+      ((cell k).elim blk fun j => blk.put (off j) (bs k))
+    rw [List.foldl_cons, hβ]
+    cases cell k <;> exact ⟨β, rfl⟩
+
+/-- **Writers that cover the cells once give the tensor**, for every codec, offsets
+`l.stored t` bytes apart and in the block, `ι`, cell map `cell : ι → Option (Shape.Coord s)`,
+values `val k` with encodings `bs k`, and list `ks`: if no two elements of `ks` map to one cell
+and every cell has an element of `ks` mapping to it, writing `bs k` at `off j` for each `k` of
+`ks` with `cell k = some j`, in any order and with repetitions, gives a block that holds the
+tensor whose element `i` is `val (wr i)`, for a writer `wr i` in `ks` that maps to `i`. -/
+theorem Block.holds_cells {ι : Type} {blk : Block} (hc : l.Codec t enc)
+    (hap : Apart off (l.stored t)) (hin : ∀ i, off i + l.stored t ≤ blk.size)
+    {cell : ι → Option (Shape.Coord s)} {val : ι → α} {bs : ι → List MemByte}
+    (hbs : ∀ k, l.encode t (enc (val k)) = some (bs k)) {ks : List ι}
+    (hu : ∀ k ∈ ks, ∀ k' ∈ ks, ∀ i, cell k = some i → cell k' = some i → k = k')
+    (hall : ∀ i, ∃ k ∈ ks, cell k = some i) :
+    ∃ wr : Shape.Coord s → ι, (∀ i, wr i ∈ ks ∧ cell (wr i) = some i) ∧
+      (ks.foldl (fun b k => (cell k).elim b fun j => b.put (off j) (bs k)) blk).Holds l t enc off
+        (Tensor.Rep.ofFn fun i => val (wr i)) := by
+  choose wr hwr using hall
+  have hl k : (bs k).length = l.stored t := by
+    obtain ⟨bs', he, hl, -⟩ := hc.round (val k)
+    rw [hbs k, Option.some.injEq] at he
+    rw [he, hl]
+  refine ⟨wr, hwr, ?_⟩
+  obtain ⟨β, hβ⟩ := Block.cells_bytes (off := off) (bs := bs) (cell := cell) ks blk
+  refine Block.holds_of_tiles hc (fun i => by rw [hβ]; exact hin i) fun i => ?_
+  rw [Block.read_cells hap hl (hwr i).2 ks blk (hwr i).1
+    fun k' hk' hc' => hu k' hk' (wr i) (hwr i).1 i hc' (hwr i).2]
+  exact hbs (wr i)
 
 /-- Writes in any order give the tensor: writing the encoding of `enc (f i)` at each tile
 `off i` of a list `is` that contains every coordinate, in any order and with repetitions, gives a
-block that holds `ofFn f`, when the tiles are `l.stored t` bytes apart and in the block. -/
+block that holds `ofFn f`, when the tiles are `l.stored t` bytes apart and in the block. The cell
+map `some` of `Block.holds_cells`. -/
 theorem Block.holds_puts {blk : Block} (hc : l.Codec t enc) (hap : Apart off (l.stored t))
     (hin : ∀ i, off i + l.stored t ≤ blk.size) {f : Shape.Coord s → α}
     {bs : Shape.Coord s → List MemByte}
     (hbs : ∀ i, l.encode t (enc (f i)) = some (bs i)) {is : List (Shape.Coord s)}
     (hall : ∀ i, i ∈ is) :
     (is.foldl (fun b i => b.put (off i) (bs i)) blk).Holds l t enc off (Tensor.Rep.ofFn f) := by
-  have hl i : (bs i).length = l.stored t := by
-    obtain ⟨bs', he, hl, _⟩ := hc.round (f i)
-    rw [hbs i, Option.some.injEq] at he
-    rw [he, hl]
-  have hsize : ∀ (is' : List (Shape.Coord s)) (b : Block),
-      (is'.foldl (fun b i => b.put (off i) (bs i)) b).size = b.size := fun is' => by
-    induction is' with
-    | nil => intro _; rfl
-    | cons j is' ih => intro b; rw [List.foldl_cons, ih]; rfl
-  refine Block.holds_of_tiles hc (fun i => by rw [hsize]; exact hin i) fun i => ?_
-  rw [Block.read_puts hap hl, ite_eq_left (hall i)]
-  exact hbs i
+  obtain ⟨wr, hwr, h⟩ := Block.holds_cells (cell := some) hc hap hin hbs
+    (fun _ _ _ _ _ h h' => (Option.some.inj h).trans (Option.some.inj h').symm)
+    fun i => ⟨i, hall i, rfl⟩
+  have e : (fun i => f (wr i)) = f := funext fun i => congrArg f (Option.some.inj (hwr i).2)
+  rw [e] at h
+  exact h
 
 /-- Through a codec, a block holds at most one tensor at given offsets. -/
 theorem Block.holds_inj {blk : Block} (hc : l.Codec t enc) {y : Tensor α s}

@@ -130,7 +130,7 @@ loop's obligations are those above, named with its header (`n.entry4`, `n.init4`
 by its clause's tactic, with two changes: a loop's path in is the previous loop's path out, and
 the exit of each loop but the last says that every valuation `W` of `inv V (trips V)` meets the
 next clause's precondition, and that every memory of the next clause's postcondition at `W` is
-one of `post V`. `n.loop` runs `Chain.loop` for each loop in turn, from the first clause's
+one of `post V`. `n.loop` runs `ChainWith.loop` for each loop in turn, from the first clause's
 precondition to its postcondition, and `n.sound_loop` (on `n.args`) takes the first clause's
 precondition and postcondition. With one clause, the names, the statements and the messages are as above.
 MojoProofTest/KernelLoop.lean's `cnt2k` runs two clauses on SymLoop's `cnt2`, and `cnt2_open`
@@ -223,9 +223,10 @@ keyword `inv` after the clause's two terms (`mat paths chains inv`), for `chains
 one loop with no nested loop, it proves the run from an invariant you give. It adds three more
 theorems. `n.runInv` is the run of one thread in bounds, from the facts the start gives it
 (`Mat.Entry`, the inputs other than the output, `Elem` and `Elem.Only` before it), its bounds
-and one premise `H : LoopIterWith …` at an invariant `I` and a trip count `N`. `n.sound_inv` is
+and one premise `H : LoopIterWith …` at an invariant `I` for the trip count `max K 0`
+(`smax(K, 0)`, `K` the third size: one round for each index below `K`). `n.sound_inv` is
 `n.sound_mat` with `Hin` replaced by one premise `H`: `LoopIterWith` at each thread in bounds
-`th`, where `I th` and `N th` may use the thread's facts. `th : Mat.Thread …` is
+`th`, where `I th` may use the thread's facts. `th : Mat.Thread …` is
 a structure of those facts: the oracles, the index `th.k`, the context `th.c`, the memories
 `th.m₀` and `th.m'`, the frame `th.f`, the bounds `th.inBounds`, the oracle fact `th.oracleEq`,
 the entry facts `th.entry`, and `Elem` and `Elem.Only` before the thread (`th.elem`,
@@ -238,12 +239,15 @@ the loop head itself. The three fields of
 `LoopIterWith` (MojoProof/Sym/KernelIter.lean) are about the
 heads of the rounds, the iterates `R^[i] V₀` of the round from the loop head's entry valuation
 `V₀` after the chain's path in: `head` (`I` at round 0 at `V₀`), `round` (at the head of every
-round `i < N`, where `Mat.Head` and `I i` hold, the round's conditions, `RoundWith`, and
-`I (i + 1)` after it) and `exit` (at the head of round `N`, where `Mat.Head` and `I N` hold, the
-path out to `ret` with `Elem` after one more thread, `RetWith`). `Mat.Head` is what rounds that
+round `i < max K 0`, where `Mat.Head` and `I i` hold, the round's conditions, `RoundWith`, and
+`I (i + 1)` after it) and `exit` (at the head of round `max K 0`, where `Mat.Head` and
+`I (max K 0)` hold, the path out to `ret` with `Elem` after one more thread, `RetWith`). For a
+loop that runs another number of rounds (a tiled loop over `K / t`), `H` does not hold, so the
+clause's theorems do not apply to it. `Mat.Head` is what rounds that
 only read keep: the function, the buffers of `Mat.Entry`, `Elem` and `Elem.Only`. The command
 proves it at every head (mojo_inv at `V₀`, then `Mat.Head.iterate` at the registers through
-which the loop reads, `LoopSeg.bases`), and the registers the loop keeps have their values at
+which the loop reads, `LoopSeg.bases`, their values at `V₀` by `n.kept`, which the command adds
+before `n.runInv`), and the registers the loop keeps have their values at
 `V₀` at every head (`n.kept`), so `I` carries neither. A proof of `H` is
 `fun th => ⟨head, round, exit⟩`, and it takes the thread's facts once. The edge into the loop is
 discharged by `mojo_obl` at the thread's row and column, as `n.out`'s conditions are; if it is
@@ -284,8 +288,8 @@ the theorem would cover only launches with no thread out of, or in, bounds.
 | `n.starts` | the launch on `Mat.args z o a b m n K` starts | `mat` |
 | `n.out` | a thread out of bounds takes a path of the clause to `ret` (`RetWith.of_first`, `mojo_obl`, `mojo_ret`) | `mat` |
 | `n.sound_mat` | the matmul kernel theorem from the run of a thread in bounds `Hin` (`Kernel.sound_mat`, `Hout` by `n.out`) | `mat` |
-| `n.runInv` | a thread's run from its entry facts and `LoopIterWith` at an invariant, with `Mat.Head` at every head of a round (`RetLsWith.of_iter`, the edge into the loop by `mojo_obl`, `Mat.Head` by mojo_inv and `Mat.Head.iterate`) | `mat … inv` |
 | `n.kept` | the registers the loop keeps (`LoopSeg.kept`) at every head of a round, with their values at the loop head by `obl_have` (`LoopSeg.kept_round`) | `mat … inv` |
+| `n.runInv` | a thread's run from its entry facts and `LoopIterWith` at an invariant, with `Mat.Head` at every head of a round (`RetLsWith.of_iter`, the edge into the loop by `mojo_obl`, `Mat.Head` by mojo_inv and `Mat.Head.iterate` at the registers `LoopSeg.bases`, their values at the loop head by `n.kept`) | `mat … inv` |
 | `n.sound_inv` | `n.sound_mat` with `Hin` replaced by `LoopIterWith` with `Mat.Head` at each thread's `Mat.Thread` | `mat … inv` |
 
 With `mat`, the command declares only the last six rows, the last two with `inv` (no summary,
@@ -341,7 +345,7 @@ Its final grids (the reachable grids in which every thread has returned) agree o
   computes.
 - **`n.loop`** (with `loop`). For every valuation `V` of `pre` and every predicate `Q` that holds
   of every memory of `post V`, the thread runs from `V` through the loop of `n.chains` to `ret`
-  with a memory of `Q` (`RetLs`, by `Chain.loop` with `inv V` and `trips V` from the four
+  with a memory of `Q` (`RetLs`, by `ChainWith.loop` with `inv V` and `trips V` from the four
   obligations).
 - **`n.sound_loop`** (with `loop`, as `n.args`). For every launch, block numbers, scalars,
   memory `m` closed for `n.args` (`Mem.Closed`) whose pointer bytes are known, admission,
@@ -453,7 +457,7 @@ parentheses, which the table leaves out.
 | `mat: n.out does not elaborate: no path of the clause is discharged for a thread out of bounds by RetWith.of_first, mojo_obl and mojo_ret (fn): …` | no path of `paths` stores nothing after its entry block, returns and has its conditions proved by `mojo_obl` at a thread out of bounds, so `Hout` is not generated |
 | `mat: inv needs one chain; the chains do not reduce to a list of one (fn)` | `n.runInv` proves `Hin` with one invariant, for one chain |
 | `mat: inv needs a chain of one loop; its loops do not reduce to a list of one (fn)`, `mat: inv needs a loop with no nested loop; its nested loops do not reduce to [] (fn)` | `RetLsWith.of_inv` is for a sequence of one loop with no nested loop |
-| `mat: the clause name x is a binder name of n.runInv, n.kept or n.sound_inv (fn)` | with `inv`, `I`, `N`, `H`, `th`, `C`, `i`, `W` and `hW` are binder names too |
+| `mat: the clause name x is a binder name of n.runInv, n.kept or n.sound_inv (fn)` | with `inv`, `I`, `H`, `th`, `C`, `i`, `W` and `hW` are binder names too |
 | `mat: inv: n.runInv does not elaborate: Mat.Head.iterate's premise LoopSeg.loadsFrom at LoopSeg.bases (%r, …) is false: block %l of the loop path stores; block %l' of the loop path loads through a pointer whose base is not a register the loop keeps (fn)` | evaluated before the attempt: a block of the loop path stores, or loads through a pointer whose base is no register the loop keeps (`Summary.loadsIn` at `LoopSeg.bases` fails), so the rounds may change the memory `Mat.Head` is about |
 | `mat: inv: n.runInv does not elaborate: Mat.Head.iterate's premise on the registers LoopSeg.bases fails at %r: obl_have gives it no value at the loop head (fn): ⊢ …`, `… fails at %r: its value at the loop head is not shown to name a block other than the output's by hne (a or b other than the output) (fn): ⊢ …` | register `%r` of `LoopSeg.bases`, which a load of the loop path reads through, has no value at the loop head by `obl_have`, or a value that `a ≠ o` and `b ≠ o` do not show to name a block other than the output's (at a pointer to the output, `⊢ o ≠ o`) |
 | `mat: inv: n.runInv does not elaborate: the edge into the loop is not discharged by mojo_obl at the thread's 2-D index facts, or Mat.Head at the loop head is not proved by mojo_inv (fn): ⊢ …` | the chain's path into the loop has a condition `mojo_obl` does not prove at a thread in bounds, so `Hin` would need it as a further premise; or `Mat.Head` is not proved at the loop head. After the colon, in this row and the one above, the first error of the failed attempt from its first goal on, without the goal's hypotheses |
@@ -660,19 +664,20 @@ Every result here is for every program, launch and contexts.
   of the distinct threads `ns` runs its thread on memory `m`, this is a run of grid steps to the
   grid with threads `ns` done, the others unchanged, and memory `m'`. `Seq.trace`:
   `m'.trace = Es.reverse.flatten ++ m.trace`. `Seq.done`: when `ns` names every thread, the grid
-  reached is done (`Grid.Done`, `Grid.done_foldl`).
+  reached is done (the core's `GPUProof.Done` at `sig`, `Grid.done_foldl`).
 - **Soundness from a schedule.** `Seq.start_sound` holds for every program, kernel, launch,
   arguments, address choice and oracle. Start from the grid `Grid.start` gives. If threads that
   name every thread run in turn to a done grid that is not bad and observes `y` with `R y`, the
-  start's grid is sound (`Grid.Sound`, by `Grid.start_sound`). That the done grid is not bad is
-  the caller's premise.
+  start's grid is sound (`Grid.Sound`, by `Grid.start_sound`). That the done grid is not bad
+  (`¬ GPUProof.Bad sig (z, L, c)`, the core's `Bad` at `sig`) is the caller's premise.
 - **Soundness from an invariant.** `Seq.start_sound_inv` (with `Seq.of_inv`) is the same for an
   invariant `P k` of the memory after `k` threads. Suppose the start's memory is of `P 0`, and
   each thread `k` (`Grid.thread`), from every memory of `P k`, runs to its end leaving one of
   `P (k + 1)`. Suppose also that every memory of `P N` has a trace with no data race (`racy`)
-  that keeps the promise of `!invariant.load` (`kept`), and an observation meeting `R`. Then the
-  start's grid is sound. The done grid the threads leave is not bad, by `Grid.Done.bad_iff`: a
-  done grid is bad only by its trace (MojoProof/Sem/Determinism.lean).
+  that keeps the promise of `!invariant.load` (the core's `GPUProof.kept` at `sig`), and an
+  observation meeting `R`. Then the start's grid is sound. The done grid the threads leave is not
+  bad, by `Grid.Done.bad_iff`: a done grid is bad only by its trace
+  (MojoProof/Sem/Determinism.lean).
 
 A kernel's proof then needs a per-thread run on every memory of the invariant, not one
 schedule's memories, and facts about the last memory's trace, not about a grid. On a launch whose
@@ -730,18 +735,19 @@ These results turn a kernel's paths into `Kernel.Sound`; their proofs are in
 docs/proofs/kernel.md. Each holds for every program, kernel, launch, arguments, memory, address
 choice and oracle, under the premises given.
 
-- **Paths that return.** `Ret V Q ps`: path `ps` from valuation `V` has its premises with `phi`s
-  (`WalkI`), its last block (`Valuation.lastI`) returns, and the last block's effects succeed with
-  a memory of `Q`. `Runs.of_ret`: take a one-frame thread with no `alloca` blocks at the first
-  block of a path that the path checker with `phi`s accepts (`coversPathI`). If the path is a
-  `Ret` from the thread's entry valuation, the thread runs to its end leaving a memory of `Q`
-  (`Block.sound_retR`). `Walk.walkI`: premises without `phi`s (`Walk`) are premises with `phi`s,
-  with the same last block. So `Ret.of_walk`, and `mojo_obl`'s `Walk` goals, give a `Ret`
-  (`Elem.ret`, MojoProof/Sym/Ops.lean, is `Ret.of_walk` with the effects as steps of `Elem`).
+- **Paths that return.** `Ret V Q ps` (`RetWith false`): path `ps` from valuation `V` has its
+  premises (`WalkWith false`, an edge into a block with `phi`s setting them), its last block
+  (`Valuation.lastWith false`) returns, and the last block's effects succeed with a memory of
+  `Q`. `Runs.of_ret`: take a one-frame thread with no `alloca` blocks at the first block of a
+  path that the path checker accepts (`coversPathWith false`). If the path is a `Ret` from the
+  thread's entry valuation, the thread runs to its end leaving a memory of `Q`
+  (`Block.sound_retWith`). `mojo_obl` proves the premises (`WalkWith` goals), and
+  `Elem.retWith` (MojoProof/Sym/Ops.lean) gives a `Ret` from them with the effects as steps of
+  `Elem`.
 - **The start's threads.** `Grid.start_thread`: every thread `Grid.start` makes has one frame of
   the kernel at its first block, instruction 0, no `alloca` blocks, step count 0.
 - **Covered paths.** `coversEntry P fn paths`: every path starts at `fn`'s first block and is
-  accepted by the path checker with `phi`s (`coversPathI`) from instruction 0. A path may
+  accepted by the path checker (`coversPathWith false`) from instruction 0. A path may
   therefore cross a join whose block starts with `phi`s. This is a closed Boolean that
   `decide +kernel` evaluates on a concrete program. `coversEntryWith contract` is the same with
   the path checker with `fmul contract` when `contract` (`coversPathWith`); at `false` it is
@@ -778,10 +784,10 @@ choice and oracle, under the premises given.
   `coversChainsWith contract` for the checks, and `RetWith contract` and `RetLsWith contract` for
   each thread's run, so the blocks may have `fmul contract` and `fadd contract`
   (`Runs.of_retWith`, `Runs.of_chainsWith`, MojoProof/Sym/Loop.lean). The three without the flag
-  are their `false` cases (`Chain.with_iff`). `Kernel.sound_entryWith` also indexes the
-  invariant by the start's memory and gives each named `byval(t)` parameter's register a pointer
-  to a block of the start's memory, owned by the thread, from which `t` loads as the argument
-  (`Grid.start_buffer`), and the valuation's oracle.
+  are their `false` cases, one line each (`RetLs` is `RetLsWith false` by definition).
+  `Kernel.sound_entryWith` also indexes the invariant by the start's memory and gives each named
+  `byval(t)` parameter's register a pointer to a block of the start's memory, owned by the
+  thread, from which `t` loads as the argument (`Grid.start_buffer`), and the valuation's oracle.
 - **The elementwise invariant.** `Elem m₀ out w cell bs k m`: block `out` is `m₀`'s with the
   bytes of the first `k` threads put at their cells, other blocks are unchanged, and every access
   is owned.
@@ -885,9 +891,7 @@ choice and oracle, under the premises given.
     `T` loads as `enc x` (`Mem.load_byval`).
   - `Grid.start_scalar`: any other parameter's register holds the value `withAttrs` gives on
     every memory.
-- **Helpers.** `Valuation.after_mem` (the memory after a block) and `Ret.of_walk` (a path with
-  `Walk` whose last block returns and whose effects succeed with a memory of `Q` is a `Ret` to
-  `Q`).
+- **Helpers.** `Valuation.after_mem` (the memory after a block).
 - **The corollaries of a binary float map.** These hold for every kernel whose theorem is
   `Kernel.Sound` for `Elem.Out` with `Elem.map2`'s bytes. Those bytes are the encoding of
   `deliver (op x_k y_k) (o k)` for `k < n`; `Kernels.vadd.bytes`, `Kernels.vmul.bytes` and
@@ -929,7 +933,7 @@ Tests in MojoProofTest/Kernel.lean. Each covers the launch and memory it names.
   pointer bytes and the observation decided by the kernel.
 - **Twins.**
   - `out_twin`: thread 0 does not take the out-of-range path, so the path is chosen per thread.
-  - `entry_twin`: a path from `%21` passes `coversPathI` but not `coversEntry`.
+  - `entry_twin`: a path from `%21` passes `coversPathWith false` but not `coversEntry`.
   - `elem_twin`: cells that are not `Apart` meet `Elem` with a racy trace.
 - **`phi_runs`.** `Runs.of_ret` on a path with a join: the naive matmul kernel's
   `%46 → %51 → %67 → %69`, whose edge into `%67` sets its `phi` (MojoProofTest/SymPhi.lean). It
@@ -940,8 +944,9 @@ Tests in MojoProofTest/Kernel.lean. Each covers the launch and memory it names.
   - `correct23`: `vadd.correct` on 2 blocks of 3 threads (`L23`, `valid23`) with count 5 and
     nonconstant inputs (`x5`, `y5`), on `Map2.mem` (`mem5`, `pre5` by `Map2.pre_mem`), at every
     address choice and oracle. Thread 5 is idle.
-  - `correct12`: the same on one block of 2 threads (`L12`, `valid12`), fewer threads than the
-    count 5. Only the cells of threads 0 and 1 are put, and cells 2 to 4 keep `mem5`'s contents.
+  - `correct12`: the same on one block of 2 threads (`Confluence.two`, `launch2 1 1 2 1`),
+    fewer threads than the count 5. Only the cells of threads 0 and 1 are put, and cells 2 to 4
+    keep `mem5`'s contents.
   - `correctV23`: `vmul.correct` on `L23` with inputs `x5`, `x5` (`memV`).
   - `correctS23`: `vsub.correct` on `L23` with inputs `x5`, `y5` (`mem5`, `pre5`).
 - **The satisfiability witness `g2_vadd`.** `Grid.start` then `Grid.run` (fuel 64, one phase) on
@@ -953,15 +958,15 @@ Tests in MojoProofTest/Kernel.lean. Each covers the launch and memory it names.
   - (a) `twin_len`: an output of 4 floats at count 5 (`mem4`, which meets every other field of
     `Map2.Pre`, `pre4_5`). The run faults (`run_len`).
   - (b) `twin_alias`: the output at the first input's block, which `Map2.Pre` refuses
-    (`pre_alias`), on `mem5w` (that block writable). The run ends done with no race and `kept`
-    false (`run_alias`).
+    (`pre_alias`), on `mem5w` (that block writable). The run ends done with no race and the
+    core's `GPUProof.kept` at `sig` false (`run_alias`).
   - (c) `twin_tid`: `fnTid` (statement 14 of the entry block adds 0 for `ctaid.x * ntid.x`,
     built from `Kernels.vadd.fn_0`'s AST). The run ends done with a race and its two accesses
     (`run_tid`).
   - (d) `twin_2d`: the four launches of `rows2`, valid, each with two rows in one of the grid's
-    and the block's `y` and `z` (the block of 3 by 2 threads `L32` is one) and so refused by one
-    of `vadd.correct`'s hypotheses on the launch. The run races on each, so each hypothesis is
-    needed.
+    and the block's `y` and `z` (the block of 3 by 2 threads `launch2 1 1 3 2` is one) and so
+    refused by one of `vadd.correct`'s hypotheses on the launch. The run races on each, so each
+    hypothesis is needed.
 - **The canaries `canaries_vadd`, `canaries_vmul` and `canaries_vsub`.** `Elem.canaries` of
   `correct23`'s, `correctV23`'s and `correctS23`'s bytes, each refuted
   (`Kernel.replay_canaries`, by the kernel).
@@ -972,7 +977,8 @@ Tests in MojoProofTest/Kernel.lean. Each covers the launch and memory it names.
   cells; `vsub_real` their difference.
 
 Tests in MojoProofTest/KernelContract.lean and MojoProofTest/KernelXY.lean. Each covers the
-launch, memory, address choice and oracle it names.
+launch, memory, address choice and oracle it names, except `not_apart_xy`, which holds for every
+valid launch.
 
 - **`kernelF`.** `Kernel.sound_mapNWith` at `contract = true` with every premise closed: `kf`,
   whose threads run three rounds of `%a = fadd contract (fmul contract %a, 2.0), 1.0` and store
@@ -985,6 +991,7 @@ launch, memory, address choice and oracle it names.
   postcondition (`Elem.Out` of 7.0 in each thread's cell). The clause's `pre` holds of every
   valuation with the start's facts of a thread and a memory of `memF` for that thread, so each
   admitted thread meets it; `kfK_retLs` is `kfK.loop` at thread 0.
-- **`apart2x3`.** `Launch.apart_xy` on one block of 2 × 3 threads. Its twin `apart2x3_twin`: at a
-  row stride below the column bound, two threads share a cell.
+- **`apart2x3`.** `Launch.apart_xy` on one block of 2 × 3 threads. Its twin `not_apart_xy`, for
+  every valid launch: at a row stride below the column bound, two threads share a cell; tested
+  on `L2x3` (`apart2x3_twin`) and on two blocks of 2 × 5 threads (`apart4x5_twin`).
 - **`out_run`.** `Elem.Out.of_run` on one run of `vector_addition` (`mem5`, `ch₀`, `ω₀`).

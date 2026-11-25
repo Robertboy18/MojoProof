@@ -1,0 +1,18 @@
+MojoProof GPU run record of cp.async: notice for the files in tests/gpu/cp-async/
+
+test_async_cpy_wait_group.mojo is a modified copy of
+max/kernels/test/gpu/memory/test_async_cpy_wait_group.mojo in
+https://github.com/modular/modular at commit bbc13a719b6c139ede763f1434a4342ebfd843ac
+(bbc13a71). It keeps Modular's header, which reads:
+
+    Copyright (c) 2026, Modular Inc. All rights reserved.
+
+    Licensed under the Apache License v2.0 with LLVM Exceptions:
+    https://llvm.org/LICENSE.txt
+
+and says in a comment what was changed: the imports of its origin are kept, and its kernels,
+runners and `main` are replaced by a one-warp kernel around the library's `async_copy`,
+`async_copy_commit_group` and `async_copy_wait_group` and a `main` that runs it on random words
+and plans and writes the dump. The license text is in tests/corpus/LICENSE-APACHE-LLVM.
+
+record.txt, dump.txt and Compare.lean are this repository's, under its license.

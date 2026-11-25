@@ -1,10 +1,12 @@
-# A `ret` to a caller frame (`Block.sound_retR`, `Block.sound_back`)
+# A `ret` to a caller frame (`Block.sound_retWith`, `Block.sound_back`)
 
 Lean: `MojoProof/Sym/Path.lean`. Test: `MojoProofTest/SymPhi.lean`, the section "A `ret` to a caller
 frame".
 
 **Scope.** The results hold for every program `P` and function `fn`, and for every path
-`(l, ds, S) :: ps` that `coversPathI P fn p0` accepts and whose last block returns (`ret void`).
+`(l, ds, S) :: ps` that `coversPathWith contract P fn p0` accepts and whose last block returns
+(`ret void`), for both values of the flag `contract` (with or without `fmul contract`; `false`
+for `Block.sound_back`).
 They hold for every context of `P` and every memory `m`, and for every thread whose innermost
 frame `f` runs `fn` at block `l`'s position `p0` above any caller frames `rest`. For
 `Block.sound_back`, the caller frame `g` is any frame whose block `covers` accepts from
@@ -15,31 +17,30 @@ its caller needs the case of a caller frame too, so item 1 is stated under any c
 
 ## Statement
 
-1. `Block.sound_retR`. Assume `coversPathI P fn p0 ((l, ds, S) :: ps) = true`,
-   `t.frames = f :: rest`, `f.fn = fn`, `f.label = l`, `f.pc = p0`, `WalkI` of the path from `f`'s
-   entry valuation `V`, and that the last block's exit is `.ret`. Then there are `fe` and `me` such
-   that:
+1. `Block.sound_retWith`. Assume `coversPathWith contract P fn p0 ((l, ds, S) :: ps) = true`,
+   `t.frames = f :: rest`, `f.fn = fn`, `f.label = l`, `f.pc = p0`, `WalkWith contract` of the
+   path from `f`'s entry valuation `V`, that `V.lastWith contract l S ps = (W, l', S')` and that
+   `S'.exit = .ret`. Then there are `fe` and `me` such that:
    - `Steps c t m ⟨fe :: rest, t.k + pathLen S ps⟩ me`;
-   - the last block's effects give `me` (`SEff.run` at `V.lastI l S ps`);
+   - the last block's effects give `me` (`SEff.run` at `W`);
    - `step c ⟨fe :: rest, t.k + pathLen S ps⟩ me` is `.ok` of the following, where `me'` is `me`
      with `f`'s `alloca` blocks dead:
      - `.done me'` if `rest = []`;
      - `.next ⟨{ g.set f.dest none none with pc := g.pc + 1 } :: gs, t.k + pathLen S ps + 1⟩ me'`
        if `rest = g :: gs`.
 2. `Frame.set_none`: `g.set r none p = g`, since `ret void` sets no register.
-3. `Block.sound_back`. Take item 1's premises with `t.frames = f :: g :: rest`, and `dg` and `Sg`
-   with `covers P g.fn g.label (g.pc + 1) dg Sg = true`. Suppose that every memory `me` the last
-   block's effects make satisfies every `d ∈ dg` at `W`, which is the entry valuation of
-   `{ g with pc := g.pc + 1 }` at step count `t.k + pathLen S ps + 1` on `me` with `f`'s `alloca`
-   blocks dead. Then for some such `me`,
-   `Ends c t m { g with pc := g.pc + 1 } rest (W, g.label, Sg)`.
+3. `Block.sound_back`. Take item 1's premises at `contract := false` with
+   `t.frames = f :: g :: rest`, and `dg` and `Sg` with `covers P g.fn g.label (g.pc + 1) dg Sg =
+   true`. Suppose that every memory `me` the last block's effects make satisfies every `d ∈ dg` at
+   `Wg`, which is the entry valuation of `{ g with pc := g.pc + 1 }` at step count
+   `t.k + pathLen S ps + 1` on `me` with `f`'s `alloca` blocks dead. Then for some such `me`,
+   `Ends c t m { g with pc := g.pc + 1 } rest (Wg, g.label, Sg)`.
 
 ## Proof
 
-1. `Block.sound_pathI`
-   gives `Ends` of the last block, and with it the frame's `alloca` blocks and caller's register
-   (`hal`, `hde`). The `ret`'s `Exit.next` is `step`'s result (`hn`, `hst`), and it is the match
-   on `rest`.
+1. `Block.sound_pathWith_ptrs` gives `EndsWith contract` of the last block, and with it the frame's
+   `alloca` blocks and caller's register (`hal`, `hde`). The `ret`'s `Exit.next` is `step`'s result
+   (`hn`, `hst`), and it is the match on `rest`.
 2. By cases on `r`: `Frame.set` with no value is the identity.
 3. Item 1 with `rest = g :: rest`, simplified by item 2, gives the step to
    `{ g with pc := g.pc + 1 } :: rest`. `Block.sound` on the caller's block, from that thread and
@@ -47,7 +48,8 @@ its caller needs the case of a caller frame too, so item 1 is stated under any c
 
 ## Dependencies
 
-`Block.sound_pathI`, `Block.sound`, `Ends.pre`, `Exit.next`, `step` (MojoProof/Sem/Thread.lean).
+`Block.sound_pathWith_ptrs`, `Block.sound`, `Ends.pre`, `Exit.next`, `step`
+(MojoProof/Sem/Thread.lean).
 
 ## Instances
 

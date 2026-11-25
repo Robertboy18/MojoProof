@@ -18,7 +18,7 @@ LangRef's section on `shufflevector` (the quote is the first sentence of its ove
 
 ## Corpus
 
-42 of the 114 corpus files use it (1068 uses); `corpus` lists the first 5 in path order.
+42 of the 116 corpus files use it (1068 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

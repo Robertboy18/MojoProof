@@ -32,8 +32,8 @@ the constant it denotes), and, when the command is elaborated:
    (`enableRealizationsForConst`), so `simp only [n.b<i>]` unfolds them in the module that runs the
    command too;
 3. enumerates the paths from the entry block over the summaries' exits (`kernelSegs`, depth
-   first; `br d` to `d`, `cond c d e` and `phi c d e` to `d` then `e`, `ret` ends a path); a
-   branch into a block with `phi`s is followed, and the path checker with `phi`s (`coversPathI`,
+   first; `br d` to `d`, `cond c d e` and `phi c d e` to `d` then `e`, `ret` ends a path); a branch
+   into a block with `phi`s is followed, and the path checker with `phi`s (`coversPathWith false`,
    in `coversEntry`) covers its target from after them. It adds `n.paths`, each path a list of
    `(label, n.b<i>.obls, n.b<i>)`, and the theorem `n.covers : coversEntry P fn n.paths = true`,
    proved by `decide +kernel`. A branch to a block on the current path is a loop: without the
@@ -48,11 +48,11 @@ the constant it denotes), and, when the command is elaborated:
    leaves), before it adds anything. It adds the sequence of loops `n.chains` (`LoopChain`, the
    loop entered at the header's position `Exit.pc`), the theorem
    `n.coversChains : coversChains P fn n.chains = true` by `decide +kernel`, the obligations of
-   `Chain.loop` at every valuation `V` of `pre` (`n.entry`, the path into the loop is an
+   `ChainWith.loop` at every valuation `V` of `pre` (`n.entry`, the path into the loop is an
    `Edge`; `n.init`, `inv V 0` after it; `n.step`, each round `i < trips V` from `inv V i` is a
    `Round` to `inv V (i + 1)`; `n.exit`, the path out from `inv V (trips V)` is a `Ret` to
    `post V`), each proved by `tac` (`decide +kernel` if the clause has no `by`; `proveBy`, with
-   no error recovery), and the thread's run `n.loop` (`RetLs` by `Chain.loop`). If `tac` leaves
+   no error recovery), and the thread's run `n.loop` (`RetLs` by `ChainWith.loop`). If `tac` leaves
    some obligations, the error names each of them and the command restores the environment, so
    it adds nothing. With a clause for each of several loops in sequence, in the order a thread
    runs them, the paths end at a branch into any of their headers; the command needs one path
@@ -61,7 +61,7 @@ the constant it denotes), and, when the command is elaborated:
    loop; each loop's obligations end with its header (`n.entry<h>`), its path in is the previous
    loop's path out, and the exit of each loop but the last is that the invariant at its trip
    count gives the next clause's precondition, whose postcondition implies this clause's;
-   `n.loop` is `Chain.loop` for each loop in turn, from the first clause's precondition;
+   `n.loop` is `ChainWith.loop` for each loop in turn, from the first clause's precondition;
 4. adds `n.sound_of`, `Kernel.sound_of_paths` at `n.covers` (with the loop clause
    `Kernel.sound_of_chains` at `n.covers` and `n.coversChains`; with the flag and no loop clause
    `Kernel.sound_of_chainsWith` at `n.covers` and no sequence of loops, whose cover is `rfl`): the
@@ -130,18 +130,18 @@ the constant it denotes), and, when the command is elaborated:
    runs `Hin` and `Hout` remain, named so that a caller passes them by name. With
    `mat paths chains inv`, when `chains` reduces (`whnf`) to one chain of one loop with no nested
    loop (otherwise an error naming the reason and `fn`, before anything is added), it also adds
-   `n.runInv`, the run of one thread in bounds from its entry facts, its memory's `Elem` and
-   `Elem.Only`, and an invariant `I` and a trip count `N` of the caller's with the three facts
-   `LoopIterWith` at the heads of the rounds by `RetLsWith.of_iter`
-   (MojoProof/Sym/KernelIter.lean), with the edge into the loop by `mojo_obl` and the facts
-   `Mat.Head` (the function, the buffers, `Elem` and `Elem.Only`) at the head of every round by
-   mojo_inv at the loop head and `Mat.Head.iterate` at the registers `LoopSeg.bases` (an error if
-   one is not discharged, with the goal left open, and nothing added), `n.kept`, each register
-   that the loop keeps (`LoopSeg.kept`) at the head of every round with its value at the loop
-   head by `obl_have` (or that value itself where `obl_have` gives it only as a
-   `Classical.choose`), and `n.sound_inv`,
-   `n.sound_mat` with `Hin` replaced by one premise `H`, `LoopIterWith` at each thread in bounds
-   `th : Mat.Thread` (its facts as one structure), with `I` and `N` of `th`. Its instance is the naive matmul kernel
+   `n.kept`, each register that the loop keeps (`LoopSeg.kept`) at the head of every round with its
+   value at the loop head by `obl_have` (or that value itself where `obl_have` gives it only as a
+   `Classical.choose`), `n.runInv`, the run of one thread in bounds from its entry facts, its
+   memory's `Elem` and `Elem.Only`, and an invariant `I` of the caller's with the three facts
+   `LoopIterWith` at the heads of the rounds for the trip count `max K 0` (`smax(K, 0)`, `K` the
+   third size) by `RetLsWith.of_iter` (MojoProof/Sym/KernelIter.lean), with the edge into the loop
+   by `mojo_obl` and the facts `Mat.Head` (the function, the buffers, `Elem` and `Elem.Only`) at the
+   head of every round by mojo_inv at the loop head and `Mat.Head.iterate` at the registers
+   `LoopSeg.bases`, each a pointer to `a` or `b` at the loop head by `n.kept` (an error if one is
+   not discharged, with the goal left open, and nothing added), and `n.sound_inv`, `n.sound_mat`
+   with `Hin` replaced by one premise `H`, `LoopIterWith` at each thread in bounds `th : Mat.Thread`
+   (its facts as one structure), with `I` of `th`. Its instance is the naive matmul kernel
    (MojoProofTest/NaiveSound.lean).
 
 In a library module (`MojoProof.*`), or in any module with the option `mojo_kernel.share` true,
@@ -360,10 +360,10 @@ two `byval` inputs and `i32` sizes `m`, `n`, `K`, the command adds only `n.names
 (on `Mat.args`) and `n.sound_mat`, `Kernel.sound_mat` at `paths` and `chains` with every premise
 of the program discharged, whose premises are the memory premises and the threads' runs `Hin` and
 `Hout` (`elabMat`). With `mat paths chains inv` (`chains` one chain of one loop with no nested
-loop), it also adds `n.runInv`, a thread's run from an invariant's three facts `LoopIterWith`
-at the heads of the rounds, with `Mat.Head` there, `n.kept`, the registers the loop keeps at
-those heads, and `n.sound_inv`, `n.sound_mat` with `Hin` replaced by those facts at each thread's
-`Mat.Thread`. -/
+loop), it also adds `n.kept`, the registers the loop keeps at the heads of the rounds,
+`n.runInv`, a thread's run from an invariant's three facts `LoopIterWith` at those heads, with
+`Mat.Head` there, and `n.sound_inv`, `n.sound_mat` with `Hin` replaced by those facts at each
+thread's `Mat.Thread`. -/
 syntax (name := mojoKernel) "mojo_kernel " ident " := " term:max term:max
   (&" reads " sepBy1(ident " := " ident, ", "))? (&" writes " sepBy1(ident " := " ident, ", "))?
   (&" scalars " sepBy1(ident " := " ident, ", "))? (&" pointers " sepBy1(ident " := " ident, ", "))?
@@ -403,27 +403,27 @@ abbrev LoopClause : Type :=
 /-- The proof term of a thread's run through the loops `ks` in order (each given by its clause's
 invariant and trip count and the constants of its obligations `entry`, `init`, `step` and `exit`)
 from valuation `V` with the first one's precondition `hV`, to `ret` with a memory of the predicate
-of `hQ` (a proof that the first one's postcondition at `V` implies it): `Chain.loop` for each
+of `hQ` (a proof that the first one's postcondition at `V` implies it): `ChainWith.loop` for each
 loop, the next loop's from every valuation of the invariant at the trip count, by that loop's
-`exit` (the next precondition, and the next postcondition implies this one's), and `Chain.last`
-with `Ret.mono` for the last loop's path out; with `contract`, `ChainWith.loop`,
-`ChainWith.last` and `RetWith.mono`. Each level's binders have their own macro scope. -/
+`exit` (the next precondition, and the next postcondition implies this one's), and
+`ChainWith.last` with `Ret.mono` for the last loop's path out (`RetWith.mono` with `contract`).
+Each level's binders have their own macro scope. -/
 def loopRun (contract : Bool) : List (Lean.Term × Lean.Term × Ident × Ident × Ident × Ident) →
     Lean.Term → Lean.Term → Lean.Term → CommandElabM Lean.Term
   | [], _, _, _ => throwError "mojo_kernel: no loop clause"
   | (invS, tripsS, entryI, initI, stepI, exitI) :: ks, V, hV, hQ => withFreshMacroScope do
     let W := mkIdent (← MonadQuotation.addMacroScope `W)
     let hW := mkIdent (← MonadQuotation.addMacroScope `hW)
-    let (loopC, lastC, monoC) := if contract then
-        (mkCIdent ``ChainWith.loop, mkCIdent ``ChainWith.last, mkCIdent ``RetWith.mono)
-      else (mkCIdent ``Chain.loop, mkCIdent ``Chain.last, mkCIdent ``Ret.mono)
+    let (loopC, lastC) := (mkCIdent ``ChainWith.loop, mkCIdent ``ChainWith.last)
+    let monoC := if contract then mkCIdent ``RetWith.mono else mkCIdent ``Ret.mono
+    let cq : Lean.Term := quote contract
     let next ← match ks with
       | [] => `($lastC ($monoC $hQ ($exitI $V $hV $W $hW)))
       | _ => do
         let hV' ← `(($exitI $V $hV $W $hW).1)
         let hQ' ← `(fun me h => $hQ me (($exitI $V $hV $W $hW).2 me h))
         loopRun contract ks W hV' hQ'
-    `($loopC ($invS $V) ($tripsS $V) ($entryI $V $hV) ($initI $V $hV)
+    `($loopC (contract := $cq) ($invS $V) ($tripsS $V) ($entryI $V $hV) ($initI $V $hV)
         (fun i hi W hW => $lastC ($stepI $V $hV i hi W hW)) fun $W:ident $hW:ident => $next)
 
 /-- The declarations of the `loop` clauses of `mojo_kernel n`, in namespace `ns`, for kernel
@@ -579,7 +579,7 @@ def elabLoopClause (n ns : Name) (Pstx fnstx : Lean.Term) (fnText enText : Strin
     of the {if one then "" else "first "}loop clause's precondition, for every predicate `Q` \
     that holds of every memory of the postcondition at `V`, the sequence of loops of \
     `{chainsS}` runs from `V` to `ret` with a memory of `Q`{withText} (`{w "RetLs"}`: \
-    `{if contract then "ChainWith" else "Chain"}.loop` with the invariant and the trip count at \
+    `ChainWith.loop` with the invariant and the trip count at \
     `V`, by {obText}). It covers this one kernel, at every valuation of the precondition."
   return chainsN
 
@@ -619,8 +619,11 @@ def elabSoundLoop (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String) (fn :
   let loopC := mkCIdent (base ++ `loop)
   let soundLoopId := mkIdent (n ++ `sound_loop)
   let sig ← `(Kernel.Sound $Pstx $fnstx L ($argsId $xs*) m adm obs R)
-  let hendT ← `(∀ m', I (volume L.grid * volume L.block) m' → racy m'.trace = false ∧
-    kept m'.trace = true ∧ ∃ y, obs m' = some y ∧ R y)
+  let hendT ← `(∀ m', I (volume L.grid * volume L.block) m' →
+    ((∀ a, Event.access a ∈ m'.trace → a.who.thread < volume L.grid * volume L.block ∧
+        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped m'.trace.reverse →
+      GPUProof.racy sig (m'.trace.map (Event.toCore L)).reverse = false) ∧
+    GPUProof.kept sig (m'.trace.map (Event.toCore L)).reverse = true ∧ ∃ y, obs m' = some y ∧ R y)
   if contract then
     let run ← `((H ch oracle ha k hk V hp hw he ho hf $regArgs* hI).elim fun h1 h2 =>
       Or.inr ($loopC V h1 h2))
@@ -680,9 +683,9 @@ def elabSoundLoop (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String) (fn :
     oracle `oracle k`" else ""} and the kernel{regText}) and \
     memory of `I k`, meets the {if one then "" else "first "}loop clause's precondition, with \
     every memory of its postcondition at `V` one of `I (k + 1)`, and `I` after all threads \
-    holds only of memories whose trace has no data race, keeps the promise of \
-    `!invariant.load` and has an observation meeting the predicate. It covers this one \
-    kernel."
+    holds only of memories whose trace keeps the promise of `!invariant.load`, has no data \
+    race when it has the premises of `racy_iff`, and has an observation meeting the \
+    predicate. It covers this one kernel."
 
 /-- The binder names of `n.sound_mat` and `n.out` other than the six clause names: no clause
 of `mat` may have one of them as its name. -/
@@ -694,7 +697,7 @@ def matBinders : List Name :=
 /-- The binder names that `mat … inv` adds in `n.runInv`, `n.kept` and `n.sound_inv`: no clause
 of `mat … inv` may have one of them as its name. -/
 def matInvBinders : List Name :=
-  [`I, `N, `H, `th, `C, `i, `W, `hW]
+  [`I, `H, `th, `C, `i, `W, `hW]
 
 /-- The one chain of the `mat` clause's `chains` (an elaborated term of type `List LoopChain`)
 and its one loop, by `whnf` at the default transparency: `.ok (C, Lp)` if `chains` reduces to
@@ -733,28 +736,28 @@ memory by `mojo_ret` discharge, tried in order on each side of the row's bound) 
 `n.sound_mat`, `Kernel.sound_mat` at `fn` with every premise that depends only on the program
 discharged and `Hout` by `n.out`; the run of a thread in bounds, `Hin`, stays its premise. With
 `inv` (`chains` one chain of one loop with no nested loop by `matInvChain`, checked before the
-path checker, and no clause name in `matInvBinders`), it also adds `n.runInv` (the run of a
-thread in bounds from its entry facts, `Elem` and `Elem.Only`, and `LoopIterWith` at an
-invariant `I` and a trip count `N`: `RetLsWith.of_iter` with the edge into the loop by
-`mojo_obl` at the thread's 2-D index facts and `Mat.Head` at every head of a round by mojo_inv
-at the loop head and `Mat.Head.iterate`, at the registers `LoopSeg.bases` of the loop evaluated
-here, each one's value at the loop head by `obl_have`), `n.kept` (each register of
+path checker, and no clause name in `matInvBinders`), it also adds `n.kept` (each register of
 `LoopSeg.kept` at every head of a round, with the value that `obl_have` computes at the loop head
 from `Mat.Entry`, the launch's validity, the sizes and the thread's 2-D index facts, by
-`LoopSeg.kept_round`; a register whose value `obl_have` gives only as a `Classical.choose` is
-stated with its value at the loop head itself) and `n.sound_inv` (`n.sound_mat`'s
-statement with `Hin` replaced by `LoopIterWith` at each thread's `Mat.Thread`, proved by
-`n.runInv` at each thread). If one of them does not elaborate, the command restores the
-environment, so it adds nothing; for `n.out` the error says that no path of the clause is
-discharged; for `n.runInv`, before the attempt, that the loop path stores or loads through a
-pointer whose base is not a register the loop keeps (`LoopSeg.loadsFrom` at `LoopSeg.bases` is
-false, evaluated), with the blocks at which it fails, and after it, that a register of
-`LoopSeg.bases` has no value at the loop head by `obl_have` or one not shown to name a block
-other than the output's, with the register, or else that `mojo_obl` does not discharge the edge
-into the loop or `Mat.Head` at the loop head is not proved; for `n.kept` that the function at
-the loop head is not proved or that a register the loop keeps has no value there by `obl_have`.
-After an attempt the error ends with the attempt's first error from its first goal (`⊢ …`,
-without the hypotheses) on; the failed attempt's messages are dropped. -/
+`LoopSeg.kept_round`; a register whose value `obl_have` gives only as a `Classical.choose` is stated
+with its value at the loop head itself), `n.runInv` (the run of a thread in bounds from its entry
+facts, `Elem` and `Elem.Only`, and `LoopIterWith` at an invariant `I` for the trip count `max K 0`,
+`K` the third size: `RetLsWith.of_iter` with the edge into the loop by `mojo_obl` at the thread's
+2-D index facts and `Mat.Head` at every head of a round by mojo_inv at the loop head and
+`Mat.Head.iterate`, at the registers `LoopSeg.bases` of the loop evaluated here, each one's value at
+the loop head by `n.kept` at round 0, or by `obl_have` for a register that `n.kept` states by its
+value at the loop head) and `n.sound_inv` (`n.sound_mat`'s statement with `Hin` replaced by
+`LoopIterWith` at each thread's `Mat.Thread`, proved by `n.runInv` at each thread). If one of them
+does not elaborate, the command restores the environment, so it adds nothing; for `n.out` the error
+says that no path of the clause is discharged; for `n.runInv`, before `n.kept`'s attempt, that the
+loop path stores or loads through a pointer whose base is not a register the loop keeps
+(`LoopSeg.loadsFrom` at `LoopSeg.bases` is false, evaluated), with the blocks at which it fails; for
+`n.kept` that the function at the loop head is not proved or that a register the loop keeps has no
+value there by `obl_have`; for `n.runInv` after its attempt, that a register of `LoopSeg.bases` has
+no value at the loop head by `obl_have` or one not shown to name a block other than the output's,
+with the register, or else that `mojo_obl` does not discharge the edge into the loop or `Mat.Head`
+at the loop head is not proved. After an attempt the error ends with the attempt's first error from
+its first goal (`⊢ …`, without the hypotheses) on; the failed attempt's messages are dropped. -/
 unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
   let n := stx[1].getId
   let base := (← getCurrNamespace) ++ n
@@ -1074,7 +1077,7 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
       `Mat.args` (`Kernel.Sound`) for the observation of the blocks and `Elem.Out` at the 2-D \
       cells. It covers this one kernel; `Hin` is the user's."
     if inv then
-      let some [I, N, H, th, C, iI, W, hW] := some (matInvBinders.map mkIdent)
+      let some [I, H, th, C, iI, W, hW] := some (matInvBinders.map mkIdent)
         | throwError "unreachable"
       let runInvC := mkCIdent (base ++ `runInv)
       -- the one chain and its one loop as syntax, in the elaboration that uses them
@@ -1110,112 +1113,6 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
         throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: `Mat.Head.iterate`'s \
           premise `LoopSeg.loadsFrom` at `LoopSeg.bases` ({", ".intercalate (rs.map rname)}) is \
           false: {"; ".intercalate parts} ({fnText})"
-      -- the messages before `n.runInv`: on failure, `mojo_obl`'s and the elaborator's are dropped
-      let msgs := (← get).messages
-      try
-        liftTermElabM <| Term.withoutErrToSorry do
-          let Tt ← Term.exprToSyntax (toExpr T)
-          let (Cs, Ls) ← invChain
-          -- the thread's entry valuation and the memory predicate at `ret`
-          let V ← `(Valuation.entry $c 0 $m' $f)
-          let Q ← `(fun $me:ident =>
-            Elem $m₀ $xo $w $cellF $bs ($k + 1) $me ∧ Elem.Only $xo $SF $me)
-          -- the loop head's entry valuation and the facts at the head of every round
-          let V0 ← `(Valuation.roundWith $cq ($Cs).l ($Cs).S ($Cs).E $V)
-          let Ft ← `(Mat.Head $Pstx $fnstx $t $enc $al $xo $xa $xb $sC $x $y $w $cellF $bs $k
-            $m₀ $SF)
-          -- each register of `rs` at the loop head, by `obl_have`, a pointer to `a` or `b`; if
-          -- not, an error naming the register (`premiseMark`, read by the refusal below)
-          let hr ← rs.foldrM (fun r acc => do
-            let no (s : String) : TSyntax `str :=
-              Syntax.mkStrLit s!"{premiseMark} at {rname r}: {s}"
-            `(List.forall_mem_cons.2 ⟨by
-              first
-                | obl_have g : ($V0).regs $(quote r)
-                | fail $(no "obl_have gives it no value at the loop head")
-              exact ⟨_, g, by
-                try simp only [Val.NamesIn]
-                first
-                  | exact ($hne).1
-                  | exact ($hne).2
-                  | fail $(no "its value at the loop head is not shown to name a block other \
-                      than the output's by `hne` (`a` or `b` other than the output)")⟩,
-              $acc⟩)) (← `(fun _ h => nomatch h))
-          let body ← `(fun {$L : Launch} ($hL : Launch.Valid $L) {$xo $xa $xb $xm $xn $xK : Nat}
-              {$α : Type} [TorchLean.Storage $α] {$t : Ty} {$enc : $α → Val}
-              {$al $sA $sB $sC : Nat} {$x : TorchLean.Tensor $α [$xm, $sA]}
-              {$y : TorchLean.Tensor $α [$xn, $sB]} {$w : Nat} {$bs : Nat → Option (List MemByte)}
-              ($hsz : $xm < 2 ^ 31 ∧ $xn < 2 ^ 31 ∧ $xK < 2 ^ 31) {$k $q0 $q1 $q2 : Nat}
-              {$c : Ctx} {$m₀ $m' : Mem} {$f : Frame} ($hS : $Sk)
-              ($h : Mat.Entry $Pstx $fnstx $L $Tt $zt $alq $t $enc $al $xo $xa $xb $xK $sC $x $y
-                $k $c $q0 $q1 $q2 $m' $f) ($hne : $xa ≠ $xo ∧ $xb ≠ $xo)
-              ($hE : Elem $m₀ $xo $w $cellF $bs $k $m') ($hO : Elem.Only $xo $SF $m')
-              {$I : Nat → Valuation → Prop} {$N : Nat}
-              ($H : LoopIterWith $cq $Ls $V ($Cs).l ($Cs).S ($Cs).E $Q $N $Ft $I) =>
-            show ∃ $C:ident ∈ $chainsStx, RetLsWith $cq $Q ($C).loops $V ($C).l ($C).ds ($C).S
-                ($C).E from
-              ⟨$Cs, List.mem_singleton_self _, RetLsWith.of_iter (L := $Ls) rfl
-                (by
-                  clear $H $hE $hO
-                  obtain ⟨⟨hcp, hce, -⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
-                    ⟨hr3, hr4, hr5⟩, -, -, ⟨hbC, -⟩⟩ := $h
-                  obtain ⟨hm, hn, hK⟩ := $hsz
-                  obtain ⟨hk, hX, hY⟩ := $hS
-                  replace hX : $sx < $xm := hX
-                  replace hY : $sy < $xn := hY
-                  mojo_obl)
-                (by
-                  clear $H
-                  obtain ⟨⟨hcp, hce, hcw⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
-                    ⟨hr3, hr4, hr5⟩, hbA, hbB, hbC⟩ := $h
-                  exact Mat.Head.iterate (c := $cq) (L := $Ls) (rs := $(quote rs))
-                    (by decide +kernel) (by mojo_inv) $hr)
-                $H⟩)
-          let e ← Term.elabTerm body none
-          Term.synthesizeSyntheticMVarsNoPostponing
-          let e ← instantiateMVars e
-          let ty ← instantiateMVars (← inferType e)
-          if e.hasSorry || e.hasExprMVar || ty.hasExprMVar then
-            throwError "unsolved goals"
-          addDecl <| .thmDecl { name := base ++ `runInv, levelParams := [], type := ty, value := e }
-      catch ex =>
-        let why ← why msgs ex
-        let logged := ((← get).messages.toList.drop msgs.toList.length).any
-          (·.severity matches .error)
-        modify fun s => { s with messages := msgs }
-        -- a register of `LoopSeg.bases` that `hr` does not discharge, with no error before: its
-        -- `fail`, the exception, names it in its first line, and its goal follows the hypotheses
-        let t ← liftTermElabM ex.toMessageData.toString
-        if !logged && t.startsWith premiseMark then
-          throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: \
-            {(t.splitOn "\n").headD t} ({fnText}): {(goalOf t).getD ""}"
-        throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: the edge into the loop \
-          is not discharged by mojo_obl at the thread's 2-D index facts, or `Mat.Head` at the loop \
-          head is not proved by mojo_inv ({fnText}): {why}"
-      addDocStringCore (base ++ `runInv) s!"**A thread of `{fnText}` in bounds runs the `mat` \
-        clause's chain to `ret`, from an invariant** (generated by `mojo_kernel {n}`, `inv`): for \
-        every launch `L` valid, block numbers `{xsN[0]!}` (output), `{xsN[1]!}`, `{xsN[2]!}`, \
-        sizes `{xsN[3]!}`, `{xsN[4]!}`, `{xsN[5]!}` below `2 ^ 31`, element type, encoder, \
-        alignment, row strides, tensors, cell width, bytes `bs`, thread `k` in bounds (`hS`), \
-        blocks `q0`, `q1`, `q2`, context `c`, memories `m₀` and `m'` and frame `f` with the \
-        facts of `Mat.Entry` (`h`), `a` and `b` other than the output (`hne`), a memory `m'` of \
-        `Elem` after `k` threads (from `m₀`) with `Elem.Only` (`hE`, `hO`), invariant `I` and trip \
-        count `N`: if `I` is an invariant of the chain's loop at the heads of its rounds (`H : \
-        LoopIterWith`, at the iterates of the round from the loop head's entry valuation after \
-        the chain's path in: `I 0` there; at the head of every round `i < N` with the thread's \
-        context and round `i`'s step count where `Mat.Head` (the function, the buffers of \
-        `Mat.Entry`, `Elem` after `k` threads and `Elem.Only`) and `I i` hold, the round's \
-        premises (`RoundWith`) and `I (i + 1)` after it; at the head of round `N` with those \
-        facts and `I N`, the path out to `ret` with `Elem` after `k + 1` threads and \
-        `Elem.Only`, `RetWith`), the thread runs the chain from `f`'s entry valuation to `ret` \
-        (`RetLsWith`), the conclusion of `{n}.sound_mat`'s premise `Hin`. The proof is \
-        `RetLsWith.of_iter`, with the edge into the loop by `mojo_obl` at the thread's row and \
-        column, and `Mat.Head` at every head by mojo_inv at the loop head and \
-        `Mat.Head.iterate` (the loop reads memory only through the registers it keeps \
-        `LoopSeg.bases`, numbers `{rs}`, by `decide +kernel`, each a pointer to `a` or `b` at the \
-        loop head by `obl_have`). The registers the loop keeps have their loop-head values at \
-        every head (`{n}.kept`, `LoopSeg.kept_round`), so `I` need not carry them. \
-        It covers this one kernel, whose chain is one loop with no nested loop."
       -- `n.kept`: each register the loop keeps at the head of every round, with its value at the
       -- loop head by `obl_have`; on failure, `obl_have`'s and the elaborator's messages are dropped
       let msgsK := (← get).messages
@@ -1306,6 +1203,133 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
         computes at the loop head `V₀` (the thread's index as `Launch.index`){opnText}. The \
         proof is `LoopSeg.kept_round` at each (`decide +kernel`), with the \
         function at the loop head by mojo_inv. It covers this one kernel."
+      -- the messages before `n.runInv`: on failure, `mojo_obl`'s and the elaborator's are dropped
+      let msgs := (← get).messages
+      try
+        liftTermElabM <| Term.withoutErrToSorry do
+          let Tt ← Term.exprToSyntax (toExpr T)
+          let (Cs, Ls) ← invChain
+          -- the thread's entry valuation and the memory predicate at `ret`
+          let V ← `(Valuation.entry $c 0 $m' $f)
+          let Q ← `(fun $me:ident =>
+            Elem $m₀ $xo $w $cellF $bs ($k + 1) $me ∧ Elem.Only $xo $SF $me)
+          -- the loop head's entry valuation and the facts at the head of every round
+          let V0 ← `(Valuation.roundWith $cq ($Cs).l ($Cs).S ($Cs).E $V)
+          let Ft ← `(Mat.Head $Pstx $fnstx $t $enc $al $xo $xa $xb $sC $x $y $w $cellF $bs $k
+            $m₀ $SF)
+          -- each register of `rs` at the loop head, a pointer to `a` or `b`: its value there by
+          -- `n.kept` at round 0 (`hkept`, the position of the register in `ks`), or by `obl_have`
+          -- where `n.kept` states the register by its value at the loop head (`opnK`); if not, an
+          -- error naming the register (`premiseMark`, read by the refusal below)
+          let hkept := mkIdent `hkept
+          let keptAt (r : Nat) : Option Nat := if opnK.contains r then none else List.idxOf? r ks
+          let hr ← rs.foldrM (fun r acc => do
+            let no (s : String) : TSyntax `str :=
+              Syntax.mkStrLit s!"{premiseMark} at {rname r}: {s}"
+            let names ← `(by
+              try simp only [Val.NamesIn]
+              first
+                | exact ($hne).1
+                | exact ($hne).2
+                | fail $(no "its value at the loop head is not shown to name a block other \
+                    than the output's by `hne` (`a` or `b` other than the output)"))
+            match keptAt r with
+            | some j =>
+              let mut p ← `($hkept)
+              for _ in [0:j] do p ← `(($p).2)
+              if j + 1 < ks.length then p ← `(($p).1)
+              `(List.forall_mem_cons.2 ⟨⟨_, $p, $names⟩, $acc⟩)
+            | none =>
+              `(List.forall_mem_cons.2 ⟨by
+                first
+                  | obl_have g : ($V0).regs $(quote r)
+                  | fail $(no "obl_have gives it no value at the loop head")
+                exact ⟨_, g, $names⟩, $acc⟩)) (← `(fun _ h => nomatch h))
+          -- `n.kept` at round 0, the loop head itself, if a register of `rs` uses it
+          let keptC := mkCIdent (base ++ `kept)
+          let haveK ← if rs.any fun r => (keptAt r).isSome then
+              `(tactic| have $hkept := $keptC $hL $hsz $hS $h 0 (W := $V0) rfl)
+            else `(tactic| skip)
+          let body ← `(fun {$L : Launch} ($hL : Launch.Valid $L) {$xo $xa $xb $xm $xn $xK : Nat}
+              {$α : Type} [TorchLean.Storage $α] {$t : Ty} {$enc : $α → Val}
+              {$al $sA $sB $sC : Nat} {$x : TorchLean.Tensor $α [$xm, $sA]}
+              {$y : TorchLean.Tensor $α [$xn, $sB]} {$w : Nat} {$bs : Nat → Option (List MemByte)}
+              ($hsz : $xm < 2 ^ 31 ∧ $xn < 2 ^ 31 ∧ $xK < 2 ^ 31) {$k $q0 $q1 $q2 : Nat}
+              {$c : Ctx} {$m₀ $m' : Mem} {$f : Frame} ($hS : $Sk)
+              ($h : Mat.Entry $Pstx $fnstx $L $Tt $zt $alq $t $enc $al $xo $xa $xb $xK $sC $x $y
+                $k $c $q0 $q1 $q2 $m' $f) ($hne : $xa ≠ $xo ∧ $xb ≠ $xo)
+              ($hE : Elem $m₀ $xo $w $cellF $bs $k $m') ($hO : Elem.Only $xo $SF $m')
+              {$I : Nat → Valuation → Prop}
+              ($H : LoopIterWith $cq $Ls $V ($Cs).l ($Cs).S ($Cs).E $Q (max $xK 0) $Ft $I) =>
+            show ∃ $C:ident ∈ $chainsStx, RetLsWith $cq $Q ($C).loops $V ($C).l ($C).ds ($C).S
+                ($C).E from
+              ⟨$Cs, List.mem_singleton_self _, RetLsWith.of_iter (L := $Ls) rfl
+                (by
+                  clear $H $hE $hO
+                  obtain ⟨⟨hcp, hce, -⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
+                    ⟨hr3, hr4, hr5⟩, -, -, ⟨hbC, -⟩⟩ := $h
+                  obtain ⟨hm, hn, hK⟩ := $hsz
+                  obtain ⟨hk, hX, hY⟩ := $hS
+                  replace hX : $sx < $xm := hX
+                  replace hY : $sy < $xn := hY
+                  mojo_obl)
+                (by
+                  clear $H
+                  $haveK:tactic
+                  obtain ⟨⟨hcp, hce, hcw⟩, hfn, ⟨hr0, hr1, hr2, hp0, hp1, hp2⟩, ⟨hv0, hv1, hv2⟩,
+                    ⟨hr3, hr4, hr5⟩, hbA, hbB, hbC⟩ := $h
+                  exact Mat.Head.iterate (c := $cq) (L := $Ls) (rs := $(quote rs))
+                    (by decide +kernel) (by mojo_inv) $hr)
+                $H⟩)
+          let e ← Term.elabTerm body none
+          Term.synthesizeSyntheticMVarsNoPostponing
+          let e ← instantiateMVars e
+          let ty ← instantiateMVars (← inferType e)
+          if e.hasSorry || e.hasExprMVar || ty.hasExprMVar then
+            throwError "unsolved goals"
+          addDecl <| .thmDecl { name := base ++ `runInv, levelParams := [], type := ty, value := e }
+      catch ex =>
+        let why ← why msgs ex
+        let logged := ((← get).messages.toList.drop msgs.toList.length).any
+          (·.severity matches .error)
+        modify fun s => { s with messages := msgs }
+        -- a register of `LoopSeg.bases` that `hr` does not discharge, with no error before: its
+        -- `fail`, the exception, names it in its first line, and its goal follows the hypotheses
+        let t ← liftTermElabM ex.toMessageData.toString
+        if !logged && t.startsWith premiseMark then
+          throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: \
+            {(t.splitOn "\n").headD t} ({fnText}): {(goalOf t).getD ""}"
+        throwError "mojo_kernel: mat: inv: {n}.runInv does not elaborate: the edge into the loop \
+          is not discharged by mojo_obl at the thread's 2-D index facts, or `Mat.Head` at the loop \
+          head is not proved by mojo_inv ({fnText}): {why}"
+      addDocStringCore (base ++ `runInv) s!"**A thread of `{fnText}` in bounds runs the `mat` \
+        clause's chain to `ret`, from an invariant** (generated by `mojo_kernel {n}`, `inv`): for \
+        every launch `L` valid, block numbers `{xsN[0]!}` (output), `{xsN[1]!}`, `{xsN[2]!}`, \
+        sizes `{xsN[3]!}`, `{xsN[4]!}`, `{xsN[5]!}` below `2 ^ 31`, element type, encoder, \
+        alignment, row strides, tensors, cell width, bytes `bs`, thread `k` in bounds (`hS`), \
+        blocks `q0`, `q1`, `q2`, context `c`, memories `m₀` and `m'` and frame `f` with the \
+        facts of `Mat.Entry` (`h`), `a` and `b` other than the output (`hne`), a memory `m'` of \
+        `Elem` after `k` threads (from `m₀`) with `Elem.Only` (`hE`, `hO`) and invariant `I`: if \
+        `I` is an invariant of the chain's loop at the heads of its rounds for the trip count \
+        `max {xsN[5]!} 0`, `smax({xsN[5]!}, 0)`, one round for each index below the size \
+        `{xsN[5]!}` (`H : LoopIterWith`, at the iterates of the round from the loop head's entry \
+        valuation after the chain's path in: `I 0` there; at the head of every round \
+        `i < max {xsN[5]!} 0` with the thread's context and round `i`'s step count where \
+        `Mat.Head` (the function, the buffers of `Mat.Entry`, `Elem` after `k` threads and \
+        `Elem.Only`) and `I i` hold, the round's premises (`RoundWith`) and `I (i + 1)` after it; \
+        at the head of round `max {xsN[5]!} 0` with those facts and `I (max {xsN[5]!} 0)`, the \
+        path out to `ret` with `Elem` after `k + 1` threads and `Elem.Only`, `RetWith`), the \
+        thread runs the chain from `f`'s entry valuation to `ret` \
+        (`RetLsWith`), the conclusion of `{n}.sound_mat`'s premise `Hin`. The proof is \
+        `RetLsWith.of_iter`, with the edge into the loop by `mojo_obl` at the thread's row and \
+        column, and `Mat.Head` at every head by mojo_inv at the loop head and \
+        `Mat.Head.iterate` (the loop reads memory only through the registers it keeps \
+        `LoopSeg.bases`, numbers `{rs}`, by `decide +kernel`, each a pointer to `a` or `b` at the \
+        loop head by `{n}.kept` at round 0, or by `obl_have` for a register that `{n}.kept` \
+        states by its value at the loop head). The registers the loop keeps have their loop-head \
+        values at every head (`{n}.kept`, `LoopSeg.kept_round`), so `I` need not carry them. \
+        It covers this one kernel, whose chain is one loop with no nested loop; for a loop that \
+        runs another number of rounds than `max {xsN[5]!} 0`, `H` does not hold."
       liftTermElabM <| Term.withoutErrToSorry do
         let Tt ← Term.exprToSyntax (toExpr T)
         let (Cs, Ls) ← invChain
@@ -1314,14 +1338,14 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
         let Qth ← `(fun $me:ident => Elem ($th).m₀ $xo $w $cellF $bs (($th).k + 1) $me ∧
           Elem.Only $xo $SF $me)
         let hTy ← `(∀ $th:ident : $thTy, LoopIterWith $cq $Ls
-          (Valuation.entry ($th).c 0 ($th).m' ($th).f) ($Cs).l ($Cs).S ($Cs).E $Qth ($N $th)
+          (Valuation.entry ($th).c 0 ($th).m' ($th).f) ($Cs).l ($Cs).S ($Cs).E $Qth (max $xK 0)
           (Mat.Head $Pstx $fnstx $t $enc $al $xo $xa $xb $sC $x $y $w $cellF $bs ($th).k
             ($th).m₀ $SF) ($I $th))
         let hin ← `(fun ch oracle ha k q0 q1 q2 c m₀ m' f hS hω h hE hO =>
           $runInvC $hL $hsz hS h $hne hE hO
             ($H ⟨ch, oracle, ha, k, q0, q1, q2, c, m₀, m', f, hS, hω, h, hE, hO⟩))
-        let body ← matCommon (← `(fun {$I : $thTy → Nat → Valuation → Prop} {$N : $thTy → Nat}
-          ($H : $hTy) => $(← matCall Tt hin)))
+        let body ← matCommon (← `(fun {$I : $thTy → Nat → Valuation → Prop} ($H : $hTy) =>
+          $(← matCall Tt hin)))
         let e ← Term.elabTerm body none
         Term.synthesizeSyntheticMVarsNoPostponing
         let e ← instantiateMVars e
@@ -1333,11 +1357,11 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
       addDocStringCore (base ++ `sound_inv) s!"**The kernel theorem of `{fnText}` from an \
         invariant of its loop** (generated by `mojo_kernel {n}`, `inv`): `{n}.sound_mat`'s \
         statement with the run of a thread in bounds `Hin` replaced by one premise `H` on every \
-        thread in bounds with its facts (`Mat.Thread`): the caller's invariant `I th` with trip \
-        count `N th` is an invariant of the chain's loop at the heads of its rounds at the thread \
-        (`LoopIterWith` with `Mat.Head` at each head, as in `{n}.runInv`). The proof is \
-        `Kernel.sound_mat` at `{n}.sound_mat`'s arguments with `Hin` by `{n}.runInv` at each \
-        thread. It covers this one kernel; `I`, `N` and `H` are the user's."
+        thread in bounds with its facts (`Mat.Thread`): the caller's invariant `I th` is an \
+        invariant of the chain's loop at the heads of its rounds at the thread for the trip \
+        count `max {xsN[5]!} 0` (`LoopIterWith` with `Mat.Head` at each head, as in \
+        `{n}.runInv`). The proof is `Kernel.sound_mat` at `{n}.sound_mat`'s arguments with `Hin` \
+        by `{n}.runInv` at each thread. It covers this one kernel; `I` and `H` are the user's."
   catch e =>
     setEnv env0
     throw e
@@ -1800,8 +1824,9 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
     pointer bytes are known (`Mem.BytesIn`), the start succeeds on every admitted address choice \
     and oracle, the observation reads only blocks, and on each start some invariant indexed by \
     the number of threads done holds of the start's memory, is kept by each thread \
-    {alongText}, and holds at the end only of memories whose trace has no data race, keeps the \
-    promise of `!invariant.load` and has an observation meeting the predicate. It covers this \
+    {alongText}, and holds at the end only of memories whose trace keeps the promise of \
+    `!invariant.load`, has no data race when it has the premises of `racy_iff`, and has an \
+    observation meeting the predicate. It covers this \
     one kernel; every premise is the caller's."
   -- 5. the arguments from the clauses, the start on them, and the kernel theorem from `Mem.Closed`
   let some fnC := fnC? | return

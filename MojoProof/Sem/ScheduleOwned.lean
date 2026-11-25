@@ -1,3 +1,4 @@
+import GPUProof.Transfer
 import MojoProof.Sem.Determinism
 
 /-!
@@ -15,28 +16,34 @@ For every program, kernel, launch, arguments, address choice, oracle and discipl
 - `Grid.owned_reach`: under `hH` and `hI`, in every grid reachable from the start's, every thread
   number is one of the start's, and every access of the trace is by such a thread, to a block of
   the memory whose owner admits it, follows the discipline or is to a block its thread owns, and,
-  with `!invariant.load`, is to an untiled block that no thread owns. `Grid.start_trace`: the
-  start's trace is empty.
+  with `!invariant.load`, is to an untiled block that no thread owns. `Trace.Shaped.writes`: in a
+  shaped trace (`Trace.Shaped`, as every reachable grid's is, `Grid.start_reach_shaped` in
+  MojoProof/Sem/Bad.lean) an access that writes for the core (`GPUProof.Kind.writes`) has a
+  write at its pointer.
 - `Grid.owned_clean` (conclusion 2's trace part): under `hH`, `hI` and `hX`, no reachable grid has
   a racy trace or breaks the promise of `!invariant.load`. Its trace lemma,
-  `racy_eq_false_of_local` (every trace): accesses that follow the discipline or are to a block
-  local to their thread, with `own` injective on the threads of one tiled block, do not race.
+  `racy_eq_false_of_local` (every launch and trace with the premises of `racy_iff`, as a
+  reachable grid's has, `Grid.start_reach_fits`): accesses that follow the discipline or are to a
+  block local to their thread, with `own` injective on the threads of one tiled block, do not
+  race.
 - `Grid.owned_race` (conclusion 2's race part): a reachable grid with a race enabled faults.
 - `Grid.owned_bad`: so a reachable grid that is bad faults; with the converse (every grid),
-  on reachable grids `Grid.Bad` is `Grid.Faults`.
+  on reachable grids the core's `Bad` at `sig` is the core's `GPUProof.Faults` at `sig`.
 - `Grid.confluent_owned` (T2′, conclusion 1), on a caller's memory every pointer byte of whose
   blocks names a number below `next` or with a block: the steps between grids reachable from the
-  start's are confluent up to `Grid.Same` with `Grid.Faults` persistent. It is `Grid.confluent`
-  with `Confluent.of_iff` (every relation and two bad sets with the same members).
+  start's are confluent up to `Grid.Same` with the faults (`GPUProof.Faults` at `sig`)
+  persistent. It is `Grid.confluent` with `Confluent.transfer` along the identity (two bad sets
+  with the same members).
 
 - `Grid.owned_sound` (conclusion 3, one run for all), on such a memory and for every observation
   that reads only the blocks: one run from the start's grid to a grid in which every thread has
   returned, whose trace meets the premises of `racy_kept_of_local`, and whose observation is
   defined and satisfies `R`, makes the start's grid sound (`Grid.Sound`). Its trace lemma,
-  `racy_kept_of_local` (every trace): under the premises of `racy_eq_false_of_local`, with no
-  access with `!invariant.load` to a block that a write of the trace touches, the trace is not
-  racy and keeps the promise of `!invariant.load`. It asks the discipline of the done grid's
-  trace only, not of every reachable grid (`hH`, `hI`).
+  `racy_kept_of_local` (every launch and trace with the premises of `racy_iff`): under the
+  premises of `racy_eq_false_of_local`, with no access with `!invariant.load` to a block that a
+  write of the trace touches, the trace is not racy and keeps the promise of `!invariant.load`
+  (the core's `GPUProof.kept` at `sig`). It asks the discipline
+  of the done grid's trace only, not of every reachable grid (`hH`, `hI`).
 
 The instance (two threads, each storing to its own `alloca`) and the twin (one thread, an
 `!invariant.load` and then a store to its bytes, which no discipline meets) are in
@@ -46,35 +53,27 @@ MojoProofTest/ScheduleOwned.lean, one kernel each.
 namespace MojoProof.Sem
 
 open MojoProof.LLVM Relation
+open GPUProof
 
-/-- A confluent system stays confluent when its bad set is replaced by one with the same
-members, for every relation and equivalence. -/
-theorem Confluent.of_iff {α : Type*} {r e : α → α → Prop} {B B' : α → Prop}
-    (h : Confluent r e B) (hB : ∀ a, B a ↔ B' a) : Confluent r e B' where
-  refl := h.refl
-  symm := h.symm
-  trans := h.trans
-  bisim := h.bisim
-  bad_eqv he hb := (hB _).1 (h.bad_eqv he ((hB _).2 hb))
-  bad_step hb hs := (hB _).1 (h.bad_step ((hB _).2 hb) hs)
-  diamond hb hc := (h.diamond hb hc).imp_right (Or.imp (And.imp (hB _).1 (hB _).1)
-    fun ⟨d, d', hd, hd', hdd⟩ => ⟨d, d', hd, hd', hdd.imp_right (And.imp (hB _).1 (hB _).1)⟩)
-
-/-- **Ownership with thread-local blocks gives race freedom** (`racy`, every trace). `loc b w`
-says that block `b` is local to thread `w`. If every access of the trace to a block local to no
-thread follows the discipline `(T, own)`, every access to a block local to `w` is by `w`, and
-threads that access one tiled block have different tiles, the trace has no race. -/
+/-- **Ownership with thread-local blocks gives race freedom** (the core's `racy` at `sig`, for
+every launch and trace whose accesses are by threads of the launch in their blocks of threads and
+that is shaped, the premises of `racy_iff`). `loc b w` says that block `b` is local to thread
+`w`. If every access of the trace to a block local to no thread follows the discipline
+`(T, own)`, every access to a block local to `w` is by `w`, and threads that access one tiled
+block have different tiles, the trace has no race. -/
 theorem racy_eq_false_of_local {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι}
-    {loc : Nat → Nat → Prop} {tr : List Event}
+    {loc : Nat → Nat → Prop} {L : Launch} {tr : List Event}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse)
     (hO : ∀ a, Event.access a ∈ tr → (∀ w, ¬ loc a.ptr.block w) → Owned T own a)
     (hL : ∀ a w, Event.access a ∈ tr → loc a.ptr.block w → a.who.thread = w)
     (hX : ∀ a e, Event.access a ∈ tr → Event.access e ∈ tr → a.ptr.block = e.ptr.block →
       T a.ptr.block ≠ none → own a.who.thread = own e.who.thread →
         a.who.thread = e.who.thread) :
-    racy tr = false := by
-  cases h : racy tr
+    GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false := by
+  cases h : GPUProof.racy sig (tr.map (Event.toCore L)).reverse
   · rfl
-  obtain ⟨x, hx, y, hy, hc⟩ := racy_iff.1 h
+  obtain ⟨x, hx, y, hy, hc⟩ := (racy_iff hU hs).1 h
   simp only [clash, Bool.and_eq_true, bne_iff_ne, ne_eq, Bool.or_eq_true, beq_iff_eq] at hc
   obtain ⟨⟨ht, hc⟩, -⟩ := hc
   have hb : x.1.ptr.block = y.1.ptr.block := by
@@ -91,11 +90,31 @@ theorem racy_eq_false_of_local {ι : Type} {T : Nat → Option (Tiling ι)} {own
       (by simp only [Access.conflict, Bool.and_eq_true] at hc; exact hc.1.1)
     simp [Access.conflict, this] at hc
 
-/-- **The trace lemma of conclusion 3 of T2′** (every trace): under the premises of
-`racy_eq_false_of_local`, and if no access with `!invariant.load` is to a block that a write of
-the trace touches, the trace is not racy and keeps the promise of `!invariant.load`. -/
-theorem racy_kept_of_local {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι}
+/-- **An access that writes for the core has a write at its pointer** in every trace `tr` (newest
+first) whose reverse is shaped, for every access `e` of `tr` that writes for the core
+(`Kind.writes`): `e` writes, or it is an `atomicrmw`'s read and its write, the same access with
+`write` set, is in `tr`. -/
+theorem Trace.Shaped.writes {tr : List Event} (hs : Trace.Shaped tr.reverse) {e : Access}
+    (he : Event.access e ∈ tr) (hw : e.kind.writes = true) :
+    ∃ e', Event.access e' ∈ tr ∧ e'.write = true ∧ e'.ptr = e.ptr := by
+  rw [Access.kind_writes] at hw
+  cases hwr : e.write
+  · rw [hwr, Bool.false_or] at hw
+    obtain ⟨p, hp⟩ := List.getElem?_of_mem (List.mem_reverse.2 he)
+    exact ⟨{ e with write := true },
+      List.mem_reverse.1 (List.mem_of_getElem? (hs.2 p e hp hw hwr)), rfl, rfl⟩
+  · exact ⟨e, he, hwr, rfl⟩
+
+/-- **The trace lemma of conclusion 3 of T2′** (every launch and trace whose accesses are by
+threads of the launch in their blocks of threads and whose reverse is shaped, `Trace.Shaped`):
+under the premises of `racy_eq_false_of_local`, and if no access with `!invariant.load` is to a
+block that a write of the trace touches, the trace is not racy and keeps the promise of
+`!invariant.load` (the core's `kept` at `sig`; an `atomicrmw`'s read has its write in the trace,
+`Trace.Shaped.writes`). -/
+theorem racy_kept_of_local {L : Launch} {ι : Type} {T : Nat → Option (Tiling ι)} {own : Nat → ι}
     {loc : Nat → Nat → Prop} {tr : List Event}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse)
     (hO : ∀ a, Event.access a ∈ tr → (∀ w, ¬ loc a.ptr.block w) → Owned T own a)
     (hL : ∀ a w, Event.access a ∈ tr → loc a.ptr.block w → a.who.thread = w)
     (hX : ∀ a e, Event.access a ∈ tr → Event.access e ∈ tr → a.ptr.block = e.ptr.block →
@@ -103,29 +122,14 @@ theorem racy_kept_of_local {ι : Type} {T : Nat → Option (Tiling ι)} {own : N
         a.who.thread = e.who.thread)
     (hI : ∀ a e, Event.access a ∈ tr → Event.access e ∈ tr → a.invariant = true →
       e.write = true → a.ptr.block ≠ e.ptr.block) :
-    racy tr = false ∧ kept tr = true :=
-  ⟨racy_eq_false_of_local hO hL hX,
+    GPUProof.racy sig (tr.map (Event.toCore L)).reverse = false ∧
+      GPUProof.kept sig (tr.map (Event.toCore L)).reverse = true :=
+  ⟨racy_eq_false_of_local hU hs hO hL hX,
     kept_of_split (W := fun b => ∃ e, Event.access e ∈ tr ∧ e.write = true ∧ e.ptr.block = b)
       (fun a ha hi ⟨e, he, hw, hb⟩ => hI a e ha he hi hw hb.symm)
-      fun e he hw => ⟨e, he, hw, rfl⟩⟩
-
-/-- The trace of the grid that `Grid.start` gives is empty, for every program, kernel, launch,
-arguments, memory and choices. -/
-theorem Grid.start_trace {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
-    {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} {c : Nat → Ctx}
-    (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) : g.mem.trace = [] := by
-  unfold Grid.start at h
-  simp only [bind, Except.bind] at h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  split at h
-  · cases h
-  cases h
-  rfl
+      fun e he hw => by
+        obtain ⟨e', he', hw', hp⟩ := hs.writes he hw
+        exact ⟨e', he', hw', by rw [hp]⟩⟩
 
 section Owned
 
@@ -211,10 +215,13 @@ theorem Grid.owned_clean (h : Grid.start prog fn L args m ch oracle = .ok (g₀,
       a.invariant = true → T a.ptr.block = none ∧ ¬ g.mem.Owned n a.ptr.block)
     (hX : ∀ n k, n < g₀.threads.size → k < g₀.threads.size → own n = own k → n = k)
     {g : Grid} (hr : ReflTransGen (Grid.Step L c) g₀ g) :
-    racy g.mem.trace = false ∧ kept g.mem.trace = true := by
+    GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse = false ∧
+      GPUProof.kept sig (g.mem.trace.map (Event.toCore L)).reverse = true := by
   have hA := (Grid.owned_reach h hH hI hr).2
+  have hf := Grid.start_reach_fits h hr
+  have hsh := hf.2
   refine ⟨racy_eq_false_of_local (T := T) (own := own) (loc := fun b w => g.mem.Owned w b)
-    (fun a ha hl => ?_) (fun a w ha hl => ?_)
+    hf.trace hsh (fun a ha hl => ?_) (fun a w ha hl => ?_)
     (fun a e ha he _ _ ho => hX _ _ (hA a ha).1 (hA e he).1 ho),
     kept_of_split (W := fun b => T b ≠ none ∨ ∃ w, g.mem.Owned w b) (fun a ha hi => ?_)
       fun e he hw => ?_⟩
@@ -232,55 +239,61 @@ theorem Grid.owned_clean (h : Grid.start prog fn L args m ch oracle = .ok (g₀,
     · rw [hx] at hy
       cases hy
       exact hno w hyo
-  · obtain ⟨-, x, hx, -, ho | ho, -⟩ := hA e he
-    · exact Or.inl fun hT => by rw [ho.read hT] at hw; cases hw
+  · obtain ⟨e', he', hw', hp⟩ := hsh.writes he hw
+    rw [← hp]
+    obtain ⟨-, x, hx, -, ho | ho, -⟩ := hA e' he'
+    · exact Or.inl fun hT => by rw [ho.read hT] at hw'; cases hw'
     · exact Or.inr ⟨_, x, hx, ho⟩
 
 /-- **Conclusion 2 of T2′, the enabled race.** Under the hypotheses of `Grid.owned_clean`, a
-reachable grid with a race enabled faults: the step of the racing thread is a fault, since if it
-succeeded the grid after would be reachable with a racy trace. -/
+reachable grid with a race enabled (the core's `RaceEnabled` at `sig`) faults: the step of the
+racing thread is a fault, since if it succeeded the grid after would be reachable with a racy
+trace; a race enabled by a collective call that completes needs a racy trace, which no reachable
+grid has. -/
 theorem Grid.owned_race (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
     (hH : ∀ g, ReflTransGen (Grid.Step L c) g₀ g → ∀ n a, .access a ∈ g.pending c n →
       Owned T own a ∨ g.mem.Owned n a.ptr.block)
     (hI : ∀ g, ReflTransGen (Grid.Step L c) g₀ g → ∀ n a, .access a ∈ g.pending c n →
       a.invariant = true → T a.ptr.block = none ∧ ¬ g.mem.Owned n a.ptr.block)
     (hX : ∀ n k, n < g₀.threads.size → k < g₀.threads.size → own n = own k → n = k)
-    {g : Grid} (hr : ReflTransGen (Grid.Step L c) g₀ g) (hE : g.RaceEnabled c) :
-    g.Faults L c := by
-  obtain ⟨n, t, ht, hR⟩ := hE
+    {g : Grid} (hr : ReflTransGen (Grid.Step L c) g₀ g) (hE : GPUProof.RaceEnabled sig (g, L, c)) :
+    GPUProof.Faults sig (g, L, c) := by
+  rcases Grid.raceEnabled_iff.1 hE with ⟨n, t, ht, hR⟩ | ⟨-, -, -, hR⟩
+  swap
+  · exact nomatch (Grid.owned_clean h hH hI hX hr).1.symm.trans hR
   match hA : g.advance c n with
-  | .error e => exact ⟨n, e, .inl hA⟩
+  | .error e => exact Grid.faults_iff.2 ⟨n, e, .inl hA⟩
   | .ok none => exact absurd hA (Grid.advance_run ht)
   | .ok (some g') =>
     have hc := (Grid.owned_clean h hH hI hX (hr.tail ⟨n, .inl hA⟩)).1
     obtain ⟨-, _, m', -, rfl, htr, -⟩ := Grid.advance_set hA
     have hp : g.pending c n = t.pending (c n) g.mem := by simp only [Grid.pending, ht]
-    change racy m'.trace = false at hc
+    change GPUProof.racy sig (m'.trace.map (Event.toCore L)).reverse = false at hc
     rw [htr, hp, hR] at hc
     cases hc
 
-/-- Under the hypotheses of `Grid.owned_clean`, a reachable grid that is bad (`Grid.Bad`) faults;
-the converse holds for every grid (`Or.inl`). -/
+/-- Under the hypotheses of `Grid.owned_clean`, a reachable grid that is bad (the core's `Bad` at
+`sig`) faults; the converse holds for every grid (`Or.inl`). -/
 theorem Grid.owned_bad (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
     (hH : ∀ g, ReflTransGen (Grid.Step L c) g₀ g → ∀ n a, .access a ∈ g.pending c n →
       Owned T own a ∨ g.mem.Owned n a.ptr.block)
     (hI : ∀ g, ReflTransGen (Grid.Step L c) g₀ g → ∀ n a, .access a ∈ g.pending c n →
       a.invariant = true → T a.ptr.block = none ∧ ¬ g.mem.Owned n a.ptr.block)
     (hX : ∀ n k, n < g₀.threads.size → k < g₀.threads.size → own n = own k → n = k)
-    {g : Grid} (hr : ReflTransGen (Grid.Step L c) g₀ g) (hb : g.Bad L c) : g.Faults L c := by
+    {g : Grid} (hr : ReflTransGen (Grid.Step L c) g₀ g) (hb : GPUProof.Bad sig (g, L, c)) :
+    GPUProof.Faults sig (g, L, c) := by
   obtain ⟨hR, hK⟩ := Grid.owned_clean h hH hI hX hr
   rcases hb with hf | hb | hb | hb
   · exact hf
-  · rw [hR] at hb
-    cases hb
-  · rw [hK] at hb
-    cases hb
+  · exact nomatch hR.symm.trans hb
+  · exact nomatch hK.symm.trans hb
   · exact Grid.owned_race h hH hI hX hr hb
 
 /-- **T2′.** For every program, kernel, launch, arguments, address choice and oracle, on a
 caller's memory every pointer byte of whose blocks names a number below `next` or with a block,
 and every discipline `(T, own)` that meets `hH`, `hI` and `hX`: the steps between grids reachable
-from the start's are confluent up to `Grid.Same`, with `Grid.Faults` persistent. -/
+from the start's are confluent up to `Grid.Same`, with the faults (`GPUProof.Faults` at `sig`)
+persistent. -/
 theorem Grid.confluent_owned (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
     (hm : m.BytesIn m.Known)
     (hH : ∀ g, ReflTransGen (Grid.Step L c) g₀ g → ∀ n a, .access a ∈ g.pending c n →
@@ -289,8 +302,9 @@ theorem Grid.confluent_owned (h : Grid.start prog fn L args m ch oracle = .ok (g
       a.invariant = true → T a.ptr.block = none ∧ ¬ g.mem.Owned n a.ptr.block)
     (hX : ∀ n k, n < g₀.threads.size → k < g₀.threads.size → own n = own k → n = k) :
     Confluent (fun x y : {g // ReflTransGen (Grid.Step L c) g₀ g} => Grid.Step L c x.1 y.1)
-      (fun x y => x.1.Same y.1) (fun x => x.1.Faults L c) :=
-  (Grid.confluent h hm).of_iff fun x => ⟨Grid.owned_bad h hH hI hX x.2, Or.inl⟩
+      (fun x y => x.1.Same y.1) (fun x => GPUProof.Faults sig (x.1, L, c)) :=
+  (Grid.confluent h hm).transfer Function.surjective_id (fun _ _ => .rfl) (fun _ _ => .rfl)
+    fun x => ⟨Or.inl, Grid.owned_bad h hH hI hX x.2⟩
 
 /-- **Conclusion 3 of T2′: one run for all.** For every program, kernel, launch, arguments,
 address choice, oracle and discipline `(T, own)`, on a caller's memory every pointer byte of whose
@@ -304,7 +318,7 @@ observation is `y` with `R y`, makes the start's grid sound (`Grid.Sound`). By `
 theorem Grid.owned_sound (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c))
     (hm : m.BytesIn m.Known) {β : Type} {obs : Mem → Option β} {R : β → Prop}
     (hB : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m')
-    {n : Nat} {z : Grid} (run : Path (Grid.Step L c) n g₀ z) (hz : z.Done)
+    {n : Nat} {z : Grid} (run : Path (Grid.Step L c) n g₀ z) (hz : GPUProof.Done sig (z, L, c))
     {loc : Nat → Nat → Prop}
     (hO : ∀ a, Event.access a ∈ z.mem.trace → (∀ w, ¬ loc a.ptr.block w) → Owned T own a)
     (hL : ∀ a w, Event.access a ∈ z.mem.trace → loc a.ptr.block w → a.who.thread = w)
@@ -315,8 +329,10 @@ theorem Grid.owned_sound (h : Grid.start prog fn L args m ch oracle = .ok (g₀,
       a.invariant = true → e.write = true → a.ptr.block ≠ e.ptr.block)
     {y : β} (hy : obs z.mem = some y) (hR : R y) : Grid.Sound L c g₀ obs R :=
   Grid.start_sound h hm hB run hz (fun hb => by
-    obtain ⟨hr, hk⟩ := racy_kept_of_local hO hL hX hI
-    rw [hz.bad_iff, hr, hk] at hb
+    have hf := Grid.start_reach_fits h (Path.exists_iff.1 ⟨_, run⟩)
+    obtain ⟨hr, hk⟩ := racy_kept_of_local hf.trace hf.2 hO hL hX hI
+    rw [Grid.Done.bad_iff (Grid.start_reach_size h (Path.exists_iff.1 ⟨_, run⟩)).le hz, hr, hk]
+      at hb
     simp at hb) hy hR
 
 end Owned

@@ -12,8 +12,8 @@ On `Closed.mem1` (block 1 of 8 undefined bytes of every thread, `next = 2`). The
 so both orders give the same blocks (`comm`) and the same trace (`same`); there byte 0 of block 1
 is 7 and byte 4 is 8 (`bytes`). The twins: two puts at byte 0 of block 1 are not apart, and the two
 orders give 8 and 7 there (`twin`); a write by thread 1 and a barrier of its block of threads are
-not apart, and after a write by thread 0 the two orders give a trace that is not racy and one that
-is, so not the same trace (`trace_twin`).
+not apart, and after a write by thread 0 the two orders give a trace with no two accesses that
+clash by phases and one with two, so not the same trace (`trace_twin`).
 
 The instance of `Grid.advance_comm`: in the contexts `ctxOf n` (thread `n`), the grid `stores 4`
 of thread 0 storing `7` at bytes 0 to 3 of block 1 and thread 1 storing `8` at bytes 4 to 7 is
@@ -45,22 +45,23 @@ threads own, and the two orders give the same grid (`start_diamond`'s statement 
 
 The instance of `Grid.advance_fire_comm`: the grid `fires` of thread 0 at barrier 0 and thread 1
 storing to bytes 4 to 7 of block 1, after a write of those bytes by thread 0, in a launch of one
-thread per block of threads (`Pending.launch 1`). In the contexts `ctxB n` (thread `n` of block of
+thread per block of threads (`launch2 1 1 1 1`). In the contexts `ctxB n` (thread `n` of block of
 threads `n`) the store is not of block of threads 0, and the two orders give the same grid
 (`fire_diamond`). The twin: in the contexts `ctxOf n` (every thread of block of threads 0) the
 barrier orders thread 1's store after thread 0's write in one order and not in the other, so one
-trace is racy and the other not, and the grids are not the same (`fire_twin`). At a shuffle: the
+trace has two accesses that clash by phases and the other not, and the grids are not the same
+(`fire_twin`). At a shuffle: the
 grid `shfls` of thread 0 at a butterfly shuffle of `5` and thread 1 storing, in the same launch and
 contexts `ctxB`, where thread 0's warp is thread 0 alone; the two orders give the same grid
 (`shfl_diamond`), and the shuffle puts in thread 0's register 0 its own `5` under the callee's
 `range(i32 0, 8)` (`shfl_value`).
 
-The instance of `Grid.start_reach_fire_comm`: the kernel of MojoProofTest/Launch.lean (an
-`alloca`, a store, barrier 0, `ret void`) launched on two blocks of one thread (`twoBlocks`); after
+The instance of `Grid.start_reach_fire_comm`: the kernel of MojoProofTest/Launch.lean (an `alloca`,
+a store, barrier 0, `ret void`) launched on two blocks of one thread (`launch2 2 1 1 1`); after
 thread 0's three steps it waits at the barrier, and after thread 1's `alloca` its store succeeds,
 the barrier completes, and the two orders give the same grid (`start_fire_diamond`). The twin:
-`fire_twin`'s contexts `ctxOf` are no start's contexts for its launch, since the start's put
-thread 1 in block of threads 1 (`start_fire_twin`, by `Grid.start_ctx`).
+`fire_twin`'s contexts `ctxOf` are no start's contexts for its launch, since the start's put thread
+1 in block of threads 1 (`start_fire_twin`, by `Grid.start_ctx`).
 
 The instances of `Grid.fire_fire_comm`: the grid `bars` of threads 0 and 1 at barrier 0. In the
 contexts `ctxB` with one thread per block of threads the two fires give different grids, and each
@@ -158,11 +159,12 @@ theorem twin : ¬ (Mem.Op.put 1 0 [.byte 7]).Apart (.put 1 0 [.byte 8]) ∧
   decide
 
 /-- The twin at the trace: a write by thread 1 and a barrier of block of threads 0 are not apart,
-and after a write by thread 0 at the same bytes the two orders give different traces. -/
+and after a write by thread 0 at the same bytes the two orders give different traces: one has
+two accesses that clash by phases and the other not (`Trace.Same.clash`). -/
 theorem trace_twin : ¬ (Mem.Op.log (ev 1 0)).Apart (.log (.barrier 0)) ∧
     ¬ Trace.Same (((Closed.mem1.log (ev 0 0)).run [.log (ev 1 0)]).run [.log (.barrier 0)]).trace
       (((Closed.mem1.log (ev 0 0)).run [.log (.barrier 0)]).run [.log (ev 1 0)]).trace :=
-  ⟨by simp [Mem.Op.Apart, ev, Event.indep], fun h => absurd h.racy (by decide)⟩
+  ⟨by simp [Mem.Op.Apart, ev, Event.indep], fun h => absurd h.clash (by decide +kernel)⟩
 
 /-! ## The two-thread case of the diamond (`Grid.advance_comm`) -/
 
@@ -320,7 +322,7 @@ def kprog : Program :=
     intrinsics := [], kernels := ["k"] }
 
 /-- One block of two threads. -/
-def two : Launch := ⟨fun _ => 1, fun | .x => 2 | _ => 1, 0⟩
+def two : Launch := launch2 1 1 2 1
 
 /-- The launch of `kern` on `two` on the empty memory, with address choice and oracle 0. -/
 def start2 : Except Fault (Grid × (Nat → Ctx)) :=
@@ -485,24 +487,24 @@ def ctxB (n : Nat) : Ctx := { ctx0 with who := ⟨n, n⟩ }
 not of block of threads 0, whose barrier thread 0 waits at, so the two orders of the store and the
 barrier give the same grid. -/
 theorem fire_diamond : ∃ gk gf g₁ g₂, fires.advance ctxB 1 = .ok (some gk) ∧
-    fires.fire (Pending.launch 1) ctxB 0 = .ok (some gf) ∧
-    gk.fire (Pending.launch 1) ctxB 0 = .ok (some g₁) ∧ gf.advance ctxB 1 = .ok (some g₂) ∧
+    fires.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gf) ∧
+    gk.fire (launch2 1 1 1 1) ctxB 0 = .ok (some g₁) ∧ gf.advance ctxB 1 = .ok (some g₂) ∧
     g₁.Same g₂ := by
   obtain ⟨gk, hk⟩ : ∃ gk, fires.advance ctxB 1 = .ok (some gk) := ⟨_, rfl⟩
-  obtain ⟨gf, hf⟩ : ∃ gf, fires.fire (Pending.launch 1) ctxB 0 = .ok (some gf) := ⟨_, rfl⟩
+  obtain ⟨gf, hf⟩ : ∃ gf, fires.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gf) := ⟨_, rfl⟩
   obtain ⟨g₁, g₂, h₁, h₂, h⟩ := Grid.advance_fire_comm hk hf (by decide)
   exact ⟨gk, gf, g₁, g₂, hk, hf, h₁, h₂, h⟩
 
 /-- The twin of the premise on blocks of threads: in the contexts `ctxOf`, thread 1 is of block of
 threads 0, whose `.barrier` the barrier logs, and the two orders give grids that are not the same:
 the barrier orders thread 1's store after thread 0's write in one and not in the other, so one
-trace is racy and the other not. -/
-theorem fire_twin : .barrier (ctxOf 1).who.cta ∈ fires.fired (Pending.launch 1) 0 ∧
+trace has two accesses that clash by phases and the other not (`Trace.Same.clash`). -/
+theorem fire_twin : .barrier (ctxOf 1).who.cta ∈ fires.fired (launch2 1 1 1 1) 0 ∧
     ∃ gk gf g₁ g₂, fires.advance ctxOf 1 = .ok (some gk) ∧
-      fires.fire (Pending.launch 1) ctxOf 0 = .ok (some gf) ∧
-      gk.fire (Pending.launch 1) ctxOf 0 = .ok (some g₁) ∧ gf.advance ctxOf 1 = .ok (some g₂) ∧
+      fires.fire (launch2 1 1 1 1) ctxOf 0 = .ok (some gf) ∧
+      gk.fire (launch2 1 1 1 1) ctxOf 0 = .ok (some g₁) ∧ gf.advance ctxOf 1 = .ok (some g₂) ∧
       ¬ g₁.Same g₂ :=
-  ⟨by decide, _, _, _, _, rfl, rfl, rfl, rfl, fun h => absurd h.2.2.2.racy (by decide)⟩
+  ⟨by decide, _, _, _, _, rfl, rfl, rfl, rfl, fun h => absurd h.2.2.2.clash (by decide +kernel)⟩
 
 /-- The callee of a shuffle, `i32 @llvm.nvvm.shfl.sync.bfly.i32`, its result in
 `range(i32 0, 8)`. -/
@@ -529,29 +531,26 @@ def shfls : Grid :=
 alone, so the shuffle completes, and thread 1's store and the shuffle give the same grid in both
 orders; the shuffle logs nothing. -/
 theorem shfl_diamond : ∃ gk gf g₁ g₂, shfls.advance ctxB 1 = .ok (some gk) ∧
-    shfls.fire (Pending.launch 1) ctxB 0 = .ok (some gf) ∧
-    gk.fire (Pending.launch 1) ctxB 0 = .ok (some g₁) ∧ gf.advance ctxB 1 = .ok (some g₂) ∧
-    g₁.Same g₂ ∧ shfls.fired (Pending.launch 1) 0 = [] := by
+    shfls.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gf) ∧
+    gk.fire (launch2 1 1 1 1) ctxB 0 = .ok (some g₁) ∧ gf.advance ctxB 1 = .ok (some g₂) ∧
+    g₁.Same g₂ ∧ shfls.fired (launch2 1 1 1 1) 0 = [] := by
   obtain ⟨gk, hk⟩ : ∃ gk, shfls.advance ctxB 1 = .ok (some gk) := ⟨_, rfl⟩
-  obtain ⟨gf, hf⟩ : ∃ gf, shfls.fire (Pending.launch 1) ctxB 0 = .ok (some gf) := ⟨_, rfl⟩
+  obtain ⟨gf, hf⟩ : ∃ gf, shfls.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gf) := ⟨_, rfl⟩
   obtain ⟨g₁, g₂, h₁, h₂, h⟩ := Grid.advance_fire_comm hk hf (by decide)
   exact ⟨gk, gf, g₁, g₂, hk, hf, h₁, h₂, h, rfl⟩
 
 /-- The shuffle of `shfls` puts in thread 0's register 0 the value `5` of its own lane, in the
 range of its callee's return, and keeps thread 1's status. -/
-theorem shfl_value : ∃ gf, shfls.fire (Pending.launch 1) ctxB 0 = .ok (some gf) ∧
+theorem shfl_value : ∃ gf, shfls.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gf) ∧
     reg0 gf 0 = some (.bits 32 5) ∧ gf.threads[1]? = some (.run (storerAt 8 4)) :=
   ⟨_, rfl, rfl, rfl⟩
 
 /-! ## A thread and a barrier from the start (`Grid.start_reach_fire_comm`) -/
 
-/-- Two blocks of one thread. -/
-def twoBlocks : Launch := ⟨fun | .x => 2 | _ => 1, fun _ => 1, 0⟩
-
-/-- The launch of `Launch.k` (an `alloca`, a store, barrier 0 and `ret void`) on `twoBlocks`, on
-the empty memory, with address choice and oracle 0. -/
+/-- The launch of `Launch.k` (an `alloca`, a store, barrier 0 and `ret void`) on two blocks of one
+thread (`launch2 2 1 1 1`), on the empty memory, with address choice and oracle 0. -/
 def startB : Except Fault (Grid × (Nat → Ctx)) :=
-  Grid.start Launch.prog Launch.k twoBlocks [] {} (fun _ => 0) (fun _ _ => 0)
+  Grid.start Launch.prog Launch.k (launch2 2 1 1 1) [] {} (fun _ => 0) (fun _ _ => 0)
 
 /-- The grid and contexts of `startB`. -/
 def runB : Grid × (Nat → Ctx) :=
@@ -581,29 +580,31 @@ def b4 : Grid := advB 1 b3
 theorem startB_eq : startB = .ok (runB.1, cB) := rfl
 
 /-- The four steps from the start to `b4`. -/
-theorem b4_reach : Relation.ReflTransGen (Grid.Step twoBlocks cB) runB.1 b4 :=
+theorem b4_reach : Relation.ReflTransGen (Grid.Step (launch2 2 1 1 1) cB) runB.1 b4 :=
   ((((Relation.ReflTransGen.refl).tail (b := runB.1) (c := b1) ⟨0, .inl rfl⟩).tail
     (c := b2) ⟨0, .inl rfl⟩).tail (c := b3) ⟨0, .inl rfl⟩).tail (c := b4) ⟨1, .inl rfl⟩
 
 /-- The instance: in `b4` thread 0 waits at barrier 0, which completes, and thread 1's store
 succeeds, so the two orders give the same grid. -/
 theorem start_fire_diamond : ∃ t vs fn, b4.threads[0]? = some (.wait t .barrier vs fn) ∧
-    ∃ gk gf g₁ g₂, b4.advance cB 1 = .ok (some gk) ∧ b4.fire twoBlocks cB 0 = .ok (some gf) ∧
-      gk.fire twoBlocks cB 0 = .ok (some g₁) ∧ gf.advance cB 1 = .ok (some g₂) ∧ g₁.Same g₂ := by
+    ∃ gk gf g₁ g₂, b4.advance cB 1 = .ok (some gk) ∧
+      b4.fire (launch2 2 1 1 1) cB 0 = .ok (some gf) ∧
+      gk.fire (launch2 2 1 1 1) cB 0 = .ok (some g₁) ∧ gf.advance cB 1 = .ok (some g₂) ∧
+      g₁.Same g₂ := by
   obtain ⟨t, vs, fn, hb⟩ : ∃ t vs fn, b4.threads[0]? = some (.wait t .barrier vs fn) :=
     ⟨_, _, _, rfl⟩
   obtain ⟨gk, hk⟩ : ∃ gk, b4.advance cB 1 = .ok (some gk) := ⟨_, rfl⟩
-  obtain ⟨gf, hf⟩ : ∃ gf, b4.fire twoBlocks cB 0 = .ok (some gf) := ⟨_, rfl⟩
+  obtain ⟨gf, hf⟩ : ∃ gf, b4.fire (launch2 2 1 1 1) cB 0 = .ok (some gf) := ⟨_, rfl⟩
   obtain ⟨g₁, g₂, h₁, h₂, h⟩ := Grid.start_reach_fire_comm startB_eq b4_reach hk hf
   exact ⟨t, vs, fn, hb, gk, gf, g₁, g₂, hk, hf, h₁, h₂, h⟩
 
 /-- The twin of the start's contexts: for every program, kernel, arguments, memory, address
-choice and oracle, the start of `Pending.launch 1` does not give `fire_twin`'s contexts `ctxOf`,
+choice and oracle, the start of `launch2 1 1 1 1` does not give `fire_twin`'s contexts `ctxOf`,
 since it puts thread 1 in block of threads 1 (`Grid.start_ctx`). So `fire_twin`'s grid in those
 contexts is reachable from no start, and there the two orders differ. -/
 theorem start_fire_twin {prog : Program} {fn : Func} {args : List Val} {m : Mem}
     {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g : Grid} :
-    Grid.start prog fn (Pending.launch 1) args m ch oracle ≠ .ok (g, ctxOf) :=
+    Grid.start prog fn (launch2 1 1 1 1) args m ch oracle ≠ .ok (g, ctxOf) :=
   fun h => absurd (Grid.start_ctx h 1).2.1 (by decide)
 
 /-! ## Two collective calls (`Grid.fire_fire_comm`, `Grid.start_fire_fire_comm`) -/
@@ -618,13 +619,13 @@ def runs (g : Grid) : List Bool := g.threads.toList.map fun | .run _ => true | _
 threads, the two barriers are of blocks of threads 0 and 1, the two fires give grids that differ
 (each resumes its own thread), and each completes after the other, both orders giving the same
 grid. -/
-theorem bars_diamond : ∃ gn gj, bars.fire (Pending.launch 1) ctxB 0 = .ok (some gn) ∧
-    bars.fire (Pending.launch 1) ctxB 1 = .ok (some gj) ∧ runs gn = [true, false] ∧
-    runs gj = [false, true] ∧ ∃ g₁ g₂, gn.fire (Pending.launch 1) ctxB 1 = .ok (some g₁) ∧
-      gj.fire (Pending.launch 1) ctxB 0 = .ok (some g₂) ∧ g₁.Same g₂ := by
-  obtain ⟨gn, hn, rn⟩ : ∃ gn, bars.fire (Pending.launch 1) ctxB 0 = .ok (some gn) ∧
+theorem bars_diamond : ∃ gn gj, bars.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gn) ∧
+    bars.fire (launch2 1 1 1 1) ctxB 1 = .ok (some gj) ∧ runs gn = [true, false] ∧
+    runs gj = [false, true] ∧ ∃ g₁ g₂, gn.fire (launch2 1 1 1 1) ctxB 1 = .ok (some g₁) ∧
+      gj.fire (launch2 1 1 1 1) ctxB 0 = .ok (some g₂) ∧ g₁.Same g₂ := by
+  obtain ⟨gn, hn, rn⟩ : ∃ gn, bars.fire (launch2 1 1 1 1) ctxB 0 = .ok (some gn) ∧
       runs gn = [true, false] := ⟨_, rfl, rfl⟩
-  obtain ⟨gj, hj, rj⟩ : ∃ gj, bars.fire (Pending.launch 1) ctxB 1 = .ok (some gj) ∧
+  obtain ⟨gj, hj, rj⟩ : ∃ gj, bars.fire (launch2 1 1 1 1) ctxB 1 = .ok (some gj) ∧
       runs gj = [false, true] := ⟨_, rfl, rfl⟩
   refine ⟨gn, gj, hn, hj, rn, rj,
     (Grid.fire_fire_comm (n := 0) (j := 1) rfl hn hj).resolve_left fun e => ?_⟩
@@ -634,8 +635,8 @@ theorem bars_diamond : ∃ gn gj, bars.fire (Pending.launch 1) ctxB 0 = .ok (som
 /-- The instance of the first alternative: in the contexts `ctxOf`, both threads are of block of
 threads 0, and either thread's fire completes the barrier for both and gives one grid, in which no
 fire completes, since no thread waits. -/
-theorem bars_same : ∃ g', bars.fire (Pending.launch 2) ctxOf 0 = .ok (some g') ∧
-    bars.fire (Pending.launch 2) ctxOf 1 = .ok (some g') ∧ runs g' = [true, true] :=
+theorem bars_same : ∃ g', bars.fire (launch2 1 1 2 1) ctxOf 0 = .ok (some g') ∧
+    bars.fire (launch2 1 1 2 1) ctxOf 1 = .ok (some g') ∧ runs g' = [true, true] :=
   ⟨_, rfl, rfl, rfl⟩
 
 /-- Threads 0 and 1 at `regT`, waiting at a butterfly shuffle of all lanes with lane mask `1` and
@@ -648,8 +649,8 @@ def shfl2 : Grid :=
 /-- The first alternative at a shuffle: in a launch of one block of two threads, lanes 0 and 1
 share a warp, and either lane's fire completes the shuffle for both and gives one grid, in which
 lane 0 has `6` and lane 1 has `5`. -/
-theorem shfls_same : ∃ g', shfl2.fire (Pending.launch 2) ctxOf 0 = .ok (some g') ∧
-    shfl2.fire (Pending.launch 2) ctxOf 1 = .ok (some g') ∧ reg0 g' 0 = some (.bits 32 6) ∧
+theorem shfls_same : ∃ g', shfl2.fire (launch2 1 1 2 1) ctxOf 0 = .ok (some g') ∧
+    shfl2.fire (launch2 1 1 2 1) ctxOf 1 = .ok (some g') ∧ reg0 g' 0 = some (.bits 32 6) ∧
     reg0 g' 1 = some (.bits 32 5) :=
   ⟨_, rfl, rfl, rfl, rfl⟩
 
@@ -675,14 +676,14 @@ address is `2 ^ 32` under thread 0's 64-bit layout and `0` under thread 1's 32-b
 thread 0's fire gives thread 0 the pointer and thread 1's gives it poison (`nonnull`); after
 thread 0's fire no thread waits, so thread 1's fire does not complete. -/
 theorem layout_twin : (ctxL 0).prog.layout ≠ (ctxL 1).prog.layout ∧
-    ∃ gn gj, ptrs.fire (Pending.launch 2) ctxL 0 = .ok (some gn) ∧
-      ptrs.fire (Pending.launch 2) ctxL 1 = .ok (some gj) ∧
-      ¬ (gn = gj ∨ ∃ g₁ g₂, gn.fire (Pending.launch 2) ctxL 1 = .ok (some g₁) ∧
-        gj.fire (Pending.launch 2) ctxL 0 = .ok (some g₂) ∧ g₁.Same g₂) := by
-  obtain ⟨gn, hn, pn, rn⟩ : ∃ gn, ptrs.fire (Pending.launch 2) ctxL 0 = .ok (some gn) ∧
-      reg0 gn 0 = some (.ptr ⟨0, 2 ^ 32⟩) ∧ gn.fire (Pending.launch 2) ctxL 1 = .ok none :=
+    ∃ gn gj, ptrs.fire (launch2 1 1 2 1) ctxL 0 = .ok (some gn) ∧
+      ptrs.fire (launch2 1 1 2 1) ctxL 1 = .ok (some gj) ∧
+      ¬ (gn = gj ∨ ∃ g₁ g₂, gn.fire (launch2 1 1 2 1) ctxL 1 = .ok (some g₁) ∧
+        gj.fire (launch2 1 1 2 1) ctxL 0 = .ok (some g₂) ∧ g₁.Same g₂) := by
+  obtain ⟨gn, hn, pn, rn⟩ : ∃ gn, ptrs.fire (launch2 1 1 2 1) ctxL 0 = .ok (some gn) ∧
+      reg0 gn 0 = some (.ptr ⟨0, 2 ^ 32⟩) ∧ gn.fire (launch2 1 1 2 1) ctxL 1 = .ok none :=
     ⟨_, rfl, rfl, rfl⟩
-  obtain ⟨gj, hj, pj⟩ : ∃ gj, ptrs.fire (Pending.launch 2) ctxL 1 = .ok (some gj) ∧
+  obtain ⟨gj, hj, pj⟩ : ∃ gj, ptrs.fire (launch2 1 1 2 1) ctxL 1 = .ok (some gj) ∧
       reg0 gj 0 = some .poison := ⟨_, rfl, rfl⟩
   refine ⟨fun e => absurd (congrArg Layout.ptrs e) (by decide), gn, gj, hn, hj, ?_⟩
   rintro (rfl | ⟨g₁, g₂, h₁, -⟩)
@@ -699,14 +700,17 @@ def b6 : Grid := advB 1 b5
 /-- The instance from the start: `b6` is reachable from `startB`'s grid, and there the two
 barriers complete, give grids that differ, and each completes after the other, both orders giving
 the same grid. -/
-theorem start_bars : Relation.ReflTransGen (Grid.Step twoBlocks cB) runB.1 b6 ∧
-    ∃ gn gj, b6.fire twoBlocks cB 0 = .ok (some gn) ∧ b6.fire twoBlocks cB 1 = .ok (some gj) ∧
+theorem start_bars : Relation.ReflTransGen (Grid.Step (launch2 2 1 1 1) cB) runB.1 b6 ∧
+    ∃ gn gj, b6.fire (launch2 2 1 1 1) cB 0 = .ok (some gn) ∧
+      b6.fire (launch2 2 1 1 1) cB 1 = .ok (some gj) ∧
       runs gn = [true, false] ∧ runs gj = [false, true] ∧
-      ∃ g₁ g₂, gn.fire twoBlocks cB 1 = .ok (some g₁) ∧ gj.fire twoBlocks cB 0 = .ok (some g₂) ∧
-        g₁.Same g₂ := by
-  obtain ⟨gn, hn, rn⟩ : ∃ gn, b6.fire twoBlocks cB 0 = .ok (some gn) ∧ runs gn = [true, false] :=
+      ∃ g₁ g₂, gn.fire (launch2 2 1 1 1) cB 1 = .ok (some g₁) ∧
+        gj.fire (launch2 2 1 1 1) cB 0 = .ok (some g₂) ∧ g₁.Same g₂ := by
+  obtain ⟨gn, hn, rn⟩ : ∃ gn, b6.fire (launch2 2 1 1 1) cB 0 = .ok (some gn) ∧
+      runs gn = [true, false] :=
     ⟨_, rfl, rfl⟩
-  obtain ⟨gj, hj, rj⟩ : ∃ gj, b6.fire twoBlocks cB 1 = .ok (some gj) ∧ runs gj = [false, true] :=
+  obtain ⟨gj, hj, rj⟩ : ∃ gj, b6.fire (launch2 2 1 1 1) cB 1 = .ok (some gj) ∧
+      runs gj = [false, true] :=
     ⟨_, rfl, rfl⟩
   refine ⟨(b4_reach.tail (c := b5) ⟨1, .inl rfl⟩).tail (c := b6) ⟨1, .inl rfl⟩, gn, gj, hn, hj, rn,
     rj, (Grid.start_fire_fire_comm startB_eq hn hj).resolve_left fun e => ?_⟩
@@ -972,7 +976,8 @@ theorem atomic_comm {gn gk : Grid} (hn : adds.advance ctxOf 0 = .ok (some gn))
 
 /-- The instance of `Grid.advance_comm`'s premise at two `atomicrmw`s: on `adds` the writes of the
 two threads overlap, and no pending access of thread 0 conflicts with one of thread 1, as
-`Access.conflict` exempts two `atomicrmw`s of one operation at one pointer and size; and with the
+`Access.conflict` exempts two `atomicrmw`s of one commuting operation (`add`) at one pointer and
+size; and with the
 premise the two orders give the same grid. -/
 theorem atomic_diamond :
     (∃ a a', .access a ∈ adds.pending ctxOf 0 ∧ .access a' ∈ adds.pending ctxOf 1 ∧

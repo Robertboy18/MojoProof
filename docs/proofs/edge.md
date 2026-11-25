@@ -7,8 +7,9 @@ time".
 **Scope.** Every program `P`, function `fn`, block `lbl`, entry position `p0`, target `d₀`,
 condition list `ds` and summary `S` that `coversTo P fn lbl p0 d₀ ds S` accepts, every context of
 `P` and every thread whose innermost frame runs `fn` at block `lbl`'s position `p0`, with any
-memory, whenever the exit goes to `d₀`. Along a path: every path that `coversPathI` accepts, each
-block but the last by `covers` or by `coversTo` for the edge into the next block.
+memory, whenever the exit goes to `d₀`. Along a path: every path that `coversPathWith contract`
+accepts, for either value of the flag, each block but the last by `covers` or by `coversTo` for the
+edge into the next block (their `coversWith` forms with the flag).
 
 **Why one edge.** `SState.phiExit` gives `br i1 c, d, e` into blocks with `phi`s the obligations
 of both edges (`SState.phiConds fn lbl d ++ SState.phiConds fn lbl e`). A `phi` operand of the
@@ -24,25 +25,28 @@ obligations from `ex σ b.term` (`ex : SState → Term → Option (Exit × List 
 d₀ σ` is `SState.phiExit` except on `br i1 c, d, e`: the exit `.phi x d e` with the obligations
 `.bool x :: SState.phiConds fn lbl d₀` (the edge into `d₀` only); `SState.exitTo` is
 `SState.exit`'s exit, else `SState.phiExitTo`'s; `coversTo P fn lbl p0 d₀ := coversWith P fn lbl p0
-(fun σ tm => σ.exitTo fn lbl d₀ tm)`. `coversPathI`'s step `(l, ds, S) :: (l', ds', S') :: ps`
-checks `covers P fn l p0 ds S || coversTo P fn l p0 l' ds S`.
+(fun σ tm => σ.exitTo fn lbl d₀ tm)`. `coversPathWith contract`'s step
+`(l, ds, S) :: (l', ds', S') :: ps` checks `coversWith` with the flag at `SState.exitAt` or at
+`SState.exitTo` the next label: without the flag, `covers P fn l p0 ds S || coversTo P fn l p0 l'
+ds S`.
 
 1. `SState.exitTo_sound`: under `Rel` at the block's end (after its statements), if
    `σ.exitTo fe.fn fe.label d₀ b.term = some (x, cs)`, every condition of `cs` holds and
    `x.dest V vs = some d₀`, then `x.next V vs rest k fe me = .ok r` and the terminator's step is
    `.ok r`.
-2. `Block.sound_with`: `Block.sound` for `coversWith` with any `ex` whose exit, at the block's end,
-   is the terminator's step whenever its obligations hold (premise `hex`), and either value of
-   the flag `contract`. It concludes `EndsWith contract ∧ Ptrs`, which is `Ends ∧ Ptrs` without
-   the flag (docs/proofs/ptrs.md, docs/proofs/contract.md).
-3. `Block.sound` is `Block.sound_with` with `SState.exitAt_sound` (`Block.sound_atWith`), through
-   `Block.sound_ptrs` (`Ends ∧ Ptrs`).
+2. `Block.sound_withAt`: `Block.sound` for `coversAt` with any `ex` whose exit, at the block's
+   end, is the terminator's step whenever its obligations hold (premise `hex`), and either value
+   of the flags `alloca` and `contract`. It concludes `EndsAt contract ∧ Ptrs`; with the flag
+   `alloca` off `EndsAt.ends` makes it `EndsWith contract ∧ Ptrs`, which is `Ends ∧ Ptrs` without
+   `contract` (docs/proofs/ptrs.md, docs/proofs/contract.md).
+3. `Block.sound` is `Block.sound_withAt` with `SState.exitAt_sound` (`Block.sound_atWith`),
+   through `Block.sound_ptrs` (`Ends ∧ Ptrs`).
 4. `Block.sound_to`: `Block.sound` for `coversTo P fn lbl p0 d₀` (`Block.sound_toWith` without the
    flag), with the extra premise
    `S.exit.dest (Valuation.entry c t.k m f) (vals … S.nodes) = some d₀`; it concludes
    `Ends ∧ Ptrs`.
-5. `Block.sound_pathI`, `Block.sound_retR` for the wider `coversPathI`; `Block.sound_pathI` is the
-   first half of `Block.sound_pathI_ptrs`.
+5. `Block.sound_pathWith_ptrs` and `Block.sound_retWith` for the paths that `coversPathWith`
+   accepts; the first half of `Block.sound_pathWith_ptrs` is the last block's `EndsWith`.
 
 ## Proof
 
@@ -55,9 +59,10 @@ checks `covers P fn l p0 ds S || coversTo P fn l p0 l' ds S`.
 2. `Block.sound`'s proof with the call of `SState.exitAt_sound` replaced by `hex`.
 3. and 4. `hex` from items 1 and `SState.exitAt_sound` (`Rel` gives `fe.fn = f.fn` and
    `fe.label = f.label`).
-5. In `Block.sound_pathI`'s step the head block's `Ends` comes from `Block.sound` (through
-   `Block.sound_ptrs`) or from `Block.sound_to` with the premise `Exit.dest = some l'` that `WalkI`
-   already contains; the rest of the proof is unchanged. `Walk.toI` gives the left disjunct.
+5. In `Block.sound_pathWith_ptrs`'s step the head block's `EndsWith` comes from
+   `Block.sound_atWith` or from `Block.sound_toWith` with the premise `Exit.dest = some l'` that
+   `WalkWith` contains; `Ends.edgeWith` enters the next block and `EndsWith.pre` prepends the
+   steps.
 
 ## Dependencies
 
@@ -69,7 +74,8 @@ checks `covers P fn l p0 ds S || coversTo P fn l p0 l' ds S`.
 MojoProofTest/SymPhi.lean, one program written in the test (`edgeF`, three blocks), one context
 (`ctxE`), memory (`mem0`) and frame (`frameE true`): `entryTo` is the entry block's summary for the
 edge into block 1, `edge_covers` accepts the path `0 → 1` (the entry block by `coversTo`),
-`edge_walk` its premises, and `edge_run` (`Block.sound_retR`) runs the thread to block 1's `ret`.
+`edge_walk` its premises, and `edge_run` (`Block.sound_retWith`) runs the thread to block 1's
+`ret`.
 `entry_both`: `summarize` accepts the entry block with both edges' obligations, block 2's float
 constant 1.5 as its node 0 (`SNode.flit`), whose obligation holds at `frameE true`. Twins
 (`edge_twins`): `coversTo` refuses the corrupted certificates `entryTo` without its first

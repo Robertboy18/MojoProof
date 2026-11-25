@@ -30,6 +30,8 @@ programs the terms `mojo_import` added (`MojoProof.Kernels`).
   threads computes the first tile of the output, and its trace (37,888 accesses and 8 barrier
   completions) has no race.
 
+* `castV_bytes4`: `castV_join` at `<4 x i8>` and `i32`, the bytes `[1, 2, 3, 4]` and the word
+  `0x04030201`, for every layout, memory and oracle numbers.
 * `rsqrt.approx.ftz.f32` (`MojoProof.Sem.rsqrt`): on 4096 spread-out positive finite operands,
   the word 8 units in the last place above the value under the oracle number 0 (the fallback
   `Model.rSqrt`, since the word `+0` misses the contract; the fallback meets it on every operand
@@ -70,11 +72,12 @@ programs the terms `mojo_import` added (`MojoProof.Kernels`).
   member mask, a lane that has returned and lanes at two different shuffles are unsupported. Every
   run of a small kernel, of `vector_addition` and of `tiled_matmul` (the full launch without
   contraction and one block) is checked to have no race in its trace with `fast`, proved sound
-  for `racy` (`fast_sound`); on every small kernel's trace `fast` and `racy` agree.
+  for the core's `racy` at `sig` (`fast_sound`); on every small kernel's trace `fast` and the
+  core's `racy` agree.
 * 5 small kernels for the promises of TRUST T12: a write to the bytes of an `!invariant.load`,
-  before or after it, breaks it (`Grid.Kept`); after it, the run has no fault and no race, so
-  `kept` is a separate obligation from safety and race freedom; a `norecurse` function that
-  calls itself is undefined behavior;
+  before or after it, breaks it (`Grid.Kept`); after it, the run has no fault and no race, so the
+  core's `GPUProof.kept` is a separate obligation from safety and race freedom; a `norecurse`
+  function that calls itself is undefined behavior;
   `willreturn` on a defined function is unsupported; a null argument for a `nonnull noundef`
   parameter is poison, so undefined behavior. Every run of a small kernel and of
   `vector_addition` (whose two loads have `!invariant.load`) is checked to keep the promise.
@@ -108,9 +111,9 @@ programs the terms `mojo_import` added (`MojoProof.Kernels`).
   `nocreateundeforpoison` and called with `ninf` stores poison and is not undefined behavior
   (its own result is defined), and without `ninf` stores `+∞`; a `memory` item with an unknown
   access kind at a location the check does not query is unsupported, and with `none` runs.
-* 6 small kernels and a corpus file for the atomics the semantics admits
-  (`Stmt.checkAtomic`): `atomicrmw xchg`, `atomicrmw sub`, `atomicrmw fadd`, an
-  `atomicrmw` on `i24` and an `atomicrmw add` whose result is used are unsupported; two threads that run their
+* 6 small kernels and a corpus file for the atomics the semantics admits (`Stmt.checkAtomic`):
+  `atomicrmw xchg`, `atomicrmw sub`, `atomicrmw fadd`, an `atomicrmw` on `i24` and an
+  `atomicrmw add` whose result is used are unsupported; two threads that run their
   `atomicrmw add` in either order and then wait at a barrier have the same registers
   (`regsAfter`: the old value, which depends on the order, is not kept). `atomicTests`: in
   `tests/corpus/reduction/`, the only corpus file with an atomic, every statement passes the
@@ -135,31 +138,28 @@ def input (seed i : Nat) : Model FloatFormat.binary32 :=
   if i % 3 = 0 then Model.ofRat .binary32 ((i : Rat) / 4 - seed)
   else Model.ofNatBits ((i * 2654435761 + seed * 40503) % 2 ^ 32)
 
+mutual
 /-- The value of a buffer argument of type `t`: pointer `p` in its pointer fields, empty
-structures elsewhere. -/
+structures elsewhere. The recursion through `bufArgs` is structural, so the kernel evaluates it
+(`decide +kernel`). -/
 def bufArg (p : Ptr) : Ty → Val
   | .ptr _ => .ptr p
-  | .struct fs => .agg (fs.map (bufArg p))
+  | .struct fs => .agg (bufArgs p fs)
   | _ => .agg []
 
-/-- A launch of `x` × `y` blocks of `bx` × `by'` threads. -/
-def launch2 (x y bx by' : Nat) : Launch where
-  grid := fun | .x => x | .y => y | .z => 1
-  block := fun | .x => bx | .y => by' | .z => 1
+/-- `bufArg p` of each field type `ts`, in order. -/
+def bufArgs (p : Ptr) : List Ty → List Val
+  | [] => []
+  | t :: ts => bufArg p t :: bufArgs p ts
+end
 
-/-- **`launch2 x y bx by'` is valid** (`Launch.Valid`), for all four sides with every side
-positive, `x < 2 ^ 31`, `y ≤ 65535` and `bx * by' ≤ 1024` (so `bx`, `by' ≤ 1024`); the premise
-is decidable, so `by decide` proves it at numerals. -/
-theorem launch2_valid {x y bx by' : Nat}
-    (h : 0 < x ∧ 0 < y ∧ 0 < bx ∧ 0 < by' ∧ x < 2 ^ 31 ∧ y ≤ 65535 ∧ bx * by' ≤ 1024) :
-    (launch2 x y bx by').Valid := by
-  obtain ⟨hx, hy, hbx, hby, hx', hy', ht⟩ := h
-  have hbx' : bx ≤ 1024 := (Nat.le_mul_of_pos_right bx hby).trans ht
-  have hby' : by' ≤ 1024 := (Nat.le_mul_of_pos_left by' hbx).trans ht
-  refine ⟨fun d => ?_, fun d => ?_, fun d => ?_, fun d => ?_, ?_⟩
-  all_goals first
-    | (cases d <;> simp only [launch2, Launch.maxGrid, Launch.maxBlock] <;> omega)
-    | (simp only [launch2, volume]; omega)
+/-- The arguments of a launch of `fn`, for every function: buffer `j` at offset 0 of block
+`bufs[j]`, as `bufArg` builds it at parameter `j`'s `byval` type (a pointer if the parameter has
+none), one buffer for each of the first `bufs.length` parameters (the rest of `bufs` is dropped
+when `fn` has fewer parameters), then the values `extra`. -/
+def kernelArgs (fn : Func) (bufs : List Nat) (extra : List Val) : List Val :=
+  let tys := fn.params.map fun p => (p.attrs.findSome? fun | .ty "byval" t => some t | _ => none)
+  (bufs.zip tys).map (fun (b, t) => bufArg ⟨b, 0⟩ (t.getD (.ptr 0))) ++ extra
 
 /-- `v` is the float `r`, bit for bit, or some NaN if `r` is a NaN. -/
 def isF32 (r : Model FloatFormat.binary32) (v : Val) : Bool :=
@@ -170,18 +170,17 @@ def isF32 (r : Model FloatFormat.binary32) (v : Val) : Bool :=
 /-- A fault as a failure message. -/
 def err (e : Fault) : String := s!"{repr e}"
 
-/-- Launch the kernel of `prog` with `L`, buffers `ins` of floats, then an output buffer of
-`out` floats, then the scalar arguments `extra`; thread `n` gets oracle `oracle n`. Each input
-buffer is the block `Mem.holds_alloc` proves holds its tensor (`tensorBytes`, row-major). Returns
-the output buffer's values; with `race`, a data race in the run's trace (`fast`, which finds every
-race of `racy`) or a write to the bytes of an `!invariant.load` (`kept`) is a failure. With
-`tiles := some r`, the final output block must meet the premises of `Block.holds_of_tiles`
-row-major from 0, with `f i` the float decoded at tile `i`, and each `f i` must be `r i`
-(`isF32`): a tile `i` that fails is reported as `tile i`. -/
-def runF32 (prog : Program) (L : Launch) (oracle : Nat → Nat → Nat)
-    (ins : List (List (Model FloatFormat.binary32))) (out : Nat) (extra : List Val)
-    (race := false) (tiles : Option (Nat → Model FloatFormat.binary32) := none) :
-    Except String (List Val) := do
+/-- The start of a launch of the kernel of `prog` (the first of `prog.kernels`) with `L`,
+buffers `ins` of floats, then an output buffer of `out` floats, then the scalar arguments
+`extra`; thread `n` gets oracle `oracle n` and every address choice is `oracle 0`. Input buffer
+`j` is a block at address `0x100 * (j + 1)` that `Mem.holds_alloc` proves holds its tensor
+(`tensorBytes`, row-major); the output buffer is a block of `4 * out` bytes at `0x10000`. Returns
+the start's grid and contexts (`MojoProof.Sem.Grid.start`) and the output buffer's block, or the
+fault as a message. The kernel evaluates it, with `Array.anyM.loop` unsealed: at
+`vector_addition`'s launch of `vaddTests` in `MojoProofTest.RacySig.trSig_run`. -/
+def startF32 (prog : Program) (L : Launch) (oracle : Nat → Nat → Nat)
+    (ins : List (List (Model FloatFormat.binary32))) (out : Nat) (extra : List Val) :
+    Except String (Grid × (Nat → Ctx) × Nat) := do
   let l := prog.layout
   let some fn := prog.module.funcs.find? (some ·.name == prog.kernels.head?)
     | throw "no kernel"
@@ -194,12 +193,39 @@ def runF32 (prog : Program) (L : Launch) (oracle : Nat → Nat → Nat)
       false .all (0x100 * (j + 1)) (0x100 * (j + 1)) bs
     (m, acc ++ [b])
   let (m, c) := m.alloc l 1 (4 * out) 16 true false .all 0x10000 0x10000
-  let tys := fn.params.map fun p => (p.attrs.findSome? fun | .ty "byval" t => some t | _ => none)
-  let args := ((bufs ++ [c]).zip tys).map (fun (b, t) => bufArg ⟨b, 0⟩ (t.getD (.ptr 0))) ++ extra
-  let (g, ctx) ← (Grid.start prog fn L args m (oracle 0) oracle).mapError err
+  let (g, ctx) ← (Grid.start prog fn L (kernelArgs fn (bufs ++ [c]) extra) m (oracle 0)
+    oracle).mapError err
+  return (g, ctx, c)
+
+/-- The run of the launch that `startF32` starts, with the same arguments: the evaluator
+(`MojoProof.Sem.Grid.run`, at most 100 phases of at most 100000 steps per thread and phase)
+from the start's grid and contexts. Returns the final grid and the output buffer's block, or the
+fault as a message. -/
+def gridF32 (prog : Program) (L : Launch) (oracle : Nat → Nat → Nat)
+    (ins : List (List (Model FloatFormat.binary32))) (out : Nat) (extra : List Val) :
+    Except String (Grid × Nat) := do
+  let (g, ctx, c) ← startF32 prog L oracle ins out extra
   let g ← (g.run L ctx 100000 100).mapError err
+  return (g, c)
+
+/-- Launch the kernel of `prog` with `L`, buffers `ins` of floats, then an output buffer of
+`out` floats, then the scalar arguments `extra`; thread `n` gets oracle `oracle n`. The run is
+`gridF32`'s (the start `startF32`): each input buffer is the block `Mem.holds_alloc` proves holds
+its tensor (`tensorBytes`, row-major). Returns the output buffer's values; with `race`, a data
+race in the run's trace (`fast`, which finds every race the core's `racy` finds) or a write to
+the bytes of an `!invariant.load` (`GPUProof.kept`) is a failure. With `tiles := some r`, the
+final output block must meet the premises of `Block.holds_of_tiles` row-major from 0, with `f i`
+the float decoded at tile `i`, and each `f i` must be `r i` (`isF32`): a tile `i` that fails is
+reported as `tile i`. -/
+def runF32 (prog : Program) (L : Launch) (oracle : Nat → Nat → Nat)
+    (ins : List (List (Model FloatFormat.binary32))) (out : Nat) (extra : List Val)
+    (race := false) (tiles : Option (Nat → Model FloatFormat.binary32) := none) :
+    Except String (List Val) := do
+  let l := prog.layout
+  let (g, c) ← gridF32 prog L oracle ins out extra
   if race && fast g.mem.trace then throw "data race"
-  if race && !kept g.mem.trace then throw "invariant load written"
+  if race && !GPUProof.kept sig (g.mem.trace.map (Event.toCore L)).reverse then
+    throw "invariant load written"
   if let some r := tiles then
     let some blk := g.mem.blocks c | throw "no output block"
     let t : Ty := .fp .float
@@ -229,9 +255,15 @@ def checkFault (name msg : String) : Except String (List Val) → Array String
   | .error e => if (e.splitOn msg).length > 1 then #[] else #[s!"{name}: wrong fault {e}"]
   | .ok _ => #[s!"{name}: no fault"]
 
-/-- The `vector_addition` tests on program `prog`; returns the failures. -/
+/-- The input buffers of the `vector_addition` tests (`vaddTests`): `input 1` and `input 2` at
+100 floats each. -/
+def vaddIns : List (List (Model FloatFormat.binary32)) :=
+  [(List.range 100).map (input 1), (List.range 100).map (input 2)]
+
+/-- The `vector_addition` tests on program `prog`, on the inputs `vaddIns`; returns the
+failures. -/
 def vaddTests (prog : Program) : Array String :=
-  let ins := [(List.range 100).map (input 1), (List.range 100).map (input 2)]
+  let ins := vaddIns
   let n : Val := .bits 32 (BitVec.ofNat 32 100)
   let sum (i : Nat) := Model.add (input 1 i) (input 2 i)
   check "vadd (zero oracle)" 100 sum
@@ -318,35 +350,40 @@ def oracleTests : Array String :=
 /-- Kernel text `src` started on `blocks` blocks of `threads` threads with skeleton choices `ch`
 and payload choices `oracle` (zero by default), on arguments `args b`, where `b` points to a
 buffer of 64 bytes (space 1) at address `16 * addr` in space 1 and in the generic space,
-allocated in memory `m0`: the layout, the launch, the buffer's block, the grid and the contexts. -/
+allocated in memory `m0`, with the accumulation policy `acc` of `mma` (`gridAcc` by default): the
+layout, the launch, the buffer's block, the grid and the contexts. -/
 def startText (src : String) (threads : Nat) (args : Val → List Val) (blocks := 1)
     (addr := 0x100) (ch : Nat → Nat := fun _ => 0) (oracle : Nat → Nat → Nat := fun _ _ => 0)
-    (m0 : Mem := {}) : Except String (Layout × Launch × Nat × Grid × (Nat → Ctx)) := do
+    (m0 : Mem := {}) (acc : MmaAcc := gridAcc) :
+    Except String (Layout × Launch × Nat × Grid × (Nat → Ctx)) := do
   let prog ← importBytes src.toUTF8
   let some fn := prog.module.funcs.find? (some ·.name == prog.kernels.head?)
     | throw "no kernel"
   let (m, c) := m0.alloc prog.layout 1 64 16 true false .all addr addr
-  let L := launch2 blocks 1 threads 1
+  let L := { launch2 blocks 1 threads 1 with acc := acc }
   let (g, ctx) ← (Grid.start prog fn L (args (.ptr ⟨c, 0⟩)) m ch oracle).mapError err
   return (prog.layout, L, c, g, ctx)
 
-/-- Run kernel text `src` started as `startText` starts it; `pre` changes the grid after the
-start. Returns the buffer's first `n` values of type `ty`. With `rev` the threads first run in
-reverse order, each until it waits or returns. A data race in the run's trace (`racy`), a
-disagreement of `fast` with `racy` on it, or a write to the bytes of an `!invariant.load`
-(`kept`) is a failure. -/
+/-- Run kernel text `src` started as `startText` starts it, with the accumulation policy `acc`;
+`pre` changes the grid after the start. Returns the buffer's first `n` values of type `ty`. With
+`rev` the threads first run in reverse order, each until it waits or returns. A data race in the
+run's trace (the core's `racy` at `sig`), a disagreement of `fast` with it, or a write to the
+bytes of an `!invariant.load` (the core's `GPUProof.kept` at `sig`) is a failure. -/
 def runText (src : String) (threads : Nat) (args : Val → List Val) (n : Nat := 0)
     (blocks := 1) (addr := 0x100) (ty : Ty := .int 32) (rev := false)
     (ch : Nat → Nat := fun _ => 0) (oracle : Nat → Nat → Nat := fun _ _ => 0)
-    (m0 : Mem := {}) (pre : Grid → Grid := id) : Except String (List Val) := do
-  let (l, L, c, g, ctx) ← startText src threads args blocks addr ch oracle m0
+    (m0 : Mem := {}) (pre : Grid → Grid := id) (acc : MmaAcc := gridAcc) :
+    Except String (List Val) := do
+  let (l, L, c, g, ctx) ← startText src threads args blocks addr ch oracle m0 acc
   let g := pre g
   let g ← if rev then (g.runAll ctx 1000 (List.range g.threads.size).reverse).mapError err
     else pure g
   let g ← (g.run L ctx 1000 10).mapError err
-  if racy g.mem.trace != fast g.mem.trace then throw "fast and racy disagree"
-  if racy g.mem.trace then throw "data race"
-  if !kept g.mem.trace then throw "invariant load written"
+  let r := GPUProof.racy sig (g.mem.trace.map (Event.toCore L)).reverse
+  if r != fast g.mem.trace then throw "fast and racy disagree"
+  if r then throw "data race"
+  if !GPUProof.kept sig (g.mem.trace.map (Event.toCore L)).reverse then
+    throw "invariant load written"
   match g.mem.load l default 1 (.arr n ty) ⟨c, 0⟩ (some 4) with
   | .ok (.agg vs) => return vs
   | .ok _ => throw "buffer holds no array"
@@ -944,6 +981,14 @@ def callAttrTests : Array String :=
     (maxnum "" (lead ++ " memory(argmem: none, inaccessiblemem: bogus)")) ++
   checkWords "memory item at an unqueried location (control)" [0x7f800000]
     (maxnum "" (lead ++ " memory(argmem: none, inaccessiblemem: none)"))
+
+/-- **`bitcast <4 x i8>` to `i32` puts lane 0 low**, a test of `castV_join` at a second size
+(`castV_halves` is its instance at `<2 x i32>`): for every layout, memory and oracle numbers, the
+`bitcast` of the bytes `[1, 2, 3, 4]` to `i32` is the word `0x04030201`. -/
+theorem castV_bytes4 (l : Layout) (m : Mem) (ch : Nat → Nat) :
+    castV l m .bitcast (.vec 4 (.int 8)) (.vec [.bits 8 1#8, .bits 8 2#8, .bits 8 3#8, .bits 8 4#8])
+      (.int 32) ch = .ok (.bits 32 0x04030201#32) :=
+  (castV_join l m ch (n := 4) (w := 8) 0x04030201#32).trans rfl
 
 /-- The evaluator tests, on the imported programs of `MojoProof.Kernels`; returns the failures. -/
 def evalTests : IO (Array String) := do

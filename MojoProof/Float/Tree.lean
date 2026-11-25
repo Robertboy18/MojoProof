@@ -26,6 +26,9 @@ Proved, in every IEEE format, for every tree over any index type:
 * `finiteEval_of_isFinite`, `isFinite_of_mem_leaves`: a tree of FloatLib's `Model.add` with a
   finite root has every node's sum finite (FloatLib's `Model.ReductionTree.FiniteEval`), and
   every leaf finite.
+* `isFinite_eval`: a tree of finite words whose absolute sum, times `(1 + u) ^ depth`, is at most
+  the largest finite value has a finite sum, at most that in magnitude; FloatLib's tree bounds
+  assume the finiteness instead.
 * `eval_error`: for every carrier, FloatLib's `ReductionTree.abs_eval_sub_exact_le_depth` with
   the exact sums over any list `S` the leaves are a permutation of.
 * `sum_error`: if the tree's sum of words is finite, every input is finite and the sum is within
@@ -153,6 +156,63 @@ theorem isFinite_of_mem_leaves {fmt : FloatFormat} (t : ReductionTree (Model fmt
     intro y hy
     rw [ReductionTree.leaves, List.mem_append] at hy
     exact hy.elim (ha h.1 y) (hb h.2.1 y)
+
+/-- **A tree of IEEE additions stays finite.** In every IEEE format, for every tree `t` over any
+index type and words `v` finite at every leaf of `t`: if `(1 + u) ^ t.depth · Σ |v j|`, over the
+leaves of `t`, is at most the largest finite value of `fmt`, with `u` FloatLib's unit roundoff
+`Model.unitRoundoffAt fmt`, the tree's sum by FloatLib's `Model.add` is finite and at most that
+in magnitude. Each addition of finite words whose exact sum is at most the largest finite value
+is finite (`Model.isFinite_add_of_abs_toReal_add_le_posMaxFinite`) and errs by at most `u` times
+that sum (`Model.abs_toReal_add_sub_le_unitRoundoffAt`). -/
+theorem isFinite_eval {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) {ι : Type}
+    (t : ReductionTree ι) (v : ι → Model fmt) (hv : ∀ j ∈ t.leaves, (v j).isFinite = true)
+    (h : (1 + Model.unitRoundoffAt fmt) ^ t.depth * (t.leaves.map fun j => |(v j).toReal|).sum ≤
+      (Model.posMaxFinite fmt).toReal) :
+    (t.eval (fun x y => Model.add x y) v).isFinite = true ∧
+      |(t.eval (fun x y => Model.add x y) v).toReal| ≤
+        (1 + Model.unitRoundoffAt fmt) ^ t.depth * (t.leaves.map fun j => |(v j).toReal|).sum := by
+  have hu := Model.unitRoundoffAt_pos fmt
+  have hS : ∀ s : ReductionTree ι, 0 ≤ (s.leaves.map fun j => |(v j).toReal|).sum := fun s =>
+    List.sum_nonneg fun _ h => by obtain ⟨_, -, rfl⟩ := List.mem_map.1 h; exact abs_nonneg _
+  induction t with
+  | leaf j =>
+    refine ⟨hv j (List.mem_singleton_self j), ?_⟩
+    simp [ReductionTree.eval, ReductionTree.leaves, ReductionTree.depth]
+  | node a b ha hb =>
+    simp only [ReductionTree.leaves, List.mem_append, List.map_append, List.sum_append,
+      ReductionTree.depth, ReductionTree.eval] at hv h ⊢
+    set q := 1 + Model.unitRoundoffAt fmt with hq_def
+    set Sa := (a.leaves.map fun j => |(v j).toReal|).sum
+    set Sb := (b.leaves.map fun j => |(v j).toReal|).sum
+    have hq : 1 ≤ q := by linarith
+    have hpa : q ^ a.depth ≤ q ^ max a.depth b.depth := pow_le_pow_right₀ hq (le_max_left _ _)
+    have hpb : q ^ b.depth ≤ q ^ max a.depth b.depth := pow_le_pow_right₀ hq (le_max_right _ _)
+    have hm : q ^ max a.depth b.depth ≤ q ^ (max a.depth b.depth + 1) :=
+      pow_le_pow_right₀ hq (Nat.le_succ _)
+    have h0a : 0 ≤ Sa := hS a
+    have h0b : 0 ≤ Sb := hS b
+    have hM : q ^ max a.depth b.depth * (Sa + Sb) ≤ (Model.posMaxFinite fmt).toReal :=
+      (mul_le_mul_of_nonneg_right hm (add_nonneg h0a h0b)).trans h
+    obtain ⟨fa, ea⟩ := ha (fun j hj => hv j (.inl hj))
+      ((mul_le_mul hpa (le_add_of_nonneg_right h0b) h0a (by positivity)).trans hM)
+    obtain ⟨fb, eb⟩ := hb (fun j hj => hv j (.inr hj))
+      ((mul_le_mul hpb (le_add_of_nonneg_left h0a) h0b (by positivity)).trans hM)
+    set A := a.eval (fun x y => Model.add x y) v
+    set B := b.eval (fun x y => Model.add x y) v
+    have hAB : |A.toReal + B.toReal| ≤ q ^ max a.depth b.depth * (Sa + Sb) := by
+      have := mul_le_mul_of_nonneg_right hpa h0a
+      have := mul_le_mul_of_nonneg_right hpb h0b
+      linarith [abs_add_le A.toReal B.toReal]
+    have hf := Model.isFinite_add_of_abs_toReal_add_le_posMaxFinite A B hfmt fa fb (hAB.trans hM)
+    refine ⟨hf, ?_⟩
+    have e := Model.abs_toReal_add_sub_le_unitRoundoffAt A B hfmt hf
+    have e2 := abs_sub_abs_le_abs_sub (Model.add A B).toReal (A.toReal + B.toReal)
+    have h3 := mul_le_mul_of_nonneg_left hAB (by linarith : (0 : ℝ) ≤ q)
+    have h4 : |(Model.add A B).toReal| ≤ q * |A.toReal + B.toReal| := by
+      rw [hq_def]
+      linarith
+    calc |(Model.add A B).toReal| ≤ q * (q ^ max a.depth b.depth * (Sa + Sb)) := h4.trans h3
+      _ = q ^ (max a.depth b.depth + 1) * (Sa + Sb) := by rw [pow_succ]; ring
 
 /-- **Any tree within FloatLib's depth bound.** For every carrier, combining operation, values
 `v`, map `interpret` to the reals, `u ≥ 0`, tree `t` over any index type and list `S` such that

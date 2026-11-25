@@ -115,12 +115,10 @@ theorem RetWith.true_eq {V : Valuation} {Q : Mem → Prop} :
     simp only [RetWith]
     rw [walkWith_noProds h, Valuation.lastWith_noProds (ps := ps) h'.1 h'.2]
 
-set_option smartUnfolding false in
 /-- **Some path is a `RetWith true` when some path is a `Ret`, on paths with no `fmul contract`
 product**: for every valuation `V`, predicate `Q` and list `paths` of paths each with
 `pathNoProds` (decided on `paths`), a path of `paths` that is a `Ret` from `V` to `Q` is a
-`RetWith true` (`RetWith.true_eq`; `RetWith false` and `Ret` agree definitionally with
-`smartUnfolding` off). -/
+`RetWith true` (`RetWith.true_eq`; `Ret` is `RetWith false` by definition). -/
 theorem RetWith.exists_true_of_ret {V : Valuation} {Q : Mem → Prop}
     {paths : List (List (Nat × List Cond × Summary))} (hp : paths.all pathNoProds = true)
     (h : ∃ ps ∈ paths, Ret V Q ps) : ∃ ps ∈ paths, RetWith true V Q ps := by

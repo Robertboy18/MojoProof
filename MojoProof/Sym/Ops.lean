@@ -22,10 +22,10 @@ bytes `bs`, valuation `V` and node values `vs`:
   threads at its entry to `Elem` after `K` threads after it (`Valuation.after_mem`);
 * `Elem.intoWith`: the same as `Elem.after` across `Valuation.intoWith c`, for every flag `c`
   (`Valuation.intoWith_mem`);
-* `Elem.ret`: a path whose premises hold (`Walk`) and whose last block returns, with `Elem` after
-  `k` threads at that block's entry and its effects steps from `k` to `K`, is a `Ret` to `Elem`
-  after `K` threads; `Elem.retWith`: the same with `WalkWith c` and `Valuation.lastWith c`, a
-  `RetWith c`, for every flag `c`;
+* `Elem.retWith`: a path whose premises hold (`WalkWith c`) and whose last block (entered with
+  `Valuation.lastWith c`) returns, with `Elem` after `k` threads at that block's entry and its
+  effects steps from `k` to `K`, is a `RetWith c` to `Elem` after `K` threads, for every flag `c`
+  (without it a `Ret`);
 * `vals_getElem?_of_eq`: an entry of node values given as a list;
 * `Elem.Only.Steps out S V vs es`: effects `es` keep `Elem.Only out S` (every access to block
   `out` is by a thread of `S`); `Elem.Only.steps_nil`, `Elem.Only.steps_of` (every effect of a
@@ -41,9 +41,9 @@ mojo_ret (syntax `mojoRet`, elaborator `evalMojoRet`, method `Ops.run`) closes t
    effects of `S` as steps from `k` to `K` (`Ops.steps`);
 2. `∃ ps ∈ paths, Ret V (Elem m₀ out w cell bs K) ps`, for a concrete list of paths and a
    hypothesis `Elem m₀ out w cell bs k M` with `M` the memory of `V`: the first path that it
-   proves, each block's premises by mojo_obl's `walk` and its effects as steps, the blocks before
-   the last by `Elem.after`, the last by `Elem.ret`; or `RetWith c V (Elem …) ps` for every flag
-   `c`, the same by mojo_obl's `walkI` (`WalkWith c`), `Elem.intoWith` and `Elem.retWith`. When no
+   proves, each block's premises by mojo_obl's `walk` (`WalkWith false`) and its effects as
+   steps, the blocks before the last by `Elem.intoWith`, the last by `Elem.retWith`; or
+   `RetWith c V (Elem …) ps` for every flag `c`, the same with `WalkWith c`. When no
    path is proved, it splits on a branch condition that `omega` decided neither way
    (`Decidable.byCases`, twice at most) and proves each case so;
 3. `Elem.Only out S me`, from the run as in goal 1 and a hypothesis `Elem.Only out S M` with `M`
@@ -143,20 +143,6 @@ theorem Elem.after {k K : Nat} {S : Summary} (hE : Elem m₀ out w cell bs k V.m
   obtain ⟨me, hme⟩ := hm
   rw [Valuation.after_mem hme]
   exact h _ _ hE hme
-
-/-- **A path to `Elem` after `K` threads**: for every valuation `V` and path `(l, ds, S) :: ps`
-whose premises hold (`Walk`) and whose last block `S'` (entered with `V'`, `Valuation.last`)
-returns, with `Elem` after `k` threads at `V'`'s memory and `S'`'s effects succeeding at `V'` as
-steps from `k` to `K`, the path is a `Ret` to `Elem` after `K` threads. -/
-theorem Elem.ret {K l : Nat} {ds : List Cond} {S : Summary} {ps : List (Nat × List Cond × Summary)}
-    {V' : Valuation} {l' : Nat} {S' : Summary} {k : Nat} (hW : Walk V ((l, ds, S) :: ps))
-    (hl : V.last l S ps = (V', l', S')) (hx : S'.exit = .ret)
-    (hE : Elem m₀ out w cell bs k V'.mem)
-    (hm : ∃ me, SEff.run V' (vals V' S'.nodes) S'.effs = .ok me)
-    (h : Elem.Steps m₀ out w cell bs V' (vals V' S'.nodes) k K S'.effs) :
-    Ret V (Elem m₀ out w cell bs K) ((l, ds, S) :: ps) := by
-  obtain ⟨me, hme⟩ := hm
-  exact Ret.of_walk hW hl hx hme (h _ _ hE hme)
 
 /-- **A block of `Elem` steps, into the next block, with or without `fmul contract`**: for every
 flag `c`, label `l`, valuation `V` and summary `S` whose effects succeed at `V` and are steps from
@@ -448,13 +434,12 @@ partial def blocks (ps : Expr) : MetaM (List (Expr × Expr × Expr)) := do
     let (ds, S) ← kpair r
     return (l, ds, S) :: (← blocks tl)
 
-/-- **Path `p` from `V0` is a `Ret` to `Elem E K`**, or with flag `c` a `RetWith c`: its walk
-(`Obl.walk`, with the flag `Obl.walkI`), each block's effects as steps, the blocks before the last
-by `Elem.after` (with the flag `Elem.intoWith`) and the last by `Elem.ret` (`Elem.retWith`). -/
+/-- **Path `p` from `V0` is a `Ret` to `Elem E K`**, or with flag `c` a `RetWith c`: its premises
+(`Obl.walk`), each block's effects as steps, the blocks before the last by `Elem.intoWith` and
+the last by `Elem.retWith`, without the flag at `false`. -/
 def onePath (c? : Option Expr) (E : Array Expr) (K V0 p : Expr) : M Expr := do
-  let hW ← match c? with
-    | some c => walkI (some c) V0 p
-    | none => walk V0 p
+  let c := c?.getD (mkConst ``Bool.false)
+  let hW ← walk c? V0 p
   let bl ← blocks p
   let some (l0, ds0, S0) := bl.head? | throwError "mojo_ret: an empty path"
   let some (_, tl) ← kcons p | throwError "mojo_ret: an empty path"
@@ -465,25 +450,17 @@ def onePath (c? : Option Expr) (E : Array Expr) (K V0 p : Expr) : M Expr := do
     let K' := addN k (← stores es)
     let hm ← runEx V S es
     let hS ← steps E V S k K' es
-    match c? with
-    | some c =>
-      hE := (← use ``Elem.intoWith (named E ++ [(`c, c), (`l, l), (`V, V), (`k, k), (`K, K'),
-        (`S, S)]) [.kd hE, .kd hm, .kd hS]).1
-      (V, k) := (mkApp4 (mkConst ``Valuation.intoWith) c V l S, K')
-    | none =>
-      hE := (← use ``Elem.after (named E ++ [(`V, V), (`k, k), (`K, K'), (`S, S)])
-        [.kd hE, .kd hm, .kd hS]).1
-      (V, k) := (mkApp2 (mkConst ``Valuation.after) V S, K')
+    hE := (← use ``Elem.intoWith (named E ++ [(`c, c), (`l, l), (`V, V), (`k, k), (`K, K'),
+      (`S, S)]) [.kd hE, .kd hm, .kd hS]).1
+    (V, k) := (intoV c? V l S, K')
   let (ln, _, Sn) := bl.getLast!
   let es ← klist (mkApp (mkConst ``Summary.effs) Sn)
   let hm ← runEx V Sn es
   let hS ← steps E V Sn k K es
   let args := [(`V, V0), (`K, K), (`l, l0), (`ds, ds0), (`S, S0), (`ps, tl), (`V', V),
     (`l', ln), (`S', Sn), (`k, k)]
-  let (lem, wc) := match c? with
-    | some c => (``Elem.retWith, [(`c, c)])
-    | none => (``Elem.ret, [])
-  return (← use lem (named E ++ wc ++ args) [.kd hW, .rfl, .rfl, .kd hE, .kd hm, .kd hS]).1
+  return (← use ``Elem.retWith (named E ++ [(`c, c)] ++ args)
+    [.kd hW, .rfl, .rfl, .kd hE, .kd hm, .kd hS]).1
 
 /-- `List.Mem` of entry `i` of the list `l`, by `List.Mem.tail`s and `List.Mem.head`. -/
 partial def memOfList (l : Expr) (i : Nat) : MetaM Expr := do
@@ -589,8 +566,8 @@ end Ops
   one thread (`V.ctx.who.thread = k`, the pointer `⟨out, cell k⟩` and the bytes `bs k` by
   mojo_vals' equalities), and when the effects end one thread short of `K`, that thread `k` is
   skipped by `bs k = none` (one at most);
-* a goal `∃ ps ∈ paths, Ret V (Elem m₀ out w cell bs K) ps`, from `Elem m₀ out w cell bs k M`:
-  the first path whose premises mojo_obl proves (`Walk`) and whose blocks' effects are such
+* a goal `∃ ps ∈ paths, Ret V (Elem m₀ out w cell bs K) ps`, from `Elem m₀ out w cell bs k M`: the
+  first path whose premises mojo_obl proves (`WalkWith false`) and whose blocks' effects are such
   steps, splitting on a branch condition when no path is proved outright; the same for
   `RetWith c V (Elem m₀ out w cell bs K) ps`, for every flag `c` (`WalkWith c`, each block after
   the first entered through `Valuation.intoWith c`);

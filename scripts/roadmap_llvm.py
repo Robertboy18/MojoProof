@@ -594,15 +594,18 @@ def gpu_launches(text: str) -> bool:
 def gpu_records() -> dict[str, str]:
     """The records of GPU runs (tests/gpu/*/record.txt) whose `result:` line starts with `agree`
     and whose launches all agree (`gpu_launches`): for each, the corpus file of the kernel it ran
-    (its `kernel:` line). The file must exist and have the sha256 of the record's `kernel sha256:`
-    line. A record whose `result:` says `agree` but whose launch, evaluator and compare lines do
-    not is not counted, with a message on stderr. Each counted record, with its first launch's
-    words changed, must be rejected by `gpu_launches`."""
+    (its `kernel:` line). A record with no `kernel:` line, of one instruction (tests/gpu/mma/,
+    ldmatrix/, cp-async/), is skipped. The file must exist and have the sha256 of the record's
+    `kernel sha256:` line. A record whose `result:` says `agree` but whose launch, evaluator and
+    compare lines do not is not counted, with a message on stderr. Each counted record, with its
+    first launch's words changed, must be rejected by `gpu_launches`."""
     out = {}
     for p in sorted(GPU.glob('*/record.txt')):
         text = p.read_text()
         f = dict(re.findall(r'^([a-z][a-z0-9 ]*): (.*)$', text, re.M))
         rel = str(p.relative_to(ROOT))
+        if 'kernel' not in f:
+            continue  # the record of one instruction, not of a corpus kernel
         k = ROOT / f['kernel']
         assert k.is_file() and f['kernel'].startswith('tests/corpus/'), f'{rel}: no kernel file'
         sha = hashlib.sha256(k.read_bytes()).hexdigest()

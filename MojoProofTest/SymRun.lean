@@ -24,8 +24,8 @@ at block `out`.
   `mem0` does not have), by `decide +kernel`.
 * `vadd4_hds`: the premise `hds` of `Block.sound` on the entry block `%4` (`vadd4_covers`,
   MojoProofTest/Sym.lean), whose statements 7, 9 and 11 call the special registers `tid.x`,
-  `ctaid.x` and `ntid.x`. The context `ctx4 i` is thread number `i` of the launch `launch4` of
-  one block of four threads (`ctx0` with the special registers `Launch.env` gives thread `i`);
+  `ctaid.x` and `ntid.x`. The context `ctx4 i` is thread number `i` of the launch `launch2 1 1 4 1`
+  of one block of four threads (`ctx0` with the special registers `Launch.env` gives thread `i`);
   the memory `mem4` adds to `mem0` the three argument blocks 4, 5
   and 6, which hold pointers to the inputs and the output; the frame `frame4 n` is at `%4`'s entry
   with `%0`, `%1`, `%2` pointing at the argument blocks and the element count `%3 = n`. For every
@@ -35,13 +35,13 @@ at block `out`.
   `[1, 1025)` that the declaration of `@llvm.nvvm.read.ptx.sreg.ntid.x` gives its result, the call
   at statement 11 has a poison result that its `noundef` attribute makes undefined behavior, and
   the obligations fail.
-* `vadd_walk`: the premise `Walk` of `vadd_ret` (`Block.sound_ret` on the kernel's paths,
-  MojoProofTest/Sym.lean): for every `i < 4`, at `frame4 4` under `ctx4 i`, the premises of the
-  path `%4 → %21 → %31` hold (every block's obligations under its entry valuation
-  `Valuation.after`, the registers, memory and step count of the block before; `%4`'s branch to
-  `%21`); and thread 3 with element count 2 (`frame4 2` under `ctx4 3`) meets those of
-  `%4 → %30 → %31`. Its twin `vadd_walk_twin`: that thread fails the premises of the path through
-  `%21` (its branch goes to `%30`).
+* `vadd_walk`: the premise `WalkWith false` of `vadd_ret` (`Block.sound_retWith` on the kernel's
+  paths, MojoProofTest/Sym.lean): for every `i < 4`, at `frame4 4` under `ctx4 i`, the premises of
+  the path `%4 → %21 → %31` hold (every block's obligations under its entry valuation
+  `Valuation.into`, the registers, memory and step count after the block before, whose branches
+  enter no `phi`; `%4`'s branch to `%21`); and thread 3 with element count 2 (`frame4 2` under
+  `ctx4 3`) meets those of `%4 → %30 → %31`. Its twin `vadd_walk_twin`: that thread fails the
+  premises of the path through `%21` (its branch goes to `%30`).
 * `vadd_cell`: for every `i < 4`, thread `i`'s steps from the kernel's entry block (`frame4 4`
   under `ctx4 i`, memory `mem4`) run `%4`, `%21` and `%31` to the `ret`, whose step is `.done`,
   and cell `i` of the output holds the sum of cells `i` of the inputs (`vadd_ret` with
@@ -62,8 +62,8 @@ at block `out`.
 
 Each evaluated proposition is proved by `decide +kernel` alone, with no rewriting before it:
 the kernel unfolds `vals`, `SNode.eval`, `Mem.load` and `Layout.decode` (its value on a
-float type is `scalarOf` of the bytes), and along a path `Walk`, `Valuation.after`,
-`Valuation.last` and the path, whose registers are values of `%4`'s table.
+float type is `scalarOf` of the bytes), and along a path `WalkWith`, `Valuation.intoWith`,
+`Valuation.lastWith` and the path, whose registers are values of `%4`'s table.
 Block `%4` loads structures `{ ptr, { { {} }, { {} } } }`, whose decoding goes through
 `Layout.decodeFields`; it recurses structurally on the type and the field list, so the kernel
 evaluates it with the rest.
@@ -154,15 +154,12 @@ theorem vadd21_hds_twins :
       (vals (Valuation.entry ctx0 0 mem0 (frame0 2 7)) Kernels.vadd.b1.nodes)) := by
   decide +kernel
 
-/-- The launch of one block of four threads: grid `(1, 1, 1)`, block `(4, 1, 1)`. -/
-def launch4 : Launch := ⟨fun _ => 1, fun | .x => 4 | _ => 1, 0⟩
-
-/-- The context of thread number `i` of `launch4`: `ctx0` with the special registers that
+/-- The context of thread number `i` of `launch2 1 1 4 1`: `ctx0` with the special registers that
 `Launch.env` gives thread `i` (`tid = (i % 4, 0, 0)`, `ntid = (4, 1, 1)`, `ctaid = (i / 4, 0, 0)`,
 `nctaid = (1, 1, 1)`, `laneid = i % 4`), named as thread `i` of block `i / 4`, as `Grid.start`
 names it. -/
 def ctx4 (i : Nat) : Ctx :=
-  { ctx0 with env := launch4.env i, who := ⟨i, i / 4⟩ }
+  { ctx0 with env := (launch2 1 1 4 1).env i, who := ⟨i, i / 4⟩ }
 
 /-- `mem0` with the three argument blocks 4, 5 and 6 (8 bytes, global, read-only), which hold
 pointers to the inputs (blocks 1 and 2) and to the output (block 3). -/
@@ -198,20 +195,20 @@ theorem vadd4_hds_twin :
   decide +kernel
 
 /-- **The path premises**: for every thread index `i < 4`, at `frame4 4` under `ctx4 i`, the
-premises of the path `%4 → %21 → %31` hold (`Walk`: each block's obligations under its entry
-valuation, `%4`'s branch to `%21`, `%21`'s to `%31`); and thread 3 with element count 2
-(`frame4 2` under `ctx4 3`) meets those of the path `%4 → %30 → %31`. With `vadd_ret`, these
-run the threads to their `ret`. -/
-theorem vadd_walk : (∀ i < 4, Walk (Valuation.entry (ctx4 i) 0 mem4 (frame4 4))
+premises of the path `%4 → %21 → %31` hold (`WalkWith false`: each block's obligations under its
+entry valuation, `%4`'s branch to `%21`, `%21`'s to `%31`); and thread 3 with element count 2
+(`frame4 2` under `ctx4 3`) meets those of the path `%4 → %30 → %31`. With `vadd_ret`, these run the
+threads to their `ret`. -/
+theorem vadd_walk : (∀ i < 4, WalkWith false (Valuation.entry (ctx4 i) 0 mem4 (frame4 4))
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddIn)) ∧
-    Walk (Valuation.entry (ctx4 3) 0 mem4 (frame4 2))
+    WalkWith false (Valuation.entry (ctx4 3) 0 mem4 (frame4 2))
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddOut) := by
   decide +kernel
 
 /-- **The twin**: thread 3 with element count 2 (`frame4 2` under `ctx4 3`) has index 3, not
 below the count: block `%4`'s branch goes to `%30`, and the premises of the path through `%21`
 fail. -/
-theorem vadd_walk_twin : ¬ Walk (Valuation.entry (ctx4 3) 0 mem4 (frame4 2))
+theorem vadd_walk_twin : ¬ WalkWith false (Valuation.entry (ctx4 3) 0 mem4 (frame4 2))
     ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddIn) := by
   decide +kernel
 
@@ -226,13 +223,13 @@ theorem vadd_cell : ∀ i < 4, ∃ fe me,
       .ok (.ofFloat .float (Model.add (Model.ofNatBits (inA.getD i 0))
         (Model.ofNatBits (inB.getD i 0)))) := by
   have hc : ∀ i < 4,
-      (match SEff.run ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).last
+      (match SEff.run ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).lastWith false
             Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 vaddIn).1
-          (vals ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).last
+          (vals ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).lastWith false
             Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 vaddIn).1
-            ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).last
+            ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).lastWith false
               Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 vaddIn).2.2.nodes)
-          ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).last
+          ((Valuation.entry (ctx4 i) 0 mem4 (frame4 4)).lastWith false
             Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 vaddIn).2.2.effs with
         | .ok me =>
           match me.load Kernels.vadd.prog.layout (ctx4 i).who 0 (.fp .float) ⟨3, 4 * i⟩

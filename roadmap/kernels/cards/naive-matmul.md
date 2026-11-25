@@ -6,7 +6,7 @@ ref: modular/modular@bbc13a71:max/kernels/src/linalg/matmul/gpu/__init__.mojo:25
 quote: "def matmul_kernel_naive["
 lean: TorchLean.Tensor.matmul, MojoProof.Sem.matmul_cell_real
 corpus: tests/corpus/mgemm/g_matmul_kernel_naive_*, tests/corpus/mgemm_nocontract, tests/corpus/mgemm_sm80
-tests: MojoProofTest.Matmul, MojoProofTest.SymNaive, MojoProofTest.SymContract, MojoProofTest.SymPhi, MojoProofTest.NaiveThread, MojoProofTest.NaiveStart, MojoProofTest.NaiveKernel, MojoProofTest.NaiveOff, MojoProofTest.ContractOff, MojoProofTest.Gpu
+tests: MojoProofTest.Matmul, MojoProofTest.SymNaive, MojoProofTest.SymContract, MojoProofTest.SymPhi, MojoProofTest.NaiveThread, MojoProofTest.NaiveStart, MojoProofTest.NaiveKernel, MojoProofTest.NaiveOff, MojoProofTest.ContractOff, MojoProofTest.Gpu, MojoProofTest.Family, MojoProofTest.NaiveFamRun
 upstream:
 depends: launch, contract, binary-op-rounding
 level: L4
@@ -62,9 +62,11 @@ with side 1 in `z`, sizes, blocks, tensors and memory meeting the matmul precond
 every final memory holds the contracted dot loop of row `r` of `A` and row `c` of `B` over the
 first `K` columns at each cell `(r, c)` with `r < m`, `c < n` and inside the launch's window
 (`r < grid.x * block.x`, `c < grid.y * block.y`), every other byte the caller's. It is the
-library's kernel theorem of a matmul kernel from its threads' runs,
-`MojoProof.Sym.Kernel.sound_mat`, at the naive kernel (`MojoProofTest.NaiveSound.naive_sound`,
-from the run `MojoProofTest.NaiveIn.runIn` of an in-bounds thread only), through
+family's theorem `MojoProofTest.NaiveFam.sound` at the corpus strides 768, 768 and 50257 (below,
+"The kernel theorem at every row stride"). The `mat … inv` clause of `mojo_kernel` proves the
+same theorem for this one program: the library's kernel theorem of a matmul kernel from its
+threads' runs, `MojoProof.Sym.Kernel.sound_mat`, at the naive kernel
+(`MojoProofTest.NaiveSound.naive_sound`, from the run of an in-bounds thread only), through
 `MojoProofTest.NaiveSound.naive.sound_mat`, the call that `mojo_kernel`'s `mat` clause generates
 with the run of an out-of-bounds thread (`MojoProofTest.NaiveSound.naive.out`). The run of an
 in-bounds thread is `MojoProofTest.NaiveSound.naive.runInv`, which the `mat … inv` clause
@@ -86,6 +88,27 @@ those of a run that exists (`MojoProofTest.NaiveStart.cells12`).
 window covers `m × n` (`m ≤ grid.x * block.x`, `n ≤ grid.y * block.y`); a cell outside the window
 keeps the caller's bytes: `MojoProofTest.NaiveKernel.keep11`, a launch of one thread with
 `m = 1`, `n = 2`, writes only `C[0, 0]`.
+
+**The kernel theorem at every row stride.** `MojoProofTest.NaiveFam.prog sA sB sC` is the
+float32 kernel compiled with `fmul contract` with the constants of its three stride
+multiplications as parameters (the command `mojo_family`, MojoProofTest.Family): the corpus file
+16826c8c is its value at 768, 768 and 50257 (`MojoProofTest.NaiveFam.prog_corpus`), and
+tests/corpus/naive_k512 its value at 512, 512 and 256 up to the kernel's name.
+`MojoProofTest.NaiveFam.sound` is `Kernel.Sound` of it for every row stride `sA`, `sB`, `sC`,
+oracle family, valid launch with side 1 in `z`, sizes `m`, `n`, `K` below `2 ^ 31`, blocks,
+tensors and memory meeting `Mat.Pre` at those strides (so `n ≤ sC` and `K ≤ min sA sB`), for
+`Elem.Out` of the family's bytes at the cells `MojoProofTest.NaiveFam.cell`. Its run of an
+in-bounds thread is `MojoProofTest.NaiveFam.runInF`, with the entry block summarized as a
+function of the strides (`MojoProofTest.NaiveFam.entryF`, by the command `sym_summary_family`)
+and the invariant's three facts proved by hand at every stride (`MojoProofTest.NaiveFam.head_inF`,
+`MojoProofTest.NaiveFam.round_inF`, `MojoProofTest.NaiveFam.exit_inF`); an out-of-bounds thread
+is `MojoProofTest.NaiveFam.outF`. `MojoProofTest.NaiveKernel.correct` and
+`MojoProofTest.NaiveFam.sound_512_512_256` are its instances at the two specializations, one line
+each. With contraction off, `MojoProofTest.NaiveOff.soundF`, `MojoProofTest.NaiveOff.matmul_nanEqF`
+and `MojoProofTest.NaiveOff.matmul_errorF` hold at every row stride and `K ≤ min sA sB`, and
+`MojoProofTest.NaiveOff.correct`, `matmul_nanEq` and `matmul_error` are their instances at the
+corpus file (`MojoProofTest.NaiveOff.corpus_off`). The other nine float32 files of
+tests/corpus/mgemm are not yet checked to be members of the family.
 
 **The kernel compiled with contraction off.** `MojoProofTest.NaiveOff.correct` is
 `Kernel.Sound` of the float32 kernel of tests/corpus/mgemm_nocontract, at every oracle family

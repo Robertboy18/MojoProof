@@ -18,7 +18,7 @@ LangRef's section on the intrinsic (the quote is the section's first sentence). 
 
 ## Corpus
 
-67 of the 114 corpus files use it (36476 uses); `corpus` lists the first 5 in path order. The members called: `llvm.lifetime.end.p0`, `llvm.lifetime.start.p0`.
+67 of the 116 corpus files use it (36476 uses); `corpus` lists the first 5 in path order. The members called: `llvm.lifetime.end.p0`, `llvm.lifetime.start.p0`.
 
 ## Out of scope
 

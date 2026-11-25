@@ -1,4 +1,5 @@
 import MojoProof.Sem.Spec
+import MojoProof.Sem.Determinism
 import MojoProof.Sem.Buffer
 
 /-!
@@ -28,7 +29,8 @@ relation:
   has returned after a phase, `Replay.all_ok`, and no collective call completed,
   `Replay.fire_false`); `Grid.run_ub` is the same for `Grid.run`'s undefined behavior;
 * `Replay.found_bad`: a violation the replay reports gives `¬ Grid.Sound` for the grid it
-  replayed (`Access.races_of_raceWith`, `racy_of_race`, `kept_of_broken`);
+  replayed, if every grid reachable from it has the premises of `racy_iff` (`Grid.Fits`)
+  (`Access.races_of_raceWith`, `clash_of_race`, `racy_of_race`, `kept_of_broken`);
 * `Kernel.replay_sound`: a violation gives `¬ Kernel.Sound` at those arguments and memory, for
   every admission that admits the address choice and oracle; `Kernel.replay_unsafe`: a violation
   for the trivial observation (`Grid.Sound.unit`) gives it for every observation and relation;
@@ -76,7 +78,8 @@ theorem Access.races_of_raceWith {a e : Access} :
       rw [hc, Bool.true_or]
     · rw [races_of_raceWith h, Bool.or_true]
 
-/-- A data race of trace `tr` (`racy`): an access and the earlier access it races with. -/
+/-- A data race of trace `tr` (newest first): an access and the earlier access it races with
+(`Access.races`). -/
 def race? : List Event → Option (Access × Access)
   | [] => none
   | .barrier _ :: tr => race? tr
@@ -85,33 +88,44 @@ def race? : List Event → Option (Access × Access)
     | some e => some (a, e)
     | none => race? tr
 
-/-- A race `race?` finds makes the trace racy (`racy`), for every trace. -/
-theorem racy_of_race : ∀ {tr : List Event} {p : Access × Access}, race? tr = some p →
-    racy tr = true
+/-- A race `race?` finds is a race by phases, for every trace: two accesses of `phases` clash
+(`clash_access`, `clash_barrier`). -/
+theorem clash_of_race : ∀ {tr : List Event} {p : Access × Access}, race? tr = some p →
+    ∃ x ∈ (phases tr).1, ∃ y ∈ (phases tr).1, clash x y = true
   | [], _, h => by cases h
   | .barrier _ :: tr, _, h => by
     simp only [race?] at h
-    simp only [racy]
-    exact racy_of_race h
+    exact clash_barrier.2 (clash_of_race h)
   | .access a :: tr, _, h => by
     simp only [race?] at h
-    simp only [racy]
+    refine clash_access.2 ?_
     split at h
     · rename_i e he
-      rw [Access.races_of_raceWith he, Bool.true_or]
-    · rw [racy_of_race h, Bool.or_true]
+      exact .inl (Access.races_of_raceWith he)
+    · exact .inr (clash_of_race h)
 
-/-- A broken promise of `!invariant.load` in trace `tr` (`kept`): a load with `!invariant.load`
-and a write that touches a byte it reads. -/
+/-- **A race `race?` finds makes the trace racy** (the core's `racy` at `sig`), for every launch
+and trace whose accesses are by threads of the launch in their blocks of threads and that is
+shaped, the premises of `racy_iff`: `clash_of_race`. -/
+theorem racy_of_race {L : Launch} {tr : List Event} {p : Access × Access}
+    (hU : ∀ a, Event.access a ∈ tr → a.who.thread < volume L.grid * volume L.block ∧
+      a.who.cta = a.who.thread / volume L.block) (hs : Trace.Shaped tr.reverse)
+    (h : race? tr = some p) : GPUProof.racy sig (tr.map (Event.toCore L)).reverse = true :=
+  (racy_iff hU hs).2 (clash_of_race h)
+
+/-- A broken promise of `!invariant.load` in trace `tr` (the core's `kept` at `sig`): a load with
+`!invariant.load` (of kind `frozen`, `Access.kind_frozen`) and an access that writes for the core
+(`Kind.writes`: a write or an `atomicrmw`'s read) that touches a byte it reads. -/
 def broken? (tr : List Event) : Option (Access × Access) :=
-  let inv := tr.filterMap fun | .access a => if a.invariant then some a else none | _ => none
+  let inv := tr.filterMap fun | .access a => if a.kind = .frozen then some a else none | _ => none
   tr.findSome? fun
-    | .access e => if e.write then (inv.find? (·.overlaps e)).map (·, e) else none
+    | .access e => if e.kind.writes then (inv.find? (·.overlaps e)).map (·, e) else none
     | .barrier _ => none
 
-/-- A broken promise `broken?` finds makes `kept` false, for every trace. -/
-theorem kept_of_broken {tr : List Event} {p : Access × Access} (h : broken? tr = some p) :
-    kept tr = false := by
+/-- A broken promise `broken?` finds makes the core's `kept` at `sig` false, for every launch and
+trace. -/
+theorem kept_of_broken {L : Launch} {tr : List Event} {p : Access × Access}
+    (h : broken? tr = some p) : GPUProof.kept sig (tr.map (Event.toCore L)).reverse = false := by
   obtain ⟨x, hx, hf⟩ := List.exists_of_findSome?_eq_some h
   cases x with
   | barrier _ => cases hf
@@ -121,18 +135,23 @@ theorem kept_of_broken {tr : List Event} {p : Access × Access} (h : broken? tr 
     · rename_i hw
       rw [Bool.eq_false_iff]
       intro hk
-      simp only [kept, List.all_eq_true] at hk
-      have he := hk _ hx
-      simp only [hw, Bool.not_true, Bool.false_or, List.all_eq_true] at he
       revert hf
       cases hr : List.find? (fun a => a.overlaps e) (tr.filterMap fun
-        | .access a => if a.invariant then some a else none | _ => none) with
+        | .access a => if a.kind = .frozen then some a else none | _ => none) with
       | none => intro hf; cases hf
       | some r =>
         intro _
-        have := he r (List.mem_of_find?_eq_some hr)
-        rw [List.find?_some hr] at this
-        cases this
+        obtain ⟨y, hy, hyr⟩ := List.mem_filterMap.1 (List.mem_of_find?_eq_some hr)
+        cases y with
+        | barrier _ => cases hyr
+        | access a =>
+          by_cases hfz : a.kind = .frozen
+          · simp only [hfz, ↓reduceIte, Option.some.injEq] at hyr
+            subst hyr
+            have := kept_sig_iff.1 hk e a hx hy hw hfz
+            rw [List.find?_some hr] at this
+            cases this
+          · simp [hfz] at hyr
     · cases hf
 
 namespace Replay
@@ -272,7 +291,8 @@ that has not returned, and has no step. -/
 def Stop.Holds (L : Launch) (c : Nat → Ctx) (g₀ : Grid) : Stop → Prop
   | .fault g n b e => ReflTransGen (Grid.Step L c) g₀ g ∧
       (if b then g.fire L c n else g.advance c n) = .error e
-  | .deadlock g => ReflTransGen (Grid.Step L c) g₀ g ∧ ¬ g.Done ∧ ∀ g', ¬ Grid.Step L c g g'
+  | .deadlock g => ReflTransGen (Grid.Step L c) g₀ g ∧ ¬ GPUProof.Done sig (g, L, c) ∧
+      ∀ g', ¬ Grid.Step L c g g'
   | .out _ => True
 
 /-- What a stop says about the grids reachable from `g₁` holds from every grid `g₀` that reaches
@@ -426,13 +446,15 @@ theorem fire_stop : ∀ {ns : List Nat} {g : Grid} {s : Stop},
 /-- **The fault side of `Grid.run_reach`.** Where the replay stops, the stop holds of the start
 grid (`Stop.Holds`): the grid of a fault is reachable and its thread's step or collective call is
 the fault, and the grid of a deadlock is reachable, has a thread that has not returned, and has
-no step. For every launch, contexts, fuel, phases and grid. -/
+no step. For every launch, contexts, fuel, phases and grid with at most the launch's number of
+threads. -/
 theorem run_stop {fuel : Nat} : ∀ {phases : Nat} {g : Grid} {s : Stop},
-    run L c fuel phases g = .error s → s.Holds L c g
-  | 0, _, _, h => by
+    g.threads.size ≤ volume L.grid * volume L.block → run L c fuel phases g = .error s →
+      s.Holds L c g
+  | 0, _, _, _, h => by
     cases h
     trivial
-  | phases + 1, g, s, h => by
+  | phases + 1, g, s, hsz, h => by
     simp only [run] at h
     split at h
     · cases h
@@ -450,8 +472,10 @@ theorem run_stop {fuel : Nat} : ∀ {phases : Nat} {g : Grid} {s : Stop},
         · rename_i r h₂
           have r₂ : ReflTransGen (Grid.Step L c) g₁ r.1 :=
             Grid.fireAll_reach (ok_of_eq fire_eq h₂)
+          have hsz' : r.1.threads.size ≤ volume L.grid * volume L.block :=
+            (Grid.reach_size (r₁.trans r₂)).trans_le hsz
           split at h
-          · have hs := run_stop h
+          · have hs := run_stop (g := ⟨r.1.threads, r.1.mem.compact⟩) hsz' h
             rw [Mem.compact_eq] at hs
             exact hs.back (r₁.trans r₂)
           · rename_i hb
@@ -461,7 +485,7 @@ theorem run_stop {fuel : Nat} : ∀ {phases : Nat} {g : Grid} {s : Stop},
               cases h
               obtain ⟨he, hf⟩ := fire_false h₂ (by simpa using hb)
               obtain ⟨hs, hi⟩ := all_ok h₁
-              refine ⟨r₁.trans r₂, hd, ?_⟩
+              refine ⟨r₁.trans r₂, fun hD => hd (Grid.Done.all hsz' hD), ?_⟩
               rintro g' ⟨k, hk⟩
               rw [he] at hk
               by_cases hlt : k < g.threads.size
@@ -480,7 +504,7 @@ theorem run_stop {fuel : Nat} : ∀ {phases : Nat} {g : Grid} {s : Stop},
 
 /-- The final grid of a replay is reachable from the start, and every thread has returned. -/
 theorem run_ok {fuel phases : Nat} {g g' : Grid} (h : run L c fuel phases g = .ok g') :
-    ReflTransGen (Grid.Step L c) g g' ∧ g'.Done :=
+    ReflTransGen (Grid.Step L c) g g' ∧ GPUProof.Done sig (g', L, c) :=
   have h' := ok_of_eq run_eq h
   ⟨Grid.run_reach h', Grid.run_done h'⟩
 
@@ -532,23 +556,27 @@ def found {β : Type} (obs : Mem → Option β) (R : β → Prop) [DecidablePred
     | none, none, some y => if R y then .pass y else .post (some y)
     | none, none, none => .post none
 
-/-- **A violation the replay reports is one.** For every launch, contexts, grid, fuel, phases,
-observation and decidable relation: if the replay of `g` reports a violation, `g` is not sound. A
-fault is `¬ Safe` at its grid, a deadlock `¬ Progress`, a race `¬ RaceFree`, a broken promise
-`¬ Kept`, and a final observation that is `none` or fails `R` contradicts the field `post`. -/
+/-- **A violation the replay reports is one.** For every launch, contexts, grid with at most the
+launch's number of threads every grid reachable from which has the premises of `racy_iff`
+(`Grid.Fits`, as every grid reachable from a start's has, `Grid.start_reach_fits`), fuel, phases,
+observation and decidable relation: if the replay of `g` reports a violation, `g` is not sound.
+A fault is `¬ Safe` at its grid, a deadlock `¬ Progress`, a race `¬ RaceFree` (`racy_of_race`), a
+broken promise `¬ Kept`, and a final observation that is `none` or fails `R` contradicts the
+field `post`. -/
 theorem found_bad {β : Type} {obs : Mem → Option β} {R : β → Prop} [DecidablePred R]
-    {fuel phases : Nat} {g : Grid} (h : (found obs R (run L c fuel phases g)).bad = true) :
-    ¬ Grid.Sound L c g obs R := by
+    {fuel phases : Nat} {g : Grid} (hsz : g.threads.size ≤ volume L.grid * volume L.block)
+    (hf : ∀ g', ReflTransGen (Grid.Step L c) g g' → g'.Fits L c)
+    (h : (found obs R (run L c fuel phases g)).bad = true) : ¬ Grid.Sound L c g obs R := by
   intro hs
   revert h
   rcases hr : run L c fuel phases g with s | g'
-  · have hh := run_stop hr
+  · have hh := run_stop hsz hr
     cases s with
     | fault g' n b e =>
       cases e with
       | ub msg =>
         intro _
-        refine hs.safe g' hh.1 ⟨n, .ub msg, ?_⟩
+        refine hs.safe g' hh.1 (Grid.faults_iff.2 ⟨n, .ub msg, ?_⟩)
         cases b
         · exact .inl hh.2
         · exact .inr hh.2
@@ -580,28 +608,31 @@ theorem found_bad {β : Type} {obs : Mem → Option β} {R : β → Prop} [Decid
         cases this
     · intro _
       have := hs.raceFree g' hreach
-      rw [racy_of_race h1] at this
+      rw [racy_of_race (hf g' hreach).trace (hf g' hreach).2 h1] at this
       cases this
 
 end Replay
 
 /-- **The fault side of `Grid.run_reach`, for the evaluator.** A run that ends in undefined
 behavior reached a grid at which some thread's step or collective call faults, or one with a
-thread that has not returned and no step: the start grid is not safe, or makes no progress. For
-every launch, contexts, fuel, phases and grid. -/
+thread of the launch that has not returned and no step: the start grid is not safe, or makes no
+progress. For every launch, contexts, fuel, phases and grid with at most the launch's number of
+threads. -/
 theorem Grid.run_ub {L : Launch} {c : Nat → Ctx} {fuel phases : Nat} {g : Grid} {msg : String}
+    (hsz : g.threads.size ≤ volume L.grid * volume L.block)
     (h : g.run L c fuel phases = .error (.ub msg)) :
     ∃ g', ReflTransGen (Grid.Step L c) g g' ∧
-      (g'.Faults L c ∨ ¬ g'.Done ∧ ∀ g'', ¬ Grid.Step L c g' g'') := by
+      (GPUProof.Faults sig (g', L, c) ∨ ¬ GPUProof.Done sig (g', L, c) ∧
+        ∀ g'', ¬ Grid.Step L c g' g'') := by
   have he := Replay.run_eq (L := L) (c := c) (fuel := fuel) (phases := phases) (g := g)
   rw [h] at he
   revert he
   rcases hr : Replay.run L c fuel phases g with s | g'
   · intro he
-    have hh := Replay.run_stop hr
+    have hh := Replay.run_stop hsz hr
     cases s with
     | fault g' n b e =>
-      refine ⟨g', hh.1, .inl ⟨n, e, ?_⟩⟩
+      refine ⟨g', hh.1, .inl (Grid.faults_iff.2 ⟨n, e, ?_⟩)⟩
       cases b
       · exact .inl hh.2
       · exact .inr hh.2
@@ -663,7 +694,7 @@ theorem Kernel.replay_sound {β : Type} {prog : Program} {fn : Func} {L : Launch
   obtain ⟨g, c, hst, hs⟩ := hk ch oracle hadm
   unfold Kernel.replay at h
   rw [hst] at h
-  exact Replay.found_bad h hs
+  exact Replay.found_bad (Grid.start_size hst).le (fun _ hg => Grid.start_reach_fits hst hg) h hs
 
 /-- A grid sound for some observation and relation is sound for the trivial observation and
 relation, for every launch, contexts and grid: it keeps the five fields `safe`, `raceFree`,

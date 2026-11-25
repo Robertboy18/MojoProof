@@ -409,7 +409,8 @@ whose width is a power of two of at least 8 (LangRef, `atomicrmw`, Arguments; so
 determines the type), with a commutative and associative operation (`add`, `and`, `or`, `xor`,
 `max`, `min`, `umax`, `umin`), and with a result that function `fn` does not use. Two such updates
 of one location by the same operation and size give the same memory in either order (`rmw_comm` for
-the values, MojoProof/Sem/Rmw.lean; `Access.conflict` exempts exactly these pairs).
+the values, MojoProof/Sem/Rmw.lean; `Access.conflict` exempts two updates of the same bytes by one
+operation exactly when `RmwOp.commutes` holds of it).
 Unsupported: float operations (`fadd`, `fsub`, `fmax`, `fmin`; rounding makes the result depend on
 the order), `xchg` and `nand` (two updates do not commute), `sub`, and a used result (the old value
 depends on the order). `sub` commutes too (`(v - x) - y = (v - y) - x`) but is not among the

@@ -1,5 +1,6 @@
 import MojoProof.Sem.Matmul
 import MojoProof.Sem.Grid
+import MojoProof.Sem.TensorCoreDef
 import TorchLean.Tensor.Arithmetic
 
 /-!
@@ -7,7 +8,7 @@ import TorchLean.Tensor.Arithmetic
 
 The PTX ISA, version 9.5, places the tiles of a warp's `mma` and `ldmatrix` in the lanes'
 registers by fixed formulas (section 9.7.16.5.14, the tables "Matrix Fragments for
-mma.m…n8k…" of sections 9.7.16.5.2 and 9.7.16.5.6-8, and section 9.7.16.5.15, `ldmatrix`).
+mma.m…n8k…" of sections 9.7.16.5.1-2 and 9.7.16.5.6-8, and section 9.7.16.5.15, `ldmatrix`).
 With `g = l / 4` and `t = l % 4` for lane `l` (the ISA's groupID and threadID_in_group), and
 `p` elements per register:
 * A (`m<8h>n8k<4pc>`, row major): element `s` of register `r` is cell
@@ -16,63 +17,54 @@ With `g = l / 4` and `t = l % 4` for lane `l` (the ISA's groupID and threadID_in
 * C and D (`m<8h>n8`): element `i = p r + s` is cell `(g + 8 (i / 2), 2 t + i % 2)`, for
   `i < 2h` (`fragC h p`);
 * `ldmatrix.x<q>` of `q` stacked 8 × 8 matrices of 16-bit elements: cell `(8 r + g, 2 t + s)`,
-  and with `.trans` cell `(8 r + 2 t + s, g)`, for `r < q` (`ldm q t`).
+  and with `.trans` cell `(8 r + 2 t + s, g)`, for `r < q` (`ldm q t`);
+* `m8n8k4` with f16 inputs (section 9.7.16.5.1), four products at once, the `q`-th by the quad
+  pair of lanes `l % 16 / 4 = q`: A, B and C/D are `quadA t`, `quadB t` and `quadC p`, the four
+  tiles stacked.
 `m16n8k8 .tf32` is `h = 2`, `p = 1`, `c = 2`; `m16n8k16 .bf16` and `.f16` are `h = 2`, `p = 2`,
 `c = 2`; `m16n8k<4c> .f64` is `h = 2`, `p = 1` (one f64 per 64-bit register), and
-`m8n8k4 .f64` is `h = 1`, `p = 1`, `c = 1`. The accumulators are `p = 1` in f32 and f64 and
-`p = 2` in f16 (two to an `.f16x2` register).
+`m8n8k4 .f64` is `h = 1`, `p = 1`, `c = 1`. The accumulators are `p = 1` in f32, f64 and s32
+and `p = 2` in f16 (two to an `.f16x2` register). The 8-bit and 4-bit inputs of `m16n8k<k>` and
+`m8n8k<k>` (sections 9.7.16.5.3-4 and 9.7.16.5.9-11) are `p = 4` and `p = 8`; the importer
+reads no such `mma`.
 
-Definitions:
+Definitions (`Frag`, `Frag.scatter`, `Frag.gather`, `fragA`, `fragB`, `fragC`, `mmaFrags` and
+`mmaStep` are in `MojoProof.Sem.TensorCoreDef`, below the grid, which runs them):
 * `Frag`: a layout, with `pos` (lane, register, element ↦ cell) and its inverse `own`;
   `Frag.Inv`: the two are inverse on the 32 lanes' registers and on the tile; `Frag.scatter` and
   `Frag.gather`: a tile into the registers and back.
-* `mmaFrags v`: the three layouts of the importer's `Mma` value `v`, for `m16n8k<k>` with tf32,
-  bf16 or f16 inputs and an f32 accumulator, and for `m16n8k<k>` and `m8n8k4` in f64.
+* `mmaFrags v`: the three layouts of the importer's `Mma` value `v`, for every value of
+  `Mma.table` (the shapes the ISA lists for tf32, bf16 and f16 inputs with an f32 accumulator
+  and for f64, `m8n8k4` with f16 inputs excepted), `none` otherwise.
 * `ldmatrix q t a rd`: the registers `ldmatrix.x<q>` loads, with lane `R`'s row address `a R`
   and the memory's 16-bit elements `rd`.
 * `mmaStep FA FB FC acc a b c`: the D registers of every lane, with the accumulation `acc` a
-  parameter; `exactAcc`, the exact sum over `ℝ`; `AccOk bnd acc`, a contract with error `bnd`;
-  `tileEntry d T`, a rank-2 tensor as a function of two numbers.
+  parameter; `exactAcc`, the exact sum over `ℝ`; `AccBy mag magC bnd acc`, a contract with
+  magnitudes `mag`, `magC` and error `bnd`, and `AccOk bnd acc`, the one at absolute values;
+  `tileEntry d T`, a rank-2 tensor as a function of two numbers; `seqAcc`, the sequential
+  round-to-nearest accumulation policy (`MmaAcc`), the second policy beside `gridAcc`.
 * `Grid.warpReady g size n i`: the obligation of a warp-collective step.
 
 Proved: `Frag.bijOn` (an `Inv` layout's `pos` is a bijection, every layout);
 `Frag.gather_of_scatter` (registers that hold a tile read back as it, every layout); `fragA_inv`
 (every `h`, `p` and `c`), `fragB_inv` (every `p` and `c`), `fragC_inv` (every `h`, and `p` 1 or
-2), `ldm_inv` (every `q` and flag);
-`mmaFrags_inv` (every accepted `Mma`); `ldmatrix_gather`, `ldmatrix_fragA`,
+2), `ldm_inv` (every `q` and flag), `quad_inv` (both flags, and `p` 1 or 2);
+`mmaFrags_inv` (every `Mma` of the table); `ldmatrix_gather`, `ldmatrix_fragA`,
 `ldmatrix_fragB_cols` (with `.trans`, B operands side by side), `ldmatrix_fragB`,
 `ldmatrix_fragBt` (the loads, every count, read in the layouts as `mmaStep` reads its
 operands); `mmaStep_gather` (every set of layouts and
 accumulation); `mma_exact` (the exact model is TorchLean's `matmul A B + C`); `mma_contract`
-(under `AccOk`, the error against TorchLean's real `matmul A B + C`); `castDot_ok` (a
-cast-then-`dotLoop` accumulator meets `AccOk` with `dotBound`). That the hardware meets `AccOk`
-for some bound is a trust item: the ISA leaves the accumulation's order and rounding
-unspecified.
+(under `AccBy`, the error against TorchLean's real `matmul A B + C`); `castDot_ok` (a
+cast-then-`dotLoop` accumulator meets `AccOk` with `dotBound`) and its case `seqAcc_ok`. The
+ISA leaves the accumulation's order, rounding and handling of subnormal inputs unspecified, so
+the grid runs a policy (`MmaAcc`, `Launch.acc`) and its statements hold for every policy; which
+policy, and which contract, a GPU meets is a trust item. `MojoProof.Sem.TensorCoreAcc` proves
+the bound the measured policy `gridAcc` meets (`gridAcc_ok`).
 -/
 
 namespace MojoProof.Sem
 
 open FloatLib FloatLib.Floats.Formats FloatLib.Floats.Formats.BinaryInterchange TorchLean LLVM
-
-/-- A fragment layout of a tile in a warp's registers: each of the 32 lanes holds `regs` registers
-(32-bit, and 64-bit for f64) of `pack` elements each; `pos l r s` is the tile cell
-`(row, column)` of element `s` (element 0 in the low bits) of register `r` of lane `l`, and
-`own i j` the `(lane, register, element)` meant to hold cell `(i, j)`. -/
-structure Frag where
-  /-- Builds a layout from its sizes and maps. -/
-  mk ::
-  /-- The number of rows of the tile. -/
-  rows : Nat
-  /-- The number of columns of the tile. -/
-  cols : Nat
-  /-- The number of registers per lane. -/
-  regs : Nat
-  /-- The number of elements per register. -/
-  pack : Nat
-  /-- The cell of element `s` of register `r` of lane `l`. -/
-  pos : Nat → Nat → Nat → Nat × Nat
-  /-- The lane, register and element of cell `(i, j)`. -/
-  own : Nat → Nat → Nat × Nat × Nat
 
 namespace Frag
 
@@ -101,16 +93,6 @@ theorem bijOn {F : Frag} (h : F.Inv) :
   · rintro ⟨i, j⟩ ⟨hi, hj⟩
     exact ⟨(h.2 i hi j hj).1, (h.2 i hi j hj).2.1, (h.2 i hi j hj).2.2.1⟩
 
-/-- The registers holding the tile `T` in layout `F`: element `s` of register `r` of lane `l` is
-`T` at the cell `F.pos l r s`. -/
-def scatter {α : Type} (F : Frag) (T : Nat → Nat → α) (l r s : Nat) : α :=
-  T (F.pos l r s).1 (F.pos l r s).2
-
-/-- The tile the registers `x` hold in layout `F`: cell `(i, j)` is `x` at the lane, register
-and element `F.own i j`. -/
-def gather {α : Type} (F : Frag) (x : Nat → Nat → Nat → α) (i j : Nat) : α :=
-  x (F.own i j).1 (F.own i j).2.1 (F.own i j).2.2
-
 /-- **Registers that hold a tile read back as the tile**, for every layout `F` with `Inv`,
 registers `x` and tile `T` of any type: if `x l r s = F.scatter T l r s` at every lane `l < 32`,
 register `r < F.regs` and element `s < F.pack`, then `F.gather x i j = T i j` at every cell
@@ -133,40 +115,6 @@ theorem gather_scatter {α : Type} {F : Frag} (h : F.Inv) (T : Nat → Nat → �
 
 end Frag
 
-/-- The A operand of `mma.m<8h>n8k<4pc>` (PTX ISA 9.5, section 9.7.16.5.14), row major, with
-`p` elements per register: an `8h × 4pc` tile in `hc` registers per lane; element `s` of
-register `r` of lane `l` is cell `(l / 4 + 8 (r % h), s + p (l % 4 + 4 (r / h)))`. -/
-def fragA (h p c : Nat) : Frag where
-  rows := 8 * h
-  cols := 4 * p * c
-  regs := h * c
-  pack := p
-  pos l r s := (l / 4 + 8 * (r % h), s + p * (l % 4 + 4 * (r / h)))
-  own i j := (4 * (i % 8) + j / p % 4, i / 8 + h * (j / p / 4), j % p)
-
-/-- The B operand of `mma.m16n8k<4pc>` (PTX ISA 9.5, section 9.7.16.5.14), column major, with
-`p` elements per register: a `4pc × 8` tile in `c` registers per lane; element `s` of register
-`r` of lane `l` is cell `(s + p (l % 4 + 4 r), l / 4)`. -/
-def fragB (p c : Nat) : Frag where
-  rows := 4 * p * c
-  cols := 8
-  regs := c
-  pack := p
-  pos l r s := (s + p * (l % 4 + 4 * r), l / 4)
-  own i j := (4 * j + i / p % 4, i / p / 4, i % p)
-
-/-- The C and D operands of `mma.m<8h>n8k<k>` (PTX ISA 9.5, section 9.7.16.5.14), for every
-`k`, with `p` accumulators per register (1 for f32 and f64, 2 for f16): an `8h × 8` tile in
-`2h / p` registers per lane; element `s` of register `r` of lane `l`, the accumulator
-`i = p r + s`, is cell `(l / 4 + 8 (i / 2), 2 (l % 4) + i % 2)`. -/
-def fragC (h p : Nat) : Frag where
-  rows := 8 * h
-  cols := 8
-  regs := 2 * h / p
-  pack := p
-  pos l r s := (l / 4 + 8 * ((p * r + s) / 2), 2 * (l % 4) + (p * r + s) % 2)
-  own i j := (4 * (i % 8) + j / 2, (2 * (i / 8) + j % 2) / p, (2 * (i / 8) + j % 2) % p)
-
 /-- The destination of `ldmatrix.sync.aligned.m8n8.x<q>.b16` (PTX ISA 9.5, section
 9.7.16.5.15), with `.trans` when `t`: the tile is the `q` matrices of 8 × 8 16-bit elements
 stacked (row `8 m + i` is row `i` of matrix `m`), register `r` of each lane holds matrix `r`, two
@@ -179,6 +127,57 @@ def ldm (q : Nat) (t : Bool) : Frag where
   pack := 2
   pos l r s := if t then (8 * r + 2 * (l % 4) + s, l / 4) else (8 * r + l / 4, 2 * (l % 4) + s)
   own i j := if t then (4 * j + i % 8 / 2, i / 8, i % 2) else (4 * (i % 8) + j / 2, i / 8, j % 2)
+
+/-- The A operand of `mma.m8n8k4` with f16 inputs (PTX ISA 9.5, section 9.7.16.5.1), row major,
+or column major when `t`. The warp computes four `m8n8k4` products, the `q`-th by the quad pair
+`q`, the lanes `l` with `l % 16 / 4 = q` (lanes `4q` to `4q + 3` and `4q + 16` to `4q + 19`);
+the tile is the four `8 × 4` A tiles stacked (row `8 q + i` is row `i` of product `q`), in two
+`.f16x2` registers per lane. Element `s` of register `r` of lane `l` is cell
+`(8 q + 4 (l / 16) + l % 4, 2 r + s)`, and when `t` cell `(8 q + 4 (l / 16) + 2 r + s, l % 4)`. -/
+def quadA (t : Bool) : Frag where
+  rows := 32
+  cols := 4
+  regs := 2
+  pack := 2
+  pos l r s := if t then (8 * (l % 16 / 4) + 4 * (l / 16) + 2 * r + s, l % 4)
+    else (8 * (l % 16 / 4) + 4 * (l / 16) + l % 4, 2 * r + s)
+  own i j := if t then (16 * (i % 8 / 4) + 4 * (i / 8) + j, i % 4 / 2, i % 2)
+    else (16 * (i % 8 / 4) + 4 * (i / 8) + i % 4, j / 2, j % 2)
+
+/-- The B operand of `mma.m8n8k4` with f16 inputs (PTX ISA 9.5, section 9.7.16.5.1), column
+major, or row major when `t`: the four `4 × 8` B tiles of the quad pairs `q = l % 16 / 4`
+(`quadA`) stacked (row `4 q + k` is row `k` of product `q`), in two `.f16x2` registers per lane.
+Element `s` of register `r` of lane `l` is cell `(4 q + 2 r + s, 4 (l / 16) + l % 4)`, and when
+`t` cell `(4 q + l % 4, 4 (l / 16) + 2 r + s)`. -/
+def quadB (t : Bool) : Frag where
+  rows := 16
+  cols := 8
+  regs := 2
+  pack := 2
+  pos l r s := if t then (4 * (l % 16 / 4) + l % 4, 4 * (l / 16) + 2 * r + s)
+    else (4 * (l % 16 / 4) + 2 * r + s, 4 * (l / 16) + l % 4)
+  own i j := if t then (16 * (j / 4) + 4 * (i / 4) + i % 4, j % 4 / 2, j % 2)
+    else (16 * (j / 4) + 4 * (i / 4) + j % 4, i % 4 / 2, i % 2)
+
+/-- The C and D operands of `mma.m8n8k4` with f16 inputs (PTX ISA 9.5, section 9.7.16.5.1), with
+`p` accumulators per register (1 for f32, 2 for f16): the four `8 × 8` tiles of the quad pairs
+`q = l % 16 / 4` (`quadA`) stacked (row `8 q + i` is row `i` of product `q`), in `8 / p`
+registers per lane. For `p = 1`, register `r` of lane `l` is cell
+`(8 q + 4 (l / 16) + l % 2 + 2 (r % 4 / 2), 4 (r / 4) + 2 (l % 4 / 2) + r % 2)`; otherwise
+element `s` of register `r` is cell `(8 q + 4 (l / 16) + l % 4, p r + s)`. -/
+def quadC (p : Nat) : Frag where
+  rows := 32
+  cols := 8
+  regs := 8 / p
+  pack := p
+  pos l r s := if p = 1 then
+      (8 * (l % 16 / 4) + 4 * (l / 16) + l % 2 + 2 * (r % 4 / 2),
+        4 * (r / 4) + 2 * (l % 4 / 2) + r % 2)
+    else (8 * (l % 16 / 4) + 4 * (l / 16) + l % 4, p * r + s)
+  own i j := if p = 1 then
+      (16 * (i % 8 / 4) + 4 * (i / 8) + 2 * (j % 4 / 2) + i % 2,
+        4 * (j / 4) + 2 * (i % 4 / 2) + j % 2, 0)
+    else (16 * (i % 8 / 4) + 4 * (i / 8) + i % 4, j / 2, j % 2)
 
 /-- **The A fragments are bijections**: for every `h`, `p` and `c`, `fragA h p c` has `Inv`, so
 (`Frag.bijOn`) it places the `8h × 4pc` tile one to one in the lanes' `hc` registers (for `p = 0`
@@ -277,24 +276,22 @@ theorem ldm_inv (q : Nat) (t : Bool) : (ldm q t).Inv := by
     simp only [ldm, Prod.mk.injEq, Bool.false_eq_true, ↓reduceIte] at * <;>
     exact ⟨by omega, by omega, by omega, by omega, by omega⟩
 
-/-- The elements per register of an `mma` input type: 1 for tf32 (one to a 32-bit register) and
-for f64 (one to a 64-bit register), 2 for bf16 and f16 (two to a 32-bit register). -/
-def mmaPack : MmaTy → Nat
-  | .tf32 => 1 | .bf16 => 2 | .f16 => 2 | .f64 => 1
-
-/-- The fragment layouts of the importer's `mma` value `v` (`Mma.ofName?`): the A, B and C/D
-layouts `fragA (m / 8) p (k / 4p)`, `fragB p (k / 4p)` and `fragC (m / 8) 1`, with
-`p = mmaPack v.ab`, when `v` is `m16n8k<k>` with `k` a positive multiple of `4p` and an f32
-accumulator (an f64 one for f64 inputs), or `m8n8k4` in f64; `none` for every other shape, among
-them `m8n8k4` with f16 inputs, whose layouts are not these families (PTX ISA 9.5, section
-9.7.16.5.1). -/
-def mmaFrags (v : Mma) : Option (Frag × Frag × Frag) :=
-  let p := mmaPack v.ab
-  if v.n = 8 ∧ 0 < v.k ∧ v.k % (4 * p) = 0 ∧
-      (v.m = 16 ∧ (v.ab ≠ .f64 ∧ v.cd = .float ∨ v.ab = .f64 ∧ v.cd = .double) ∨
-        v.m = 8 ∧ v.k = 4 ∧ v.ab = .f64 ∧ v.cd = .double) then
-    some (fragA (v.m / 8) p (v.k / (4 * p)), fragB p (v.k / (4 * p)), fragC (v.m / 8) 1)
-  else none
+/-- **The layouts of `m8n8k4` with f16 inputs are bijections**: for both values of the flag `t`
+and `p` 1 or 2, `quadA t`, `quadB t` and `quadC p` have `Inv`, so (`Frag.bijOn`) each places its
+four stacked tiles one to one in the lanes' registers. -/
+theorem quad_inv (t : Bool) {p : Nat} (hp : p = 1 ∨ p = 2) :
+    (quadA t).Inv ∧ (quadB t).Inv ∧ (quadC p).Inv := by
+  refine ⟨?_, ?_, ?_⟩
+  · refine ⟨fun l hl r hr s hs => ?_, fun i hi j hj => ?_⟩ <;> cases t <;>
+      simp only [quadA, Prod.mk.injEq, Bool.false_eq_true, ↓reduceIte] at * <;>
+      exact ⟨by omega, by omega, by omega, by omega, by omega⟩
+  · refine ⟨fun l hl r hr s hs => ?_, fun i hi j hj => ?_⟩ <;> cases t <;>
+      simp only [quadB, Prod.mk.injEq, Bool.false_eq_true, ↓reduceIte] at * <;>
+      exact ⟨by omega, by omega, by omega, by omega, by omega⟩
+  · rcases hp with rfl | rfl <;>
+      refine ⟨fun l hl r hr s hs => ?_, fun i hi j hj => ?_⟩ <;>
+      simp only [quadC, Prod.mk.injEq, Nat.reduceDiv, OfNat.ofNat_ne_one, ↓reduceIte] at * <;>
+      exact ⟨by omega, by omega, by omega, by omega, by omega⟩
 
 /-- **The layouts of every accepted `mma` are bijections of the right shapes**: for every
 importer `Mma` value `v` with `mmaFrags v = some (FA, FB, FC)`, the three layouts have `Inv`, A
@@ -303,24 +300,15 @@ is `m × k`, B is `k × 8`, C/D is `m × 8`, and their register counts per lane 
 theorem mmaFrags_inv {v : Mma} {FA FB FC : Frag} (h : mmaFrags v = some (FA, FB, FC)) :
     FA.Inv ∧ FB.Inv ∧ FC.Inv ∧ FA.rows = v.m ∧ FA.cols = v.k ∧ FB.rows = v.k ∧ FB.cols = 8 ∧
       FC.rows = v.m ∧ FC.cols = 8 ∧ (FA.regs, FB.regs, FC.regs) = v.regs := by
-  obtain ⟨m, n, k, ab, cd⟩ := v
   simp only [mmaFrags] at h
   split_ifs at h with hc
-  obtain ⟨hn, -, hk, hm⟩ := hc
   simp only [Option.some.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl, rfl⟩ := h
-  subst hn
-  have hkk : 4 * mmaPack ab * (k / (4 * mmaPack ab)) = k :=
-    Nat.mul_div_cancel' (Nat.dvd_of_mod_eq_zero hk)
-  have h8 : 8 * (m / 8) = m := by rcases hm with ⟨rfl, -⟩ | ⟨rfl, -⟩ <;> rfl
-  refine ⟨fragA_inv _ _ _, fragB_inv _ _, fragC_inv _ (Or.inl rfl), h8, hkk, hkk, rfl, h8, rfl,
-    ?_⟩
-  have e : Mma.regs ⟨m, 8, k, ab, cd⟩ = (m * k * ab.bits / (32 * if ab = .f64 then 64 else 32),
-      k * 8 * ab.bits / (32 * if ab = .f64 then 64 else 32), m * 8 / 32) := rfl
-  rw [e]
-  rcases hm with ⟨rfl, -⟩ | ⟨rfl, rfl, rfl, -⟩
-  · cases ab <;> simp [fragA, fragB, fragC, MmaTy.bits, mmaPack] at hk ⊢ <;> omega
-  · rfl
+  refine ⟨fragA_inv _ _ _, fragB_inv _ _, fragC_inv _ (Or.inl rfl), ?_⟩
+  simp only [Mma.ok, Mma.table, List.contains_cons, List.contains_nil, Bool.or_false,
+    Bool.or_eq_true, beq_iff_eq] at hc
+  rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- The registers `ldmatrix.sync.aligned.m8n8.x<q>.b16` loads, with `.trans` when `t` (PTX ISA
 9.5, section 9.7.16.5.15): lane `R < 8q` gives the address `a R` of row `R` of the stacked tile,
@@ -427,15 +415,6 @@ def Grid.warpReady (g : Grid) (size n : Nat) (i : Intrinsic) : Prop :=
     ∃ p, ∀ j < 32, ∃ t args fn,
       g.threads[n - n % size % 32 + j]? = some (Status.wait t i args fn) ∧ t.at = p
 
-/-- The D registers of `mma` with layouts `FA`, `FB`, `FC`, accumulation `acc` and the lanes'
-A, B and C registers `a`, `b`, `c`: element `s` of register `r` of lane `l`, at the cell
-`(i, j) = FC.pos l r s`, is `acc` of row `i` of the tile gathered from `a`, column `j` of the
-tile gathered from `b`, and `C (i, j)` gathered from `c`. -/
-def mmaStep {α β : Type} {K : Nat} (FA FB FC : Frag) (acc : (Fin K → α) → (Fin K → α) → β → β)
-    (a b : Nat → Nat → Nat → α) (c : Nat → Nat → Nat → β) (l r s : Nat) : β :=
-  acc (fun k => FA.gather a (FC.pos l r s).1 k) (fun k => FB.gather b k (FC.pos l r s).2)
-    (FC.gather c (FC.pos l r s).1 (FC.pos l r s).2)
-
 /-- **`mma` on fragments is the accumulation on tiles**, for all layouts with `Inv` whose shapes
 fit (`FC.rows ≤ FA.rows`, `FC.cols ≤ FB.cols`, `K ≤ FA.cols`, `K ≤ FB.rows`), every accumulation
 `acc`, all tiles `TA`, `TB`, `TC` of any types and every cell `i < FC.rows`, `j < FC.cols`: the D
@@ -483,27 +462,38 @@ theorem mma_exact {m n K : Nat} {FA FB FC : Frag} (hA : FA.Inv) (hB : FB.Inv) (h
     (by omega), Tensor.add_def, Tensor.get2_zipWith, Tensor.get2_matmul, foldl_eq_sum]
   simp [exactAcc, tileEntry]
 
-/-- The accumulation contract with error `bnd`, for input format `fi` and accumulator format
-`fc`: for all finite input words `a k`, `b k` and a finite `c`, a finite result is within
-`bnd (Σ_k |a_k b_k| + |c|)` of `Σ_k a_k b_k + c`, over the words' real values. Nothing is
-claimed of an infinite or NaN result. -/
-def AccOk {fi fc : FloatFormat} {K : Nat} (bnd : ℝ → ℝ)
-    (acc : (Fin K → Model fi) → (Fin K → Model fi) → Model fc → Model fc) : Prop :=
+/-- The accumulation contract with magnitudes `mag`, `magC` and error `bnd`, for input format
+`fi` and accumulator format `fc`: for all finite input words `a k`, `b k` and a finite `c`, a
+finite result is within `bnd (Σ_k mag a_k b_k + magC c)` of `Σ_k a_k b_k + c`, over the words'
+real values. Nothing is claimed of an infinite or NaN result. -/
+def AccBy {fi fc : FloatFormat} {K : Nat} (mag : Model fi → Model fi → ℝ) (magC : Model fc → ℝ)
+    (bnd : ℝ → ℝ) (acc : (Fin K → Model fi) → (Fin K → Model fi) → Model fc → Model fc) : Prop :=
   ∀ a b c, (∀ k, (a k).isFinite = true) → (∀ k, (b k).isFinite = true) → c.isFinite = true →
     (acc a b c).isFinite = true →
     |(acc a b c).toReal - (∑ k, (a k).toReal * (b k).toReal + c.toReal)| ≤
-      bnd (∑ k, |(a k).toReal * (b k).toReal| + |c.toReal|)
+      bnd (∑ k, mag (a k) (b k) + magC c)
+
+/-- The accumulation contract with error `bnd` at the absolute values: `AccBy` with the
+magnitudes `|a_k b_k|` and `|c|`, so a finite result is within `bnd (Σ_k |a_k b_k| + |c|)` of
+`Σ_k a_k b_k + c`. -/
+def AccOk {fi fc : FloatFormat} {K : Nat} (bnd : ℝ → ℝ)
+    (acc : (Fin K → Model fi) → (Fin K → Model fi) → Model fc → Model fc) : Prop :=
+  AccBy (fun x y => |x.toReal * y.toReal|) (fun c => |c.toReal|) bnd acc
 
 /-- **The `mma` contract against TorchLean**: for all layouts with `Inv` of shapes `m × K`,
-`K × n` and `m × n`, every accumulation `acc` meeting `AccOk bnd`, all tensors of words
-`TA : [m, K]`, `TB : [K, n]` (format `fi`), `TC : [m, n]` (format `fc`), out-of-shape words `dA`,
-`dB`, `dC` and every cell `(i, j)`: if row `i` of A, column `j` of B and `C (i, j)` are finite
-and D's word at `(i, j)` is finite, it is within `bnd (Σ_k |a_ik b_kj| + |c_ij|)` of entry
-`(i, j)` of TorchLean's real `matmul A' B' + C'` (the tensors mapped by `Model.toReal`). -/
+`K × n` and `m × n`, all magnitudes `mag`, `magC`, every accumulation `acc` meeting
+`AccBy mag magC bnd` (`AccOk bnd` among them), all tensors of words `TA : [m, K]`, `TB : [K, n]`
+(format `fi`), `TC : [m, n]` (format `fc`), out-of-shape words `dA`, `dB`, `dC` and every cell
+`(i, j)`: if row `i` of A, column `j` of B and `C (i, j)` are finite and D's word at `(i, j)` is
+finite, it is within `bnd (Σ_k mag a_ik b_kj + magC c_ij)` of entry `(i, j)` of TorchLean's real
+`matmul A' B' + C'` (the tensors mapped by `Model.toReal`). It covers a GPU only if the GPU's
+accumulation meets the premise. -/
 theorem mma_contract {fi fc : FloatFormat} {m n K : Nat} {FA FB FC : Frag} (hA : FA.Inv)
     (hB : FB.Inv) (hC : FC.Inv) (hmA : FA.rows = m) (hkA : FA.cols = K) (hkB : FB.rows = K)
-    (hnB : FB.cols = n) (hmC : FC.rows = m) (hnC : FC.cols = n) {bnd : ℝ → ℝ}
-    {acc : (Fin K → Model fi) → (Fin K → Model fi) → Model fc → Model fc} (hacc : AccOk bnd acc)
+    (hnB : FB.cols = n) (hmC : FC.rows = m) (hnC : FC.cols = n) {mag : Model fi → Model fi → ℝ}
+    {magC : Model fc → ℝ} {bnd : ℝ → ℝ}
+    {acc : (Fin K → Model fi) → (Fin K → Model fi) → Model fc → Model fc}
+    (hacc : AccBy mag magC bnd acc)
     (TA : Tensor (Model fi) [m, K]) (TB : Tensor (Model fi) [K, n]) (TC : Tensor (Model fc) [m, n])
     (dA dB : Model fi) (dC : Model fc) (i : Fin m) (j : Fin n)
     (hfA : ∀ k, (Tensor.get2 TA i k).isFinite = true)
@@ -514,8 +504,7 @@ theorem mma_contract {fi fc : FloatFormat} {m n K : Nat} {FA FB FC : Frag} (hA :
         (FB.scatter (tileEntry dB TB)) (FC.scatter (tileEntry dC TC))) i j).toReal -
         Tensor.get2 (Tensor.matmul (Tensor.map Model.toReal TA) (Tensor.map Model.toReal TB) +
           Tensor.map Model.toReal TC) i j| ≤
-      bnd (∑ k, |(Tensor.get2 TA i k).toReal * (Tensor.get2 TB k j).toReal| +
-        |(Tensor.get2 TC i j).toReal|) := by
+      bnd (∑ k, mag (Tensor.get2 TA i k) (Tensor.get2 TB k j) + magC (Tensor.get2 TC i j)) := by
   have e := mmaStep_gather hA hB hC (by omega) (by omega) (by omega) (by omega) acc
     (tileEntry dA TA) (tileEntry dB TB) (tileEntry dC TC) (i := i) (j := j) (by omega) (by omega)
   have eA : (fun k : Fin K => tileEntry dA TA i k) = fun k => Tensor.get2 TA i k := by
@@ -549,5 +538,20 @@ theorem castDot_ok {fi fc : FloatFormat} {K : Nat} (hfmt : fc.isIEEE = true)
   simp only [List.map_ofFn, List.sum_ofFn, List.length_ofFn, Function.comp_def, zero_add,
     hcast _ (ha _), hcast _ (hb _)] at e
   rwa [add_comm (c.toReal), add_comm |c.toReal|] at e
+
+/-- **The sequential round-to-nearest policy**, for every pair of formats: the `K` input pairs
+cast to the accumulator's format `fc` (`Model.cast`) and folded from C in order, `K` products
+and `K` sums each rounded to nearest, ties to even (`dotLoop` unfused: FloatLib's `Model.mul`
+and `Model.add`, through `deliver` at the oracle number 0, which keeps every word). -/
+def seqAcc : MmaAcc := fun fi fc _ a b c =>
+  dotLoop false (fun _ => (0, 0)) c
+    (List.ofFn fun k => (Model.cast fi fc (a k), Model.cast fi fc (b k)))
+
+/-- **The sequential policy meets the contract**: `castDot_ok` at `seqAcc`, in every pair of
+formats `fi`, `fc` with `fc` IEEE and a cast exact on finite words (`hcast`), for every `K`. -/
+theorem seqAcc_ok {fi fc : FloatFormat} {K : Nat} (hfmt : fc.isIEEE = true)
+    (hcast : ∀ x : Model fi, x.isFinite = true → (Model.cast fi fc x).toReal = x.toReal) :
+    AccOk (dotBound fc K) (seqAcc fi fc (K := K)) :=
+  castDot_ok hfmt hcast false _
 
 end MojoProof.Sem

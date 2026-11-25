@@ -23,15 +23,14 @@ and with another exit (`vadd21_twins`). The entry block `%4`, which calls the sp
 a call node moved to another call, and the block with the fast-math flag `nnan` on its first
 call, which `summarize` and `sym_summary` refuse (`vadd4_twins`).
 
-`Block.sound` gives the step count at the block's end, `t.k + Kernels.vadd.b1.len`
-(`vadd21_sound`). The path checker accepts the kernel's two paths from its entry,
+`Block.sound` gives the step count at the block's end, `t.k + Kernels.vadd.b1.len` (`vadd21_sound`).
+The path checker (`coversPathWith false`) accepts the kernel's two paths from its entry,
 `%4 → %21 → %31` (`%4` then `vaddIn`) and `%4 → %30 → %31` (`%4` then `vaddOut`), by
 `decide +kernel` (`vadd_paths`), and refuses a path with a summary at the wrong block and one
-entered at the wrong position (`vadd_paths_twins`). `Block.sound_ret` on them: from a thread with
-one frame at `%4`'s entry whose path premises hold (`Walk`), the steps run the path to `%31`'s
-`ret`, and the next step returns (`vadd_ret`; its premises on a concrete run are in
-MojoProofTest/SymRun.lean). Each result is about the one kernel, for every context and thread of
-it.
+entered at the wrong position (`vadd_paths_twins`). `Block.sound_retWith` on them: from a thread
+with one frame at `%4`'s entry whose path premises hold (`WalkWith false`), the steps run the path
+to `%31`'s `ret`, and the next step returns (`vadd_ret`; its premises on a concrete run are in
+MojoProofTest/SymRun.lean). Each result is about the one kernel, for every context and thread of it.
 -/
 
 namespace MojoProofTest.Sym
@@ -81,6 +80,12 @@ def relabel (a b : Nat) : SVal → SVal
   | .reg r => .reg (if r = a then b else r)
   | x => x
 
+/-- Register `a` read as register `b` in an effect's operands. -/
+def relabelEff (a b : Nat) : SEff → SEff
+  | .load l pc y => .load l pc (relabel a b y)
+  | .store l pc v y => .store l pc (relabel a b v) (relabel a b y)
+  | .alloca l pc n c => .alloca l pc n (c.map (relabel a b))
+
 /-- Register `a` read as register `b` in a node's operands. -/
 def relabelNode (a b : Nat) : SNode → SNode
   | .bin op fl w x y => .bin op fl w (relabel a b x) (relabel a b y)
@@ -100,9 +105,20 @@ def relabelNode (a b : Nat) : SNode → SNode
   | .flit ft lit => .flit ft lit
   | .castAt l pc n x => .castAt l pc n (relabel a b x)
   | .globalAt l pc i => .globalAt l pc i
-  | .loadAfter l pc x es => .loadAfter l pc (relabel a b x) (es.map fun
-      | .load l' pc' y => .load l' pc' (relabel a b y)
-      | .store l' pc' v y => .store l' pc' (relabel a b v) (relabel a b y))
+  | .constAt l pc i => .constAt l pc i
+  | .insert is x y => .insert is (relabel a b x) (relabel a b y)
+  | .eltAt l pc x y => .eltAt l pc (relabel a b x) (relabel a b y)
+  | .insEltAt l pc x y z => .insEltAt l pc (relabel a b x) (relabel a b y) (relabel a b z)
+  | .gepN l pc x ys => .gepN l pc (relabel a b x) (ys.map (relabel a b))
+  | .loadAfter l pc x es => .loadAfter l pc (relabel a b x) (es.map (relabelEff a b))
+  | .fresh n => .fresh n
+  | .icmpAfter p w x y es =>
+    .icmpAfter p w (relabel a b x) (relabel a b y) (es.map (relabelEff a b))
+  | .castAfter l pc n x es => .castAfter l pc n (relabel a b x) (es.map (relabelEff a b))
+  | .gepAfter l pc x y es =>
+    .gepAfter l pc (relabel a b x) (relabel a b y) (es.map (relabelEff a b))
+  | .gepNAfter l pc x ys es =>
+    .gepNAfter l pc (relabel a b x) (ys.map (relabel a b)) (es.map (relabelEff a b))
 
 /-- The number of local `%n` of `vector_addition`. -/
 def local? (n : String) : Nat :=
@@ -177,44 +193,51 @@ def vaddOut : List (Nat × List Cond × Summary) :=
 /-- The path checker accepts `vector_addition`'s two paths from the entry block `%4`:
 `%4 → %21 → %31` and `%4 → %30 → %31`. -/
 theorem vadd_paths :
-    coversPath Kernels.vadd.prog Kernels.vadd.fn_0 0
+    coversPathWith false Kernels.vadd.prog Kernels.vadd.fn_0 0
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddIn) = true ∧
-    coversPath Kernels.vadd.prog Kernels.vadd.fn_0 0
+    coversPathWith false Kernels.vadd.prog Kernels.vadd.fn_0 0
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddOut) = true := by
   decide +kernel
 
 /-- The twins: the path checker refuses the path with `%21`'s summary at `%30`, and the path
 whose first block is entered at position 1 (its summary is from position 0). -/
 theorem vadd_paths_twins :
-    coversPath Kernels.vadd.prog Kernels.vadd.fn_0 0
+    coversPathWith false Kernels.vadd.prog Kernels.vadd.fn_0 0
       [(Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0),
         (Kernels.vadd.fn_0.b_2.label, Kernels.vadd.b1.obls, Kernels.vadd.b1),
         (Kernels.vadd.fn_0.b_3.label, Kernels.vadd.b3.obls, Kernels.vadd.b3)] = false ∧
-    coversPath Kernels.vadd.prog Kernels.vadd.fn_0 1
+    coversPathWith false Kernels.vadd.prog Kernels.vadd.fn_0 1
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: vaddIn) = false := by
   decide +kernel
 
-/-- **`Block.sound_ret` on `vector_addition`'s two paths**: for every context of the kernel and
-thread with one frame, at the entry block `%4`, and either path (`ps` is `vaddIn` or `vaddOut`)
-whose premises hold (`Walk`), the thread's steps reach `%31`'s end, `pathLen Kernels.vadd.b0 ps`
-steps later, on the memory the path's last block's effects make, and its next step returns. -/
+/-- **`Block.sound_retWith` on `vector_addition`'s two paths**: for every context of the kernel
+and thread with one frame, at the entry block `%4`, and either path (`ps` is `vaddIn` or
+`vaddOut`) whose premises hold (`WalkWith false`), the thread's steps reach `%31`'s end,
+`pathLen Kernels.vadd.b0 ps` steps later, on the memory the path's last block's effects make, and
+its next step returns. -/
 theorem vadd_ret {c : Ctx} (hP : c.prog = Kernels.vadd.prog)
     {ps : List (Nat × List Cond × Summary)} (hps : ps = vaddIn ∨ ps = vaddOut) {t : Thread}
     {m : Mem} {f : Frame} (ht : t.frames = [f]) (hfn : f.fn = Kernels.vadd.fn_0)
     (hl : f.label = Kernels.vadd.fn_0.b_0.label) (hp : f.pc = 0)
-    (hW : Walk (Valuation.entry c t.k m f)
+    (hW : WalkWith false (Valuation.entry c t.k m f)
       ((Kernels.vadd.fn_0.b_0.label, Kernels.vadd.b0.obls, Kernels.vadd.b0) :: ps)) :
     ∃ fe me, Steps c t m ⟨[fe], t.k + pathLen Kernels.vadd.b0 ps⟩ me ∧
-      SEff.run ((Valuation.entry c t.k m f).last Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 ps).1
-        (vals ((Valuation.entry c t.k m f).last Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0 ps).1
-          ((Valuation.entry c t.k m f).last Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0
+      SEff.run ((Valuation.entry c t.k m f).lastWith false Kernels.vadd.fn_0.b_0.label
+          Kernels.vadd.b0 ps).1
+        (vals ((Valuation.entry c t.k m f).lastWith false Kernels.vadd.fn_0.b_0.label
+            Kernels.vadd.b0 ps).1
+          ((Valuation.entry c t.k m f).lastWith false Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0
             ps).2.2.nodes)
-        ((Valuation.entry c t.k m f).last Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0
+        ((Valuation.entry c t.k m f).lastWith false Kernels.vadd.fn_0.b_0.label Kernels.vadd.b0
           ps).2.2.effs = .ok me ∧
       step c ⟨[fe], t.k + pathLen Kernels.vadd.b0 ps⟩ me =
         .ok (.done (f.allocas.foldl (fun m b => m.setLive b false) me)) := by
   rcases hps with rfl | rfl
-  · exact Block.sound_ret hP vadd_paths.1 ht hfn hl hp hW rfl
-  · exact Block.sound_ret hP vadd_paths.2 ht hfn hl hp hW rfl
+  · have h := Block.sound_retWith hP vadd_paths.1 ht hfn hl hp hW rfl rfl
+    rw [Valuation.allocsWith_nil _ vadd_paths.1, List.nil_append] at h
+    exact h
+  · have h := Block.sound_retWith hP vadd_paths.2 ht hfn hl hp hW rfl rfl
+    rw [Valuation.allocsWith_nil _ vadd_paths.2, List.nil_append] at h
+    exact h
 
 end MojoProofTest.Sym

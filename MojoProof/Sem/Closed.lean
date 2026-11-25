@@ -437,6 +437,15 @@ theorem Grid.fire_closed {L : Launch} {c : Nat → Ctx} {g g' : Grid} {n : Nat}
              | (cases ho
                 have hw := hg.threads _ _ ‹_›
                 exact hw.2 _ (by simp)))
+        | (refine ⟨hg.null, resumeAll_namesIn ‹_› hg.threads ?_, hg.bytes, hg.globals⟩
+           intro k x hx
+           cases hx
+           obtain ⟨_, hy, -⟩ := mmaRes_ok ‹_›
+           obtain ⟨rs, e, hrs⟩ := mmaGrid_agg hy (k - _)
+           rw [e]
+           exact Val.allNamesIn_iff.2 fun r hr => by
+             obtain ⟨w, b, rfl⟩ := hrs r hr
+             trivial)
 
 /-- A property of grids that every step of a thread and every fire keeps holds of every grid
 reachable from a grid that has it. -/

@@ -1,9 +1,11 @@
-# Float bounds of reductions: any tree, butterflies of any width, block trees, mean, variance and max-subtracted exponential sums
+# Float bounds of reductions: any tree, butterflies of any width, block trees, mean, variance, max-subtracted exponential sums, the compiled exponential and log-softmax
 
 Lean: MojoProof/Float/Tree.lean, MojoProof/Float/Halve.lean, MojoProof/Float/Stats.lean,
-MojoProof/Float/ExpSum.lean and the additions to MojoProof/Sem/Bfly.lean and
-MojoProofTest/Bfly.lean. Instances:
-MojoProofTest/FloatTree.lean and MojoProofTest/FloatStats.lean. Floats are FloatLib's
+MojoProof/Float/ExpSum.lean, MojoProof/Float/Ex2.lean and the additions to
+MojoProof/Sem/Bfly.lean and MojoProofTest/Bfly.lean. Instances: MojoProofTest/FloatTree.lean,
+MojoProofTest/FloatStats.lean and MojoProofTest/FloatEx2.lean. Welford's one-pass mean and
+variance are in docs/proofs/float-welford.md, layer norm's and RMS norm's outputs in
+docs/proofs/float-norm.md. Floats are FloatLib's
 `Model fmt` words; `u = Model.unitRoundoffAt fmt` is FloatLib's unit roundoff and
 `η = Model.underflowErrorAt fmt` its underflow allowance. `MixedError x x₀ r a` is FloatLib's
 `|x - x₀| ≤ r · |x₀| + a` with `r, a ≥ 0` (FloatLib/Numerics/MixedError/Basic.lean).
@@ -77,9 +79,10 @@ after `p :: ps` the tree after `ps` with each cell `c'` replaced by the first ro
 
 `halveStep s c` is the tree of cell `c`'s value after the shared-memory halving round with stride
 `s`: a cell `c < s` combines its value with cell `c + s`'s, its own first; the other cells keep
-theirs. `halvings k` is the strides `2 ^ (k - 1), …, 2, 1`, so the halving loop over `2 ^ k` cells
-is `rounds combine halveStep (halvings k)` and cell 0's tree is
-`roundsTree halveStep (halvings k) 0`.
+theirs. The strides `2 ^ (k - 1), …, 2, 1` are the butterfly's offsets `bflyOffsets k`
+(MojoProof/Sem/Bfly.lean), so the halving loop over `2 ^ k` cells is
+`rounds combine halveStep (bflyOffsets k)` and cell 0's tree is
+`roundsTree halveStep (bflyOffsets k) 0`.
 
 9. `leaves_halve`, `depth_halve`: for every `k`, cell 0's leaves after the halving rounds over
    `2 ^ k` cells are a permutation of `0, …, 2 ^ k - 1` and its depth is `k`.
@@ -114,6 +117,9 @@ forms of the absolute errors of the mean, of each difference and of the variance
     population variance `TorchLean.var` of the inputs' real values. `𝔼` and `TorchLean.var` are
     the two statistics of TorchLean's real layer norm `TorchLean.TransformerBlock.layerNorm`.
 
+The same module has RMS norm's mean of squares `msq t x N` and its bound `msq_error`
+(docs/proofs/float-norm.md, statement 1).
+
 ### Max-subtracted exponential sums and softmax (MojoProof/Float/ExpSum.lean)
 
 The maximum is a tree of `Model.maximumNumber` (LLVM's `maxnum`) over the inputs. `expTerm b x m j`
@@ -142,15 +148,125 @@ the sum. `expSumErr u η d y` is the closed form of the sum's absolute error,
     The exponential of `-∞` is `+0`, a finite word, so the differences' finiteness is a premise and
     not a consequence of the entry's.
 
-### Instances (MojoProofTest/FloatTree.lean, MojoProofTest/FloatStats.lean)
+### The compiled exponential (MojoProof/Float/Ex2.lean)
+
+Mojo's `exp` on float32 is not a correctly rounded exponential. Its NVPTX lowering of
+`exp (x - m)` is `fsub contract`, `fmul contract` by the word `0x3FB8AA3B` of `log₂ e` (`log2e`)
+and the instruction `ex2.approx.ftz.f32` as inline assembly (the standard library's `math.exp`). A
+subtraction followed by a multiplication cannot contract, so the instruction's operand is
+`Model.mul (Model.sub x m) log2e`. PTX ISA 9.5 §9.7.3.21 states its accuracy: at most 2 ulp from
+the correctly rounded result across the full range of inputs, with subnormal inputs and results
+flushed to zero of their sign. Its consequence at a finite operand `a < 128` is the contract
+`Ex2Close a w`: the word `w` is finite and within `ex2Err · 2 ^ a + ex2Tiny` of `2 ^ a`, with
+`ex2Err = 3 · 2 ^ -23` (two ulp of a normal value `c` are at most `2 ^ -22 · c`, and the correctly
+rounded `c` is within `2 ^ -24 · 2 ^ a` of `2 ^ a`) and `ex2Tiny = 2 ^ -126` (a flushed result, a
+result near the subnormal range or the `1` of a flushed subnormal operand). The contract is an
+assumption on the hardware, as `rsqrt.approx`'s is; the execution model stops at inline assembly.
+`ex2Rel u η ρ y = (1 + ex2Err) · exp (((1 + u) · (u + ρ + u ρ) + u) · |y| + η · log 2) - 1` is one
+term's relative error.
+
+18. `log2e_close`: the word `log2e` (`12102203 / 2 ^ 23`) is within `MixedError … 2 ^ -26 0` of
+    `1 / log 2`.
+19. `ex2_error`: for every binary32 multiplier word `L` within `MixedError … ρ 0` of `1 / log 2`
+    and words `x`, `m`, `w`: if the operand `Model.mul (Model.sub x m) L` is finite and `w` meets
+    the contract there, `w` is within `MixedError … (ex2Rel u η ρ (x - m)) ex2Tiny` of
+    `exp (x - m)`.
+20. `ex2Sum_error`: for every `n`, tree `t` whose leaves are a permutation of the `n` indices,
+    such `L`, words `x`, word `m` and term words `e`: if every operand is finite, every `e j`
+    meets the contract at its operand and the sum of the `e j` along `t` is finite, the sum is
+    within `MixedError … 0 (((1 + u) ^ d - 1) · Σ_j exp (y j) + (1 + u) ^ d ·
+    Σ_j (ex2Rel u η ρ (y j) · exp (y j) + ex2Tiny))` of `Σ_j exp (x j - m)`, with `y j = x j - m`
+    and `d = t.depth`: statement 16's form with the compiled term's error.
+
+### Log-sum-exp and log-softmax (MojoProof/Float/ExpSum.lean)
+
+`lse t b c x m` is `Model.add m (log s)` and `logSoftmax t b c x m j` is
+`Model.sub (Model.sub (x j) m) (log s)`, with `s` the sum of statement 16 and `log` FloatLib's
+correctly rounded `Model.Transcendentals.CorrectlyRounded.log` with the search budget `c`. The
+entry is in the order of Mojo's three-pass CPU log-softmax (max/kernels/src/nn/softmax.mojo,
+`_softmax_3_pass_base` with `identity`, `exp`, `log` and `sub`): it stores `x j - m`, sums the
+exponentials and subtracts the logarithm of the sum. With `S = Σ_j exp (x j - m)` and `A` the
+absolute error of statement 16:
+
+21. `lse_error`: in every IEEE format, for every `n`, tree `t`, budgets, inputs and word `m` whose
+    real value is some input's: if every difference is finite, `A < 1`, the sum is finite and
+    `lse` is finite, it is within `MixedError … u ((1 + u) · (u · log S + (1 + u) · -log (1 - A)
+    + η))` of `log Σ_j exp (x j)`.
+22. `logSoftmax_error`: under the same premises with the entry `j` finite in place of `lse`, the
+    entry is within `MixedError … u ((1 + u) · (u · |x j - m| + (u · log S + (1 + u) ·
+    -log (1 - A) + η)))` of `x j - log Σ_i exp (x i)`. TorchLean has no log-softmax over the reals
+    as a function of `Fin n → ℝ` in the modules built here; its
+    `TorchLean.Roundoff.CrossEntropy.log_probs_reference`
+    (TorchLean/Verify/RuntimeApprox/Roundoff/CrossEntropy.lean, not built here) states its
+    reference in this real form, which is written out here rather than defined a second time.
+
+The relative part `u` is of the result itself; the absolute part grows with `log S ≤ log n` and,
+through `-log (1 - A)`, with the sum's error.
+
+### Masked inputs (MojoProof/Float/ExpSum.lean)
+
+A masked input is `-∞`: less a finite `m`, its difference is `-∞`, whose correctly rounded
+exponential is `+0`, an exact zero of the sum. `maskErr U u η d y` is `expSumErr`'s form with both
+sums over the kept indices `U`, and `expSumErr` is `maskErr` with every index kept.
+
+23. `expTerm_negInf`: in every format, if the difference `Model.sub (x j) m` is `-∞` (infinite with
+    its sign bit set), the term `expTerm b x m j` is the word `+0`.
+24. `maskSum_error`: in every IEEE format, for every `n`, tree `t`, inputs, word `m` and set `U` of
+    kept indices: if the difference is finite at every `j ∈ U` and `-∞` at every other index and
+    the sum of the terms along `t` is finite, the sum is within
+    `MixedError … 0 (maskErr U u η t.depth (x - m))` of `Σ_{j ∈ U} exp (x j - m)`.
+25. `maskSoftmax_error`: in every IEEE format, for every `n`, tree `t`, inputs, set `U`, word `m`
+    whose real value is some kept input's and index `j ∈ U`, with `A = maskErr U u η t.depth
+    (x - m)`: if the differences are as in statement 24, `A < 1`, the sum is finite and the entry
+    is finite, the entry is within statement 17's mixed error with this `A` of TorchLean's real
+    softmax over the kept indices `TorchLean.TransformerBlock.softmax U x j`.
+
+Statements 16 and 17 are statements 24 and 25 with every index kept, and are proved so.
+
+### The entry in the kernel's order (MojoProof/Float/ExpSum.lean)
+
+Mojo's GPU softmax computes an entry as `e_j * (1 / s)`: the reciprocal of the sum rounded, then
+the product, where statements 17 and 25 take one `Model.div e_j s`. With `r = termErr u (x j - m)
+= (1 + u) · exp (u · |x j - m|) - 1`, the term's relative error of statement 15, and
+`q = recipErr u A = (1 + u) · (A / (1 - A)) + u`, the reciprocal's:
+
+26. `softmaxRecip_error`: in every IEEE format, for every `n`, tree `t`, inputs, set `U`, word `m`
+    whose real value is some kept input's and index `j ∈ U`, under statement 25's premises on the
+    differences, `A < 1` and the sum: if the entry
+    `Model.mul (expTerm b x m j) (Model.div 1 s)` is finite, it is within
+    `MixedError … ((1 + u) · (r + q + r · q) + u)
+    ((1 + u) · ((1 + q) · η + (1 + r) · η · exp (x j - m) + η²) + η)` of TorchLean's real
+    softmax over the kept indices `TorchLean.TransformerBlock.softmax U x j`; `U = Finset.univ`
+    is the unmasked softmax of statement 17.
+
+### Instances (MojoProofTest/FloatTree.lean, MojoProofTest/FloatStats.lean, MojoProofTest/FloatEx2.lean)
 
 Each headline statement has one binary32 instance whose premises are discharged by evaluation
 (`decide +kernel`): `chain_error`, `chain_mixed` (statements 5 and 6 at a loop), `halve_ones`
-(statement 10 over 8 cells), `block_ones` (statement 11 with two warps), `mean_xs` and `var_xs`
+(statement 10 over 8 cells), `block_ones` and `block_ones8` (statement 11 with two warps and
+with four groups of 8 lanes), `mean_xs` and `var_xs`
 (statements 12 and 13 at the inputs `1, 2, 3, 4`, the mean along a loop and the squares along a
-pairwise tree), `max_xs`, `term_xs`, `expSum_xs` (statements 14 to 16), and `softmax_ones`
+pairwise tree), `max_xs`, `term_xs`, `expSum_xs` (statements 14 to 16), `softmax_ones`
 (statement 17 at four inputs `1` shifted by their maximum, with `A < 1` by `norm_num` on FloatLib's
-binary32 constants in `errA_lt`). Each is one example, not a claim about a program.
+binary32 constants in `errA_lt`), `lse_ones` and `logSoftmax_ones` (statements 21 and 22 under
+`softmax_ones`'s premises, with the correctly rounded logarithm of the sum `4`), and
+`term_masked`, `maskSum_masked` and `maskSoftmax_masked` (statements 23 to 25 at the inputs
+`1, -∞, 1, -∞` less `1`, kept at `0` and `2`, with `A < 1` in `errM_lt`). Statement 26 has two,
+`softmaxRecip4` and `softmaxRecip8`, at four and eight inputs `1` less `1` along `halveFin 2` and
+`halveFin 3`, every index kept, each with `A < 1` closed by the tactic `recip_num`. `ex2_ones` and
+`ex2Sum_ones` are statements 19 and 20 at four inputs `1` less the word `1` with `L = log2e`: the
+operand is `+0`, at which the word `1` meets the contract (`zero_close`). Each is one example, not
+a claim about a program.
+
+`block_halve` is statement 11 at the inputs `1` for every `k` halving rounds after `j` butterfly
+rounds, its premise the finiteness of the sum word; `block_ones` and `block_ones8` are its cases
+at `(1, 5)` and `(2, 3)`, declared by the command `theorem name := e`, a `theorem` without a type
+(MojoProofTest/FloatTree.lean), which states the type of the term `e`. The inputs `xs` are `iota 4`, the words of `1, …, n` at `n = 4`,
+and `pairs` is `halveFin 2`, cell 0's halving tree over `2 ^ k` cells with its leaves in
+`Fin (2 ^ k)` at `k = 2`; `iota_toReal`, `iota_bound`, `var_iota` and `msq_iota` give their real
+values, bound, variance `(n ^ 2 - 1) / 12` and mean of squares `(n + 1) (2 n + 1) / 6` at every
+`n ≤ 2 ^ 24` (MojoProofTest/FloatStats.lean). `four_toReal` and `eight_toReal` are `nat32_toReal`,
+the real value of the word of a natural number `m ≤ 2 ^ 24`, at `4` and `8`.
 
 ## Proofs
 
@@ -170,8 +286,8 @@ binary32 constants in `errA_lt`). Each is one example, not a claim about a progr
    (`List.range_add`), and XOR with `l < 2 ^ k` permutes that list (it has no duplicates and stays
    below `2 ^ k`).
 8. Statement 4 or 5 rewritten by `eval_bflyTree` and `depth_bflyTree`.
-9. Induction on `k`: by the definition of `roundsTree`, cell 0's tree over `halvings (k + 1)` is its tree over
-   `halvings k` with each leaf `c < 2 ^ k` replaced by the pair `c, c + 2 ^ k`, so its leaves are
+9. Induction on `k`: by the definition of `roundsTree`, cell 0's tree over `bflyOffsets (k + 1)` is its
+   tree over `bflyOffsets k` with each leaf `c < 2 ^ k` replaced by the pair `c, c + 2 ^ k`, so its leaves are
    those of `0, …, 2 ^ k - 1` followed by those shifted by `2 ^ k` (`List.flatMap_append_perm`,
    `List.range_add`), and its depth grows by 1 (statement 1).
 10. Statement 5 at cell 0's tree, with `eval_roundsTree` and statement 9.
@@ -190,29 +306,63 @@ binary32 constants in `errA_lt`). Each is one example, not a claim about a progr
 15. FloatLib's `toReal_exp_of_isFinite` (a finite correctly rounded exponential of a finite
     argument is the rounded real exponential), `Model.mixedError_toReal_sub` for the difference
     and `MixedError.trans_exp`.
-16. Statement 6 with statement 15 at every leaf.
-17. The term at `k` is `exp 0 = 1` and every term is positive, so the exact sum is at least 1 and
-    FloatLib's `MixedError.relative_of_le_abs` makes the sum's absolute error `A` a relative one;
-    then `Model.mixedError_toReal_div`, TorchLean's `softmax_eq_exp_sub_div` (the softmax at every
-    shift `m`) and `η / ((1 - A) · Σ) ≤ η / (1 - A)`.
+16. Statement 24 with every index kept.
+17. Statement 25 with every index kept.
+18. `log2e`'s value by evaluation, then Mathlib's `Real.log_two_gt_d9` and `Real.log_two_lt_d9`:
+    `|log2e · log 2 - 1| ≤ 2 ^ -26`.
+19. `Model.mixedError_toReal_sub` for the difference, `Model.mixedError_toReal_mul` with `L`'s
+    error and FloatLib's `MixedError.const_mul` by `log 2` put `log 2 · p` within
+    `((1 + u) · (u + ρ + u ρ) + u, η · log 2)` of `x - m`; then `2 ^ p = exp (log 2 · p)` and
+    FloatLib's `MixedError.trans_exp` with the contract.
+20. Statement 6 with statement 19 at every leaf.
+21. Statement 17's relative error `A` of the sum (shared by a private lemma), FloatLib's
+    `toReal_pos_of_isFinite_log` and `toReal_log_of_isFinite` (a finite correctly rounded
+    logarithm of a finite input is the rounded real logarithm of a positive one), then FloatLib's
+    `MixedError.trans_log`, which needs `A < 1`, for `log S`, and `Model.mixedError_toReal_add`
+    with the exact `m`; `log S = log Σ_j exp (x j) - m` (`Real.exp_sub`, `Real.log_div`) and
+    `log S ≥ 0`.
+22. As statement 21, with `Model.mixedError_toReal_sub` for the difference `x j - m` and for the
+    entry.
+23. FloatLib's correctly rounded exponential of an infinite word with its sign bit set is `+0` by
+    its definition (an infinite word is not a NaN, FloatLib's
+    `Model.isNaN_eq_false_of_isInfinite_eq_true`).
+24. Statement 6 with the weights `exp (x j - m)` at the kept leaves (statement 15) and `0` at the
+    masked ones, whose terms are `+0` (statement 23), so of real value `0` with error `(0, 0)`; a
+    sum over every index of terms that are `0` outside `U` is the sum over `U` (Mathlib's
+    `Finset.sum_ite_mem`).
+25. The term at the kept `k` is `exp 0 = 1` and every term is positive, so the exact sum over `U`
+    is at least 1 and FloatLib's `MixedError.relative_of_le_abs` makes the sum's absolute error
+    `A` a relative one; then `Model.mixedError_toReal_div`, TorchLean's `softmax_eq_exp_sub_div`
+    over `U` (the softmax is `exp (x j - m) / Σ_{i ∈ U} exp (x i - m)` for every `m`) and
+    `η / ((1 - A) · Σ) ≤ η / (1 - A)`.
+26. Statement 25's relative error `A` of the sum (the same private lemma); FloatLib's
+    `Model.mixedError_toReal_div` with the exact numerator `1` (`Model.toReal_posOne`) gives the
+    reciprocal's error `(q, η)`, and `Model.mixedError_toReal_mul` with statement 15's term
+    error the entry's (both factors are finite by `Model.isFinite_of_isFinite_mul`); then
+    `softmax_eq_exp_sub_div`, `a / Σ = a · (1 / Σ)` and `|1 / Σ| ≤ 1`, as `Σ ≥ 1`.
 
 ## Not proved
 
 - That a grid run of a kernel computes these trees. The corpus's layer norm kernels
   (tests/corpus/layernorm/) compute the mean and variance by Welford updates merged across lanes,
-  not by two passes, so statements 12 and 13 are not their bound; the corpus's reduction kernel
-  sums `i32`, so no float bound applies to it.
-- The normalized output of layer norm (the square root or `rsqrt.approx`, the scale and the
-  shift).
-- RMS norm. TorchLean's `TorchLean.Tensor.rmsNorm` (TorchLean/Tensor/Layers/Normalization.lean)
-  is defined over any of its scalar contexts, the reals included, and divides each fiber by its
-  largest magnitude before it takes the mean of the squares. TorchLean proves no closed form of it
-  over the reals (its docstring states `x / sqrt (mean x ^ 2 + epsilon) · gamma`), and
-  TorchLean.TransformerBlock, whose real softmax and layer norm the statements here are linked to,
-  has no RMS norm. No statement here targets RMS norm, and none is defined here. TorchLean's
+  not by two passes, so statements 12 and 13 are not their bound (Welford's merge is bounded in
+  docs/proofs/float-welford.md); the corpus's reduction kernel sums `i32`
+  (tests/corpus/reduction/reduction_reduction_sum_kernel_SIMD_DTy6A6AcB6A6AcB_950d42eb4d93545d.nvptx.ll,
+  lines 151-160), so no float bound applies to it.
+- A softmax entry with the compiled exponential: statement 20 bounds the sum, and statement 17's
+  form with `ex2Rel` is not stated. Nor is the `-∞` operand (its `+0` is outside the contract) or
+  an operand of `128` or more.
+- RMS norm against TorchLean: TorchLean proves no closed form of `TorchLean.Tensor.rmsNorm`
+  (TorchLean/Tensor/Layers/Normalization.lean) over the reals, so docs/proofs/float-norm.md states
+  RMS norm against the real value its docstring gives. TorchLean's
   `TorchLean.Roundoff.rms_norm_forward_error`
   (TorchLean/Verify/RuntimeApprox/Roundoff/Operators.lean) bounds `TorchLean.Tensor.rmsNorm` on
   its configured tensors with left-fold reductions.
+- Masked inputs in log-sum-exp and log-softmax (statements 21 and 22 keep every index), the
+  maximum of a tree with `-∞` inputs (statement 14's inputs are finite; statement 25 takes any `m`
+  whose real value is a kept input's) and a row whose every input is masked. Nor is the
+  log-softmax entry in the order of Mojo's GPU softmax kernel, `log (e_j · (1 / s))`, stated, nor
+  with Mojo's own `log`, which is not FloatLib's correctly rounded one.
 - Any bound when a result is infinite or a NaN.
 
 ## Related results elsewhere

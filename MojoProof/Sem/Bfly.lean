@@ -8,17 +8,23 @@ import FloatLib.Floats.Formats.BinaryInterchange.Analysis.StandardModel
 A warp reduction by butterfly shuffles: in each round with offset `m`, lane `l` combines its own
 value with the value of lane `l ^^^ m` (`shfl.sync.bfly`). Both kernels of tests/corpus/gemv/ end
 with five such rounds, offsets 16, 8, 4, 2, 1, each an `fadd contract` of the lane's value and the
-shuffled one. docs/proofs/bfly.md has the informal argument. Proved here, about the rounds as
-functions of the lanes' values:
+shuffled one (gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, lines
+113-132; gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, lines 83-102). A
+group of `2 ^ k` lanes takes the `k` rounds `bflyOffsets k`, offsets `2 ^ (k - 1), ..., 2, 1`; a
+warp's are `warpOffsets = bflyOffsets 5`. docs/proofs/bfly.md has the informal argument. Proved
+here, about the rounds as functions of the lanes' values:
 
 - `eval_bflyTree`, for every carrier, combining operation, offsets, values and lane: the value of
   a lane after the rounds is the evaluation of a fixed FloatLib `ReductionTree` of lane numbers
   (`bflyTree`); `depth_bflyTree`: that tree's depth is the number of rounds, for every lane.
 - `leaves_bfly`: for every `k`, offsets that are `1, 2, ..., 2 ^ (k - 1)` in any order and lane
-  below `2 ^ k`, the lane has every lane below `2 ^ k` as a leaf exactly once; `leaves_warp` is its
-  case at a warp's offsets (`warpOffsets`, `k = 5`).
-- `shflSource_bfly`: the semantics' source lane of a butterfly shuffle with clamp 31
-  (`shflSource`, MojoProof/Sem/Grid.lean) is `l ^^^ m` for lanes and offsets below 32.
+  below `2 ^ k`, the lane has every lane below `2 ^ k` as a leaf exactly once; `leaves_offsets` is
+  its case at `bflyOffsets k`, and `leaves_warp` that at a warp's offsets (`k = 5`).
+- `shflSource_group`: for every group width `2 ^ k` with `k ≤ 5`, the semantics' source lane of a
+  butterfly shuffle with that width's clamp `(32 - 2 ^ k) · 256 + 31` (`shflSource`,
+  MojoProof/Sem/Grid.lean; PTX's segment mask in bits 8-12, the clamp `31` in bits 0-4) is
+  `l ^^^ m` for every lane `l < 32` and offset `m < 2 ^ k`; `shflSource_bfly` is its case `k = 5`,
+  clamp 31, the one in tests/corpus/.
 - `bfly_warp_error`, for every carrier, combining operation, offsets `ms`, values, lane and width
   `w` whose lanes below `w` are the lane's leaves, each once: FloatLib's error bound for a
   reduction tree of depth `d` (FloatLib/Numerics/Reduction/Error.lean, through `eval_error` of
@@ -37,6 +43,9 @@ functions of the lanes' values:
 - `bflyRounds_congr`, for every carrier, combining operation, offsets and lane: the lane's value
   after the rounds depends only on the values at the leaves of its tree.
 
+`bflyRoundsAt F ms v` is the rounds with a combination `F r l` per round `r` and lane `l` (an
+oracle number per round and lane); `bflyRounds combine` is its case `F r l = combine`.
+
 That a grid run of a kernel computes `bflyRounds` is not proved here. The instances and the twin
 (offsets that repeat a round) are in MojoProofTest/Bfly.lean.
 -/
@@ -50,9 +59,19 @@ lane `l ^^^ m`'s, its own first. -/
 def bflyRound {β : Type} (combine : β → β → β) (m : Nat) (v : Nat → β) : Nat → β :=
   fun l => combine (v l) (v (l ^^^ m))
 
-/-- The values after the butterfly rounds with offsets `ms`, first to last. -/
+/-- The values after the butterfly rounds with offsets `ms` when the combination depends on the
+round and the lane: in round `r`, counted from `0`, lane `l` combines its own value with lane
+`l ^^^ m`'s by `F r l`, its own first. At `F r l x y = deliver (Model.add x y) (o r l)` these are
+the semantics' `fadd` rounds with an oracle number for every round and lane. -/
+def bflyRoundsAt {β : Type} (F : Nat → Nat → β → β → β) : List Nat → (Nat → β) → Nat → β
+  | [], v => v
+  | m :: ms, v => bflyRoundsAt (fun r => F (r + 1)) ms fun l => F 0 l (v l) (v (l ^^^ m))
+
+/-- The values after the butterfly rounds with offsets `ms`, first to last, with one combining
+operation in every round and lane: `bflyRoundsAt` at `fun _ _ => combine`, so that round `m`
+takes the values `v` to `bflyRound combine m v`. -/
 def bflyRounds {β : Type} (combine : β → β → β) (ms : List Nat) (v : Nat → β) : Nat → β :=
-  ms.foldl (fun v m => bflyRound combine m v) v
+  bflyRoundsAt (fun _ _ => combine) ms v
 
 /-- The schedule of lane `l` after the butterfly rounds with offsets `ms`, a FloatLib
 `ReductionTree` of lane numbers: with no rounds the leaf `l`; a round with offset `m` makes lane
@@ -60,8 +79,14 @@ def bflyRounds {β : Type} (combine : β → β → β) (ms : List Nat) (v : Nat
 def bflyTree (ms : List Nat) : Nat → ReductionTree Nat :=
   ms.foldl (fun T m l => .node (T l) (T (l ^^^ m))) .leaf
 
-/-- The offsets of a warp's five butterfly rounds, `16, 8, 4, 2, 1`, as in tests/corpus/gemv/. -/
-def warpOffsets : List Nat := [16, 8, 4, 2, 1]
+/-- The offsets of the `k` butterfly rounds of a group of `2 ^ k` lanes, largest first:
+`2 ^ (k - 1), ..., 2, 1`. -/
+def bflyOffsets (k : Nat) : List Nat := ((List.range k).map (2 ^ ·)).reverse
+
+/-- The offsets of a warp's five butterfly rounds, `bflyOffsets 5 = [16, 8, 4, 2, 1]`, as in
+tests/corpus/gemv/ (gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, lines
+114, 118, 122, 126 and 130). -/
+def warpOffsets : List Nat := bflyOffsets 5
 
 /-- For every carrier, combining operation, offsets, values and lane, lane `l`'s value after the
 butterfly rounds is the evaluation of its tree `bflyTree ms l` at the lanes' values. -/
@@ -69,13 +94,14 @@ theorem eval_bflyTree {β : Type} (combine : β → β → β) (ms : List Nat) (
     (bflyTree ms l).eval combine v = bflyRounds combine ms v l := by
   suffices h : ∀ (T : Nat → ReductionTree Nat) (w : Nat → β), (∀ l, (T l).eval combine v = w l) →
       ∀ l, (ms.foldl (fun T m l => .node (T l) (T (l ^^^ m))) T l).eval combine v =
-        ms.foldl (fun v m => bflyRound combine m v) w l from
+        bflyRounds combine ms w l from
     h .leaf v (fun _ => rfl) l
   induction ms with
   | nil => exact fun T w h l => h l
   | cons m ms ih =>
     intro T w h l
-    exact ih _ _ (fun l => by simp only [ReductionTree.eval, bflyRound, h]) l
+    exact ih (fun l => .node (T l) (T (l ^^^ m))) (bflyRound combine m w)
+      (fun l => by simp only [ReductionTree.eval, bflyRound, h]) l
 
 /-- For all offsets and every lane, the tree of the lane after the butterfly rounds has depth
 the number of rounds. -/
@@ -151,17 +177,57 @@ theorem leaves_bfly {k : Nat} {ms : List Nat} (hms : ms.Perm ((List.range k).map
   rw [← Multiset.coe_eq_coe, hx, hc, hr, Multiset.map_coe, Multiset.coe_eq_coe]
   exact hp
 
-/-- At a warp's offsets, for every lane below 32, the leaves of the lane's tree are a permutation
-of the lanes `0, ..., 31`: `leaves_bfly` at `k = 5`. -/
-theorem leaves_warp : ∀ l < 32, (bflyTree warpOffsets l).leaves.Perm (List.range 32) :=
-  fun _ hl => leaves_bfly (k := 5) (by decide) hl
+/-- For every `k`, at the offsets `bflyOffsets k` and for every lane below `2 ^ k`, the leaves of
+the lane's tree are a permutation of the lanes `0, ..., 2 ^ k - 1`: `leaves_bfly`, the offsets
+being the reverse of `1, 2, ..., 2 ^ (k - 1)`. -/
+theorem leaves_offsets (k : Nat) :
+    ∀ l < 2 ^ k, (bflyTree (bflyOffsets k) l).leaves.Perm (List.range (2 ^ k)) :=
+  fun _ hl => leaves_bfly (List.reverse_perm _) hl
 
-/-- For all lanes and offsets below 32, a butterfly shuffle with clamp 31 reads lane `l ^^^ m`. -/
+/-- At a warp's offsets, for every lane below 32, the leaves of the lane's tree are a permutation
+of the lanes `0, ..., 31`: `leaves_offsets` at `k = 5`. -/
+theorem leaves_warp : ∀ l < 32, (bflyTree warpOffsets l).leaves.Perm (List.range 32) :=
+  leaves_offsets 5
+
+/-- **The butterfly shuffle of a group of `2 ^ k` lanes.** For every `k ≤ 5`, lane `l < 32` and
+offset `m < 2 ^ k`, a butterfly shuffle with the clamp `(32 - 2 ^ k) · 256 + 31` of width
+`2 ^ k` (segment mask `32 - 2 ^ k`, clamp `31`) reads lane `l ^^^ m`: the lanes `l` and `l ^^^ m`
+agree above bit `k`, so `l ^^^ m` is at most the segment's last lane. -/
+theorem shflSource_group {k l m : Nat} (hk : k ≤ 5) (hl : l < 32) (hm : m < 2 ^ k) :
+    shflSource .bfly l m ((32 - 2 ^ k) * 256 + 31) = l ^^^ m := by
+  have h32 : 2 ^ k ≤ 32 := Nat.pow_le_pow_right (by decide) hk
+  have hs : 32 - 2 ^ k = 2 ^ k * (2 ^ (5 - k) - 1) := by
+    rw [Nat.mul_sub, Nat.mul_one, ← Nat.pow_add, Nat.add_sub_cancel' hk]
+  have t31 : ∀ i, (31 : Nat).testBit i = decide (i < 5) := fun i => by
+    rw [show (31 : Nat) = 2 ^ 5 - 1 by rfl, Nat.testBit_two_pow_sub_one]
+  have ts : ∀ i, (32 - 2 ^ k).testBit i = (decide (k ≤ i) && decide (i < 5)) := fun i => by
+    rw [hs, Nat.testBit_two_pow_mul, Nat.testBit_two_pow_sub_one]
+    by_cases h : k ≤ i
+    · simp only [ge_iff_le, h, decide_true, Bool.true_and, decide_eq_decide]
+      omega
+    · simp [h]
+  have hle : l ^^^ m ≤ l &&& (32 - 2 ^ k) ||| 31 &&& (31 ^^^ (32 - 2 ^ k)) := by
+    refine Nat.le_of_testBit fun i hi => ?_
+    simp only [Nat.testBit_xor, Nat.testBit_and, Nat.testBit_or, t31, ts] at hi ⊢
+    by_cases h1 : i < k
+    · simp [show i < 5 by omega, show ¬ k ≤ i by omega]
+    · have hmi : m.testBit i = false := Nat.testBit_lt_two_pow
+        (lt_of_lt_of_le hm (Nat.pow_le_pow_right (by decide) (by omega)))
+      by_cases h2 : i < 5
+      · simp only [hmi, Bool.bne_false] at hi
+        simp [hi, h2, show k ≤ i by omega]
+      · have hli : l.testBit i = false := Nat.testBit_lt_two_pow
+          (lt_of_lt_of_le hl (show 2 ^ 5 ≤ 2 ^ i from Nat.pow_le_pow_right (by decide) (by omega)))
+        simp [hmi, hli] at hi
+  have e1 : ((32 - 2 ^ k) * 256 + 31) % 32 = 31 := by omega
+  have e2 : ((32 - 2 ^ k) * 256 + 31) / 256 % 32 = 32 - 2 ^ k := by omega
+  simp [shflSource, e1, e2, Nat.mod_eq_of_lt (show m < 32 by omega), hle]
+
+/-- For all lanes and offsets below 32, a butterfly shuffle with clamp 31 reads lane `l ^^^ m`:
+`shflSource_group` at `k = 5`. -/
 theorem shflSource_bfly {l m : Nat} (hl : l < 32) (hm : m < 32) :
-    shflSource .bfly l m 31 = l ^^^ m := by
-  have : l ^^^ m < 2 ^ 5 := Nat.xor_lt_two_pow hl hm
-  simp [shflSource, Nat.mod_eq_of_lt hm]
-  omega
+    shflSource .bfly l m 31 = l ^^^ m :=
+  shflSource_group (k := 5) le_rfl hl hm
 
 /-- **The butterfly within FloatLib's tree bound.** For every carrier, combining operation,
 values `v`, map `interpret` to the reals, `u ≥ 0`, offsets `ms`, lane `l` and width `w` such that

@@ -233,8 +233,8 @@ Intrinsic.griddepWait: returns
 Intrinsic.griddepLaunch: returns
 Intrinsic.cpAsyncCommit: returns
 Intrinsic.cpAsyncWait: returns
-Intrinsic.ldmatrix: unsupported: ldmatrix and mma in a grid
-Intrinsic.mma: unsupported: ldmatrix and mma in a grid
+Intrinsic.ldmatrix: unsupported: ldmatrix in a grid
+Intrinsic.mma: unsupported: mma in a warp cut by its block of threads
 -/
 #guard_msgs in
 #eval do

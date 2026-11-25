@@ -1,4 +1,4 @@
-# The warp butterfly as a reduction tree (`bflyRounds`, `bflyTree`, `eval_bflyTree`, `depth_bflyTree`, `leaves_bfly`, `leaves_warp`, `shflSource_bfly`, `bfly_warp_error`, `bfly_add_error`, `bflyRounds_congr`)
+# The warp butterfly as a reduction tree (`bflyRounds`, `bflyRoundsAt`, `bflyOffsets`, `bflyTree`, `eval_bflyTree`, `depth_bflyTree`, `leaves_bfly`, `leaves_offsets`, `leaves_warp`, `shflSource_group`, `shflSource_bfly`, `bfly_warp_error`, `bfly_add_error`, `bflyRounds_congr`)
 
 Lean: proved, for every carrier, combining operation, offsets, values and lane as stated below,
 in MojoProof/Sem/Bfly.lean. Instances and twins: MojoProofTest/Bfly.lean. The tree type is
@@ -34,7 +34,10 @@ on the value `%67` it loads from shared memory, ending in `%87`.
 
 In the semantics (MojoProof/Sem/Grid.lean): a `shfl.sync` with the full member mask (`-1`) and
 clamp 31 completes when every lane of the warp waits at it, and lane `l` receives the operand of
-lane `shflSource .bfly l m 31`, which is `l ^^^ m` for `l, m < 32` (`shflSource_bfly`). A
+lane `shflSource .bfly l m 31`, which is `l ^^^ m` for `l, m < 32` (`shflSource_bfly`). A shuffle
+within groups of `2 ^ k` lanes has the clamp `(32 - 2 ^ k) · 256 + 31` (the segment mask in bits
+8-12), and its source is `l ^^^ m` for `m < 2 ^ k` (`shflSource_group`); the corpus's kernels use
+clamp 31 only. A
 `bitcast` from `float` to `i32` and back gives the same bits. The `fadd contract`'s operands are a
 `phi` or an `fadd` result and a `bitcast`, never an `fmul contract` result, so `contract`
 (MojoProof/Sem/Float.lean) is FloatLib's `Model.add` at every oracle number, through `deliver`,
@@ -44,8 +47,11 @@ which changes only a NaN result.
 
 Write `bflyRound combine m v` for the values after one round with offset `m`: lane `l` gets
 `combine (v l) (v (l ^^^ m))`, its own value first, as in `fadd contract float %79, %82`.
-`bflyRounds combine ms v` is the rounds with offsets `ms`, first to last, and `warpOffsets` is
-`[16, 8, 4, 2, 1]`. `bflyTree ms l` is a `ReductionTree Nat` whose leaves are lane numbers: with
+`bflyRoundsAt F ms v` is the rounds with offsets `ms`, first to last, in which lane `l` of round
+`r` (counted from `0`) combines by `F r l`; `bflyRounds combine ms v` is its case
+`F r l = combine`. `bflyOffsets k` is `2 ^ (k - 1), ..., 2, 1`, the `k` rounds of a group of
+`2 ^ k` lanes, and `warpOffsets` is by definition `bflyOffsets 5`, the offsets `16, 8, 4, 2, 1`.
+`bflyTree ms l` is a `ReductionTree Nat` whose leaves are lane numbers: with
 no rounds lane `l`'s tree is the leaf `l`, and a round with offset `m` makes lane `l`'s tree the
 node of its own tree and lane `l ^^^ m`'s.
 
@@ -58,8 +64,12 @@ node of its own tree and lane `l ^^^ m`'s.
 3. `leaves_bfly`: for every `k`, offsets `ms` that are a permutation of
    `1, 2, 4, ..., 2 ^ (k - 1)` (the rounds in any order) and lane `l < 2 ^ k`, the leaves of
    `bflyTree ms l` are a permutation of `0, ..., 2 ^ k - 1`: each lane's value is a leaf exactly
-   once. `leaves_warp` is its case `k = 5` at `warpOffsets`, for every lane `l < 32`.
-4. `shflSource_bfly`: for all `l, m < 32`, `shflSource .bfly l m 31 = l ^^^ m`.
+   once. `leaves_offsets`: its case at `bflyOffsets k`, for every `k` and lane `l < 2 ^ k`;
+   `leaves_warp` is `leaves_offsets` at `k = 5`, for every lane `l < 32`.
+4. `shflSource_group`: for every `k ≤ 5`, lane `l < 32` and offset `m < 2 ^ k`,
+   `shflSource .bfly l m ((32 - 2 ^ k) · 256 + 31) = l ^^^ m`: a butterfly shuffle within groups
+   of `2 ^ k` lanes reads lane `l ^^^ m`. `shflSource_bfly` is its case `k = 5`: for all
+   `l, m < 32`, `shflSource .bfly l m 31 = l ^^^ m`.
 5. `bfly_warp_error`: for every carrier, `combine`, values `v`, map `interpret : β → ℝ`,
    `u ≥ 0`, offsets `ms`, lane `l` and width `w` such that the leaves of `bflyTree ms l` are a
    permutation of `0, ..., w - 1`: if at every node of lane `l`'s tree the combination of the
@@ -98,10 +108,14 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
    offsets; at `1, 2, ..., 2 ^ (k - 1)` in order they are `0, ..., 2 ^ k - 1`, by induction on
    `k` with `2 ^ k ^^^ j = 2 ^ k + j` for `j < 2 ^ k`. XOR with `l < 2 ^ k` permutes that list:
    it has no duplicates (XOR with `l` is injective) and stays below `2 ^ k`
-   (`Nat.xor_lt_two_pow`). `leaves_warp` checks that `warpOffsets` is a permutation of
-   `1, 2, 4, 8, 16` by `decide`.
-4. Unfold `shflSource`: with clamp 31 the segment mask is 0 and the largest lane is 31; `m % 32 =
-   m`, and `l ^^^ m < 32` (`Nat.xor_lt_two_pow`), so the source is in range.
+   (`Nat.xor_lt_two_pow`). `leaves_offsets`: `bflyOffsets k` is the reverse of
+   `1, 2, ..., 2 ^ (k - 1)`, so a permutation of it (`List.reverse_perm`).
+4. Unfold `shflSource`: the clamp's low five bits are 31 and its segment mask is
+   `32 - 2 ^ k = 2 ^ k (2 ^ (5 - k) - 1)`, whose bits are those from `k` to 4, and `m % 32 = m`.
+   The largest lane `(l &&& seg) ||| (31 &&& (31 ^^^ seg))` has every bit below `k` and `l`'s
+   bits from `k` to 4; `l ^^^ m` has `l`'s bits from `k` on (`m < 2 ^ k`) and no bit from 5 on
+   (`l < 32`), so it is at most the largest lane, bit by bit (`Nat.le_of_testBit`), and in
+   range.
 5. `eval_error` (FloatLib's `abs_eval_sub_exact_le_depth` with the sums over the permuted
    leaves) at lane `l`'s tree, rewritten by statement 1 on the computed side and statement 2 for
    the depth.
@@ -125,6 +139,12 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
   (`add_mixed`), statement 6 bounds lane 5's sum by `((1 + u) ^ 3 - 1) · 8`.
 - `add_ones`: statement 6 at binary32, `warpOffsets`, lane 0 and 32 lanes holding `1`: the root's
   sum `32` is finite by evaluation, so every lane is finite and the bound holds.
+- `offsets8`, `leaves8`: `bflyOffsets 3` is `4, 2, 1` and lane 0's leaves are
+  `0, 4, 2, 6, 1, 5, 3, 7` (by `decide`); statement 3's `leaves_offsets` at `k = 3`.
+- `shfl8`: statement 4 at `k = 3`, clamp `24 · 256 + 31 = 6175`: lane 13 with offset 5 reads
+  lane 8. `shfl8_twin`: with the same clamp and offset 8, outside the group, lane 5 reads itself,
+  not lane `5 ^^^ 8 = 13` (by `decide`), so statement 4 needs `m < 2 ^ k`. `shfl32`: statement 4
+  at `k = 5`, the warp's clamp `0 · 256 + 31 = 31`: lane 13 with offset 21 reads lane 24.
 - `exact4`: statement 5 away from a warp, at the offsets `2, 1`, lane 3 (leaves `3, 1, 2, 0`, by
   evaluation), `w = 4` and exact addition of reals (`u = 0`): for every `v`, lane 3's value is
   `Σ_{j<4} v j`.

@@ -16,8 +16,9 @@
 3. `Replay.found obs R`. A fault `.ub` gives `ub n msg`. An `.unsupported` fault gives `unknown`,
    and so does `out`. A deadlock gives `stuck`. For a final grid `g` the checks run in order:
    - `race? g.mem.trace`: an access and the earlier access it races with gives `race a e`;
-   - then `broken? g.mem.trace`: a load with `!invariant.load` and a write that touches its bytes
-     gives `broken r w`;
+   - then `broken? g.mem.trace`: a frozen read (an `!invariant.load` that neither writes nor is
+     an `atomicrmw`'s) and an access that writes for the core's `kept` (a write or an
+     `atomicrmw`'s read) that touches its bytes give `broken r w`;
    - then `obs g.mem`: `none` gives `post none`, a `y` failing `R` gives `post (some y)`, and a `y`
      satisfying `R` gives `pass y`.
 
@@ -31,9 +32,11 @@ For every launch `L`, contexts `c`, grid `g`, fuel, phases, observation `obs` an
 - `Replay.run_stop`: if the replay stops with `s`, then `s.Holds L c g`:
   - for `fault g' n b e`, `g'` is reachable from `g` and its step or collective call is `e`;
   - for `deadlock g'`, `g'` is reachable, not done, and has no step.
-- `Replay.found_bad`: `(found obs R (run L c fuel phases g)).bad = true → ¬ Grid.Sound L c g obs R`.
+- `Replay.found_bad`: `(found obs R (run L c fuel phases g)).bad = true → ¬ Grid.Sound L c g obs R`,
+  for a grid with at most the launch's number of threads every grid reachable from which has the
+  premises of `racy_iff` (`Grid.Fits`; `Grid.start_reach_fits` at a start's grid).
 - `Grid.run_ub`: `g.run L c fuel phases = .error (.ub msg)` gives a reachable grid that faults
-  (`Grid.Faults`), or one that is not done and has no step.
+  (the core's `GPUProof.Faults` at `sig`), or one that is not done and has no step.
 
 For every program, kernel, launch, arguments, memory, choice, oracle, fuel, phases and `adm` with
 `adm ch oracle`:
