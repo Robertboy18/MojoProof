@@ -280,12 +280,16 @@ pointer facts' definitions) unless another file is named.
     `bitcast_bits`), segments that end at a barrier, a warp shuffle or a lifetime marker
     (`summarizeTo`, `Seg.sound`, `Thread.resume_at`, `Seg.resume`, `Seg.resume_regs`;
     `summarizeLife`, `Seg.lifetime`), a block's segments in a row on one thread (`Seg.through`,
-    `Piece.through`) and into a continuation (`Piece.throughTo`, `RunsVia.of_fires`), the vector
+    `Piece.through`) and into a continuation (`Piece.throughTo`, `Piece.walk`, `RunsVia.of_fires`:
+    each wait's call, arguments and memory), the vector
     and aggregate nodes and `getelementptr` with any number of indices
     (`SNode.insert`, `eltAt`, `insEltAt`, `gepN`), a
     `getelementptr`, `load` or `store` on a global (`SNode.globalAt`, `SNode.eval_globalAt`)
     and a `load` after a `store` (`SNode.loadAfter`, its value lemmas in
-    `MojoProof/Sym/LoadAfter.lean`); tests at the two kernels' blocks
+    `MojoProof/Sym/LoadAfter.lean`), the element lemma for an array stored whole and the slots
+    through other blocks' changes (`Mem.load_store_elem`, `SNode.eval_loadAfter_elem`,
+    `Mem.load_store_codec_of_block`, `MojoProof/Sym/OblPieces.lean`; tests
+    `MojoProofTest/GemvEntry.lean`); tests at the two kernels' blocks
     (`MojoProofTest/SymLane.lean`,
     `MojoProofTest/SymCast.lean`, `MojoProofTest/SymSeg.lean`); the segment checker's tail takes
     the `alloca` flag (`MojoProofTest/SymSegAlloca.lean`), and with it the whole of `%6` from
@@ -293,18 +297,83 @@ pointer facts' definitions) unless another file is named.
     - gevm_kernel's thread from its entry to `ret` at every launch with 1024 threads a block, for
       every `K` and `N` with `K % 32 = 0` and `K * N < 2 ^ 29` and every delivered values of the
       barrier and the shuffles (`whole`, `MojoProofTest/OblGevmWhole.lean`);
-    - gemv_kernel's thread at one context, frame and memory (`MojoProofTest/SymGemvTail.lean`):
-      `%6` from statement 41 through `%43` to `ret` (`tail_runs`); from statement 0 through its
-      `alloca`s, shuffles and lifetime markers to `ret` on the `%43` branch (`gemv_runs`); from
-      statement 0 through `%44`, the loop at `%54` with no round and `%78`'s five shuffles to
-      `ret` (`gemv_loop_runs`, the chain's last path out stopped after `%59`'s edge,
-      `RunsVia.of_chain`).
+    - gemv_kernel's warps from `Grid.start` at `K = 0`, `K = 4` and `K = 3`
+      (`MojoProofTest/GemvWarp.lean`): each lane by the checkers through `%6`'s shuffles and
+      `%43` (`lane43`), or `%44`, the loop's rounds through one arm and `%78`'s five shuffles
+      (`lane`, `tail78`, with `RunsVia.of_chain` and `Runs.of_retMem`); a warp's lanes as one
+      `WarpRun.of_waits` with `Grid.fire`'s deliveries (`warp78`, `warp43`) with each lane's own
+      offers (`Warp.v` by phase and lane); one block of 32 and one of 64 to a done grid (`run32`,
+      `run64`); one round of the loop by lane at `K = 4` and `K = 3`, the output cell holding
+      `warpDot`'s word, not the left-to-right sum (`run4`, `run3`, `orders`, `one78`); the
+      16-thread `poison` mutant (`poison16`); the per-lane cost, the choice of 32 concrete
+      evaluations, the measurement of a warp's end memory carried as a `def`, and the choice of a
+      symbolic lane index next; `run4`'s cell in the `deliver` form (`run4_deliver`), and the
+      probe of a free lane index with its two blockers;
+    - gemv_kernel's entry block `%6` at a free thread (`MojoProofTest/GemvEntryRun.lean`): from
+      pc 0 to statement 41 with the two `shfl.sync.idx` deliveries as premises, at the loop's
+      meeting point, the three `alloca` blocks by `EntryInv` (`entry`);
+    - gemv_kernel's thread at every `K` (`MojoProofTest/GemvLoop.lean`): from statement 41 of
+      `%6` through the loop's rounds of both arms to `%78`, with `%79` the lane's strided
+      `dotLoop` of the row (`run`; mojo_obl on the entry and on one round of each arm,
+      `MojoProofTest/OblGemv.lean`), and through `%78`'s five shuffles, with their deliveries as
+      premises, to `ret` with lane 0's store (`thread`, `to_ret`,
+      `MojoProofTest/GemvLoopTail.lean`); lane 0's word as the semantics' rounds given the
+      deliveries (`total_eq`, `stored_holds`, `MojoProofTest/GemvLoopBfly.lean`);
+    - gemv_kernel's thread from its start to its `ret` (`MojoProofTest/GemvThread.lean`): `entry`
+      composed with `to_ret`, through the seven shuffles as `Piece.Wait.via` states them, lane 0's
+      store at row `r` and the three slots dead (`run`, `live_out`), with the deliveries as
+      premises; every premise at lane 3 of one block of 32 threads, `M = 1`, `K = 4`, with
+      `Grid.fire`'s deliveries on the memory with every lane's slots (`lane3_inv`), and two
+      premise mutants (`allocas_mutant`, `slots_mutant`, where `%9`'s store faults); the memory
+      at `%78`'s first shuffle named (`waitAt`, `MojoProof/Sym/WaitAt.lean`); the final memory and the waits in
+      `WarpRun.of_waits`'s form (`run_out`, `waits_range`); the general steps in
+      `MojoProof/Sym/WaitVia.lean` (`RunsVia.of_through_via`, `RunsVia.pin`, `RunsVia.imp`) and
+      two blocks' waits as one family (`Piece.Wait.map_via_append`, `MojoProof/Sym/Canon.lean`);
+    - gemv_kernel's warp at every `K` (`MojoProofTest/GemvWarpRun.lean`): the 32 lanes through
+      `WarpRun.of_waits` with `J = 7`, the memories by phase and lane (`Lanes.mem`), each lane by
+      `run` (`Lanes.lane`), and the output word at row `r` as lane 0's `total` of its sum and its
+      partners' offers (`Lanes.warp`); its premises at one block of 32 threads, `M = 1`, `K = 4`
+      (`w0_pre`); the shuffles' deliveries at symbolic offers (`deliver7`, `idx_row`,
+      `MojoProofTest/GemvShfl.lean`; `Program.shfl_deliver`, `MojoProof/Sym/ShflDeliver.lean`),
+      and another thread's changes keeping a lane's slots and the buffers (`Mem.SameOff`,
+      `Mem.FreshOf`, `MojoProof/Sym/Slot.lean`; `EntryInv.frame`; `Mem.SameOff.chain`,
+      `MojoProof/Sym/LaneFrame.lean`);
+    - the warp's word (`MojoProofTest/GemvWarpWord.lean`): each delivery is the partner's offered
+      value (`partner_offered`), so lane 0's word is its value after the five butterfly rounds
+      (`word_rounds`, by `total_chain` and `MojoProof.Tile.bflyRoundsAt_chain`), row `r` of words
+      that meet `bflyDeliver_holds`' rule (`warp_row`), and row `r`'s `warpDot` up to NaNs
+      (`word_warpDot_nanEq`; equal where no round's sum is a NaN, `warp_dot`), with the `NaNEq`
+      form at `w0`;
+    - the grid (`MojoProofTest/GemvWarpRun.lean`): the warp's frame and the next warp's premises
+      after it (`warp_frame`, `Lanes.Pre.later`, `later_row`), a warp's premises from
+      `Grid.start` (`Lanes.Pre.of_start`, `Pre.of_warps`; `Grid.start_free`, `Grid.start_addr`,
+      `MojoProof/Sym/LaneFrame.lean`), the warp whose row is `M` or more from its start to `ret`
+      (`Out.warp`, `Out.warp_frame`; each lane by `MojoProofTest/GemvOut.lean`'s `run` and
+      `RunsVia.endAt`, `MojoProof/Sym/WaitAt.lean`), and at every one-dimensional launch whose
+      block's `x` size 32 divides the warps as one canonical run to a done grid (`grid_run`,
+      `grid_done`), every row its
+      `warpDot` up to NaNs when `M` is at most the row count (`grid_rows`,
+      `MojoProofTest/GemvWarpWord.lean`), with instances at `M = 1` and `M = 2` (`w0_done`,
+      `w64_done`) and at a launch with a warp whose row is `M` (`w64_out_done`);
+    - the grid's soundness and kernel theorem (`MojoProofTest/GemvSound.lean`): the lanes' events
+      after their second delivery, accesses of their own `alloca` slots (`SlotEv`) and reads of
+      the matrix and the vector (`ReadEv`), from the trace facts of `entry`, `GemvLoop.run`,
+      `GemvLoopTail.to_ret`, `GemvThread.run` and `GemvOut.run` (`Lanes.mem2_ext`,
+      `Out.memE_ext`), so every event of the grid's canonical run is one of `Ev` (`lanes_events`,
+      `out_events`, `Lanes.grid_run_inv`); no race among `Ev` events (`racy_ev`, through
+      `GPUProof.racy_iff`) and the `!invariant.load` promise kept (`kept_ev`); `Grid.Sound` for
+      the output rows (`grid_sound`, by `CanonRun.start_sound`; `grid_end`), its premises at one
+      block of 32 threads, `M = 1`, `K = 4`; `GPUProof.Kernel.Sound` against
+      `GPUProof.Spec.matVec` through Theorem 0 (`kernel_sound`, `rows_holds`) and against
+      TorchLean's contraction (`gemv_torchLean`, `MojoProofTest/GemvTorch.lean`), at every valid
+      launch with `y` and `z` sizes 1 whose block's `x` size 32 divides and whose warps' rows
+      cover the matrix's rows; and at a launch of 32 × 2 threads, two warps of row 0 whose
+      lanes 0's stores at it race (`row_race`).
 
     The loop is accepted a round through either arm and as two loops at one header
     (`loop_rounds`, `loop_arms`), and refused with its path out through `%78`'s shuffles
-    (`loop_refused`). The rest is a plan: the loop's rounds on a run, the delivered values as the
-    collectives' results, the race freedom across gevm_kernel's barrier, and the order of the
-    work.
+    (`loop_refused`). The rest is a plan: a run at a launch with a `y` or `z` size above 1, the race freedom
+    across gevm_kernel's barrier, gevm_kernel's kernel theorem, and the order of the work.
 
 ## 5. Skeleton and payload
 
@@ -373,8 +442,10 @@ pointer facts' definitions) unless another file is named.
     and input grade (`dotLoop_approx`; tests in `MojoProofTest/DotGrade.lean`); lanes' dot loops
     added along a tree are `GPUProof.Approx` at `GPUProof.laneGrade` (`lanes_error`,
     `treeDot_error`, `treeDot_approx`, statements 15-16), with `dotLoop_approx` the one-leaf case,
-    and the strided lanes, every lane of the butterfly and `groupDot` are its cases
-    (`MojoProof/Tile/MatVec.lean`; tests and the depth mutant in `MojoProofTest/TileLanes.lean`);
+    and the strided lanes, every lane of the butterfly and `groupDot` are its cases, with the
+    strided lanes along a tree per row meeting `Spec.matVec` at `laneVecGrade` through `MeetsAt`
+    (`rowTrees_meetsAt`) (`MojoProof/Tile/MatVec.lean`; tests and the depth mutant in
+    `MojoProofTest/TileLanes.lean`);
     statement 12 names each term of the loop's step; `floatBin`'s `fmul` then `fadd` is one
     iteration (`floatBin_dotStep`); and
     the contracted loop at never-fusing numbers is the unfused one (`dotLoop_neverFuse`)
@@ -403,11 +474,12 @@ pointer facts' definitions) unless another file is named.
     leaves are the lanes below `w`, with the number of rounds as depth (5 at a warp), and in
     every IEEE format a lane's finite result of `Model.add` is within
     `((1 + u) ^ d - 1) · Σ |v j|` of `Σ v j`, `d` the number of rounds (`bfly_warp_error`,
-    `bfly_add_error`); and the semantics' butterfly shuffle with
-    clamp 31 reads lane `l ^^^ m` (`shflSource_bfly`) (`MojoProof/Sem/Bfly.lean`; instances and a
-    twin in `MojoProofTest/Bfly.lean`). `warp-dot.md`: the warp's dot product `warpDot`, the
-    butterfly over the 32 strided loops `dotLoop`, for every format, length, flag and oracle: the
-    exact strided sums give TorchLean's real matrix-vector and vector-matrix entries
+    `bfly_add_error`); the semantics' rounds through `deliver` are the rounds of the operation
+    where no partial sum is a NaN (`bflyRoundsAt_deliver`); and the semantics' butterfly shuffle
+    with clamp 31 reads lane `l ^^^ m` (`shflSource_bfly`) (`MojoProof/Sem/Bfly.lean`;
+    instances and a twin in `MojoProofTest/Bfly.lean`). `warp-dot.md`: the warp's dot product
+    `warpDot`, the butterfly over the 32 strided loops `dotLoop`, for every format, length, flag
+    and oracle: the exact strided sums give TorchLean's real matrix-vector and vector-matrix entries
     (`bfly_matVec`, `bfly_vecMat`); a finite result is within the error of
     `GPUProof.laneGrade (.ieee fmt) 32 5 ⌈K / 32⌉ K` at grades `⟨0, 0⟩` of the exact sum, as
     `treeDot_error` at the butterfly's tree (`warpDot_error`, `warpDot_matVec`, `warpDot_vecMat`);
@@ -416,8 +488,11 @@ pointer facts' definitions) unless another file is named.
     (`warpDot_nanEq`, `warpDot_eq`); the same over every group of `2 ^ k` lanes (`groupDot_*`), the
     warp's being its case at `k = 5`; the semantics' `fadd` rounds with an oracle number for every
     round and lane are `Model.add`'s up to NaNs and a finite lane value is within the butterfly's
-    bound (`bflyDeliver_nanEq`, `bflyDeliver_error`) (`MojoProof/Sem/WarpDot.lean`; instances at 40
-    pairs over 32 and over 8 lanes in `MojoProofTest/WarpDot.lean`). `gevm_kernel`'s transposition
+    bound (`bflyDeliver_nanEq`, `bflyDeliver_error`); element `i` of lane `l`'s strided list is
+    element `w · i + l` (`getElem?_stride`), and a lane's loop goes round by round in that order
+    (`take_stride_succ`, `dotLoop_take_stride`) (`MojoProof/Sem/WarpDot.lean`; instances at 40
+    pairs over 32 and over 8 lanes, the rounds at 40 pairs and a blocked lane order that gives
+    another word in `MojoProofTest/WarpDot.lean`). `gevm_kernel`'s transposition
     through shared memory
     (warp-dot.md, `MojoProof/Sem/Transpose.lean`): on every valid launch with `ntid.x = 1024`,
     thread `t` of a block stores to cell `tpose 32 t = 32 (t % 32) + t / 32`, a bijection of the
@@ -437,15 +512,30 @@ pointer facts' definitions) unless another file is named.
     correctly rounded log (`max_exact`, `expSum_error`, `softmax_error`, `maskSum_error`,
     `maskSoftmax_error`, `lse_error`, `logSoftmax_error`, `MojoProof/Float/ExpSum.lean`), and the
     compiled exponential `ex2.approx.ftz.f32` under its contract (`ex2_error`, `ex2Sum_error`,
-    `MojoProof/Float/Ex2.lean`); one binary32 instance each in `MojoProofTest/FloatTree.lean`,
-    `MojoProofTest/FloatStats.lean` and `MojoProofTest/FloatEx2.lean`. `float-welford.md`: Welford's
+    `MojoProof/Float/Ex2.lean`), and addition up to NaN payloads and trees up to swapped children
+    (`add_comm_nanEq`, `canon`, `canon_canon`, `eval_canon`, `eval_nanEq_of_canon`,
+    `MojoProof/Float/Canon.lean`) and its converse in every IEEE format (`eval_add_eq_iff`,
+    `MojoProof/Float/CanonIff.lean`), and the sums of distinct inputs as canonical trees and their
+    number `(2n - 3)‼` (`sumFunctionEquiv`, `card_sumFunction`, `card_canonTree`, `card_sums`,
+    `MojoProof/Float/CardSums.lean`), and the butterfly and halving trees' one canonical form at
+    every size (`halve_succ`, `canon_halve`, `canon_bflyTree_lane`, `canon_bflyOffsets`,
+    `bfly_nanEq_halve`, `MojoProof/Float/CanonHalve.lean`); one binary32
+    instance each in `MojoProofTest/FloatTree.lean`,
+    `MojoProofTest/FloatStats.lean` and `MojoProofTest/FloatEx2.lean`, and instances of
+    `Canon.lean` at binary32, binary16 and trees of 3 and 5 leaves in
+    `MojoProofTest/FloatCanon.lean`, of `CanonIff.lean` at 3 and 6 leaves in binary16, binary32
+    and binary64 in `MojoProofTest/FloatCanonIff.lean`, of `CardSums.lean` at 1, 2, 3 and 4
+    leaves, with the counts at one to four inputs, in `MojoProofTest/FloatCardSums.lean`, and of
+    `CanonHalve.lean` at 2, 4, 8 and 32 lanes in `MojoProofTest/FloatCanonHalve.lean`.
+    `float-welford.md`: Welford's
     merge along any tree against the mean and `TorchLean.var` (`welford_error`, `wmean_error`,
     `wvar_error`, `MojoProof/Float/Welford.lean`; instances in `MojoProofTest/FloatWelford.lean`).
     `float-norm.md`: layer norm's output against `TorchLean.TransformerBlock.layerNorm` and RMS
     norm's against its real value, with `rsqrt.approx`'s contract (`lnorm_error`, `rmsnorm_error`,
-    `msq_error`, `MojoProof/Float/Norm.lean`; instances in `MojoProofTest/FloatNorm.lean`). That a
-    grid run of a kernel computes these trees is not
-    proved.
+    `msq_error`), with Mojo's weight offset and dtype (`rmsnormOff_error`) and at inputs of a
+    narrower IEEE format widened exactly to binary32 (`cast_widen`, `rmsnormOff_widen`), in
+    `MojoProof/Float/Norm.lean`; instances in `MojoProofTest/FloatNorm.lean`. That a grid run of a
+    kernel computes these trees is not proved.
 
 ## 6. Checking a run
 
@@ -537,12 +627,12 @@ pointer facts' definitions) unless another file is named.
     `composeDiv`: the composite adds A's offsets of B's mode terms (`Lay.compose_sum`), is A
     after B when those terms do not carry (`noCarry`, `Lay.compose_call`), and is A after B at
     every coordinate when B's term lists are `carryFree` against A's extents, a premise on the
-    two layouts alone (`Lay.compose_all`; `MojoProof/Layout/`).
+    two layouts alone (`Lay.compose_all`; `GPUProof/Layout/`).
     Counterexamples by `decide` show the laws fail without their premises: composition with one
     mode and with two modes that carry, blocked product, idx2crd, zipped divide, upcast, the
     swizzle, (2, 2):(1, 1), whose extents are powers of two but which is not linear over F2,
     and the two-level swizzle with overlapping inner bits, past an extent, and with a zero
-    shift, where its inner map is not one-to-one (`MojoProofTest/LayoutLaws.lean`). Two tests,
+    shift, where its inner map is not one-to-one (`MojoProofTest/GPUProof/LayoutLaws.lean`). Two tests,
     not proofs, check the model: against the compiler's folded values on 43 static cases
     (`MojoProofTest/LayoutConformance.lean`, `tests/layout/record.txt`), and against a CPU run
     on 9 layouts with runtime leaves, which agrees on 8 and differs past the size 0 of the
@@ -570,10 +660,15 @@ pointer facts' definitions) unless another file is named.
     observation of a complete run (`mat_refines`); the naive matmul's row-stride family through
     `NaiveFam.sound` (`naive_tile`, `MojoProofTest/TileNaive.lean`). Each cell's word is also
     `GPUProof.Approx` at `GPUProof.dotGrade` (`Meets`' graded clause). With one column, these
-    kernels meet `GPUProof.Spec.matVec GPUProof.matVecGrade`'s rule (`MojoProof/Tile/MatVec.lean`
-    `mat_holds`; `naive_holds`), and gemv's lane-group word meets the rule at
-    `GPUProof.laneVecGrade` (`groupDot_holds`). Phases, shared
-    memory and collectives are not covered.
+    kernels' observed output words meet `GPUProof.Spec.matVec GPUProof.matVecGrade`'s rule
+    (`MojoProof/Tile/MatVec.lean` `mat_holds`; `naive_holds`, `naive_words`), and their behaviors
+    at setups that fit meet the spec through `GPUProof.MeetsAt` (`MatSetup`, `kernelRows`,
+    `kernelRows_meetsAt`, `kernelRows_nonempty`; `naive_meetsAt`, and `naive_rows` at every size
+    within the family's bounds with `naive_rows_3x4` and `naive_rows_5x7` its instances); strided
+    lanes along a tree per row meet the spec at `GPUProof.laneVecGrade` through `MeetsAt`
+    (`rowTrees`, `rowTrees_meetsAt`; `rows_2x7`, `rows_3x10`), and gemv's lane-group word meets
+    the rule as its case at lane 0's butterfly tree (`groupDot_holds`). Phases, shared memory and
+    collectives are not covered.
 
 ## 11. The core
 
@@ -608,26 +703,68 @@ pointer facts' definitions) unless another file is named.
     position, `GPUProof.UpToNaN` of `GPUProof/NaN.lean`, decode alike; a NaN leaves some entry with
     no value), the float rules `bitwise` (at inputs in the domain it asks for its word function's
     words, `FloatRule.Holds.bitwise_eq`, which decode as its word function's,
-    `FloatRule.Holds.bitwise`), `exact` and `graded`, `Spec`, `Meets` and its uniform case, and the
-    specs `matVec`, `vecMat` and the sums, for every size; the grades `laneGrade` (lanes added
-    along a tree), `dotGrade` and `matVecGrade` its cases by definition, `laneVecGrade`; which
-    kernels meet `Spec.matVec` (step 9); tests at the overflow edge of binary32,
-    at bfloat16 and at the sign of zero; the TorchLean importer is planned.
-34. `mixed-radix.md`: mixed-radix indices at symbolic sizes (`GPUProof/MixedRadix.lean`):
+    `FloatRule.Holds.bitwise`), `exact` and `graded`, `Spec`, `Meets` and its uniform case, the
+    composition of two specs along a wiring (`Wiring`, `MeetsAt.comp` for graded rules,
+    `MeetsAt.comp_exact` for `exact` rules given `Wiring.MidRep`, `MeetsAt.comp_graded_of_dec`
+    for a first stage that decodes exactly then a graded rule, with `MeetsAt.comp_exact_graded`
+    (an `exact` rule then a graded one given `Wiring.FstRep`) and `MeetsAt.comp_bitwise_graded`
+    its corollaries, `MeetsAt.comp_bitwise_exact`, `MeetsAt.comp_exact_bitwise` and
+    `MeetsAt.comp_bitwise` (with `Wiring.bitW`) for the `bitwise` pairs, and `Meets.comp`,
+    `Meets.comp_exact`, `Meets.comp_exact_graded` at every encoding, `GPUProof/Spec/Comp.lean`, step 13), decidable equality
+    of the words at each position and of whole words of the entrywise and uniform encodings
+    (`GPUProof/Spec/DecEq.lean`, step 8), and the specs `matVec`, `vecMat` and the sums, for every
+    size, with finite outputs by instance search (`Spec.ofReal.fintypeOut`); the grades
+    `laneGrade` (lanes added along a tree), `dotGrade` and `matVecGrade` its cases
+    by definition, `laneVecGrade`; which kernels meet `Spec.matVec`, gemv's row word from the
+    semantics' butterfly rounds (`MojoProof.Tile.bflyDeliver_holds`; gemv_kernel's stored word
+    in that form given the deliveries, `MojoProofTest/GemvLoopBfly.lean`), and how a kernel's
+    behaviors are read from its runs for
+    `MeetsAt` (step 9); the magnitude condition as one NaN-keeping kernel's (`nan_needs_mag`); tests at the
+    overflow edge of binary32, at bfloat16 and at the sign of zero; the TorchLean importer
+    (`import.md`).
+34. `import.md`: spec importers (`GPUProof/Spec/Import.lean`, `GPUProof.Importer`, for every
+    front end: the source's operations, sizes, tensors, meaning at the reals, proposed specs,
+    readings and the equation `eq` on the spec's domain); the TorchLean instance for the
+    matrix-vector and vector-matrix products (`MojoProof/Import/TorchLean.lean`,
+    `MojoProof.Import.torchLean`, with `matVec_eq` and `vecMat_eq` at every shape, and its
+    reading as `matVecPairs`' in every format, `readIn_map`, `readOut_map`), tested at 2 × 3,
+    3 × 5 and 2 × 2 with a transposed-reading mutant for each; the `import_spec` command
+    that declares it (`MojoProof/Import/Command.lean`, with `import_fact`), tested in
+    `MojoProofTest/ImportSpec.lean` at sizes 2 and 5 with the open goal and a mutant pinned.
+35. `mixed-radix.md`: mixed-radix indices at symbolic sizes (`GPUProof/MixedRadix.lean`):
     `SizeExpr`, `MixedRadix` with `val`, `InRange` and `radixProd`, and `GPUProof.WordFit`;
     `lt_prod` and `fits` for every size assignment, radix list and width, `eq_iff_digits` at two
     size assignments whose radices have the same values, and `val_append` (Horner's rule split at
     a digit); gemv's write index and the naive matmul's offsets at symbolic sizes, two threads'
     warp keys at two assignments (`warp_two`) and a split key (`warp_split`) as tests
     (`MojoProofTest/GPUProof/MixedRadix.lean`), by evaluation at two launches and two matrices,
-    with a mutant per rule (`mutant_assign` for the radices' premise); the statements and proof
-    plan of `View.tiling` and `View.coarsen_tile` (footprints at symbolic sizes) over the core's
-    `Sig`, `PlaceInj` and `MixedRadix` keys, and the plan for the layout algebra's move into the
-    core (not proved).
+    with a mutant per rule (`mutant_assign` for the radices' premise); footprints at symbolic
+    sizes in `GPUProof/View.lean` (proved): `View` with the instances that own a tile, `View.WF`
+    over the owners at one size assignment and launch, `View.tiling` (the owners' tiles lie in
+    the view's bytes and are pairwise disjoint, for every machine whose placement is injective),
+    `View.cover` and `View.cover_iff` (the owners' tiles cover the bytes of the first `B` key
+    values, and at every positive `B` exactly when the layout is onto its cosize and every key
+    value below `B` is an owner's), `View.tile_subset_coarsen` (a coarse tile holds the tiles inside it, under `hn`)
+    and `View.coarsen_tile` (it is their union, under `hn` and `ho`); gemv's warp view and the
+    naive matmul's thread view at MojoProof's `sig` as natural-number models of the bytes their
+    IR stores (the naive
+    kernel's row stride `N` in its admissibility, 50257 for the corpus kernel), with their
+    tilings and coverage at every admissible assignment and launch, gemv coarsened at the block
+    level with its partly owned last block, and mutants (an overlap at grid (1,2,1), the
+    assignment 0, a thread past the matrix, more warps than rows, a column count other than
+    50257, a radix that reads a bound variable, a radix past a block's warps)
+    (`MojoProofTest/GPUProof/View.lean`); a well formed view's tiles at `sig` as MojoProof's
+    `Tiling` of byte intervals over its owners and an empty interval, with an index for every
+    thread, a thread that owns no tile accessing no byte of the view's buffer under `Owned`
+    (`MojoProofTest/GPUProof/ViewTiling.lean`); the word premise `View.key_fits` and, under it at
+    32-bit words, the kernels' index words, guards and `getelementptr`s against the views' keys
+    and tiles, with mutants at the two launches where it fails
+    (`MojoProofTest/GPUProof/ViewWords.lean`); the layout algebra is in the core
+    (`GPUProof/Layout/`).
 
 ## 12. Theorem 0 at the grid
 
-35. `theorem0.md`: what MojoProof proves so that the core's `Sound.of_one_run` gives
+36. `theorem0.md`: what MojoProof proves so that the core's `Sound.of_one_run` gives
     `Grid.start_sound` at MojoProof's signature, for every program and launch: the five fields of
     `OneRun` at the grid from the start (`Grid.start_oneRun`), the number of threads and `Done`
     (`Grid.start_reach_size`, `Grid.done_iff`), the pending accesses by their threads in their
@@ -648,7 +785,7 @@ pointer facts' definitions) unless another file is named.
     `Grid.sound_of_one_run` (the grid's memory at `sig`, through `Grid.Sound.of_clean`); and
     `Grid.sound_commuting` and its case `Grid.sound_returning`, at one thread on `Launch.one` (`MojoProofTest/Close.lean`,
     `sound_one_ret`).
-36. `sig.md`: MojoProof's machine as a machine of the core, for every program and launch: what fills
+37. `sig.md`: MojoProof's machine as a machine of the core, for every program and launch: what fills
     each of the 84 fields of `Sig`, which theorem uses it, and where MojoProof falls short; the simp
     lemmas, a step appending its pending events (`sig_advance_logs`, `sig_fire_logs`) and `Levels
     sig`; the plan to remove MojoProof's five duplicates of the core's predicates at `sig` (`racy`,
@@ -659,6 +796,21 @@ pointer facts' definitions) unless another file is named.
     (`Grid.Bad` and `Grid.RaceEnabled` deleted; `Grid.raceEnabled_iff`) are done, and the one-run
     argument is written once (`Clean.of_lift`, `GPUProof/Sound.lean`), with `Sound.of_lift` and
     `Grid.sound_of_one_run` its cases and `Grid.sound_one` deleted.
+38. `canon.md`: the canonical run at one level, for every program, launch and contexts: warps in
+    turn, each warp's lanes in turn to their next shuffle, the shuffle `Grid.fire` fires once the
+    last lane waits with its delivered values, until the lanes end, each warp with its own number
+    of shuffles (`WarpShfl`, `WarpRun`, `CanonRun`); its run of grid steps to a done grid
+    (`WarpRun.grid`, `CanonRun.grid`, `CanonRun.done`), soundness through `Grid.start_sound`
+    (`CanonRun.start_sound`), the run from per-lane predicates (`WarpRun.of_inv`,
+    `CanonRun.of_inv`) and a warp's run from its lanes' runs through their waits
+    (`WarpRun.of_waits`, each delivery under the found declaration's result attributes,
+    `withAttrs`), `CanonRun.start_done`, a block's recorded waits as `of_waits`' family
+    (`Piece.Wait.map_via`), its relation to `Sched` (no theorem relates them; the
+    counterexample; what a conversion needs; barriers stay there until the two-level case), the
+    instances at a hand-built kernel at block sizes 40 and 70, with the shuffle declared without
+    attributes and with `noundef`, with the lanes by the checkers (a
+    warp that skips the shuffle, a partial last warp delivered `poison`, three refused cases),
+    and gemv_kernel's warps at five launches (`K = 0`, `K = 4`, `K = 3`).
 
 ## Not proved
 

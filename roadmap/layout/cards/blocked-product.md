@@ -4,9 +4,9 @@ title: `blocked_product`'s outer stride is documented as the block's cosize time
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:1911
 quote: "block.cosize * tiler.stride[i]"
-lean: MojoProof.Layout.Lay.blockedProduct, MojoProof.Layout.Lay.blockedProduct_call
+lean: GPUProof.Layout.Lay.blockedProduct, GPUProof.Layout.Lay.blockedProduct_call
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 depends: cosize
 level: L1

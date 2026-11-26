@@ -79,6 +79,13 @@ positive normal operand `s`, every word `Sem.rsqrt s k` is finite and within rel
    the operand (the one on its error written `¬ 1 ≤ …`), a finite output is within statement 7's
    mixed error, with statement 6's `κ`, of the real RMS norm with the offset
    `x j / √(M + ε) · (g j + o)`.
+9. `cast_widen`: for all IEEE formats `fs` and `fd` with `fd`'s exponent and fraction widths at
+   least `fs`'s, and every finite word `x` of `fs`: `Model.cast fs fd x` is finite and has the real
+   value of `x`.
+10. `rmsnormOff_widen`: statement 8 at the binary32 words `Model.cast fs binary32 (x i)` of finite
+   inputs `x` of an IEEE format `fs` with at most binary32's exponent and fraction widths
+   (binary16 and bfloat16 among them), its premise on the operand's error and its real value
+   stated with the real values of `x`.
 
 TorchLean's `TorchLean.Tensor.rmsNorm` (TorchLean/Tensor/Layers/Normalization.lean) divides each
 fiber by its largest magnitude before it takes the mean of the squares, and TorchLean proves no
@@ -109,7 +116,14 @@ premises are discharged by evaluation (`decide +kernel`). `var_xs_eq` (`V = 5 / 
 `var8` and `msq8`. Statement 8's instances, with the offset `1` and the tactic `rmsoff_num` for
 its premise on the operand's error, are `rmsnormOff_bf16` at `k = 2` with `ε = 8.5`, bfloat16
 weights `1` and the order multiplied before the cast, and `rmsnormOff_f16` at `k = 3` with
-`ε = 38.5`, binary16 weights `1` and the cast first. Each instance is one example and
+`ε = 38.5`, binary16 weights `1` and the cast first. Statement 9's instances are `widen_words`,
+the binary16 word `0x3c01` and the bfloat16 word `0x3f81` cast into binary32 (the words
+`0x3f802000` and `0x3f810000`, finite, with the same values), and its mutant `narrow16`, the
+binary32 word `0x3f800001` (`1 + 2⁻²³`) cast into binary16, where statement 9's premise on the
+fraction widths fails and the cast is the word `0x3c00` of `1`. Statement 10's instances are
+`rmsnormOff_in16` and `rmsnormOff_inbf16`, `rmsnormOff_bf16`'s case with the inputs `1, 2, 3, 4`
+in binary16 and in bfloat16 (`iotaIn`) cast into binary32, cast first and multiplied first;
+`iotaIn_toReal` gives their inputs' real values by statement 9. Each instance is one example and
 `lnorm_iota` and `rmsnorm_iota` cover only the inputs `1, …, 2 ^ k`; none is a claim about a
 program.
 
@@ -133,6 +147,12 @@ program.
 7. In the kernel's order, `Model.mixedError_toReal_mul`, `Model.mixedError_toReal_add` and
    `Model.mixedError_toReal_cast` per operation, each cast bounded as a rounding.
 8. As 6, then statement 7.
+9. FloatLib's `Block.Working.cast_exact_of_grid`
+   (FloatLib/Floats/Formats/Block/Working/Binary.lean), which takes a finite input, at most as
+   many fraction bits, a smallest subnormal exponent at least the target's and a largest finite
+   value at most the target's. The last two follow from the IEEE bias `2 ^ (e - 1) - 1`
+   (FloatLib's `FloatFormat.isIEEE_eq_true_iff`) and `Model.toReal_posMaxFinite_ieee`.
+10. Statement 9 rewrites the inputs' real values in statement 8.
 
 ## Not proved
 
@@ -144,8 +164,9 @@ program.
   contraction at each node and each iteration (`welfordC_error` and `wloop_error`,
   docs/proofs/float-welford.md), not composed into `lnorm` here.
 - RMS norm's squares fused into the additions that sum them.
-- The cast of a narrower input dtype into binary32 before the squares: statement 8 takes the
-  binary32 words the kernel computes with. The casts of the weight, the offset and the output are
-  bounded as roundings, also where they are exact (a widening).
+- The cast into binary32 before the squares of an input format with another encoding or bias than
+  IEEE's (FloatLib's finite-only and FNUZ formats): statement 10 takes IEEE formats with at most
+  binary32's widths. The casts of the weight, the offset and the output are bounded as roundings,
+  also where they are exact (a widening).
 - That a grid run of a kernel computes these words.
 - Any bound when the output is infinite or a NaN.

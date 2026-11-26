@@ -34,6 +34,13 @@ Proved:
 * `sum_stride`, `length_stride`, `length_stride_le`: for every `w > 0`, the sums over the `w`
   strided lists add up to the sum over the list, in every commutative monoid; list `l < w` has
   `K / w + [l < K % w]` elements, at most `⌈K / w⌉`, for a list of length `K`.
+* `getElem?_stride`, `take_stride_succ`, `dotLoop_append`, `dotLoop_take_stride`: for every
+  `l < w`, element `i` of `stride w l xs` is `xs[w * i + l]`, or neither exists; for every round
+  `j`, the first `j + 1` elements of `stride w l xs` are the first `j` and then `xs[w * j + l]` if
+  `w * j + l < xs.length`, nothing otherwise; so, in every format and for every flag and oracle
+  sequence, round `j` of a loop that folds the pair at `w * j + l` behind that guard, and keeps
+  its sum past the end, is one more `dotStep` or none. That is gemv_kernel's row loop on lane `l`
+  at `w = 32` (lines 89-108: the index `%65`, the guard `%69`, the arms `%70` and `%75`).
 * `bfly_stride`: for all offsets, lanes `l` and widths `w` such that lane `l`'s tree has the
   lanes below `w` as leaves, each once (`leaves_warp` at a warp), the rounds of `+` over the exact
   strided sums give the sum over the list, in every commutative monoid. Over `ℝ`, for the
@@ -63,8 +70,9 @@ Proved:
   in-order dot products `Model.dotInOrder` of the `2 ^ k` lists are the same word or both NaNs;
   `warpDot_nanEq` and `warpDot_eq` are their cases `k = 5`.
 
-That a grid run of either kernel computes `warpDot` of its loaded pairs is not proved here. The
-instances at 40 pairs, over 32 lanes and over 8, are in MojoProofTest/WarpDot.lean.
+That a grid run of either kernel computes `warpDot` of its loaded pairs is not proved here:
+`dotLoop_take_stride` is the order of a lane's rounds, not a run of the kernel. The instances at
+40 pairs, over 32 lanes and over 8, are in MojoProofTest/WarpDot.lean.
 -/
 
 namespace MojoProof.Sem
@@ -136,6 +144,101 @@ theorem length_stride_le {α : Type} {w l : Nat} (hl : l < w) (xs : List α) :
   have h2 := Nat.mod_lt xs.length hw
   rw [Nat.mul_comm] at h1
   split <;> omega
+
+/-! ## A lane's loop, round by round -/
+
+/-- **An element of a strided list**: for all `l < w`, numbers `i` and lists `xs`, element `i`
+of `stride w l xs` is the element of `xs` at `w * i + l`, or neither exists. -/
+theorem getElem?_stride {α : Type} {w l : Nat} (hl : l < w) (i : Nat) (xs : List α) :
+    (stride w l xs)[i]? = xs[w * i + l]? := by
+  induction xs using List.reverseRecOn generalizing i with
+  | nil => simp [stride]
+  | append_singleton xs x ih =>
+    have e : stride w l (xs ++ [x]) =
+        stride w l xs ++ if xs.length % w = l then [x] else [] := by
+      rw [stride, List.zipIdx_append, List.filter_append, List.map_append]
+      simp only [List.zipIdx_cons, List.zipIdx_nil, List.filter_cons, List.filter_nil,
+        Nat.zero_add, beq_iff_eq]
+      split <;> rfl
+    have hq := Nat.div_add_mod xs.length w
+    have hm := Nat.mul_add_mod w i l
+    rw [Nat.mod_eq_of_lt hl] at hm
+    rw [e]
+    split
+    · rename_i h
+      have hn : (stride w l xs).length = xs.length / w := by
+        rw [length_stride hl, h]; simp
+      rcases Nat.lt_trichotomy i (xs.length / w) with hi | rfl | hi
+      · have := Nat.mul_le_mul_left w (Nat.succ_le_of_lt hi)
+        rw [Nat.mul_succ] at this
+        rw [List.getElem?_append_left (by omega), ih, List.getElem?_append_left (by omega)]
+      · rw [List.getElem?_append_right (by omega), hn, Nat.sub_self,
+          List.getElem?_append_right (by omega), show w * (xs.length / w) + l - xs.length = 0 by
+            omega]
+      · have := Nat.mul_le_mul_left w (Nat.succ_le_of_lt hi)
+        rw [Nat.mul_succ] at this
+        rw [List.getElem?_eq_none (by simp; omega), List.getElem?_eq_none (by simp; omega)]
+    · rename_i h
+      rw [List.append_nil, ih]
+      rcases Nat.lt_or_ge (w * i + l) xs.length with h' | h'
+      · rw [List.getElem?_append_left h']
+      · have : w * i + l ≠ xs.length := fun e' => h (by rw [← e', hm])
+        rw [List.getElem?_eq_none h', List.getElem?_eq_none (by simp; omega)]
+
+/-- **One more round of a strided list**: for all `l < w`, rounds `j` and lists `xs`, the first
+`j + 1` elements of `stride w l xs` are its first `j`, then the element of `xs` at `w * j + l`
+when `w * j + l < xs.length`, and nothing more otherwise. It is the order of a loop whose round
+`j` reads position `w * j + l` behind the guard `w * j + l < xs.length`: lane `l` of gemv_kernel's
+row loop at `w = 32` (gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, lines
+89-108: the index `%65 = 32 %55 + %40`, the guard `%69`, the arms `%70` and `%75`). -/
+theorem take_stride_succ {α : Type} {w l : Nat} (hl : l < w) (j : Nat) (xs : List α) :
+    (stride w l xs).take (j + 1) = (stride w l xs).take j ++ xs[w * j + l]?.toList := by
+  rw [List.take_add_one, getElem?_stride hl]
+
+/-- **A dot loop over two lists in turn**, in every format: for every flag `c`, oracle sequence
+`o`, word `a` and lists of factor pairs `qs`, `rs`, the loop `dotLoop c o` from `a` over
+`qs ++ rs` is the loop over `rs` from the word after `qs`, with the oracle numbers after `qs`'s,
+`o (qs.length + j)`. -/
+theorem dotLoop_append (c : Bool) (o : Nat → Nat × Nat) (a : Model fmt)
+    (qs rs : List (Model fmt × Model fmt)) :
+    dotLoop c o a (qs ++ rs) = dotLoop c (fun j => o (qs.length + j)) (dotLoop c o a qs) rs := by
+  induction qs generalizing o a with
+  | nil => simp only [List.nil_append, List.length_nil, Nat.zero_add]; rfl
+  | cons q qs ih =>
+    simp only [List.cons_append, dotLoop, List.length_cons]
+    rw [ih]
+    congr 1
+    funext j
+    exact congrArg o (by omega)
+
+/-- **One more round of a lane's guarded loop**, in every format: for every flag `c`, oracle
+sequence `o`, word `a`, `l < w`, round `j` and list of factor pairs `ps`, the loop `dotLoop c o`
+from `a` over the first `j + 1` pairs of `stride w l ps` is one more `dotStep`, at the pair
+`ps[w * j + l]` and the oracle numbers `o j`, when `w * j + l < ps.length`, and the loop over the
+first `j` pairs otherwise (`take_stride_succ`, `dotLoop_append`). At `w = 32` it is round `j` of
+lane `l` of gemv_kernel's row loop: the arm `%70` folds the pair at `%65 = 32 j + l`, the arm
+`%75` keeps the sum (gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, lines
+89-108). After `⌈ps.length / w⌉` rounds the first pairs are all of `stride w l ps`
+(`length_stride_le`). -/
+theorem dotLoop_take_stride (c : Bool) (o : Nat → Nat × Nat) (a : Model fmt) {w l : Nat}
+    (hl : l < w) (j : Nat) (ps : List (Model fmt × Model fmt)) :
+    dotLoop c o a ((stride w l ps).take (j + 1)) =
+      if h : w * j + l < ps.length then
+        dotStep c (dotLoop c o a ((stride w l ps).take j)) ps[w * j + l] (o j)
+      else dotLoop c o a ((stride w l ps).take j) := by
+  rw [take_stride_succ hl]
+  split
+  · rename_i h
+    have hj : ((stride w l ps).take j).length = j := by
+      have e := congrArg List.length (take_stride_succ hl j ps)
+      rw [List.getElem?_eq_getElem h, Option.toList_some, List.length_append,
+        List.length_take, List.length_take, List.length_singleton] at e
+      rw [List.length_take]
+      omega
+    rw [List.getElem?_eq_getElem h, Option.toList_some, dotLoop_append, hj]
+    simp only [dotLoop, Nat.add_zero]
+  · rename_i h
+    rw [List.getElem?_eq_none (by omega), Option.toList_none, List.append_nil]
 
 /-! ## The exact value -/
 

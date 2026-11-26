@@ -39,18 +39,18 @@ lean_lib GPUProof where
   globs := #[.submodules `GPUProof]
 
 /-- The library: the LLVM AST, parser, printer and quotation, the semantics, the certificate
-checkers and the block checker. -/
+checkers and the block checker, and the spec importers from front ends (`MojoProof.Import`). -/
 @[default_target]
 lean_lib MojoProof where
   globs := #[
     .submodules `MojoProof.LLVM,
-    .submodules `MojoProof.Layout,
     .submodules `MojoProof.Sem,
     .submodules `MojoProof.Util,
     .submodules `MojoProof.Cert,
     .submodules `MojoProof.Float,
     .submodules `MojoProof.Sym,
-    .submodules `MojoProof.Tile]
+    .submodules `MojoProof.Tile,
+    .submodules `MojoProof.Import]
 
 /-- The imported kernels (`mojo_import`) and their theorems. -/
 @[default_target]

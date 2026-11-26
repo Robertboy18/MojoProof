@@ -17,7 +17,6 @@ symbolic: `ChainWith.loop` takes the rounds as one premise over `j < (K + 31) / 
 
 * `head`, `rnd`: the valuation after the entry block, and after one round of the loop.
 * `steps`: their contexts, functions and step counts (`LoopSeg.steps_k`).
-* `stride_getElem?`: the `i`-th element of `stride w l xs` is `xs[w * i + l]?`.
 * `oG`, `Inv`: the oracle numbers of round `j`'s `fmul` and `fadd` (the contraction choice), and
   the loop invariant: `%42` is `j`, `%44` the `dotLoop` of the first `j` of the thread's pairs.
 * `round_inv`: round `j` runs and keeps `Inv`.
@@ -62,72 +61,6 @@ theorem steps (V W : Valuation) (j : Nat) :
   LoopSeg.steps_k true _ _ _ gevmL (by decide +kernel) (by decide +kernel)
     (by decide +kernel) V W j
 
-/-- The elements of `ys` numbered from `s` whose number is `l` mod `w`, when `s + |ys| ≤ w`:
-the one at `l`, if `s ≤ l`. -/
-private theorem filter_head {α : Type} {w l : Nat} :
-    ∀ (ys : List α) (s : Nat), s + ys.length ≤ w →
-      ((ys.zipIdx s).filter fun p => p.2 % w == l).map Prod.fst =
-        (if s ≤ l then ys[l - s]? else none).toList
-  | [], s, _ => by simp
-  | y :: ys, s, h => by
-    have hs : s % w = s := Nat.mod_eq_of_lt (by simp at h; omega)
-    have ih := filter_head (w := w) (l := l) ys (s + 1) (by simp at h; omega)
-    rw [List.zipIdx_cons, List.filter_cons, hs]
-    by_cases e : s = l
-    · subst e
-      simp [ih]
-    · rcases Nat.lt_or_gt_of_ne e with e' | e'
-      · have : l - s = (l - (s + 1)) + 1 := by omega
-        simp [e, ih, this, show s + 1 ≤ l by omega, show s ≤ l by omega]
-      · simp [e, ih, show ¬ s + 1 ≤ l by omega, show ¬ s ≤ l by omega]
-
-private theorem filter_shift {α : Type} {w l : Nat} (ys : List α) (s : Nat) :
-    ((ys.zipIdx (s + w)).filter fun p => p.2 % w == l).map Prod.fst =
-      ((ys.zipIdx s).filter fun p => p.2 % w == l).map Prod.fst := by
-  rw [show s + w = w + s by omega, ← List.map_snd_add_zipIdx_eq_zipIdx, List.filter_map,
-    List.map_map]
-  congr 1
-  apply List.filter_congr
-  intro p _
-  simp [Function.comp, Nat.add_mod_right]
-
-private theorem stride_cons {α : Type} {w l : Nat} (hl : l < w) (xs : List α)
-    (hx : w ≤ xs.length) : stride w l xs = xs[l] :: stride w l (xs.drop w) := by
-  unfold stride
-  conv_lhs => rw [← List.take_append_drop w xs]
-  rw [List.zipIdx_append, List.filter_append, List.map_append, List.length_take,
-    Nat.min_eq_left hx, filter_shift _ 0, filter_head _ 0 (by rw [List.length_take]; omega)]
-  simp [hl, show l < xs.length by omega]
-
-/-- **An element of a stride** (test): for every `w`, `l < w`, number `i` and list `xs`, the
-`i`-th element of `stride w l xs` (the elements of `xs` at positions `l` mod `w`) is the element
-of `xs` at `w * i + l`, or none for both. -/
-theorem stride_getElem? {α : Type} {w l : Nat} (hl : l < w) :
-    ∀ (i : Nat) (xs : List α), (stride w l xs)[i]? = xs[w * i + l]?
-  | i, xs => by
-    by_cases hx : w ≤ xs.length
-    · rw [stride_cons hl xs hx]
-      cases i with
-      | zero => simp [show l < xs.length by omega]
-      | succ i =>
-        rw [List.getElem?_cons_succ, stride_getElem? hl i, List.getElem?_drop]
-        congr 1
-        rw [Nat.mul_succ]
-        omega
-    · have e : stride w l xs = (if 0 ≤ l then xs[l - 0]? else none).toList :=
-        filter_head xs 0 (by omega)
-      simp only [Nat.zero_le, ite_true, Nat.sub_zero] at e
-      rw [e]
-      cases i with
-      | zero =>
-        rw [Nat.mul_zero, Nat.zero_add]
-        cases xs[l]? <;> rfl
-      | succ i =>
-        rw [List.getElem?_eq_none (show xs.length ≤ w * (i + 1) + l by
-          rw [Nat.mul_succ]; omega)]
-        cases xs[l]? <;> rfl
-
-
 /-- The oracle numbers of round `j` of gevm_kernel's loop on a thread at step count `k0` in
 context `c`: of the `fmul` at statement 11 and of the `fadd` at statement 12 of the body `%45`
 (steps `k0 + 47 + 17 * j` and `k0 + 48 + 17 * j`), which choose the contraction. A test
@@ -143,14 +76,6 @@ def Inv (o : Nat → Nat × Nat) (ps : List (Model FloatTy.float.fmt × Model Fl
   W.regs 42 = some (.bits 64 (BitVec.ofNat 64 j)) ∧
     W.regs 44 = some (.ofFloat .float (dotLoop true o (Model.zero _ false) (ps.take j))) ∧
     W.prods 44 = none
-
-/-- `dotLoop` of a list with one more pair: one more `dotStep`. -/
-private theorem dotLoop_snoc {fmt : FloatFormat} (o : Nat → Nat × Nat) (a : Model fmt)
-    (qs : List (Model fmt × Model fmt)) (ab : Model fmt × Model fmt) :
-    dotLoop true o a (qs ++ [ab]) = dotStep true (dotLoop true o a qs) ab (o qs.length) := by
-  induction qs generalizing o a with
-  | nil => rfl
-  | cons x qs ih => exact ih _ _
 
 /-- **A round keeps the invariant** (test): for every `K`, `N` with `K % 32 = 0`, `K < 2 ^ 31`,
 `K * N < 2 ^ 29`, warp number `w < 32`, column `col < N`, valuation `V` of gevm_kernel whose
@@ -226,11 +151,11 @@ theorem round_inv {K N w col bA bB : Nat} {A : TorchLean.Tensor (Model FloatTy.f
   have ea : (stride 32 w (vecMatPairs A B ⟨col, hc⟩))[j] =
       (A.getScalar ⟨j * 32 + w, by omega⟩,
         TorchLean.Tensor.get2 B ⟨j * 32 + w, by omega⟩ ⟨col, hc⟩) := by
-    have h := stride_getElem? hw j (vecMatPairs A B ⟨col, hc⟩)
+    have h := getElem?_stride hw j (vecMatPairs A B ⟨col, hc⟩)
     rw [List.getElem?_eq_getElem hl, show 32 * j + w = j * 32 + w by omega,
       List.getElem?_eq_getElem (by simp only [vecMatPairs, List.length_ofFn]; omega)] at h
     simpa only [vecMatPairs, List.getElem_ofFn, Option.some.injEq] using h
-  rw [List.take_succ_eq_append_getElem hl, dotLoop_snoc, List.length_take,
+  rw [List.take_succ_eq_append_getElem hl, dotLoop_append, List.length_take,
     Nat.min_eq_left hl.le, ea, TorchLean.Tensor.getScalar_eq_apply, TorchLean.Tensor.get2_eq_apply]
   exact e44
 

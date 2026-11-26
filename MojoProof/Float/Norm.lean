@@ -1,5 +1,6 @@
 import MojoProof.Float.Welford
 import MojoProof.Sem.FloatRel
+import FloatLib.Floats.Formats.Block.Working.Binary
 import TorchLean.Verify.RuntimeApprox.TransformerBlock
 
 /-!
@@ -43,6 +44,10 @@ Proved:
   `cast ((x · r) · (cast g + o))`, or cast first, `cast (x · r) · (g + cast o)`, for every IEEE
   accumulator format and dtype (`rmsnormOff_error`: accumulated in binary32), against the real
   value `x j / √(𝔼 k, x k ^ 2 + ε) · (γ j + o)`.
+* `cast_widen`: for all IEEE formats `fs` and `fd` with `fd` at least as wide in exponent and
+  fraction, the cast of a finite word of `fs` into `fd` is finite and keeps its real value.
+* `rmsnormOff_widen`: `rmsnormOff_error` at inputs of an IEEE format with at most binary32's
+  widths (binary16, bfloat16) cast into binary32, against the inputs' own real values.
 
 `rsqrt.approx` enters through its contract (`Sem.rsqrt_close`, MojoProof/Sem/FloatRel.lean):
 the word is within relative error `rsqrtErr` of `1 / √s` for a positive normal `s`. `fused`
@@ -53,10 +58,10 @@ product, while the kernel's merge has two `fmul contract` products feeding `fadd
 free to fuse; `welfordC_error` bounds the merge for every choice of contraction at each node,
 and `wloop_error` the loop for every choice at each iteration, on their own, not composed into
 `lnorm` here. Also not covered: RMS norm's squares fused into the additions that sum them, and
-the cast of a narrower input dtype into binary32 before the squares: `rmsnormOff_error` takes the
-binary32 words the kernel computes with. Each cast of the offset, the weight or the output is
-bounded as a rounding, also where it is exact. Nothing is claimed when the output is infinite or
-a NaN. The instances are in MojoProofTest/FloatNorm.lean.
+casts into binary32 of input formats with another encoding or bias than IEEE's (finite-only and
+FNUZ formats), which `rmsnormOff_widen` does not take. Each cast of the offset, the weight or the
+output is bounded as a rounding, also where it is exact. Nothing is claimed when the output is
+infinite or a NaN. The instances are in MojoProofTest/FloatNorm.lean.
 -/
 
 namespace MojoProof.Float
@@ -308,6 +313,48 @@ theorem rmsnorm_error {n : ℕ} (t : ReductionTree (Fin n)) (ht : t.leaves.Perm 
     (x j).toReal * (1 / √((𝔼 i, (x i).toReal ^ 2) + ε.toReal)) * (g j).toReal by ring]
   exact eo
 
+/-- **A widening cast is exact.** For all IEEE formats `fs` and `fd` such that `fd` has at least
+`fs`'s exponent and fraction widths (binary16 or bfloat16 into binary32, for example), and every
+finite word `x` of `fs`: the cast `Model.cast fs fd x` (to nearest) is finite and has `x`'s real
+value. FloatLib's `Block.Working.cast_exact_of_grid`, whose premises (`fd`'s grid contains `fs`'s
+and `fd`'s largest finite value is at least `fs`'s) follow from the widths with the IEEE bias
+`2 ^ (e - 1) - 1` (`Model.toReal_posMaxFinite_ieee`). Formats with another encoding or bias
+(FloatLib's finite-only and FNUZ formats) are not covered. -/
+theorem cast_widen {fs fd : FloatFormat} (hs : fs.isIEEE = true) (hd : fd.isIEEE = true)
+    (he : fs.expWidth ≤ fd.expWidth) (hf : fs.fracWidth ≤ fd.fracWidth) {x : Model fs}
+    (hx : x.isFinite = true) :
+    (Model.cast fs fd x).isFinite = true ∧ (Model.cast fs fd x).toReal = x.toReal := by
+  obtain ⟨-, hbs⟩ := (FloatFormat.isIEEE_eq_true_iff fs).1 hs
+  obtain ⟨-, hbd⟩ := (FloatFormat.isIEEE_eq_true_iff fd).1 hd
+  have hb : fs.bias ≤ fd.bias :=
+    Nat.sub_le_sub_right (Nat.pow_le_pow_right two_pos (Nat.sub_le_sub_right he 1)) 1
+  refine Block.Working.cast_exact_of_grid x hx hf ?_ ?_
+  · simp only [FloatFormat.minSubnormalExponent, FloatFormat.minNormalExponent, hbs, hbd,
+      Int.ofNat_eq_natCast]
+    omega
+  · rw [Model.toReal_posMaxFinite_ieee fs hs, Model.toReal_posMaxFinite_ieee fd hd]
+    simp only [FloatFormat.ieeeMaxNormalExponent, Model.pow2_eq_two_pow, Model.bpow, Flocq.bpow,
+      FloatLib.Numerics.binaryRadix, FloatLib.Numerics.Radix.toReal, Int.ofNat_eq_natCast]
+    obtain ⟨k, hk⟩ := Nat.exists_eq_add_of_le hf
+    have hA : (2 ^ (fs.fracWidth + 1) - 1) * 2 ^ k ≤ 2 ^ (fd.fracWidth + 1) - 1 := by
+      have h1 : 1 ≤ 2 ^ k := Nat.one_le_two_pow
+      rw [hk, Nat.sub_mul, one_mul, ← pow_add, show fs.fracWidth + k + 1 = fs.fracWidth + 1 + k by
+        omega]
+      omega
+    calc (((2 ^ (fs.fracWidth + 1) - 1 : ℕ) : ℝ)) * (2 : ℝ) ^ ((fs.bias : ℤ) - fs.fracWidth)
+        = (((2 ^ (fs.fracWidth + 1) - 1) * 2 ^ k : ℕ) : ℝ) *
+            (2 : ℝ) ^ ((fs.bias : ℤ) - fd.fracWidth) := by
+          rw [Nat.cast_mul, Nat.cast_pow, Nat.cast_ofNat, mul_assoc, ← zpow_natCast,
+            ← zpow_add₀ two_ne_zero, hk]
+          congr 2
+          push_cast
+          ring
+      _ ≤ (((2 ^ (fd.fracWidth + 1) - 1 : ℕ) : ℝ)) * (2 : ℝ) ^ ((fs.bias : ℤ) - fd.fracWidth) := by
+          gcongr
+      _ ≤ (((2 ^ (fd.fracWidth + 1) - 1 : ℕ) : ℝ)) * (2 : ℝ) ^ ((fd.bias : ℤ) - fd.fracWidth) := by
+          gcongr
+          norm_num
+
 /-- The RMS norm output word with a weight offset, in the two orders of Mojo's RMS norm kernels,
 for an accumulator format `fa` and a dtype `fd`: the input `x`, the reciprocal word `r` and the
 offset `o` in `fa`, the weight `g` in `fd`. Multiplied before the cast (`mbc`),
@@ -401,9 +448,9 @@ dtype, finite word `N` of real value `n`, words `ε > 0` and `o`, oracle number 
 `rmsnormOff mbc t x g N ε o k j` is finite, it is within FloatLib's mixed error
 `rmsOffErr mbc u η ud ηd κ (x j / √(M + ε)) (g j) o` of the real RMS norm with the offset
 `x j / √(M + ε) · (g j + o)` (`M = 𝔼 i, x i ^ 2`), with `rmsnorm_error`'s `κ`. The inputs are the
-binary32 words the kernel computes with (a cast of a narrower dtype into binary32 is not part of
-the statement). `msq_error`, `Sem.rsqrt_close`, `rsqrt_rel` and `rmsOff_error`. Nothing is
-claimed when the output is infinite or a NaN. -/
+binary32 words the kernel computes with; `rmsnormOff_widen` states it at inputs of a narrower
+format cast into binary32. `msq_error`, `Sem.rsqrt_close`, `rsqrt_rel` and `rmsOff_error`. Nothing
+is claimed when the output is infinite or a NaN. -/
 theorem rmsnormOff_error {fd : FloatFormat} (hd : fd.isIEEE = true) (mbc : Bool) {n : ℕ}
     (t : ReductionTree (Fin n)) (ht : t.leaves.Perm (List.finRange n))
     (x : Fin n → Model .binary32) (g : Fin n → Model fd) {N ε : Model .binary32}
@@ -465,5 +512,55 @@ theorem rmsnormOff_error {fd : FloatFormat} (hd : fd.isIEEE = true) (mbc : Bool)
   have eo := rmsOff_error rfl hd mbc er h
   rw [div_eq_mul_one_div (x j).toReal]
   exact eo
+
+
+/-- **RMS norm with a weight offset and a dtype, at inputs of a narrower format.**
+`rmsnormOff_error` at the binary32 words `Model.cast fs binary32 (x i)` of finite inputs `x` of an
+IEEE format `fs` with at most binary32's exponent and fraction widths (binary16 and bfloat16 among
+them), for every IEEE dtype `fd`, order `mbc`, `n`, tree `t` whose leaves are `0, …, n - 1` up to
+order, weights `g` of the dtype, finite word `N` of real value `n`, words `ε > 0` and `o`, oracle
+number `k` and index `j`, under `rmsnormOff_error`'s premises on the operand of `rsqrt.approx`:
+its bound and the real RMS norm with the offset are stated with the real values of `x`, which the
+casts keep (`cast_widen`). Nothing is claimed when the output is infinite or a NaN. -/
+theorem rmsnormOff_widen {fs fd : FloatFormat} (hs : fs.isIEEE = true)
+    (he : fs.expWidth ≤ FloatFormat.binary32.expWidth)
+    (hf : fs.fracWidth ≤ FloatFormat.binary32.fracWidth) (hd : fd.isIEEE = true) (mbc : Bool)
+    {n : ℕ} (t : ReductionTree (Fin n)) (ht : t.leaves.Perm (List.finRange n))
+    (x : Fin n → Model fs) (hx : ∀ i, (x i).isFinite = true) (g : Fin n → Model fd)
+    {N ε : Model .binary32} (hN : N.isFinite = true) (hNn : N.toReal = n) (o : Model .binary32)
+    (k : ℕ) (hε : 0 < ε.toReal)
+    (hs' : (Model.add (msq t (fun i => Model.cast fs .binary32 (x i)) N) ε).isFinite = true)
+    (hz : (Model.add (msq t (fun i => Model.cast fs .binary32 (x i)) N) ε).isZero = false)
+    (hsub : (Model.add (msq t (fun i => Model.cast fs .binary32 (x i)) N) ε).isSubnormal = false)
+    (hsg : (Model.add (msq t (fun i => Model.cast fs .binary32 (x i)) N) ε).signBit = false)
+    (hδ : ¬ 1 ≤ Model.unitRoundoffAt .binary32 + (1 + Model.unitRoundoffAt .binary32) *
+        (Model.unitRoundoffAt .binary32 * 𝔼 i, (x i).toReal ^ 2 +
+          msqErr (Model.unitRoundoffAt .binary32) (Model.underflowErrorAt .binary32) t.depth
+            (fun i => (x i).toReal)) / ((𝔼 i, (x i).toReal ^ 2) + ε.toReal))
+    (j : Fin n)
+    (h : (rmsnormOff mbc t (fun i => Model.cast fs .binary32 (x i)) g N ε o k j).isFinite = true) :
+    MixedError (rmsnormOff mbc t (fun i => Model.cast fs .binary32 (x i)) g N ε o k j).toReal
+      ((x j).toReal / √((𝔼 i, (x i).toReal ^ 2) + ε.toReal) * ((g j).toReal + o.toReal))
+      (rmsOffErr mbc (Model.unitRoundoffAt .binary32) (Model.underflowErrorAt .binary32)
+        (Model.unitRoundoffAt fd) (Model.underflowErrorAt fd)
+        (rsqrtRel (Model.unitRoundoffAt .binary32) (Sem.rsqrtErr : ℝ)
+          ((1 + Model.unitRoundoffAt .binary32) *
+            (Model.unitRoundoffAt .binary32 * 𝔼 i, (x i).toReal ^ 2 +
+              msqErr (Model.unitRoundoffAt .binary32) (Model.underflowErrorAt .binary32)
+                t.depth (fun i => (x i).toReal)))
+          ((𝔼 i, (x i).toReal ^ 2) + ε.toReal))
+        ((x j).toReal / √((𝔼 i, (x i).toReal ^ 2) + ε.toReal)) (g j).toReal o.toReal).1
+      (rmsOffErr mbc (Model.unitRoundoffAt .binary32) (Model.underflowErrorAt .binary32)
+        (Model.unitRoundoffAt fd) (Model.underflowErrorAt fd)
+        (rsqrtRel (Model.unitRoundoffAt .binary32) (Sem.rsqrtErr : ℝ)
+          ((1 + Model.unitRoundoffAt .binary32) *
+            (Model.unitRoundoffAt .binary32 * 𝔼 i, (x i).toReal ^ 2 +
+              msqErr (Model.unitRoundoffAt .binary32) (Model.underflowErrorAt .binary32)
+                t.depth (fun i => (x i).toReal)))
+          ((𝔼 i, (x i).toReal ^ 2) + ε.toReal))
+        ((x j).toReal / √((𝔼 i, (x i).toReal ^ 2) + ε.toReal)) (g j).toReal o.toReal).2 := by
+  have hv (i : Fin n) := (cast_widen hs rfl he hf (hx i)).2
+  simpa only [hv] using rmsnormOff_error hd mbc t ht _ g hN hNn o k hε hs' hz hsub hsg
+    (by simpa only [hv] using hδ) j h
 
 end MojoProof.Float

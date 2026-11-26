@@ -107,7 +107,7 @@ def main():
             'layouts\' extents and strides are runtime values in the program, so Mojo computes '
             'them with its runtime code (`_runtime_shape_div` for `upcast`). For '
             f'{len(CASES) - len(DIFFER)} cases, the example states, by `decide`, that the '
-            'offsets the model of MojoProof/Layout computes for the scalars the program '
+            'offsets the model of GPUProof/Layout computes for the scalars the program '
             'evaluates (each scalar below the layout\'s size), its size and its cosize equal the '
             'values the run printed. On '
             f'{" and ".join(DIFFER)}, the model and the run differ: the example states the '
@@ -115,7 +115,7 @@ def main():
             'a test, not a proof: it covers these '
             f'{len(CASES)} cases ({total} values) and says nothing about other shapes. '
             'tests/layout/runtime/record.txt records the run.')
-    head = f'''import MojoProof.Layout.Algebra
+    head = f'''import GPUProof.Layout.Algebra
 
 /-!
 # The layout model against a run of Mojo's code: layouts with runtime leaves
@@ -125,7 +125,7 @@ def main():
 
 namespace MojoProofTest.LayoutRuntime
 
-open MojoProof.Layout MojoProof.Layout.Tup
+open GPUProof.Layout GPUProof.Layout.Tup
 
 '''
     with open(out, 'w') as f:

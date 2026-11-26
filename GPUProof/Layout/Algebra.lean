@@ -1,4 +1,4 @@
-import MojoProof.Layout.Basic
+import GPUProof.Layout.Basic
 
 /-!
 # The layout algebra and the swizzle
@@ -6,12 +6,12 @@ import MojoProof.Layout.Basic
 The layout functions of max/kernels/src/layout/layout.mojo at modular/modular bbc13a71 that build
 a layout from a shape or from other layouts (row major, coalesce, composition, zipped divide,
 blocked product, upcast) and the XOR swizzle of swizzle.mojo, transcribed over the model of
-MojoProof/Layout/Basic.lean. Each docstring names the Mojo function and line it transcribes. The
+GPUProof/Layout/Basic.lean. Each docstring names the Mojo function and line it transcribes. The
 layouts these functions return are given static leaves; no value of the model depends on a
 leaf's static flag.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 open Tup
 
@@ -130,4 +130,4 @@ constructor's check that `abs(shift) >= bits` (line 332) is skipped in Mojo's co
 interpreter; the model has no check. -/
 def Swizzle.call (S : Swizzle) (x : Nat) : Nat := x ^^^ shiftr (x &&& S.mask) S.shift
 
-end MojoProof.Layout
+end GPUProof.Layout

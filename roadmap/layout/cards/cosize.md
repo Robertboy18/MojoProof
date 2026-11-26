@@ -4,9 +4,9 @@ title: `cosize` is the offset of the last coordinate plus one
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:645
 quote: "`(m-1)*r + (n-1)*s + 1`, representing the memory footprint."
-lean: MojoProof.Layout.Lay.cosize, MojoProof.Layout.Lay.cosize_eq, MojoProof.Layout.Lay.call_lt_cosize
+lean: GPUProof.Layout.Lay.cosize, GPUProof.Layout.Lay.cosize_eq, GPUProof.Layout.Lay.call_lt_cosize
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance, MojoProofTest.LayoutRuntime
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance, MojoProofTest.LayoutRuntime
 upstream:
 depends: crd2idx
 level: L1

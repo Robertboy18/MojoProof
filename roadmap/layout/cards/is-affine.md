@@ -4,9 +4,9 @@ title: Stepping by a stride is exact only for an affine layout
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:120
 quote: "this first: only an affine layout makes that step exact."
-lean: MojoProof.Layout.Lay.isAffine, MojoProof.Layout.Lay.isAffine_flat, MojoProof.Layout.Lay.call_add
+lean: GPUProof.Layout.Lay.isAffine, GPUProof.Layout.Lay.isAffine_flat, GPUProof.Layout.Lay.call_add
 corpus: none
-tests: MojoProofTest.LayoutLaws
+tests: MojoProofTest.GPUProof.LayoutLaws
 upstream:
 depends: crd2idx
 level: L1

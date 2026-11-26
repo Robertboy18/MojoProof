@@ -17,7 +17,7 @@ tree; each such case is named in the definition's docstring, and no law holds th
 Every definition here reduces in the kernel, so `decide` evaluates the model on concrete layouts.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 /-- A node of a Mojo `Coord` tree (coord.mojo:186): a leaf `leaf v static` carries the value `v`,
 statically known (`ComptimeInt[v]`, coord.mojo:97) when `static` is `true` and a runtime
@@ -208,4 +208,4 @@ def modes (L : Lay) : List (Nat × Nat) := (leavesL L.shape).zip (leavesL L.stri
 
 end Lay
 
-end MojoProof.Layout
+end GPUProof.Layout

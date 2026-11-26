@@ -10,7 +10,14 @@ everywhere, with a graded rule. Its instances are the matrix-vector product (`Sp
 vector-matrix product (`Spec.vecMat`) and the sum over the reals (`Spec.sumReal`), written with
 Mathlib's `Matrix.mulVec`, `Matrix.vecMul` and `Finset.sum`. The sum over the integers
 (`Spec.sumInt`) has the `exact` rule. Each spec takes its grade: kernels with one mathematics
-have different proved bounds.
+have different proved bounds. The five specs are `[implicit_reducible]`, so that instance search
+sees their entry types and index types through the encodings of GPUProof/Spec/Basic.lean. A spec
+written as `Spec.ofReal …`, or as an `abbrev` of one, has finite outputs wherever its output type
+does (`Spec.ofReal.fintypeOut`). Instance search does not unfold a `def` to find that instance, so
+each of the four specs past `Spec.ofReal` has its own (`Spec.matVec.fintypeOut`,
+`Spec.vecMat.fintypeOut`, `Spec.sumReal.fintypeOut`, `Spec.sumInt.fintypeOut`); with
+GPUProof/Spec/DecEq.lean's `Encodings.fintypeUniformOut` they give the finite output positions of
+the specs' uniform encodings.
 
 `laneGrade fmt W d L n` is the grade of a dot product of length `n` in an output format, split
 over `W` lanes of at most `L` terms each whose sums are added along a tree of depth `d`: the error
@@ -47,6 +54,7 @@ abbrev RealGrades (In Out : Sz → Type) : Type 1 :=
 
 /-- The spec of a real function `f`, for every size type and finite input index types: every
 entry real, the function meant everywhere, and the graded rule `g`. -/
+@[implicit_reducible]
 def Spec.ofReal (In Out : Sz → Type) [∀ σ, Fintype (In σ)] (f : ∀ σ, (In σ → ℝ) → Out σ → ℝ)
     (g : RealGrades In Out) (mono : ∀ σ E A, Monotone (g σ E A)) : Spec Sz where
   In := In
@@ -60,6 +68,7 @@ def Spec.ofReal (In Out : Sz → Type) [∀ σ, Fintype (In σ)] (f : ∀ σ, (I
 /-- The matrix-vector product, for every grade `g` and every size `(m, n)`: inputs the entries
 `(i, k)` of an `m × n` matrix `A` and the entries `k` of a vector `x` of length `n`, outputs the
 `m` entries of `A.mulVec x` (Mathlib's `Matrix.mulVec`). -/
+@[implicit_reducible]
 noncomputable def Spec.matVec
     (g : RealGrades (fun σ : ℕ × ℕ => Fin σ.1 × Fin σ.2 ⊕ Fin σ.2) fun σ => Fin σ.1)
     (mono : ∀ σ E A, Monotone (g σ E A)) : Spec (ℕ × ℕ) :=
@@ -69,6 +78,7 @@ noncomputable def Spec.matVec
 /-- The vector-matrix product, for every grade `g` and every size `(m, n)`: inputs the entries
 `i` of a vector `x` of length `m` and the entries `(i, j)` of an `m × n` matrix `A`, outputs the
 `n` entries of `Matrix.vecMul x A` (Mathlib's). -/
+@[implicit_reducible]
 noncomputable def Spec.vecMat
     (g : RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2)
     (mono : ∀ σ E A, Monotone (g σ E A)) : Spec (ℕ × ℕ) :=
@@ -76,6 +86,7 @@ noncomputable def Spec.vecMat
     (fun _ X => Matrix.vecMul (fun i => X (.inl i)) (Matrix.of fun i j => X (.inr (i, j)))) g mono
 
 /-- The sum of `n` reals, for every grade `g` and every size `n`: one output, `∑ i, x i`. -/
+@[implicit_reducible]
 noncomputable def Spec.sumReal (g : RealGrades Fin fun _ => Unit)
     (mono : ∀ σ E A, Monotone (g σ E A)) : Spec ℕ :=
   .ofReal Fin (fun _ => Unit) (fun _ x _ => ∑ i, x i) g mono
@@ -83,6 +94,7 @@ noncomputable def Spec.sumReal (g : RealGrades Fin fun _ => Unit)
 /-- The sum of `n` integers, at every size `n`: every entry an integer, one output `∑ i, x i`,
 meant everywhere, with the `exact` rule, which claims the sum only where an output word decodes
 to it. -/
+@[implicit_reducible]
 def Spec.sumInt : Spec ℕ where
   In := Fin
   Out _ := Unit
@@ -91,6 +103,37 @@ def Spec.sumInt : Spec ℕ where
   Dom _ _ := True
   f _ x _ := ∑ i, x i
   rule := .exact
+
+/-- `Spec.matVec`'s outputs are finite, for every grade and size `(m, n)`: they are `Fin m`. -/
+instance Spec.matVec.fintypeOut
+    (g : RealGrades (fun σ : ℕ × ℕ => Fin σ.1 × Fin σ.2 ⊕ Fin σ.2) fun σ => Fin σ.1)
+    (mono : ∀ σ E A, Monotone (g σ E A)) (σ : ℕ × ℕ) : Fintype ((Spec.matVec g mono).Out σ) :=
+  inferInstanceAs (Fintype (Fin σ.1))
+
+/-- `Spec.vecMat`'s outputs are finite, for every grade and size `(m, n)`: they are `Fin n`. -/
+instance Spec.vecMat.fintypeOut
+    (g : RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2)
+    (mono : ∀ σ E A, Monotone (g σ E A)) (σ : ℕ × ℕ) : Fintype ((Spec.vecMat g mono).Out σ) :=
+  inferInstanceAs (Fintype (Fin σ.2))
+
+/-- `Spec.sumReal`'s outputs are finite, for every grade and size: there is one, `Unit`. -/
+instance Spec.sumReal.fintypeOut (g : RealGrades Fin fun _ => Unit)
+    (mono : ∀ σ E A, Monotone (g σ E A)) (n : ℕ) : Fintype ((Spec.sumReal g mono).Out n) :=
+  inferInstanceAs (Fintype Unit)
+
+/-- `Spec.sumInt`'s outputs are finite, at every size: there is one, `Unit`. -/
+instance Spec.sumInt.fintypeOut (n : ℕ) : Fintype (Spec.sumInt.Out n) :=
+  inferInstanceAs (Fintype Unit)
+
+/-- `Spec.ofReal`'s outputs are finite wherever its output type is, for every size type, finite
+input and output index types, function, grade and size: they are `Out σ`. Instance search finds
+it at a spec written as `Spec.ofReal …` or as an `abbrev` of one, not at a `def` such as
+`Spec.matVec`, which it does not unfold. -/
+instance Spec.ofReal.fintypeOut (In Out : Sz → Type) [∀ σ, Fintype (In σ)]
+    [h : ∀ σ, Fintype (Out σ)] (f : ∀ σ, (In σ → ℝ) → Out σ → ℝ) (g : RealGrades In Out)
+    (mono : ∀ σ E A, Monotone (g σ E A)) (σ : Sz) :
+    Fintype ((Spec.ofReal In Out f g mono).Out σ) :=
+  h σ
 
 /-- The unit roundoff of a format, for every format: FloatLib's `Model.unitRoundoffAt` of a
 binary interchange format, `0` for an integer or a Boolean. -/

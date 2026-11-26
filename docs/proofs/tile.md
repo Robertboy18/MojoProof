@@ -107,25 +107,71 @@ already checks the compiled code (`MojoProof/Sym/`), and there is to be one sema
   oracle is `pairOracle` of the kernel's oracle numbers at its loop's steps (`NaiveSpec.o`), which
   are taken from the kernel's specification, not computed from its paths as `siteStep?` does for
   `map2`.
-* `rowLoops_meetsAt`, `meets_holds`, `mat_holds` (`MojoProof/Tile/MatVec.lean`): a matrix
-  product whose second matrix has one row is a matrix-vector product. For every IEEE format,
-  width and flag, the behaviors `rowLoops` (output `i` is a `dotLoop` from `+0` over row `i` and
-  the vector) meet `GPUProof.Spec.matVec GPUProof.matVecGrade` at the uniform encoding
-  `matVecEnc` (`GPUProof.MeetsAt`); words that meet the product at the cells `(i, 0)` meet the
-  spec's rule at the inputs read from the matrices (`matIn`); and so does every kernel of
-  `mojo_kernel`'s `mat` clause whose second matrix has one row, at the cells `(i, 0)` of its tile
-  run (docs/proofs/spec.md, step 9). Its instance is `naive_holds`
-  (`MojoProofTest/TileNaive.lean`): the naive matmul kernel with one column, at every launch
-  valid with `z` sides 1 that covers the rows and column 0, every memory of `Mat.Pre` and sizes
-  below `2 ^ 31`.
+* `meets_holds`, `mat_holds` (`MojoProof/Tile/MatVec.lean`): a matrix product whose second
+  matrix has one row is a matrix-vector product. For every IEEE format and width, words that meet
+  the product at the cells `(i, 0)` meet the rule of
+  `GPUProof.Spec.matVec GPUProof.matVecGrade` at the uniform encoding `matVecEnc` and the inputs
+  read from the matrices (`matIn`); and so does every kernel of
+  `mojo_kernel`'s `mat` clause whose second matrix has one row, at its observed memory: in every
+  observation `Bk` of a complete run, the floats of `Bk`'s output block at the rows' cells
+  `i * sC * w` (`Elem.word`) meet the rule (docs/proofs/spec.md, step 9). The words come from the
+  kernel's soundness and the observation, the rule from `Meets`; the tile run that computes the
+  same words is `mat_refines`'. Its instance is `naive_holds` (`MojoProofTest/TileNaive.lean`):
+  the naive matmul kernel with one column, at every launch valid with `z` sides 1 that covers the
+  rows and column 0, every memory of `Mat.Pre` and sizes below `2 ^ 31`.
+* `MatSetup`, `kernelRows`, `kernelRows_meetsAt`, `kernelRows_nonempty`
+  (`MojoProof/Tile/MatVec.lean`): a kernel's behaviors on a matrix-vector product's inputs are the
+  observed words of its runs. For every kernel, layout, float type, width and setups (launch,
+  arguments, caller memory, admission, output block and row stride) whose matrices' inputs are
+  the input words (`matIn`), `kernelRows` is the set of the floats of the output block at the
+  rows' cells in the observations of admitted complete runs; when every setup has `mat_holds`'
+  premises (`MatSetup.Fits`) it meets `GPUProof.Spec.matVec GPUProof.matVecGrade` at `matVecEnc`
+  (`GPUProof.MeetsAt`), and a fitting setup with an admitted choice and oracle gives a behavior
+  (`Kernel.Sound.exists_obs`). The design is in docs/proofs/spec.md, step 9. Its instance is
+  `naive_meetsAt` (`MojoProofTest/TileNaive.lean`): the naive family's setups `naiveSetups` at
+  every row stride fit (`naive_fits`).
 * `stride_approx`, `bfly_approx`, `groupDot_approx`, `groupDot_holds`
   (`MojoProof/Tile/MatVec.lean`): for every IEEE format, flag and oracle sequences, loops over
   the pairs strided by the lane count and added along any tree over the lanes, every lane of a
   butterfly over `2 ^ k` such loops, and so `MojoProof.Sem.groupDot k`, are `GPUProof.Approx` at
   `GPUProof.laneGrade` at the tree's depth (`k` for the butterfly) and `⌈n / W⌉` pairs per lane;
   `groupDot k` per row meets the rule of
-  `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`. They are about
-  words, not about a kernel's run (docs/proofs/dot.md, statements 15-16).
+  `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`, the case of
+  `rowTrees_meetsAt` below at lane 0's butterfly tree. They are about words, not about a kernel's
+  run (docs/proofs/dot.md, statements 15-16).
+* `bflyDeliver_holds`, `bflyRoundsAt_take_succ`, `bflyRoundsAt_chain`
+  (`MojoProof/Tile/MatVec.lean`): for every IEEE
+  format, width, `k`, flag, oracle sequences and oracle numbers per round and lane, lane 0's
+  word after the semantics' rounds `bflyRoundsAt (fun r l x y => deliver (Model.add x y)
+  (ob i r l)) (bflyOffsets k)` over the lanes' strided loops meets the rule of
+  `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`, since it is
+  `groupDot k`'s word or both are NaNs (`MojoProof.Sem.bflyDeliver_nanEq`); and for every
+  carrier and combination the value after the first `r + 1` rounds is round `r`'s combination
+  of the lane's and its partner's values after the first `r`. For every type, round function,
+  offsets and set of lanes that holds each round's partners, values per round and lane of which
+  each, at every lane of the set, is the round function of the lane's own and its partner's
+  values the round before are the rounds over the first `r` offsets from the first values, at
+  every lane of the set (`bflyRoundsAt_chain`, by induction on `r` with
+  `bflyRoundsAt_take_succ`): the lanes' partner chain, closed over all the lanes at once. Tests
+  (MojoProofTest/TileBfly.lean) at 4 and 8 lanes with the round function `a ++ b` on lists of
+  lane numbers, which tells two orders of the offsets apart: `chain4` over `bflyOffsets 2`,
+  `chain8` over `bflyOffsets 3` and over `1, 4, 2`, with their round premises by `decide`; and
+  `mutant4`, `mutant8`, the offsets reversed, where the round premise and the rounds' value both
+  fail. They are about words; the gemv_kernel tests that use them are in docs/proofs/spec.md.
+* `rowTrees`, `rowTrees_meetsAt`, `rowLoops`, `rowLoops_meetsAt` (`MojoProof/Tile/MatVec.lean`):
+  strided lanes added along a tree per row. For every IEEE format, width, lane count `W`, tree
+  `t` whose leaves are the lanes, each once, and flag, the behaviors whose output `i` is
+  `MojoProof.Sem.treeDot t` over the lanes' loops on the pairs of row `i` strided by `W` meet
+  `GPUProof.Spec.matVec (GPUProof.laneVecGrade W t.depth fun n => ⌈n / W⌉)` at `matVecEnc`
+  (`GPUProof.MeetsAt`, by `stride_approx`); `groupDot k` per row is a behavior at lane 0's
+  butterfly tree. `rowLoops` is `rowTrees` at one lane and the tree `.leaf 0`: output `i` is a
+  `dotLoop` from `+0` over row `i` and the vector, by `treeDot`'s definition at a leaf and
+  `stride_one` (the one lane's strided list is the whole list); `rowLoops_dotLoop` states the
+  direction the tests use, that every such loop per row is a behavior. `rowLoops_meetsAt`, that it
+  meets `GPUProof.Spec.matVec GPUProof.matVecGrade` at `matVecEnc`, is `rowTrees_meetsAt` there. The
+  two grades differ by definition, lane length `⌈n / 1⌉` against `n`, and are equal at every `n`
+  (by `n + 1 - 1 = n` and `n / 1 = n`, in the proof); the equation enters through
+  `meetsAt_grade`, since a rewrite of the grade inside `GPUProof.MeetsAt` is not type correct.
 
 ## 4. Trust
 
@@ -153,7 +199,17 @@ The matrix product: `dot_meets` at the 2 × 3 binary32 matrices `tA` and `tB` of
 `#eval`; a count past the matrices' columns, which faults; and the placement by rows.
 `MojoProofTest/TileNaive.lean`: `naive_tile` at the compiled kernel's strides, one launch of
 2 × 2 threads and memory at two sizes, `K = 768` and `K = 4`, its graded clause at `K = 768`, and
-that launch's placement evaluated; `naive_holds`, `mat_holds` at the family with one column. `MojoProofTest/TileGrade.lean`: the graded clause at the inputs' own values
+that launch's placement evaluated; `naive_holds`, `mat_holds` at the family with one column;
+`naive_words`, `naive_holds` at the strides 3, 3 and 1, the launch `L12`, the memory `memV` of
+`gen 2 3` and `gen 1 3` and the oracle family 0, whose two observed words are computed (`6` and
+`-1`, the tile run's cells evaluated by the kernel); the mutant, words both at the rows' cells
+and at the other row's, refused; no word at blocks that no run produced; `naive_pre`,
+`Mat.pre_mem` at every size within the family's bounds; `naive_rows`, a behavior of
+`naive_meetsAt` that meets the rule at every row stride, size within those bounds and input words
+(the tensors of the words, `max m 1` blocks of one thread), with `naive_rows_3x4` and
+`naive_rows_5x7` its instances, for every `A` and `B`, at sizes 3 × 4 (strides 5, 6 and 2) and
+5 × 7 (strides 7, 7 and 1); and a mutant, size 2 × 4 at strides 3, 3 and 1, with no behavior.
+`MojoProofTest/TileGrade.lean`: the graded clause at the inputs' own values
 (`meets_exact`), at sizes 3 × 4 and 5 × 7 over generated binary32 matrices whose entries'
 finiteness is evaluated by the kernel, and a grade one ulp tighter refused at a cell of a run
 (`tile_mutant`). `MojoProofTest/TileMatVec.lean`: the product by rows with one column meets the
@@ -161,7 +217,9 @@ matrix-vector spec's rule at sizes 3 × 4 and 5 × 7 (`holds_3x4`, `holds_5x7`),
 one ulp tighter is not met (`rowLoops_mutant`). `MojoProofTest/TileLanes.lean`: the strided lanes
 at 3 lanes and length 7 along a tree of depth 2, the butterfly at 4 lanes and length 10 (lane 0
 and lane 3, whose trees are evaluated), their words computed by the kernel, and the grade at
-depth 0 refused on four binary32 pairs (`depth_mutant`).
+depth 0 refused on four binary32 pairs (`depth_mutant`); `rowTrees_meetsAt` at 3 lanes along the
+tree of depth 2 at size 2 × 7 (`rows_2x7`) and at lane 0's butterfly tree, whose behaviors are
+`groupDot 2` per row, at size 3 × 10 (`rows_3x10`).
 
 ## 6. Scope and what is not done
 

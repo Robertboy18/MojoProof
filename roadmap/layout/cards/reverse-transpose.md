@@ -4,9 +4,9 @@ title: `reverse` and `transpose` reverse the shape and the stride
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:665
 quote: "A new Layout with shape and stride Coords reversed."
-lean: MojoProof.Layout.Lay.reverse, MojoProof.Layout.Lay.call_reverse, MojoProof.Layout.Lay.reverse_reverse, MojoProof.Layout.Lay.size_reverse
+lean: GPUProof.Layout.Lay.reverse, GPUProof.Layout.Lay.call_reverse, GPUProof.Layout.Lay.reverse_reverse, GPUProof.Layout.Lay.size_reverse
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 level: L1
 ---

@@ -9,12 +9,12 @@ the model with the values the Mojo compiler computes.
 
 The Lean statements are the reference. Every law below holds for all inputs that meet its
 premises unless its scope says otherwise; the concrete instances and the counterexamples are in
-`MojoProofTest/LayoutLaws.lean`. The model lives under `MojoProof/Layout/` (namespace
-`MojoProof.Layout`), apart from the LLVM data layout `MojoProof.Sem.Layout`.
+`MojoProofTest/GPUProof/LayoutLaws.lean`. The model lives in the core, under `GPUProof/Layout/`
+(namespace `GPUProof.Layout`), apart from the LLVM data layout `MojoProof.Sem.Layout`.
 
 ## 1. The model
 
-`MojoProof/Layout/Basic.lean`.
+`GPUProof/Layout/Basic.lean`.
 
 * **Trees.** A shape, a stride and a coordinate are all trees `Tup`: a leaf `leaf v static`
   carries a natural number and whether Mojo knows it at compile time (`ComptimeInt[v]`) or only
@@ -54,13 +54,13 @@ premises unless its scope says otherwise; the concrete instances and the counter
   idx2crd takes the remainder with `umod` (coord.mojo:1966-1967; from the source, not run), so
   at an extent 0 that law describes the model and not Mojo.
 
-`MojoProof/Layout/Algebra.lean` transcribes the functions that build one layout from others
+`GPUProof/Layout/Algebra.lean` transcribes the functions that build one layout from others
 (`coalesce`, `composition`, `zipped_divide`, `blocked_product`, `upcast`) and the XOR swizzle
-`Swizzle`. The layouts they return have static leaves. `MojoProof/Layout/Bits.lean` transcribes
+`Swizzle`. The layouts they return have static leaves. `GPUProof/Layout/Bits.lean` transcribes
 `BitLayout` of `bit_layout.mojo`, a map over F2 from domain bits to codomain points, and
 `is_bit_linear` and `placement` on flat static layouts. It computes on natural numbers where Mojo
 computes on `UInt64`; the two agree while every image, span and offset is below `2 ^ 64`.
-`MojoProof/Layout/TwoLevel.lean` transcribes `TwoLevelLayout.__call__` of
+`GPUProof/Layout/TwoLevel.lean` transcribes `TwoLevelLayout.__call__` of
 `two_level_layout.mojo` on a flat static outer layout, and `two_level_layout_from_swizzle` with
 its two asserts on flat static layouts; Mojo computes in `Int`, and the two agree while every
 offset is below `2 ^ 63`.
@@ -305,7 +305,7 @@ positive extents.
 
 ## 3. Counterexamples
 
-Each is an `example` by `decide` in `MojoProofTest/LayoutLaws.lean`, on the model. The
+Each is an `example` by `decide` in `MojoProofTest/GPUProof/LayoutLaws.lean`, on the model. The
 conformance test (section 5) compiles the same inputs, and the compiler's values are the
 model's, so each bug is in the code Mojo compiles, not only in the model. Each item gives the
 premise under which the law holds (section 2).
@@ -353,7 +353,7 @@ premise under which the law holds (section 2).
 
 Each model definition and the Mojo function it transcribes, at modular/modular bbc13a71.
 
-| Mojo | file:line | Lean (`MojoProof.Layout.`) |
+| Mojo | file:line | Lean (`GPUProof.Layout.`) |
 | --- | --- | --- |
 | `Coord` node, `ComptimeInt` | coord.mojo:186, :97 | `Tup` |
 | `__len__` | coord.mojo:125-131, :307 | `Tup.len` |

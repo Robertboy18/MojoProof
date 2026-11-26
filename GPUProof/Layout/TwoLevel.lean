@@ -1,5 +1,5 @@
-import MojoProof.Layout.Bits
-import MojoProof.Layout.Swizzle
+import GPUProof.Layout.Bits
+import GPUProof.Layout.Swizzle
 
 /-!
 # The two-level swizzle
@@ -7,7 +7,7 @@ import MojoProof.Layout.Swizzle
 `TwoLevelLayout` of max/kernels/src/layout/two_level_layout.mojo at modular/modular bbc13a71,
 whose outer layout is flat and static, and its constructor from a swizzle (lines 1101-1133), which
 builds the two-level layout of a `Swizzle` and a flat static layout, transcribed over the model of
-MojoProof/Layout/Basic.lean and the swizzle of MojoProof/Layout/Algebra.lean, with their law, for
+GPUProof/Layout/Basic.lean and the swizzle of GPUProof/Layout/Algebra.lean, with their law, for
 every swizzle and every layout that passes the constructor's two asserts:
 
 * `Swizzle.twoLevel_call`: at every tuple coordinate inside the shape and every scalar index below
@@ -19,7 +19,7 @@ lemmas. The model computes on natural numbers where Mojo computes on `Int`s; the
 every extent, stride and offset lies below `2 ^ 63`.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 open Tup
 
@@ -76,7 +76,7 @@ def Swizzle.period (S : Swizzle) : Nat := S.base + S.bits + S.shift.natAbs
 (extent, stride) `p` that lie below the swizzle's period, `min(log2 extent, max(0, period -
 log2 stride))` when the extent and the stride are powers of two (`_PowerOfTwo`, line 145, is
 `powerOfTwo`), and 0 otherwise. Mojo takes `log2_floor` (`_log2_or_zero`, line 140), which `log2`
-of MojoProof/Layout/Bits.lean equals on the powers of two below `2 ^ 64`. -/
+of GPUProof/Layout/Bits.lean equals on the powers of two below `2 ^ 64`. -/
 def Swizzle.innerBits (S : Swizzle) (p : Nat × Nat) : Nat :=
   if powerOfTwo p.1 && powerOfTwo p.2 then min (log2 p.1) (S.period - log2 p.2) else 0
 
@@ -344,4 +344,4 @@ theorem Swizzle.twoLevel_call (S : Swizzle) (ms : List (Nat × Nat)) (hv : swizz
     rw [((Lay.flat ms).modes_size_call (Lay.flat_congruent ms)).2 x b hx, Lay.modes_flat,
       dotColex, TwoLevel.call, hsh, hoff _ hcl hcb]
 
-end MojoProof.Layout
+end GPUProof.Layout

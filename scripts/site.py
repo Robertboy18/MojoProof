@@ -91,7 +91,8 @@ FENCE = re.compile(r'^( *)(`{3,}|~{3,})[ \t]*([\w+-]*)[^`]*$')
 MARKER = re.compile(r'^([-*+]|\d{1,9}[.)])( +|$)')
 CODE_PATH = re.compile(r'^([\w.\-/]+?)(?::(\d+)(?:-(\d+))?)?$')
 TEXT_PATH = re.compile(
-    r'(?<![\w/.\-])((?:(?:MojoProof|MojoProofTest|scripts|tests|docs|roadmap)/[\w./\-]*[\w/])'
+    r'(?<![\w/.\-])((?:(?:GPUProof|MojoProof|MojoProofTest|scripts|tests|docs|roadmap)/'
+    r'[\w./\-]*[\w/])'
     r'|(?:README|CONTRIBUTING|AGENTS)\.md)(?::(\d+)(?:-(\d+))?)?')
 EXTENSIONS = ('.md', '.lean', '.py', '.tsv', '.txt', '.mojo', '.ll', '.yaml', '.dot', '.svg',
               '.pdf', '.json', '.toml')

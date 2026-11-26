@@ -1700,8 +1700,9 @@ faults.
    their ends (`Seq`). `Sched.grid`: a run of grid steps to a done grid with memory `m'`.
    `Sched.start_sound`: a start (`Grid.start`, `Grid.start_threads`) with a schedule whose last
    memory's trace has no race, keeps the promise of `!invariant.load` and observes `y` with
-   `R y` is sound (`Grid.Sound`). `Seq.start_sound_bar` (item 6) is now its one-line case at one
-   barrier phase, `Sched.wait` of `Fires.barriers` and `Sched.ends`.
+   `R y` is sound (`Grid.Sound`), by `Sched.grid` and `Grid.start_done_sound` (the same from any
+   path of grid steps to a done grid). `Seq.start_sound_bar` (item 6) is now its one-line case at
+   one barrier phase, `Sched.wait` of `Fires.barriers` and `Sched.ends`.
 9. `bflyRoundsAt_of_shfl`: for every combination `F r l` per round and lane, width `2 ^ k` with
    `k ≤ 5`, list of offsets below `2 ^ k`, family `v r l` of lane values by round and first
    values `w`: if `v 0 l = w l` and each round's value of lane `l` combines, by `F r l`, its own

@@ -30,14 +30,20 @@ call's register set to the delivered value, so `mojo_obl` reads them as it reads
   of it.
 * `RunsVia.of_ends`: after the last call, the block's obligations, its exit and a returning path
   from its target (`RetWith`, `Runs.of_retWith`) end the run.
-* `Piece.fires` and `RunsVia.of_fires`: the segments of a block through its collectives and
+* `Piece.walk` and `RunsVia.of_fires`: the segments of a block through its collectives and
   lifetime markers (`Piece.ThroughTo`, MojoProof/Sym/Segment.lean), each one's premises at the
-  valuation the previous one resumes to and a final check, as one closed Boolean on a concrete
-  valuation and deliveries; it gives `RunsVia` through the collectives, then the continuation's
-  run through the waits after them (none: to the thread's end).
+  valuation the previous one resumes to, on a concrete valuation and deliveries, give the waits
+  (`Piece.Wait`: each call's position, collective, argument values and memory), the valuation
+  after the last segment (`Piece.after`, a function of the deliveries) and the `alloca` blocks
+  the segments add (`Piece.allocs`); with a final check there (`Piece.fires`, a closed Boolean)
+  it gives `RunsVia` through the waits, each wait's predicate stating its call's instruction,
+  intrinsic, arguments and memory (`Piece.Wait.via`), then the continuation's run through the
+  waits after them, a function of the valuation after the block's (none: to the thread's end), to
+  a final predicate that is a function of that valuation and the frame's `alloca` blocks.
 * `RunsVia.of_chain`: a thread through a sequence of loops whose last path out stops after its
   last edge (`ChainWith.enter`, MojoProof/Sym/Loop.lean) runs through the waits that a
-  continuation from the frame entered runs through.
+  continuation from the frame entered runs through, the continuation told the frame's `alloca`
+  blocks.
 * `mojo_seg`: `RunsVia.of_through` at the latest `Seg.Through` hypothesis, the obligations by
   `mojo_obl`.
 * `sym_segs n := P fn lbl p0 ps`: the segments `summarizeSegs` gives, as quoted definitions (as
@@ -233,116 +239,254 @@ theorem RunsVia.of_ends {P : Program} {fn : Func} {c : Ctx} (hP : c.prog = P) {l
     (by rw [hl', hl]) (by rw [hp']; exact congrArg (L.exit.pc · dst) hfn) (ha'.trans ha) hR'
   exact ⟨m', ⟨t₂, m₂, hS.trans_step hst hS₂, hd₂⟩, hq⟩
 
-/-- **The premises of a block's segments on one valuation**, a closed Boolean on a concrete one:
-for function `fn`, block `lbl`, final check `F`, segments `Ss` (`summarizePieces`) from position
-`p`, deliveries `ds` (one per collective, in order) and valuation `V` at the first segment's
-start. A collective's segment `S`: its obligations hold at `V`, and the rest holds at
-`V.resume S.toSummary r d` for the call's register `r` (`resReg`) and the first delivery `d`. A
-lifetime marker's segment of `n` statements: its obligations hold at `V` (the pointer's term
-evaluates and the effects run), the effects make a memory `me` on which the pointer, a pointer
-`q`, is into a block the thread owns, and the rest holds at
-`V.resume (σ.toSummary n) none (none, me.setLive q.block start)`. With no segment left, no
-delivery is left and `F V`. For every function, block, check, list of segments, position, list of
-deliveries and valuation. -/
-def Piece.fires (fn : Func) (lbl : Nat) (F : Valuation → Bool) :
-    List Piece → Nat → List (Option Val × Mem) → Valuation → Bool
-  | [], _, ds, V => ds.isEmpty && F V
-  | .coll _ :: _, _, [], _ => false
-  | .coll S :: Ss, p, d :: ds, V => decide (∀ x ∈ S.obls, x.Holds V (vals V S.nodes)) &&
-      Piece.fires fn lbl F Ss (p + S.len + 1) ds
-        (V.resume S.toSummary (resReg fn lbl (p + S.len)) d)
+/-- **A wait of a block's segments**: the position `pos` of a collective call in its block, the
+call `call`, the values `args` of its arguments, the memory `mem` its segment's effects make,
+and the delivery `dlv` (value and memory) the thread resumes with. `Piece.walk` makes one per
+collective segment. -/
+structure Piece.Wait where
+  /-- The wait at position `pos` of collective `call`, with arguments `args`, memory `mem` and
+  delivery `dlv`. -/
+  mk ::
+  /-- The call's position in its block. -/
+  pos : Nat
+  /-- The collective. -/
+  call : Coll
+  /-- The values of the call's arguments. -/
+  args : List Val
+  /-- The memory at the call. -/
+  mem : Mem
+  /-- The value and memory delivered to the thread at the call. -/
+  dlv : Option Val × Mem
+
+/-- **The predicate and delivery of a wait** of function `fn`'s block `lbl`, for `RunsVia`: a
+thread `u` waits at intrinsic `i` with arguments `xs` on memory `me` when `u.at` is `fn`'s name,
+`lbl` and `w.pos`, `i` is `w.call`'s intrinsic, `xs` is `w.args` and `me` is `w.mem`; the
+delivery is `w.dlv`. For every function, block and wait. -/
+abbrev Piece.Wait.via (fn : Func) (lbl : Nat) (w : Piece.Wait) :
+    (Thread → Intrinsic → List Val → Mem → Prop) × (Option Val × Mem) :=
+  (fun u i xs me => u.at = some (fn.name, lbl, w.pos) ∧ i = w.call.intr ∧ xs = w.args ∧
+    me = w.mem, w.dlv)
+
+/-- **A block's segments on one valuation**, the one checker of `RunsVia.of_fires`: for function
+`fn`, block `lbl`, segments `Ss` (`summarizePieces`) from position `p`, deliveries `ds` (one per
+collective, in order) and valuation `V` at the first segment's start, the waits, the valuation
+after the last segment and the `alloca` blocks the segments add (newest first, as a frame lists
+them), or `none`. A collective's segment `S`: its obligations hold at `V`, its arguments evaluate
+to `xs` and its effects make a memory `me` (both at `V`), the wait is
+`⟨p + S.len, S.call, xs, me, d⟩` for the first delivery `d`, the rest is from
+`V.resume S.toSummary r d` for the call's register `r` (`resReg`), and the segment's blocks
+(`SEff.blocks V S.effs`) come after the rest's. A lifetime marker's segment of `n` statements:
+its obligations hold at `V` (the pointer's term evaluates and the effects run), the effects make
+a memory `me` on which the pointer, a pointer `q`, is into a block the thread owns, the rest is
+from `V.resume (σ.toSummary n) none (none, me.setLive q.block start)`, and the segment's blocks
+come after the rest's. With no segment left, no delivery is left, the valuation is `V` and there
+is no block. For every function, block, list of segments, position, list of deliveries and
+valuation. -/
+def Piece.walk (fn : Func) (lbl : Nat) :
+    List Piece → Nat → List (Option Val × Mem) → Valuation →
+      Option (List Piece.Wait × Valuation × List Nat)
+  | [], _, [], V => some ([], V, [])
+  | [], _, _ :: _, _ => none
+  | .coll _ :: _, _, [], _ => none
+  | .coll S :: Ss, p, d :: ds, V =>
+      if ∀ x ∈ S.obls, x.Holds V (vals V S.nodes) then
+        match S.args.mapM (·.eval V (vals V S.nodes)), SEff.run V (vals V S.nodes) S.effs with
+        | .ok xs, .ok me => (Piece.walk fn lbl Ss (p + S.len + 1) ds
+            (V.resume S.toSummary (resReg fn lbl (p + S.len)) d)).map
+              fun r => (⟨p + S.len, S.call, xs, me, d⟩ :: r.1, r.2.1,
+                r.2.2 ++ SEff.blocks V S.effs)
+        | _, _ => none
+      else none
   | .life σ start x n :: Ss, p, ds, V =>
-      decide (∀ d ∈ Cond.ok x :: .mem σ.effs :: σ.obls, d.Holds V (vals V σ.nodes)) &&
-      match SEff.run V (vals V σ.nodes) σ.effs, x.eval V (vals V σ.nodes) with
-      | .ok me, .ok (.ptr q) =>
-        ((me.block q).any fun b => b.owner == .thread V.ctx.who.thread) &&
-          Piece.fires fn lbl F Ss (p + n + 1) ds
-            (V.resume (σ.toSummary n) none (none, me.setLive q.block start))
-      | _, _ => false
+      if ∀ d ∈ Cond.ok x :: .mem σ.effs :: σ.obls, d.Holds V (vals V σ.nodes) then
+        match SEff.run V (vals V σ.nodes) σ.effs, x.eval V (vals V σ.nodes) with
+        | .ok me, .ok (.ptr q) =>
+          if (me.block q).any fun b => b.owner == .thread V.ctx.who.thread then
+            (Piece.walk fn lbl Ss (p + n + 1) ds
+              (V.resume (σ.toSummary n) none (none, me.setLive q.block start))).map
+                fun r => (r.1, r.2.1, r.2.2 ++ SEff.blocks V σ.effs)
+          else none
+        | _, _ => none
+      else none
+
+/-- **The waits of a block's segments**: `Piece.walk`'s waits, none when it gives `none`.
+Irreducible, as are `Piece.after`, `Piece.allocs` and `Piece.fires`: a statement about concrete
+segments and deliveries then elaborates without evaluating the walk, which the kernel still does
+(`decide +kernel`). -/
+@[irreducible]
+def Piece.waits (fn : Func) (lbl : Nat) (Ss : List Piece) (p : Nat)
+    (ds : List (Option Val × Mem)) (V : Valuation) : List Piece.Wait :=
+  ((Piece.walk fn lbl Ss p ds V).map Prod.fst).getD []
+
+/-- **The valuation after a block's segments**, as a function of the deliveries `ds`:
+`Piece.walk`'s, `V` when it gives `none`. -/
+@[irreducible]
+def Piece.after (fn : Func) (lbl : Nat) (Ss : List Piece) (p : Nat)
+    (ds : List (Option Val × Mem)) (V : Valuation) : Valuation :=
+  ((Piece.walk fn lbl Ss p ds V).map (·.2.1)).getD V
+
+/-- **The `alloca` blocks a block's segments add**, newest first: `Piece.walk`'s, none when it
+gives `none`. -/
+@[irreducible]
+def Piece.allocs (fn : Func) (lbl : Nat) (Ss : List Piece) (p : Nat)
+    (ds : List (Option Val × Mem)) (V : Valuation) : List Nat :=
+  ((Piece.walk fn lbl Ss p ds V).map (·.2.2)).getD []
+
+/-- **The premises of a block's segments and a final check on one valuation**, a closed Boolean
+on a concrete one: `Piece.walk` gives the waits and a valuation, and the check `F` holds there.
+For every function, block, check, list of segments, position, list of deliveries and
+valuation. -/
+@[irreducible]
+def Piece.fires (fn : Func) (lbl : Nat) (F : Valuation → Bool) (Ss : List Piece) (p : Nat)
+    (ds : List (Option Val × Mem)) (V : Valuation) : Bool :=
+  ((Piece.walk fn lbl Ss p ds V).map fun r => F r.2.1).getD false
 
 /-- **A block's segments run into `RunsVia`**, for every context `c`, block `lbl`, frames
-`rest`, continuation `K`, function `fn`, check `F`, predicate `Q`, list `ws` of waits after the
-block's and default delivery `d₀`: if `K` and `F` at the entry valuation of a frame give a run
-through `ws` (`RunsVia`; with `ws` empty, to the thread's end on a memory of `Q`), then for every
-segments `Ss`, position `p`, deliveries `ds` and thread `t` on memory `m` with frame `f` of `fn`
-at position `p` that runs the segments to `K` with the `i`-th collective delivering
-`ds.getD i d₀` (`Piece.ThroughTo`), if `Piece.fires` holds at `f`'s entry valuation, the thread
-runs through one wait per delivery, each wait's predicate `True`, and then through `ws`
-(`RunsVia`). By induction on `Ss`: `RunsVia.of_wait` at a collective, the step past the marker
-(`intrinsic_lifetime_ptr`) and `Valuation.entry_set` at a lifetime marker. -/
+`rest`, continuation `K`, function `fn`, check `F`, family `Q` of final predicates by a valuation
+and a list of `alloca` blocks, family `G` of the waits after the block's by the valuation they
+start at, and default delivery `d₀`: if `K` and `F` at the entry valuation `V` of a frame with
+`alloca` blocks `A` give a run through `G V` to a memory of `Q V A` (`RunsVia`; with `G V` empty,
+to the thread's end), then for every segments `Ss`, position `p`, deliveries `ds` and thread `t`
+on memory `m` with frame `f` of `fn` at position `p` that runs the segments to `K` with the
+`i`-th collective delivering `ds.getD i d₀` (`Piece.ThroughTo`), if `Piece.fires` holds at `f`'s
+entry valuation, the thread runs through the waits of `Piece.waits` (each at its call's
+instruction, intrinsic, argument values and the memory its segment's effects make, then resumed
+with its delivery: `Piece.Wait.via`) and then through `G` at `Piece.after`, to a memory of `Q` at
+`Piece.after` and the blocks `Piece.allocs` in front of `f`'s. By induction on `Ss`:
+`RunsVia.of_wait` at a collective, the step past the marker (`intrinsic_lifetime_ptr`) and
+`Valuation.entry_set` at a lifetime marker. -/
 theorem RunsVia.of_fires {c : Ctx} {lbl : Nat} {rest : List Frame}
-    {K : Thread → Mem → Frame → Prop} {fn : Func} {F : Valuation → Bool} {Q : Mem → Prop}
-    {ws : List ((Thread → Intrinsic → List Val → Mem → Prop) × (Option Val × Mem))}
+    {K : Thread → Mem → Frame → Prop} {fn : Func} {F : Valuation → Bool}
+    {Q : Valuation → List Nat → Mem → Prop}
+    {G : Valuation → List ((Thread → Intrinsic → List Val → Mem → Prop) × (Option Val × Mem))}
     {d₀ : Option Val × Mem}
-    (hK : ∀ t m f, K t m f → F (Valuation.entry c t.k m f) = true → RunsVia c Q ws t m) :
+    (hK : ∀ t m f, K t m f → F (Valuation.entry c t.k m f) = true →
+      RunsVia c (Q (Valuation.entry c t.k m f) f.allocas) (G (Valuation.entry c t.k m f)) t m) :
     ∀ {Ss : List Piece} {p : Nat} {ds : List (Option Val × Mem)} {t : Thread} {m : Mem}
       {f : Frame}, Piece.ThroughTo c lbl rest K Ss (fun i => ds.getD i d₀) t m f → f.fn = fn →
       f.pc = p → Piece.fires fn lbl F Ss p ds (Valuation.entry c t.k m f) = true →
-      RunsVia c Q (ds.map (fun d => (fun _ _ _ _ => True, d)) ++ ws) t m := by
-  intro Ss
-  induction Ss with
-  | nil =>
-    intro p ds t m f h _ _ hF
-    simp only [Piece.fires, Bool.and_eq_true, List.isEmpty_iff] at hF
-    obtain ⟨rfl, hF⟩ := hF
-    exact hK t m f h hF
-  | cons P Ss ih =>
-    intro p ds t m f h hfn hp hF
-    cases P with
-    | coll S =>
+      RunsVia c (Q (Piece.after fn lbl Ss p ds (Valuation.entry c t.k m f))
+          (Piece.allocs fn lbl Ss p ds (Valuation.entry c t.k m f) ++ f.allocas))
+        ((Piece.waits fn lbl Ss p ds (Valuation.entry c t.k m f)).map
+          (Piece.Wait.via fn lbl) ++ G (Piece.after fn lbl Ss p ds (Valuation.entry c t.k m f)))
+        t m := by
+  have go : ∀ {Ss : List Piece} {p : Nat} {ds : List (Option Val × Mem)} {t : Thread} {m : Mem}
+      {f : Frame} {W : List Piece.Wait} {V : Valuation} {A : List Nat},
+      Piece.ThroughTo c lbl rest K Ss (fun i => ds.getD i d₀) t m f → f.fn = fn → f.pc = p →
+      Piece.walk fn lbl Ss p ds (Valuation.entry c t.k m f) = some (W, V, A) → F V = true →
+      RunsVia c (Q V (A ++ f.allocas)) (W.map (Piece.Wait.via fn lbl) ++ G V) t m := by
+    intro Ss
+    induction Ss with
+    | nil =>
+      intro p ds t m f W V A h _ _ hw hF
       cases ds with
-      | nil => simp [Piece.fires] at hF
-      | cons d ds =>
-        simp only [Piece.fires, Bool.and_eq_true, decide_eq_true_eq] at hF
-        obtain ⟨hds, hF⟩ := hF
-        rw [List.map_cons, List.cons_append]
-        refine RunsVia.of_wait (T := fun t' fr => Piece.ThroughTo c lbl rest K Ss
-          (fun i => ds.getD i d₀) t' d.2 fr) hfn hp (h hds) (fun _ _ _ _ _ _ => trivial) ?_
-        intro fr t' _ hfr hpr _ hT hV
-        exact ih hT hfr hpr (by rw [hV]; exact hF)
-    | life σ start x n =>
-      simp only [Piece.fires, Bool.and_eq_true, decide_eq_true_eq] at hF
-      obtain ⟨hds, hF⟩ := hF
-      split at hF
-      · rename_i me q hm hx
-        simp only [Bool.and_eq_true] at hF
-        obtain ⟨ho, hF⟩ := hF
-        obtain ⟨fe, me', v, hS, hfe, -, hpc, -, -, hrg, hpr, hm', hx', hst⟩ := h hds
-        obtain rfl : me' = me := Except.ok.inj (hm'.symm.trans hm)
-        obtain rfl : v = .ptr q := Except.ok.inj (hx'.symm.trans hx)
-        obtain ⟨hs, hT⟩ := hst _ (intrinsic_lifetime_ptr ho)
-        refine RunsVia.of_steps (hS.trans_step hs (.refl _ _))
-          (ih hT (hfe.trans hfn) (by show fe.pc + 1 = _; rw [hpc, hp]) ?_)
-        exact (congrArg (Piece.fires fn lbl F Ss (p + n + 1) ds)
-          (Valuation.entry_set (c := c) (k := t.k + n + 1) (m := me'.setLive q.block start)
-            (g := (Valuation.entry c t.k m f).frameAtWith true 0 (σ.toSummary n)) hfe hrg hpr
-            none none (fe.pc + 1))).trans hF
-      · cases hF
+      | nil =>
+        obtain ⟨rfl, h2⟩ := Prod.mk.inj (Option.some.inj hw)
+        obtain ⟨rfl, rfl⟩ := Prod.mk.inj h2
+        exact hK t m f h hF
+      | cons => cases hw
+    | cons P Ss ih =>
+      intro p ds t m f W V A h hfn hp hw hF
+      cases P with
+      | coll S =>
+        cases ds with
+        | nil => cases hw
+        | cons d ds =>
+          simp only [Piece.walk] at hw
+          split at hw
+          · rename_i hds
+            split at hw
+            · rename_i xs me hx hm
+              cases hr : Piece.walk fn lbl Ss (p + S.len + 1) ds
+                  ((Valuation.entry c t.k m f).resume S.toSummary (resReg fn lbl (p + S.len))
+                    d) with
+              | none => rw [hr] at hw; cases hw
+              | some r =>
+                obtain ⟨W', V', A'⟩ := r
+                rw [hr] at hw
+                obtain ⟨rfl, h2⟩ := Prod.mk.inj (Option.some.inj hw)
+                obtain ⟨rfl, rfl⟩ := Prod.mk.inj h2
+                rw [List.map_cons, List.cons_append, List.append_assoc]
+                refine RunsVia.of_wait (T := fun t' fr => Piece.ThroughTo c lbl rest K Ss
+                  (fun i => ds.getD i d₀) t' d.2 fr) hfn hp (h hds) ?_ ?_
+                · intro u me' xs' hat hm' hx'
+                  exact ⟨hat, rfl, Except.ok.inj (hx'.symm.trans hx),
+                    Except.ok.inj (hm'.symm.trans hm)⟩
+                · intro fr t' _ hfr hpr hal hT hV
+                  rw [← hal]
+                  exact ih hT hfr hpr (by rw [hV]; exact hr) hF
+            · cases hw
+          · cases hw
+      | life σ start x n =>
+        simp only [Piece.walk] at hw
+        split at hw
+        · rename_i hds
+          split at hw
+          · rename_i me q hm hx
+            split at hw
+            · rename_i ho
+              cases hr : Piece.walk fn lbl Ss (p + n + 1) ds
+                  ((Valuation.entry c t.k m f).resume (σ.toSummary n) none
+                    (none, me.setLive q.block start)) with
+              | none => rw [hr] at hw; cases hw
+              | some r =>
+                obtain ⟨W', V', A'⟩ := r
+                rw [hr] at hw
+                obtain ⟨rfl, h2⟩ := Prod.mk.inj (Option.some.inj hw)
+                obtain ⟨rfl, rfl⟩ := Prod.mk.inj h2
+                obtain ⟨fe, me', v, hS, hfe, -, hpc, hal, -, hrg, hpr, hm', hx', hst⟩ := h hds
+                obtain rfl : me' = me := Except.ok.inj (hm'.symm.trans hm)
+                obtain rfl : v = .ptr q := Except.ok.inj (hx'.symm.trans hx)
+                obtain ⟨hs, hT⟩ := hst _ (intrinsic_lifetime_ptr ho)
+                rw [List.append_assoc, ← hal]
+                exact RunsVia.of_steps (hS.trans_step hs (.refl _ _))
+                  (ih (f := { fe with pc := fe.pc + 1 }) hT (hfe.trans hfn)
+                    (by show fe.pc + 1 = _; rw [hpc, hp])
+                    ((congrArg (Piece.walk fn lbl Ss (p + n + 1) ds)
+                      (Valuation.entry_set (c := c) (k := t.k + n + 1)
+                        (m := me'.setLive q.block start)
+                        (g := (Valuation.entry c t.k m f).frameAtWith true 0 (σ.toSummary n)) hfe
+                        hrg hpr none none (fe.pc + 1))).trans hr) hF)
+            · cases hw
+          · cases hw
+        · cases hw
+  intro Ss p ds t m f h hfn hp hF
+  unfold Piece.fires at hF
+  unfold Piece.waits Piece.after Piece.allocs
+  cases hw : Piece.walk fn lbl Ss p ds (Valuation.entry c t.k m f) with
+  | none => rw [hw] at hF; cases hF
+  | some r =>
+    obtain ⟨W, V, A⟩ := r
+    rw [hw] at hF
+    exact go h hfn hp hw hF
 
 /-- **A thread through a sequence of loops into a continuation**, for every flag `alloca` and
 `contract`, program, function `fn`, context `c` of the program, frames `rest`, block `d`,
 position `q`, predicate `J` on valuations, list `Ls` of loops, path `(l, ds, S) :: E` before
 them, position `p0`, final predicate `Q` and list `ws` of waits, when the chain checker accepts
-the paths (`coversChainAt alloca contract`): if every thread whose innermost frame runs `fn`
-above `rest` at block `d`'s position `q` with `J` at its entry valuation runs through `ws`
-(`RunsVia`), then so does every thread whose innermost frame `f` runs `fn` above `rest` at block
-`l`'s position `p0` with `ChainWith contract (BackWith contract d q J) Ls` at `f`'s entry
-valuation: the chain's last path out stops after its last edge, into `d` at `q`
-(`ChainWith.enter`, then `RunsVia.of_steps`). -/
+the paths (`coversChainAt alloca contract`): take a thread `t` whose innermost frame `f` runs
+`fn` above `rest` at block `l`'s position `p0`, on memory `m`, with
+`ChainWith contract (BackWith contract d q J) Ls` at `f`'s entry valuation. If every thread
+whose innermost frame `f'` runs `fn` above `rest` at block `d`'s position `q`, with some blocks
+(none with the flag `alloca` off) in front of `f`'s `alloca` blocks and `J` at its entry
+valuation, runs through `ws` (`RunsVia`), then so does `t`: the chain's last path out stops
+after its last edge, into `d` at `q` (`ChainWith.enter`, then `RunsVia.of_steps`). -/
 theorem RunsVia.of_chain {alloca contract : Bool} {P : Program} {fn : Func} {c : Ctx}
     (hP : c.prog = P) {rest : List Frame} {d q : Nat} {J : Valuation → Prop}
     {Ls : List LoopSeg} {p0 l : Nat} {ds : List Cond} {S : Summary}
     {E : List (Nat × List Cond × Summary)} {Q : Mem → Prop}
     {ws : List ((Thread → Intrinsic → List Val → Mem → Prop) × (Option Val × Mem))}
     (hc : coversChainAt alloca contract P fn p0 l ds S E Ls = true)
-    (hK : ∀ t m f, t.frames = f :: rest → f.fn = fn → f.label = d → f.pc = q →
-      J (Valuation.entry c t.k m f) → RunsVia c Q ws t m)
     {t : Thread} {m : Mem} {f : Frame} (ht : t.frames = f :: rest) (hfn : f.fn = fn)
     (hl : f.label = l) (hp : f.pc = p0)
-    (h : ChainWith contract (BackWith contract d q J) Ls (Valuation.entry c t.k m f) l ds S E) :
+    (h : ChainWith contract (BackWith contract d q J) Ls (Valuation.entry c t.k m f) l ds S E)
+    (hK : ∀ t' m' f', t'.frames = f' :: rest → f'.fn = fn → f'.label = d → f'.pc = q →
+      (∃ bs, f'.allocas = (bif alloca then bs else []) ++ f.allocas) →
+      J (Valuation.entry c t'.k m' f') → RunsVia c Q ws t' m') :
     RunsVia c Q ws t m :=
-  let ⟨_, _, _, hS, ht', hfn', hl', hp', _, _, hJ⟩ := ChainWith.enter hP hc ht hfn hl hp h
-  RunsVia.of_steps hS (hK _ _ _ ht' hfn' hl' hp' hJ)
+  let ⟨_, _, _, hS, ht', hfn', hl', hp', ⟨bs, hal, _⟩, _, hJ⟩ :=
+    ChainWith.enter hP hc ht hfn hl hp h
+  RunsVia.of_steps hS (hK _ _ _ ht' hfn' hl' hp' ⟨bs, hal⟩ hJ)
 
 /-- **`mojo_seg`** runs a thread through its next collective call: on a goal
 `RunsVia c Q ((P, d) :: ws) t m`, `RunsVia.of_through` at the latest hypothesis

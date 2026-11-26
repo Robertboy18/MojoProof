@@ -4,9 +4,9 @@ title: `Swizzle` is `x ^ ((x & mask) >> shift)` and needs `abs(shift) >= bits`
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/swizzle.mojo:381
 quote: "return offset ^ shiftr(offset & self.yyy_mask, self.shift)"
-lean: MojoProof.Layout.Swizzle, MojoProof.Layout.Swizzle.call, MojoProof.Layout.Swizzle.mask, MojoProof.Layout.shiftr, MojoProof.Layout.Swizzle.shiftr_and_mask, MojoProof.Layout.Swizzle.call_call
+lean: GPUProof.Layout.Swizzle, GPUProof.Layout.Swizzle.call, GPUProof.Layout.Swizzle.mask, GPUProof.Layout.shiftr, GPUProof.Layout.Swizzle.shiftr_and_mask, GPUProof.Layout.Swizzle.call_call
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 level: L1
 ---

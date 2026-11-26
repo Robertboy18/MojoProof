@@ -4,9 +4,9 @@ title: `idx2crd` maps an offset back to a coordinate, documented as the inverse 
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:548
 quote: "This is the inverse of `__call__` (crd2idx)."
-lean: MojoProof.Layout.idx2crd, MojoProof.Layout.idx2crd_flat, MojoProof.Layout.idx2crd_call, MojoProof.Layout.idx2crd_call_reverse
+lean: GPUProof.Layout.idx2crd, GPUProof.Layout.idx2crd_flat, GPUProof.Layout.idx2crd_call, GPUProof.Layout.idx2crd_call_reverse
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 depends: crd2idx
 level: L1

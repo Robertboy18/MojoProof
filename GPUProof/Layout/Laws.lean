@@ -1,10 +1,10 @@
-import MojoProof.Layout.Algebra
-import MojoProof.Layout.Crd
+import GPUProof.Layout.Algebra
+import GPUProof.Layout.Crd
 
 /-!
 # The laws of the layout algebra
 
-The laws of docs/proofs/layout-laws.md about the layouts that MojoProof/Layout/Algebra.lean
+The laws of docs/proofs/layout-laws.md about the layouts that GPUProof/Layout/Algebra.lean
 builds, for every input that meets each law's premises:
 
 * `rowMajor_call_lt`, `rowMajor_onto` and `rowMajor_inj`: a row-major layout of positive
@@ -33,7 +33,7 @@ builds, for every input that meets each law's premises:
   less than the extent, and nothing is left above `A`'s last extent.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 open Tup
 
@@ -1136,4 +1136,4 @@ theorem Lay.compose_all (A B : Lay) (hA : congruentL A.shape A.stride = true)
     (colex_pick B.modes v (by rw [hBp]; exact hv))
   exact Lay.compose_call A B hA hB hdiv v b hv (by rw [hBc v b hv, ht, ← hAp]; exact hs) hn
 
-end MojoProof.Layout
+end GPUProof.Layout

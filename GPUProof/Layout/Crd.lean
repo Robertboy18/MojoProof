@@ -1,9 +1,9 @@
-import MojoProof.Layout.Basic
+import GPUProof.Layout.Basic
 
 /-!
 # The coordinate laws: crd2idx, cosize, idx2crd, reverse and affinity
 
-The laws of docs/proofs/layout-laws.md about the coordinate map of MojoProof/Layout/Basic.lean,
+The laws of docs/proofs/layout-laws.md about the coordinate map of GPUProof/Layout/Basic.lean,
 for every shape and stride that satisfy each law's premises:
 
 * `Lay.call_scalar`: a scalar coordinate below the size is split colexicographically, first mode
@@ -26,7 +26,7 @@ for every shape and stride that satisfy each law's premises:
   keeps the size, and maps the reversed coordinate to the same offset.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 open Tup
 
@@ -59,6 +59,21 @@ theorem sum_zipWith_append (a b c d : List Nat) (h : a.length = c.length) :
     (List.zipWith (· * ·) (a ++ b) (c ++ d)).sum =
       (List.zipWith (· * ·) a c).sum + (List.zipWith (· * ·) b d).sum := by
   rw [List.zipWith_append h, List.sum_append]
+
+/-- The leaves of appended lists of trees are the appended leaves, for every two lists. -/
+theorem Tup.leavesL_append (a b : List Tup) : leavesL (a ++ b) = leavesL a ++ leavesL b := by
+  induction a with
+  | nil => rfl
+  | cons t a ih => simp only [List.cons_append, leavesL, ih, List.append_assoc]
+
+/-- Appended congruent lists of trees are congruent, for every four lists. -/
+theorem Tup.congruentL_append : ∀ (a b c d : List Tup),
+    congruentL a b = true → congruentL c d = true → congruentL (a ++ c) (b ++ d) = true
+  | [], [], _, _, _, h => h
+  | _ :: a, _ :: b, c, d, h, h' => by
+    simp only [congruentL, Bool.and_eq_true] at h
+    simp only [List.cons_append, congruentL, h.1, congruentL_append a b c d h.2 h', Bool.and_self]
+  | [], _ :: _, _, _, h, _ | _ :: _, [], _, _, h, _ => by simp [congruentL] at h
 
 /-- Congruent lists of trees have equal lengths. -/
 theorem congruentL_length : ∀ (ss ds : List Tup), congruentL ss ds = true → ss.length = ds.length
@@ -605,4 +620,4 @@ theorem Lay.call_reverse (L : Lay) (cs : List Tup) (hs : L.shape.length = L.stri
     (by simp [Lay.reverse, hc']) (by simpa using h2)]
   exact zipIdx_reverse cs L.shape L.stride hc' hs
 
-end MojoProof.Layout
+end GPUProof.Layout

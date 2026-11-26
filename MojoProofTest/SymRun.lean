@@ -87,13 +87,37 @@ every skeleton and oracle choice 0. -/
 def ctx0 : Ctx := ⟨Kernels.vadd.prog, fun _ => none, ⟨fun _ _ => 0, 0⟩, ⟨0, 0⟩, fun _ => 0,
   fun _ => 0⟩
 
-/-- The memory: blocks 1 and 2 hold `inA` and `inB` (16 bytes each, global, read-only), block 3
-is the output (16 bytes, global, writable, undefined). -/
-def mem0 : Mem :=
+/-- The memory with the little-endian bytes of the words `a` and `b` at blocks 1 and 2
+(`4 · a.length` and `4 · b.length` bytes, global, read-only) and an output of `n` words at
+block 3 (`4 · n` bytes, global, writable, undefined), for every two lists of words and every `n`.
+The blocks have alignment 16 and follow each other in both address spaces from address 16, each
+at the first multiple of 16 at or past the end of the one before: at four words each, 16, 32 and
+48. -/
+def memAB (a b : List Nat) (n : Nat) : Mem :=
   let L := Kernels.vadd.prog.layout
-  let m₁ := (({} : Mem).alloc L 1 16 16 true true .all 1 1 (inA.flatMap (leBytes 4))).1
-  let m₂ := (m₁.alloc L 1 16 16 true true .all 2 2 (inB.flatMap (leBytes 4))).1
-  (m₂.alloc L 1 16 16 true false .all 3 3).1
+  let p := 1 + (a.length + 3) / 4
+  let q := p + (b.length + 3) / 4
+  let m₁ := (({} : Mem).alloc L 1 (4 * a.length) 16 true true .all 1 1
+    (a.flatMap (leBytes 4))).1
+  let m₂ := (m₁.alloc L 1 (4 * b.length) 16 true true .all p p (b.flatMap (leBytes 4))).1
+  (m₂.alloc L 1 (4 * n) 16 true false .all q q).1
+
+/-- `memAB a b n`'s blocks 1, 2 and 3 hold `4 · a.length`, `4 · b.length` and `4 · n` bytes. -/
+theorem memAB_size (a b : List Nat) (n : Nat) :
+    [1, 2, 3].map (fun k => ((memAB a b n).blocks k).map (·.size)) =
+      [some (4 * a.length), some (4 * b.length), some (4 * n)] := rfl
+
+/-- The memory: blocks 1 and 2 hold `inA` and `inB` (16 bytes each, global, read-only), block 3
+is the output of four words (16 bytes, global, writable, undefined); `memAB` at `inA`, `inB`
+and 4. -/
+def mem0 : Mem := memAB inA inB 4
+
+-- `mem0`'s three blocks hold 16 bytes each at addresses 16, 32 and 48 in both spaces, as before
+-- `memAB` took the sizes from its arguments.
+example : [1, 2, 3].map (fun k => (mem0.blocks k).map (·.size)) = [some 16, some 16, some 16] :=
+  memAB_size inA inB 4
+example : [1, 2, 3].map (fun k => (mem0.blocks k).map fun b => (b.addr, b.gaddr)) =
+    [some (16, 16), some (32, 32), some (48, 48)] := by decide
 
 /-- The frame at block `%21`'s entry with index `%19 = i`, the inputs at `%10` and `%8` and the
 output pointer `%6` at block `out`. -/

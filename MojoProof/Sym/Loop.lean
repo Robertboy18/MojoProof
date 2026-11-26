@@ -989,6 +989,64 @@ theorem Runs.of_retAt {alloca contract : Bool} {P : Program} {fn : Func} {c : Ct
   obtain rfl : me = me' := Except.ok.inj (hm.symm.trans hm')
   exact ⟨me, ⟨_, _, hS, hst⟩, hq⟩
 
+/-- `RetWith contract V (fun _ => True) ps` as a Boolean, for every flag, path and valuation: the
+path's premises (`WalkWith contract`) and `ret` exit from `V`, and its last block's effects run;
+`false` for the empty path. `retB_ret` gives `RetWith`. -/
+def retB (contract : Bool) : List (Nat × List Cond × Summary) → Valuation → Bool
+  | [], _ => false
+  | (l, ds, S) :: E, V =>
+    let W := V.lastWith contract l S E
+    decide (WalkWith contract V ((l, ds, S) :: E) ∧ W.2.2.exit = .ret) &&
+      match SEff.run W.1 (vals W.1 W.2.2.nodes) W.2.2.effs with
+      | .ok _ => true
+      | .error _ => false
+
+/-- `retB` gives `RetWith`, for every flag, path and valuation. -/
+theorem retB_ret {contract : Bool} {ps : List (Nat × List Cond × Summary)} {V : Valuation}
+    (h : retB contract ps V = true) : RetWith contract V (fun _ => True) ps := by
+  cases ps with
+  | nil => simp [retB] at h
+  | cons x E =>
+    obtain ⟨l, ds, S⟩ := x
+    simp only [retB, Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    refine ⟨h1, h2, ?_⟩
+    split at h3
+    · exact ⟨_, ‹_›, trivial⟩
+    · cases h3
+
+/-- **The memory a path to `ret` leaves**, for every flag `contract`, valuation `V` at the path's
+first block, list `A` of the frame's earlier `alloca` blocks and path: the memory the last block's
+effects give (`V`'s memory when they fail) with the path's `alloca` blocks
+(`Valuation.allocsWith contract`) and `A` dead; `V`'s memory for the empty path. `Runs.of_retMem`
+runs a thread to it. -/
+def Valuation.retMem (contract : Bool) (V : Valuation) (A : List Nat) :
+    List (Nat × List Cond × Summary) → Mem
+  | [] => V.mem
+  | (l, _, S) :: ps =>
+    let W := V.lastWith contract l S ps
+    (V.allocsWith contract l S ps ++ A).foldl (fun m b => m.setLive b false)
+      ((SEff.run W.1 (vals W.1 W.2.2.nodes) W.2.2.effs).toOption.getD V.mem)
+
+/-- **A kernel's thread to its end at the memory its path gives**: `Runs.of_retAt`'s premises, for
+every flag `alloca` and `contract`, program, function, path, context and thread whose only frame
+`f` is at the path's first block at position `p0`, with the path's return as a Boolean (`retB`):
+`t` runs to its end at `Valuation.retMem contract` of its entry valuation, `f`'s `alloca`
+blocks and the path, so the end memory is a term the kernel can evaluate. -/
+theorem Runs.of_retMem {alloca contract : Bool} {P : Program} {fn : Func} {c : Ctx}
+    (hP : c.prog = P) {p0 l : Nat} {ds : List Cond} {S : Summary}
+    {ps : List (Nat × List Cond × Summary)}
+    (hc : coversPathAt alloca contract P fn p0 ((l, ds, S) :: ps) = true) {t : Thread} {m : Mem}
+    {f : Frame} (ht : t.frames = [f]) (hfn : f.fn = fn) (hl : f.label = l) (hp : f.pc = p0)
+    (hR : retB contract ((l, ds, S) :: ps) (Valuation.entry c t.k m f) = true) :
+    Runs c t m ((Valuation.entry c t.k m f).retMem contract f.allocas ((l, ds, S) :: ps)) := by
+  obtain ⟨hW, hret, me, hm, -⟩ := retB_ret hR
+  obtain ⟨fe, me', hS, hm', hst⟩ := Block.sound_retWith hP hc ht hfn hl hp hW rfl hret
+  obtain rfl : me = me' := Except.ok.inj (hm.symm.trans hm')
+  refine ⟨_, _, hS, ?_⟩
+  simp only [Valuation.retMem, hm]
+  exact hst
+
 /-- **A kernel's thread along a path to its end, with or without `fmul contract`**: for every
 flag `contract`, program `P`, kernel `fn`, context of `P`, path `ps` that
 `coversPathWith contract` accepts from position `p0`, predicate `Q`, and thread `t` with one

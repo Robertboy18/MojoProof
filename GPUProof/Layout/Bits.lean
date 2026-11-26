@@ -1,11 +1,11 @@
-import MojoProof.Layout.Laws
+import GPUProof.Layout.Laws
 
 /-!
 # Bit layouts
 
 `BitLayout` of max/kernels/src/layout/bit_layout.mojo at modular/modular bbc13a71, a map over F2
 from domain bits to codomain points, with its test of bit-linearity (`isBitLinear`) and
-`placement` on flat static layouts, transcribed over the model of MojoProof/Layout/Basic.lean,
+`placement` on flat static layouts, transcribed over the model of GPUProof/Layout/Basic.lean,
 and its laws, for every input that meets each law's premises. The model computes on natural
 numbers where Mojo computes on `UInt64`, which drops the bits from 64 on; the two agree while
 every image, span and offset lies below `2 ^ 64`.
@@ -16,7 +16,7 @@ every image, span and offset lies below `2 ^ 64`.
   point.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 open Tup
 
@@ -378,4 +378,4 @@ theorem placement_call (ms : List (Nat × Nat)) (h : isBitLinear ms = true)
     Nat.and_two_pow_sub_one_eq_mod, Nat.mod_eq_of_lt hx', xorBits_of_lt _ _ _ _ _ hK hx']
   exact (xorBits_place ms 0 0 _ h hw x).2
 
-end MojoProof.Layout
+end GPUProof.Layout

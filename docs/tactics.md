@@ -231,6 +231,12 @@ on registers, their operands or nodes at `V'` that the method proves (their righ
 so a lemma about one node (whose premises are the registers, operands and nodes it reads, as in
 the test `hand_node`) feeds the registers after it in the same run.
 
+`obl_exact` (`MojoProof/Sym/WaitVia.lean`, syntax `oblExact`, elaborator `evalOblExact`, for every
+program) closes a goal `e = x` whose left side is an item `obl_have` takes: it runs `Obl.haves` on
+`e` and checks the equation it proves against the goal up to definitional equality, so `x` is any
+term equal to the computed value. A goal that is not an equation, or a value not equal to `x`, is
+an error.
+
 The lemmas it chains are general. `withAttrs_ofNat` (return attributes that are `noundef` or a
 `range` containing `[lo, hi)` keep every word in it) and `SNode.eval_sreg` (a special-register call
 node is the register's value, from the program's declaration, intrinsic table and attributes)
@@ -1020,3 +1026,23 @@ Tests (`MojoProofTest/Rule.lean`): a test table over `TOp` with an extra opcode,
 `#mojo_rules`; the library's table checked complete again and printed (41 lines, pinned); a key
 that is not a constructor, in the attribute and in `mojo_refuse`, and a `local` attribute, each
 an error.
+
+## `kernel_rfl` and `kernel_rfl_late` (`MojoProofTest/KernelRfl.lean`)
+
+Two test tactics for equations `a = b` that the kernel shows by unfolding, where the elaborator's
+`rfl` or `decide` does not apply or is slow: types with no decidable equality (`Val`, `Value`,
+threads, memories) and long evaluations. `kernel_rfl` checks `a` and `b` equal by the kernel's
+definitional equality when it runs (`Obl.krfl`, MojoProof/Sym/Obl.lean) and fails there if they
+are not, with a fresh kernel cache for each call. `kernel_rfl_late` (syntax
+`MojoProofTest.kernelRflLate`) assigns `Eq.refl a` at the type `a = b` (`Obl.hint`) without
+checking it: the kernel checks it when it checks the whole declaration, in one pass with that
+declaration's other proofs, so the equations of one declaration share the kernel's caches. A goal
+the kernel does not show then fails the declaration, at the declaration and not at the tactic.
+`of_decide_eq_true (by kernel_rfl_late)` puts a Boolean decision into the same pass. Use: the
+memories of a warp's lanes, each from the lanes before it (MojoProofTest/GemvWarp.lean), where
+`kernel_rfl` or `decide +kernel` would evaluate the earlier lanes again for each equation.
+
+Tests (`MojoProofTest/KernelRfl.lean`, `#guard_msgs`): `kernel_rfl` refuses `1 = 2` when it runs;
+`kernel_rfl_late` closes `2 + 2 = 4`, refuses a goal that is not an equation when it runs, and
+leaves `1 = 2` to the declaration's check, which the kernel refuses ("application type
+mismatch").

@@ -19,10 +19,20 @@ at the end of the `mat` clause's line also `N.runInv`, `N.kept` and `N.sound_inv
 clause also `N.argTy`, `N.argTail`, `N.ret` and `N.correct`. A command `mojo_family F := …`
 declares `F.prog`, `F.fn` and `F.prog_corpus` when it is not under `#guard_msgs`, a command
 `sym_summary_family n (x₁ … xₖ) := …` declares `n` and `n_eq` when it is not under `#guard_msgs`,
-and a command `tile_map2 k …` declares `k_tile`. A command is under `#guard_msgs` when the last
-non-blank line before it, comments blanked, is `#guard_msgs in` with or without options
-(`#guard_msgs (whitespace := lax) in`); the self-checks (`CHECKS`, run before the scan) pin the
-refusals of `mojo_kernel`, `mojo_family` and `sym_summary_family` under both forms. A tactic or command declared by `elab`, `syntax`
+a command `tile_map2 k …` declares `k_tile`, and a command
+`import_spec imp p₁ … pₖ : Src (σ : Sz) where | op … | op' …` declares `Src`, `Src.SIn`,
+`Src.SOut`, `Src.denote`, `Src.translate`, `readIn`, `readOut` and, at each operation `op` (a line
+of the command beginning with `| op`), `Src.op`, `readIn_op` and `readOut_op`, and the importer
+`imp` when it is not under `#guard_msgs` (a refusal; cited.py does not check that every `eq` case
+closes). The scan reads code only: it first blanks every comment, a block comment up to the `-/`
+that closes it past the block comments nested in it (Lean's comments nest), so an example in a
+docstring declares nothing; a `/-` or `--` in a string literal (an interpolated one's terms
+included), a raw string, a char literal or a `«…»` name opens no comment. A command is under `#guard_msgs` when the last non-blank line before it, comments blanked,
+is `#guard_msgs in` with or without options (`#guard_msgs (whitespace := lax) in`); `CHECKS` (run
+before the scan) pins the refusals of `mojo_kernel`, `mojo_family` and `sym_summary_family` under
+both forms, that a docstring's example declares nothing and that a comment delimiter in each kind
+of literal opens nothing, and `DOCS` that a docstring ends past its nested comments and is found
+after a string holding `/-`. A tactic or command declared by `elab`, `syntax`
 or `macro` with a quoted name (`elab "kernel_check" : tactic`, with or without a trailing space
 inside the quotes, after an optional `(name := …)` and an optional `docComment`, `(docComment)?`
 or `d:docComment`, and with `: tactic` or `: command` on the same line or an indented line below)
@@ -43,10 +53,22 @@ checked: a card opens no namespace, so they are ambiguous.
 
 Prints each failed self-check, each missing name and the count; exits 1 if any check fails or
 any name is missing.
+
+With `--deleted REV` it checks instead the names that the commit `REV` declares (by the same
+scan of its `GPUProof/`, `MojoProof/` and `MojoProofTest/` files, read with `git show`) and the
+working tree no longer declares. Every suffix of such a name, of one or more components
+(`warpBound`, `Sem.warpBound`, `MojoProof.Sem.warpBound`), that is no suffix of a declaration of
+ours or of a package and no field name must not begin a backticked span (the whole span, or its
+head before a space) in a docstring or comment of our Lean files or in a tracked Markdown file,
+fenced code included. docs/BUGS.md, docs/found-bugs.md and docs/UPSTREAM.md are skipped: they
+record deleted names on purpose. This covers the names a change deletes in whatever case they
+are written (the default check reads only snake_case names in module docstrings, and only
+qualified names in cards), so it is run on the commits since the last check.
 """
 import functools
 import pathlib
 import re
+import subprocess
 import sys
 
 # Names cited in module docstrings that are not Lean declarations.
@@ -62,6 +84,8 @@ OTHER = {
     'vector_multiply',
     'seq_cst',          # an LLVM ordering keyword
     'mojo_import.root', # the importer's root directory (MojoProof/LLVM/Quote.lean)
+    'readIn_op',        # what `import_spec` adds at each operation `op`, schematic in op
+    'readOut_op',       # (MojoProof/Import/Command.lean)
 }
 
 # Theorems the docs name as not yet proved.
@@ -80,13 +104,19 @@ MAP2 = re.compile(r'(?:^|\s)map2\s')
 FAMILY = re.compile(r'^\s*mojo_family\s+([^\s:]+)\s+:=')
 TILE = re.compile(r'^\s*tile_map2\s+([^\s:]+)\s')
 SUMFAM = re.compile(r'^\s*sym_summary_family\s+([^\s:(]+)\s+\(')
+IMPSPEC = re.compile(r'^import_spec\s+([^\s:]+)[^:]*:\s*([A-Za-z_][A-Za-z0-9_\']*)\s*\(')
+IMPOP = re.compile(r'^\s+\|\s*([A-Za-z_][A-Za-z0-9_\']*)\s')
 TACTIC = re.compile(
-    r'^\s*(?:elab|syntax|macro)(?:\s+\(name\s*:=\s*[^)]*\))?'
+    r'^\s*(?:(?:local|scoped)\s+)?(?:elab|syntax|macro)(?:\s+\(name\s*:=\s*[^)]*\))?'
     r'(?:\s+(?:\(docComment\)\??|(?:[A-Za-z_]+:)?docComment))?\s+"([a-z][A-Za-z0-9_]*) ?"(.*)$')
 CATEGORY = re.compile(r':\s*(?:tactic|command)\b')
 GUARD = re.compile(r'^#guard_msgs(?:\s*\([^)]*\))*\s+in$')
-COMMENT = re.compile(r'/-.*?-/|--[^\n]*', re.S)
-DOC = re.compile(r'/-!(.*?)-/', re.S)
+# The tokens that open a comment or a literal, for `comments`: a raw string `r#"…"#` (its `r` not
+# the end of a name), a string, a char literal (its `'` not a name's prime), a `«…»` name; in an
+# interpolated string's term, also the braces.
+LEX = re.compile(r'/-|--|(?<![\w\'.!?])r#*"|"|(?<![\w\'])\'(?:\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)|[^\\\'\n])\'|«[^»]*»')
+TERM = re.compile(LEX.pattern + r'|[{}]')
+NEST = re.compile(r'/-|-/')
 TICK = re.compile(r"`((?:[A-Za-z_][A-Za-z0-9_'₂]*\.)*[a-z][A-Za-z0-9'₂]*(?:_[A-Za-z0-9'₂]+)+)`")
 PATH = re.compile(r'\b((?:GPUProof|MojoProof(?:Test)?)/[A-Za-z0-9_/]+\.lean)\b')
 MODULE = re.compile(r'\b((?:GPUProof|MojoProof(?:Test)?)(?:\.[A-Z][A-Za-z0-9_]*)+)\b')
@@ -107,15 +137,29 @@ def scan(text: str) -> tuple[set[str], set[str], set[str], set[str]]:
     decls, spaces, opens, fields = set(), set(), set(), set()
     stack: list[tuple[str, str]] = []   # (kind, namespace segment or '')
     struct = None   # the full name of the structure or class whose fields follow
-    # blank out comments, keeping the lines
-    text = COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text)
+    text = blank(text)
     prev = ''   # the last non-blank line
     kernel = None   # the full name of the unrefused `mojo_kernel` command whose clauses follow
+    impspec = None  # the namespace and `Src` of the `import_spec` command whose operations follow
     lines = text.split('\n')
     for i, line in enumerate(lines):
         cur = '.'.join(s for _, s in stack if s)
         if kernel and line[:1].strip():
             kernel = None
+        if impspec and line[:1].strip():
+            impspec = None
+        if impspec and (m := IMPOP.match(line)):
+            pre = f'{impspec[0]}.' if impspec[0] else ''
+            decls.update((f'{pre}{impspec[1]}.{m.group(1)}', f'{pre}readIn_{m.group(1)}',
+                          f'{pre}readOut_{m.group(1)}'))
+        if m := IMPSPEC.match(line):
+            pre = f'{cur}.' if cur else ''
+            src = f'{pre}{m.group(2)}'
+            decls.update((src, f'{src}.SIn', f'{src}.SOut', f'{src}.denote', f'{src}.translate',
+                          f'{pre}readIn', f'{pre}readOut'))
+            if not GUARD.match(prev.strip()):
+                decls.add(f'{pre}{m.group(1)}')
+            impspec = (cur, m.group(2))
         if kernel and LOOP.match(line):
             decls.add(f'{kernel}.sound_loop')
         if m := KERNEL.match(line):
@@ -226,12 +270,121 @@ CHECKS = [
     ('mojo_kernel k := vadd\n', {'k', 'k.sound_of'}, set()),
     ('#guard_msgs (drop info) in\nmojo_kernel r := vadd\n', {'r'}, {'r.sound_of'}),
     ('#guard_msgs in\nmojo_kernel q := vadd\n', {'q'}, {'q.sound_of'}),
+    ('import_spec imp g mono : Src (n : ℕ) where\n  /-- op -/\n  | sum (v : Fin n → ℝ) → (y : ℝ) :=\n'
+     '      ∑ i, v i\n    ↦ S g\n    from v\n    at fun _ => y\n',
+     {'imp', 'Src', 'Src.SIn', 'Src.SOut', 'Src.denote', 'Src.translate', 'Src.sum', 'readIn',
+      'readOut', 'readIn_sum', 'readOut_sum'}, set()),
+    ('/--\nwarning: import_spec: `bad` is not declared\n-/\n#guard_msgs in\n/-- d -/\n'
+     'import_spec bad g : Op (n : ℕ) where\n  | two (v : ℝ) → (y : ℝ) := 2 * v\n    ↦ S g\n'
+     '    from v\n    at y\n', {'Op', 'Op.two', 'readIn_two'}, {'bad'}),
+    ('/-! d\n/-- c -/\nimport_spec imp g : Src (n : ℕ) where\n  | op (v : ℝ) → (y : ℝ) := v\n'
+     'namespace holds one importer.\n-/\ndef f_g := 1\n',
+     {'f_g'}, {'imp', 'Src', 'Src.op', 'readIn_op', 'holds.f_g'}),
+    # comment delimiters in literals open nothing: a string, one after an
+    # escaped quote, a raw string with a quote in it, a char literal `'"'`, an interpolated
+    # string's term, a `«…»` name; a quote in a comment opens no string; names' primes
+    ('def marker : String := "/-"\n/-! `deleted_fact` -/\ntheorem after_marker : True := trivial\n',
+     {'marker', 'after_marker'}, set()),
+    ('def s : String := "--" /- c\ntheorem hidden : True := trivial -/\ntheorem t1 : True := trivial\n',
+     {'s', 't1'}, {'hidden'}),
+    ('def e : String := "\\"/-"\ntheorem t2 : True := trivial\n', {'e', 't2'}, set()),
+    ('def r1 : String := r#"a"/-"#\ntheorem t3 : True := trivial\n', {'r1', 't3'}, set()),
+    ('def c1 : Char := \'"\'\ndef c2 : String := "/-"\ntheorem t4 : True := trivial\n',
+     {'c1', 'c2', 't4'}, set()),
+    ('def m1 : String := s!"{"/-" ++ "}"}"\ntheorem t5 : True := trivial\n', {'m1', 't5'}, set()),
+    ('def «a/-b» := 1\ntheorem t6 : True := trivial\n', {'t6'}, set()),
+    ('-- "\ntheorem t7 : True := trivial\n/- " -/\ntheorem t8 : True := trivial\n', {'t7', 't8'}, set()),
+    ("theorem h' (x' : Nat) : x' = x' := rfl\n/- theorem gone' : True := trivial -/\n",
+     {"h'"}, {"gone'"}),
 ]
+
+# Texts and their module docstrings, as `docs` reads them: the first past its nested comment, and
+# one after a string holding `/-`.
+DOCS = [('/-! `a_b`\n```\n/-- c -/\n```\n`d_e` -/\n/-! `f_g` -/\n',
+         [' `a_b`\n```\n/-- c -/\n```\n`d_e` ', ' `f_g` ']),
+        ('def marker : String := "/-"\n/-! `deleted_fact` -/\n', [' `deleted_fact` '])]
+
+
+def comments(text: str) -> list[tuple[int, int]]:
+    """The spans of the comments of `text`: `--` to the end of its line, and `/-` to the `-/` that
+    closes it, counting the block comments nested in it (Lean's comments nest). Outside comments,
+    string literals (with their escapes, and an interpolated one's terms in braces), raw strings,
+    char literals and `«…»` names are skipped, so a `/-` or `--` in one opens nothing; inside a
+    block comment, as in Lean, only `/-` and `-/` count."""
+    out: list[tuple[int, int]] = []
+    lex(text, 0, out)
+    return out
+
+
+def lex(text: str, i: int, out: list[tuple[int, int]], term: bool = False) -> int:
+    """Scan `text` from `i`, appending the spans of its comments to `out`; in an interpolated
+    string's term (`term`), stop past the `}` that closes it. The end of the scan."""
+    depth = 0
+    while m := (TERM if term else LEX).search(text, i):
+        i, t = m.start(), m.group()
+        if t == '--':
+            j = text.find('\n', i)
+            j = len(text) if j < 0 else j
+            out.append((i, j))
+        elif t == '/-':
+            j, d = i + 2, 1
+            while d and (n := NEST.search(text, j)):
+                d, j = d + (1 if n.group() == '/-' else -1), n.end()
+            j = j if d == 0 else len(text)
+            out.append((i, j))
+        elif t == '{':
+            depth, j = depth + 1, m.end()
+        elif t == '}':
+            if not depth:
+                return m.end()
+            depth, j = depth - 1, m.end()
+        elif t == '"':
+            j = string_end(text, m.end(), out, text[i - 1:i] == '!')
+        elif t[0] == 'r':
+            k = text.find('"' + '#' * (len(t) - 2), m.end())
+            j = len(text) if k < 0 else k + len(t) - 1
+        else:   # a char literal or a `«…»` name
+            j = m.end()
+        i = j
+    return len(text)
+
+
+def string_end(text: str, i: int, out: list[tuple[int, int]], interp: bool) -> int:
+    """The end of the string literal whose body starts at `i`, past its escapes, and in an
+    interpolated one (`interp`: `s!"…"`, `m!"…"`) past each term in braces (`lex`)."""
+    while i < len(text):
+        c = text[i]
+        if c == '\\':
+            i += 2
+        elif c == '"':
+            return i + 1
+        elif c == '{' and interp:
+            i = lex(text, i + 1, out, term=True)
+        else:
+            i += 1
+    return len(text)
+
+
+def blank(text: str) -> str:
+    """`text` with every comment (`comments`) blanked, its lines kept."""
+    chars = list(text)
+    for i, j in comments(text):
+        chars[i:j] = re.sub(r'[^\n]', ' ', text[i:j])
+    return ''.join(chars)
+
+
+def docs(text: str) -> list[str]:
+    """The module docstrings of `text`: the comments that begin with `/-!`, without `/-!` and `-/`."""
+    return [text[i + 3:j - 2] for i, j in comments(text) if text.startswith('/-!', i)]
 
 
 def selfcheck() -> int:
-    """Run `CHECKS` on `scan`; print and count each failure."""
+    """Run `CHECKS` on `scan` and `DOCS` on `docs`; print and count each failure."""
     bad = 0
+    for text, want in DOCS:
+        if (got := docs(text)) != want:
+            print(f'self-check: docs({text!r}) is {got!r}')
+            bad += 1
     for text, want, refuse in CHECKS:
         got = scan(text)[0]
         for n in sorted(want - got):
@@ -243,6 +396,62 @@ def selfcheck() -> int:
     return bad
 
 
+def git(*args: str) -> str:
+    """The output of `git args`, in the working tree."""
+    return subprocess.run(['git', *args], capture_output=True, text=True, check=True).stdout
+
+
+def rev_decls(rev: str) -> set[str]:
+    """The full names that the Lean files of `GPUProof/`, `MojoProof/` and `MojoProofTest/` at the
+    commit `rev` declare (`scan`)."""
+    decls: set[str] = set()
+    for f in git('ls-tree', '-r', '--name-only', rev, '--', 'GPUProof', 'MojoProof',
+                 'MojoProofTest').split():
+        if f.endswith('.lean'):
+            decls |= scan(git('show', f'{rev}:{f}'))[0]
+    return decls
+
+
+def suffixes(name: str) -> list[str]:
+    """The suffixes of the full name `name` of one or more components, the name itself first."""
+    parts = name.split('.')
+    return ['.'.join(parts[i:]) for i in range(len(parts))]
+
+
+def deleted(rev: str, decls: set[str], fields: set[str]) -> int:
+    """Print every backticked span of our docstrings, comments and tracked Markdown files that
+    begins with a suffix of a name `rev` declares and the working tree does not, where that suffix
+    names nothing now (`--deleted`, in the module docstring); return their count."""
+    now = {s for n in decls | package_decls() for s in suffixes(n)} | fields
+    gone: dict[str, str] = {}
+    for n in sorted(rev_decls(rev) - decls):
+        for s in suffixes(n):
+            if s not in now:
+                gone.setdefault(s, n)
+    skip = {'docs/BUGS.md', 'docs/found-bugs.md', 'docs/UPSTREAM.md'}
+    texts = [f for f in git('ls-files', '--', '*.md').split() if f not in skip]
+    texts += [str(p) for d in ('GPUProof', 'MojoProof', 'MojoProofTest')
+              for p in sorted(pathlib.Path(d).rglob('*.lean'))]
+    found = 0
+    for f in texts:
+        text = pathlib.Path(f).read_text(errors='replace')
+        if f.endswith('.lean'):
+            # only docstrings and comments: blank the code, keeping the lines
+            keep = comments(text)
+            chars = [c if c == '\n' else ' ' for c in text]
+            for i, j in keep:
+                chars[i:j] = text[i:j]
+            text = ''.join(chars)
+        for s in SPAN.finditer(text):
+            head = s.group(1).split(' ')[0]
+            if head in gone:
+                line = text.count('\n', 0, s.start()) + 1
+                print(f'{f}:{line}: `{head}` names `{gone[head]}`, declared at {rev} and not now')
+                found += 1
+    print(f'cited names deleted since {rev}: {found}')
+    return found
+
+
 def main() -> int:
     if failed := selfcheck():
         print(f'cited.py self-checks failed: {failed}')
@@ -252,10 +461,11 @@ def main() -> int:
     info = {p: scan(t) for p, t in texts.items()}
     decls = set().union(*(i[0] for i in info.values()))
     fields = set().union(*(i[3] for i in info.values()))
+    if sys.argv[1:2] == ['--deleted']:
+        return 1 if deleted(sys.argv[2], decls, fields) else 0
     missing = 0
     for p, text in texts.items():
-        for d in DOC.finditer(text):
-            doc = d.group(1)
+        for doc in docs(text):
             named = {pathlib.Path(f) for f in PATH.findall(doc)}
             named |= {pathlib.Path(m.replace('.', '/') + '.lean') for m in MODULE.findall(doc)}
             spaces = info[p][1] | info[p][2]

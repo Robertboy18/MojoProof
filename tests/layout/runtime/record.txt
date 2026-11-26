@@ -1,6 +1,6 @@
 Layout conformance record, runtime leaves: a test of the model, not a proof, and not a GPU run.
 what: the values of Mojo's layout functions on layouts whose extents and strides are runtime
-  values, as a compiled CPU program computes them, against the model of MojoProof/Layout
+  values, as a compiled CPU program computes them, against the model of GPUProof/Layout
   (MojoProofTest.LayoutRuntime).
 mojo: 1.3.0.dev2026111705 (nightly), for the host CPU (x86_64, Intel Xeon Platinum 8275CL)
 source: modular/modular bbc13a71 (the layout library the model transcribes)

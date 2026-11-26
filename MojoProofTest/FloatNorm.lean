@@ -29,6 +29,11 @@ normality premises are discharged by evaluation (`decide +kernel`), the premises
   `halveFin 2` with `ε = 8.5`, bfloat16 weights `1`, multiplied before the cast, under the
   oracle number of the word `0.25`; `rmsnormOff_f16` at `1, ..., 8` along `halveFin 3` with
   `ε = 38.5`, binary16 weights `1`, cast first, under the oracle number of the word `0.125`.
+* `cast_widen`'s and `rmsnormOff_widen`'s instances, tests of one example each: `widen_words`, a
+  binary16 and a bfloat16 word cast into binary32, finite with the same value, and its mutant
+  `narrow16`, a binary32 word cast into binary16 whose value changes; `rmsnormOff_in16` and
+  `rmsnormOff_inbf16`, `rmsnormOff_bf16`'s instance at the inputs `1, 2, 3, 4` in binary16 and in
+  bfloat16 (`iotaIn`, with `iotaIn_toReal`) cast into binary32, cast first and multiplied first.
 The real values, variance and mean of squares of `xs` (`xs_toReal`, `var_xs_eq`, `msq_xs_eq`) are
 the instances at `4` of `iota_toReal`, `var_iota` and `msq_iota` (MojoProofTest/FloatStats.lean),
 which hold at every length `n ≤ 2 ^ 24`; `var8` and `msq8` are their instances at `8`.
@@ -247,6 +252,81 @@ theorem rmsnormOff_f16 := rmsnormOff_error rfl false (halveFin 3) (leaves_halveF
   0x3e000000 (by rw [toReal_eq (q := 77 / 2) (by decide +kernel)]; norm_num) (by decide +kernel)
   (by decide +kernel) (by decide +kernel) (by decide +kernel)
   (by rmsoff_num 3 (f32 0x421A0000) (77 / 2)) ⟨0, by norm_num⟩ (by decide +kernel)
+
+/-- The inputs `1, ..., n` in the format `fs`: `iota n` cast into `fs`. -/
+abbrev iotaIn (fs : FloatFormat) (n : ℕ) : Fin n → Model fs :=
+  fun i => Model.cast .binary32 fs (iota n i)
+
+/-- The real values of `iotaIn fs n` are those of `iota n`, for every IEEE format `fs` with at
+most binary32's exponent and fraction widths, `n` and index `i`, when the words of `iotaIn fs n`
+are finite and cast back into binary32 to those of `iota n`: `cast_widen`. -/
+theorem iotaIn_toReal {fs : FloatFormat} (hs : fs.isIEEE = true)
+    (he : fs.expWidth ≤ FloatFormat.binary32.expWidth)
+    (hf : fs.fracWidth ≤ FloatFormat.binary32.fracWidth) {n : ℕ}
+    (hx : ∀ i, (iotaIn fs n i).isFinite = true)
+    (hc : ∀ i, Model.cast fs .binary32 (iotaIn fs n i) = iota n i) (i : Fin n) :
+    (iotaIn fs n i).toReal = (iota n i).toReal :=
+  (cast_widen hs rfl he hf (hx i)).2.symm.trans (congrArg Model.toReal (hc i))
+
+/-- **`cast_widen` at a binary16 and a bfloat16 word**, a test of one example each: the binary16
+word `0x3c01` (`1 + 2⁻¹⁰`) cast into binary32 is the word `0x3f802000` and the bfloat16 word
+`0x3f81` (`1 + 2⁻⁷`) the word `0x3f810000`, by evaluation, and each cast is finite with the
+real value of its input, by `cast_widen`. -/
+theorem widen_words :
+    Model.cast .binary16 .binary32 (Model.ofNatBits 0x3c01) = f32 0x3f802000 ∧
+      Model.cast .bfloat16 .binary32 (Model.ofNatBits 0x3f81) = f32 0x3f810000 ∧
+      ((Model.cast .binary16 .binary32 (Model.ofNatBits 0x3c01)).isFinite = true ∧
+        (Model.cast .binary16 .binary32 (Model.ofNatBits 0x3c01)).toReal =
+          (Model.ofNatBits 0x3c01 : Model .binary16).toReal) ∧
+      ((Model.cast .bfloat16 .binary32 (Model.ofNatBits 0x3f81)).isFinite = true ∧
+        (Model.cast .bfloat16 .binary32 (Model.ofNatBits 0x3f81)).toReal =
+          (Model.ofNatBits 0x3f81 : Model .bfloat16).toReal) :=
+  ⟨by decide +kernel, by decide +kernel, cast_widen rfl rfl (by decide) (by decide)
+    (by decide +kernel), cast_widen rfl rfl (by decide) (by decide) (by decide +kernel)⟩
+
+/-- **A narrowing cast changes a value**, the mutant of `widen_words`: binary16 has fewer
+fraction bits than binary32, so `cast_widen` does not apply to the cast of binary32 into
+binary16, and the binary32 word `0x3f800001` (`1 + 2⁻²³`) cast into binary16 is the word
+`0x3c00` of `1`, whose real value differs. -/
+theorem narrow16 :
+    FloatFormat.binary16.fracWidth < FloatFormat.binary32.fracWidth ∧
+      Model.cast .binary32 .binary16 (f32 0x3f800001) = Model.ofNatBits 0x3c00 ∧
+      (Model.cast .binary32 .binary16 (f32 0x3f800001)).toReal ≠ (f32 0x3f800001).toReal := by
+  refine ⟨by decide, by decide +kernel, ?_⟩
+  rw [Model.Algebraic.toReal_of_toRat?_eq_some (q := 1) (by decide +kernel),
+    toReal_eq (q := 1 + 1 / 2 ^ 23) (by decide +kernel)]
+  norm_num
+
+/-- **The instance of `rmsnormOff_widen` at the binary16 inputs `1, 2, 3, 4` (`iotaIn`) along
+`halveFin 2`, cast into binary16 first**, a test of one example: binary16 weights `1`
+(`0x3c00`), the divisor word `4`, `ε = 8.5` (`eps'`), the offset `1` and the output at `0` under
+the oracle number of the word `0.25`, its finiteness premises by evaluation and its premise on
+the operand's error by `rmsoff_num` after `iotaIn_toReal`. -/
+theorem rmsnormOff_in16 := rmsnormOff_widen rfl (by decide) (by decide) rfl false (halveFin 2)
+  (leaves_halveFin 2) (iotaIn .binary16 _) (by decide +kernel)
+  (fun _ => (Model.ofNatBits 0x3c00 : Model .binary16)) (N := nat32 (2 ^ 2)) (ε := eps')
+  (by decide +kernel) (nat32_toReal (by norm_num) (by decide +kernel)) one 0x3e800000
+  (by rw [toReal_eq (q := 17 / 2) (by decide +kernel)]; norm_num) (by decide +kernel)
+  (by decide +kernel) (by decide +kernel) (by decide +kernel)
+  (by simp only [iotaIn_toReal (fs := .binary16) (n := 2 ^ 2) rfl (by decide) (by decide)
+        (by decide +kernel) (by decide +kernel)]
+      rmsoff_num 2 eps' (17 / 2))
+  ⟨0, by norm_num⟩ (by decide +kernel)
+
+/-- **The instance of `rmsnormOff_widen` at the bfloat16 inputs `1, 2, 3, 4` (`iotaIn`) along
+`halveFin 2`, multiplied before the cast into bfloat16**, a test of one example: bfloat16
+weights `1` (`0x3f80`), the divisor word `4`, `ε = 8.5` (`eps'`), the offset `1` and the output
+at `0` under the oracle number of the word `0.25`. -/
+theorem rmsnormOff_inbf16 := rmsnormOff_widen rfl (by decide) (by decide) rfl true (halveFin 2)
+  (leaves_halveFin 2) (iotaIn .bfloat16 _) (by decide +kernel)
+  (fun _ => (Model.ofNatBits 0x3f80 : Model .bfloat16)) (N := nat32 (2 ^ 2)) (ε := eps')
+  (by decide +kernel) (nat32_toReal (by norm_num) (by decide +kernel)) one 0x3e800000
+  (by rw [toReal_eq (q := 17 / 2) (by decide +kernel)]; norm_num) (by decide +kernel)
+  (by decide +kernel) (by decide +kernel) (by decide +kernel)
+  (by simp only [iotaIn_toReal (fs := .bfloat16) (n := 2 ^ 2) rfl (by decide) (by decide)
+        (by decide +kernel) (by decide +kernel)]
+      rmsoff_num 2 eps' (17 / 2))
+  ⟨0, by norm_num⟩ (by decide +kernel)
 
 /-- The output of `lnorm_xs` is the word `-0.75` and that of `rmsnorm_xs` the word `0.25`. -/
 theorem outs_xs :

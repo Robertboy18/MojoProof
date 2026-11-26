@@ -4,9 +4,9 @@ title: `upcast` divides strides and shapes by the factor with `shape_div`
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:2228
 quote: "new_stride = shape_div(d, factor)"
-lean: MojoProof.Layout.Lay.upcast, MojoProof.Layout.shapeDiv, MojoProof.Layout.shapeDiv_factor, MojoProof.Layout.shapeDiv_dvd, MojoProof.Layout.shapeDiv_mul, MojoProof.Layout.Lay.upcast_fuse, MojoProof.Layout.Lay.upcast_scale, MojoProof.Layout.Lay.upcast_modes, MojoProof.Layout.Lay.upcast_call
+lean: GPUProof.Layout.Lay.upcast, GPUProof.Layout.shapeDiv, GPUProof.Layout.shapeDiv_factor, GPUProof.Layout.shapeDiv_dvd, GPUProof.Layout.shapeDiv_mul, GPUProof.Layout.Lay.upcast_fuse, GPUProof.Layout.Lay.upcast_scale, GPUProof.Layout.Lay.upcast_modes, GPUProof.Layout.Lay.upcast_call
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance, MojoProofTest.LayoutRuntime
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance, MojoProofTest.LayoutRuntime
 upstream:
 level: L1
 ---

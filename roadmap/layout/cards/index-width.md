@@ -4,9 +4,9 @@ title: With a narrow index type the caller must ensure products and sums fit
 kind: construct
 ref: modular/modular@bbc13a71:Mojo/stdlib/std/utils/coord.mojo:867
 quote: "a narrow `out_type` (e.g. `uint32`) are responsible for ensuring the"
-lean: MojoProof.Layout.Lay.call_flat_ofNat, MojoProof.Layout.Lay.call_flat_toNat
+lean: GPUProof.Layout.Lay.call_flat_ofNat, GPUProof.Layout.Lay.call_flat_toNat
 corpus: none
-tests: MojoProofTest.LayoutLaws
+tests: MojoProofTest.GPUProof.LayoutLaws
 upstream:
 depends: crd2idx
 level: L1

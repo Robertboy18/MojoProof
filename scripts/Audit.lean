@@ -30,15 +30,17 @@ and the tests' declarations are compared with both.
   different definitions or inductive types of the library (two definitions of one concept; an
   inductive predicate written again, with an `iff` between the two, is one), the equivalence or
   equation being the conclusion under the binders or a conjunct of it at any depth
-  (`∀ xs, P ∧ (f as = g bs)` is counted), except a `@[csimp]` theorem whose right-hand side is a
-  private definition (the code compiled for the left-hand side, which nothing else names). A
+  (`∀ xs, P ∧ (f as = g bs)` is counted), a statement headed by another definition being read
+  as its value at its arguments (`Function.IsFixedPt f x` is `f x = x`, `sides`), except a
+  `@[csimp]` theorem whose right-hand side is a private definition (the code compiled for the left-hand side, which nothing else names). A
   `@[csimp]` equality between two public definitions is counted. A row of `scripts/laws.tsv`
   exempts the pairs of definitions it lists in the one statement it records (`lawSplit`): a
   theorem is counted unless every pair its statement asserts is exempted, so a duplicate equality
   added as a further conjunct of an exempted theorem is counted. The probe module
-  `MojoProofTest.AuditProbe` plants one theorem of each kind, a conjunction with an equation and
-  an `iff` between two inductive predicates, and the audit exits with 1 unless it counts the
-  first, the third and the fourth and not the second;
+  `MojoProofTest.AuditProbe` plants one theorem of each kind, a conjunction with an equation, an
+  `iff` between two inductive predicates, a `Function.IsFixedPt` between two definitions and a
+  `Function.Injective`, and the audit exits with 1 unless it counts the first, the third, the
+  fourth and the fifth and not the second or the sixth;
 * `laws`: the theorems of `scripts/laws.tsv` that the `equivalences` rule accepts and that a row
   exempts, each a law between two concepts and not a second definition of one. A row gives the
   theorem, its kind (`law`: one side's definition meets a specification the other side states, on
@@ -278,7 +280,8 @@ def anchored (reach : NameSet) (oursIn : Array (Name × Name)) : String → Stri
 from each package; each of our modules with its imports and their packages; for each claim (a theorem among the audit targets) the declarations of
 ours it reaches (`closure`, auto-generated ones not listed), the external constants it reaches by
 package, its axioms, and its TRUST ids (the anchors of `scripts/trust.tsv`). Throws on an anchor
-of an unknown kind or constant. -/
+of an unknown kind, a `const` anchor that is no constant, a `module` anchor that is no module of
+ours, and a `modules` anchor that no module of ours is under. -/
 def depsFacts (env : Environment) (ourMods : Array Name) (targets : List Name) : IO Json := do
   let sysroot ← findSysroot
   let mods := env.header.moduleNames
@@ -299,6 +302,8 @@ def depsFacts (env : Environment) (ourMods : Array Name) (targets : List Name) :
     unless ["all", "module", "modules", "const"].contains k do throw (.userError s!"{t}: kind {k}")
     if k == "const" && !env.contains a.toName then throw (.userError s!"{t}: no constant {a}")
     if k == "module" && !ourMods.contains a.toName then throw (.userError s!"{t}: no module {a}")
+    if k == "modules" && !ourMods.any (a.toName.isPrefixOf ·) then
+      throw (.userError s!"{t}: no module under {a}")
   let modules := ourMods.map fun m =>
     let imps := (env.header.moduleData[(env.getModuleIdx? m).get!.toNat]!).imports.map (·.module)
     Json.mkObj [("name", toJson m.toString), ("package", toJson "MojoProof"),
@@ -328,13 +333,23 @@ def depsFacts (env : Environment) (ourMods : Array Name) (targets : List Name) :
 /-- The equivalences and equations a statement asserts, as pairs of sides: under its binders
 (`∀` and premises), the statement itself when it is `a ↔ b` or `a = b`, and when it is a
 conjunction `p ∧ q`, those of `p` and of `q`, each under its own binders. So
-`∀ x, h x → (f x = g x ∧ P x)` and `∀ x, P x ∧ ∀ y, f x y ↔ g x y` assert one each. -/
-partial def sides (e : Expr) : List (Expr × Expr) :=
+`∀ x, h x → (f x = g x ∧ P x)` and `∀ x, P x ∧ ∀ y, f x y ↔ g x y` assert one each. A statement
+headed by another definition (of the library or not) is read as its value at its arguments, up to
+`fuel` such unfoldings in a row: `Function.IsFixedPt f x` is `f x = x`, so
+`Function.IsFixedPt canon t` asserts `(canon t, t)`, and `Set.EqOn f g s` asserts `(f x, g x)`
+under `x ∈ s`. -/
+partial def sides (env : Environment) (e : Expr) (fuel : Nat := 8) : List (Expr × Expr) :=
   let body := e.getForallBody
-  if body.isAppOfArity ``And 2 then sides body.appFn!.appArg! ++ sides body.appArg!
+  if body.isAppOfArity ``And 2 then sides env body.appFn!.appArg! fuel ++ sides env body.appArg! fuel
   else if body.isAppOfArity ``Iff 2 || body.isAppOfArity ``Eq 3 then
     [(body.appFn!.appArg!, body.appArg!)]
-  else []
+  else match fuel, body.getAppFn with
+    | k + 1, .const c us =>
+      match env.find? c with
+      | some (.defnInfo d) =>
+        sides env ((d.value.instantiateLevelParams d.levelParams us).beta body.getAppArgs) k
+      | _ => []
+    | _, _ => []
 
 /-- The pairs `(f, g)` of theorem `n`: for each equivalence or equation its statement asserts
 (`sides`: the conclusion under the binders, or a conjunct of it, at any depth) that is
@@ -344,7 +359,7 @@ is a `@[csimp]` theorem and `g` is private (the code compiled for `f`). -/
 def equivPairs (env : Environment) (isHead : Name → Bool) (n : Name) : List (Name × Name) :=
   match env.find? n with
   | some (.thmInfo t) =>
-    (sides t.type).filterMap fun (a, b) =>
+    (sides env t.type).filterMap fun (a, b) =>
       match a.getAppFn.constName?, b.getAppFn.constName? with
       | some f, some g =>
         if f != g && isHead f && isHead g && !(Compiler.hasCSimpAttribute env n && isPrivateName g)
@@ -663,12 +678,13 @@ unsafe def main (args : List String) : IO UInt32 := do
         {showPairs (equivPairs env isHead n)})"
     | none => s!"{r.name} (no such declaration)"
   -- the probe: a public-to-public `@[csimp]` equality is counted, one with a private right-hand
-  -- side is not, an equation that is a conjunct is counted, and so is an `iff` between two
-  -- inductive predicates
+  -- side is not, an equation that is a conjunct is counted, and so are an `iff` between two
+  -- inductive predicates and a fixed point between two definitions; an injectivity is not
   let inProbe (c : Name) := probe.isPrefixOf (userName c) && headKind env c
   let probeOk := isEquiv env inProbe (probe ++ `addZero_csimp) &&
     !isEquiv env inProbe (probe ++ `zeroAdd_csimp) && isEquiv env inProbe (probe ++ `addZero_and) &&
-    isEquiv env inProbe (probe ++ `evenA_iff)
+    isEquiv env inProbe (probe ++ `evenA_iff) && isEquiv env inProbe (probe ++ `addZero_fixed) &&
+    !isEquiv env inProbe (probe ++ `addZero_injective)
   IO.println s!"equivalences probe: {if probeOk then "ok" else "FAILED"}"
   -- the laws probe: a row exempts its pairs in its statement only, so the law's conjunction with
   -- an unexempted equation is counted, and a row with another statement or pair is stale

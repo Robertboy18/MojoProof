@@ -1,19 +1,25 @@
-# Float bounds of reductions: any tree, butterflies of any width, block trees, mean, variance, max-subtracted exponential sums, the compiled exponential and log-softmax
+# Float bounds of reductions: any tree, butterflies of any width, block trees, mean, variance, max-subtracted exponential sums, the compiled exponential and log-softmax, commutativity up to NaN payloads and trees up to swapped children
 
 Lean: MojoProof/Float/Tree.lean, MojoProof/Float/Halve.lean, MojoProof/Float/Stats.lean,
-MojoProof/Float/ExpSum.lean, MojoProof/Float/Ex2.lean and the additions to
-MojoProof/Sem/Bfly.lean and MojoProofTest/Bfly.lean. Instances: MojoProofTest/FloatTree.lean,
-MojoProofTest/FloatStats.lean and MojoProofTest/FloatEx2.lean. Welford's one-pass mean and
-variance are in docs/proofs/float-welford.md, layer norm's and RMS norm's outputs in
-docs/proofs/float-norm.md. Floats are FloatLib's
+MojoProof/Float/ExpSum.lean, MojoProof/Float/Ex2.lean, MojoProof/Float/Canon.lean,
+MojoProof/Float/CanonIff.lean, MojoProof/Float/CardSums.lean, MojoProof/Float/CanonHalve.lean
+and the additions to MojoProof/Sem/Bfly.lean and MojoProofTest/Bfly.lean. Instances:
+MojoProofTest/FloatTree.lean, MojoProofTest/FloatStats.lean, MojoProofTest/FloatEx2.lean,
+MojoProofTest/FloatCanon.lean, MojoProofTest/FloatCanonIff.lean, MojoProofTest/FloatCardSums.lean
+and MojoProofTest/FloatCanonHalve.lean.
+Welford's one-pass mean and variance are in
+docs/proofs/float-welford.md, layer norm's and RMS norm's outputs in docs/proofs/float-norm.md.
+Floats are FloatLib's
 `Model fmt` words; `u = Model.unitRoundoffAt fmt` is FloatLib's unit roundoff and
 `η = Model.underflowErrorAt fmt` its underflow allowance. `MixedError x x₀ r a` is FloatLib's
 `|x - x₀| ≤ r · |x₀| + a` with `r, a ≥ 0` (FloatLib/Numerics/MixedError/Basic.lean).
 
 Every statement here is about words and the trees of operations a kernel performs on them, as
 functions of the inputs. That a grid run of a kernel performs those operations is not proved here
-(see "Not proved"). The statements hold in every IEEE format (`fmt.isIEEE = true`), for every
-length and every tree as stated; none of them is about one program.
+(see "Not proved"). Statements 1 to 26 hold in every IEEE format (`fmt.isIEEE = true`) and
+statements 27 to 31 in every format, statements 32 and 33 in every IEEE format, statements 34
+to 36 for every size and statement 37 in every format, for every length and every tree as stated;
+none of them is about one program.
 
 ## The shape of every bound
 
@@ -239,6 +245,140 @@ the product, where statements 17 and 25 take one `Model.div e_j s`. With `r = te
     softmax over the kept indices `TorchLean.TransformerBlock.softmax U x j`; `U = Finset.univ`
     is the unmasked softmax of statement 17.
 
+### Commutativity and trees up to swapped children (MojoProof/Float/Canon.lean)
+
+`NaNEq x y` is `MojoProof.Sem.NaNEq`, `GPUProof.UpToNaN Model.isNaN`: the words are equal, or
+both are NaNs. These statements hold in every format FloatLib's `Model` has, IEEE or not, and for
+every leaf type with a linear order and every tree.
+
+They are items for FloatLib's intake: FloatLib has no commutativity of `Model.add` and no
+canonical form of a `ReductionTree`, and would carry them as `Model.add_comm_nanEq`,
+`ReductionTree.canon`, `ReductionTree.canon_canon` and `ReductionTree.eval_canon`. Here they are
+in the namespace `MojoProof.Float`: the pinned FloatLib (v4.1.0) takes no new declarations, and
+a later FloatLib that has them would clash with declarations made in its own namespace.
+
+`canon t` is the canonical form of `t` up to swapping the two children of nodes: at each node it
+puts the canonical forms of the two children in the order of `treeCmp`. `treeCmp` compares two
+leaves by the leaf type's order, puts a leaf before a node, and compares two nodes by their left
+children, then by their right ones. It is a total order on whole trees (`.eq` exactly at equal
+trees, and swapping the two trees swaps the result), so `canon` is defined at every tree,
+repeated leaves included. Ordering the children by their least leaf or by their leaf lists would
+not do: those keys tie at two different children with the same leaves (`a + (b + c)` and
+`(a + b) + c` under one node), and the form would then depend on the order the two were given in.
+
+27. `add_comm_nanEq`: for every format and words `x`, `y`,
+    `NaNEq (Model.add x y) (Model.add y x)`, with no premise. Equality fails at two NaNs, as
+    `Model.chooseNaN2` returns the first operand among two quiet NaNs, payload included.
+28. `canon_canon`: `canon (canon t) = canon t`. `perm_canon`, `depth_canon`: the leaves of
+    `canon t` are a permutation of `t`'s, and its depth is `t`'s.
+29. `canon_node_comm`, `canon_node_eq_iff`: `canon (node a b) = canon (node b a)`, and
+    `canon (node a b) = canon (node a' b')` exactly when `a` and `b` have the canonical forms of
+    `a'` and `b'` or of `b'` and `a'`. With `canon (leaf x) = leaf x` and `canon` of a node a node,
+    two trees have the same `canon` exactly when one is the other with the two children of some
+    of its nodes swapped.
+30. `eval_canon`: for every carrier, operation `f` and equivalence `R` such that `f x y` is
+    related to `f y x` and `f` maps related operands to related results, every leaf type, values
+    and tree `t`, `(canon t).eval f v` is related to `t.eval f v`. `eval_canon_nanEq` is its case
+    at `Model.add` and `NaNEq`, in every format, by statement 27 and `NaNEq.op` at `fadd`.
+31. `eval_nanEq_of_canon`: in every format, two trees with the same `canon` agree on every input
+    up to NaN payloads: `NaNEq (t.eval Model.add v) (t'.eval Model.add v)` for every `v`. This is
+    one direction of the characterization of the trees whose IEEE sums agree, Theorem 4.3.1 of
+    Huang and Lehtonen (Discrete Mathematics, 2023) at IEEE addition; the other direction is
+    statement 32.
+
+### Trees whose IEEE sums agree (MojoProof/Float/CanonIff.lean)
+
+32. `eval_add_eq_iff`: in every IEEE format (`fmt.isIEEE = true`), for every leaf type with a
+    linear order and two trees `t`, `t'` whose leaves are a permutation of each other without
+    repeats, `t` and `t'` agree up to NaN payloads on every input,
+    `∀ v, NaNEq (t.eval Model.add v) (t'.eval Model.add v)`, exactly when
+    `canon t = canon t'`. With statement 29, two such trees give the same sums up to NaN payloads
+    exactly when one is the other with the children of some of its nodes swapped: Huang and
+    Lehtonen's Theorem 4.3.1 at IEEE addition. `←` is statement 31 and needs neither premise on
+    the leaves. With repeated leaves the proof of `→` does not apply, and the statement is not
+    claimed there.
+
+The witness and the separating input are DistLean's (`DistLean.Bracket.ieeeWitness`,
+`ieeeWitness_symm` and `DistLean.Bracket.Separator.exists_eval_ne`, DistLean/Identifiability.lean),
+restated for leaf membership and both orders of each sum; the module's helper lemmas are private.
+
+### What DistLean's `identifiable_ieee` gives
+
+`DistLean.Bracket.identifiable_ieee` (DistLean/Identifiability.lean): in every IEEE format, two
+bracketings `t t' : Bracket i j` that give the same bits on every input `ℕ → Model fmt` are equal.
+It does not give statement 32, `eval_add_eq_iff`:
+
+* `Bracket i j` is another type from `ReductionTree`: its leaves are the units `i, …, j - 1` in
+  order, and there is no map between the two types;
+* the children of a bracketing are in the order of their units, so two trees that differ by
+  swapping children are never bracketings of the same units, and the theorem says nothing of
+  them. `eval_add_eq_iff` is about trees up to such swaps, which needs both orders of each
+  witness sum (`DistLean.Bracket.ieeeWitness_symm`, which `identifiable_ieee` does not use);
+* it assumes the same bits, and `eval_add_eq_iff` only agreement up to NaN payloads. The witness
+  meets that too, since `ε` and `+0` are not NaNs (DistLean's `Separator.exists_obs_ne` at the
+  observation that forgets a NaN's payload).
+
+What carries over is the witness and its laws, the shape of the induction (roots that split
+differently get `x, y, z` on three leaves; roots that split alike recurse into a child with zero
+on the other side) and the evaluation lemmas, restated for leaf membership.
+
+### The sums of distinct inputs as canonical trees (MojoProof/Float/CardSums.lean)
+
+For every `n`, `FullTree n` is the trees over `Fin n` whose leaf list is a permutation of
+`List.finRange n` (each index once), `SumFunction fmt n` is their quotient by agreeing up to NaN
+payloads on every input of `fmt` (`sumSetoid fmt n`, an equivalence as `NaNEq` is), and
+`CanonTree n` is the trees of `FullTree n` with `canon t = t`.
+
+33. `sumFunctionEquiv`: in every IEEE format and for every `n`,
+    `SumFunction fmt n ≃ CanonTree n`, a class to the `canon` of its trees and a canonical tree to
+    its class; so `card_sumFunction`: `Nat.card (SumFunction fmt n) = Nat.card (CanonTree n)`.
+    `card_canonTree`: for every `n ≥ 1`, `Nat.card (CanonTree n) = (2 * n - 3)‼` (`1` at
+    `n = 1`, with `ℕ`'s subtraction); so `card_sums`: in every IEEE format and for every
+    `n ≥ 2`, `Nat.card (SumFunction fmt n) = (2 * n - 3)‼`, the number of sums of `n` distinct
+    inputs that differ on some input, up to NaN payloads. At `n = 0` there is no tree, hence
+    `hn`.
+
+    ```lean
+    theorem card_canonTree {n : ℕ} (hn : 1 ≤ n) : Nat.card (CanonTree n) = (2 * n - 3)‼
+
+    theorem card_sums {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) {n : ℕ} (hn : 2 ≤ n) :
+        Nat.card (SumFunction fmt n) = (2 * n - 3)‼
+    ```
+
+### The butterfly and halving trees up to swapped children (MojoProof/Float/CanonHalve.lean)
+
+Write `H k` for cell 0's tree after the halving rounds over `2 ^ k` cells,
+`roundsTree halveStep (bflyOffsets k) 0`; `H 0` is the leaf `0`.
+
+34. `halve_succ`: for every `k`, `H (k + 1)` is the node of `H k` with each leaf `i` relabelled
+    `2i` and `H k` with each leaf relabelled `2i + 1` (FloatLib's `ReductionTree.map`): the even
+    cells on the left, the odd ones on the right. `H 2` is `(0 + 2) + (1 + 3)`. `canon_halve`:
+    for every `k`, `H k` is its own `canon` (`Function.IsFixedPt canon (H k)`).
+35. `canon_bflyTree_xor`: for every list of offsets `ms`, offset `m ∈ ms` and lane `l`,
+    `canon (bflyTree ms (l ^^^ m)) = canon (bflyTree ms l)`, with no other premise.
+    `canon_bflyTree_lane`: for every `k` and offsets `ms` among which are
+    `1, 2, …, 2 ^ (k - 1)` (in any order, other offsets allowed), every lane `l < 2 ^ k` has
+    `canon (bflyTree ms l) = canon (bflyTree ms 0)`.
+36. `canon_bflyOffsets`: for every `k` and lane `l < 2 ^ k`, lane `l`'s tree after the rounds
+    `bflyOffsets k` (`2 ^ (k - 1), …, 2, 1`) has the canonical form of `H k`, which is `H k`
+    (statement 34): the butterfly's trees and the halving tree are one tree up to swapping the
+    children of nodes.
+37. `bfly_nanEq_lane`: in every format, for every `k`, offsets `ms` as in statement 35, values
+    `v` and lane `l < 2 ^ k`, lane `l`'s and lane 0's sums after the butterfly rounds of
+    `Model.add` are `NaNEq`. `bfly_nanEq_halve`: in every format, for every `k`, values `v` and
+    lane `l < 2 ^ k`, lane `l`'s sum after the butterfly rounds `bflyOffsets k` and cell 0's sum
+    after the halving rounds over `2 ^ k` cells are `NaNEq`.
+
+    ```lean
+    theorem canon_bflyOffsets (k : Nat) {l : Nat} (hl : l < 2 ^ k) :
+        canon (bflyTree (bflyOffsets k) l) = canon (roundsTree halveStep (bflyOffsets k) 0)
+
+    theorem bfly_nanEq_halve {fmt : FloatFormat} (k : Nat) (v : Nat → Model fmt) {l : Nat}
+        (hl : l < 2 ^ k) :
+        NaNEq (bflyRounds (fun x y => Model.add x y) (bflyOffsets k) v l)
+          (rounds (fun x y => Model.add x y) halveStep (bflyOffsets k) v 0)
+    ```
+
 ### Instances (MojoProofTest/FloatTree.lean, MojoProofTest/FloatStats.lean, MojoProofTest/FloatEx2.lean)
 
 Each headline statement has one binary32 instance whose premises are discharged by evaluation
@@ -267,6 +407,54 @@ and `pairs` is `halveFin 2`, cell 0's halving tree over `2 ^ k` cells with its l
 values, bound, variance `(n ^ 2 - 1) / 12` and mean of squares `(n + 1) (2 n + 1) / 6` at every
 `n ≤ 2 ^ 24` (MojoProofTest/FloatStats.lean). `four_toReal` and `eight_toReal` are `nat32_toReal`,
 the real value of the word of a natural number `m ≤ 2 ^ 24`, at `4` and `8`.
+
+Statements 27 to 31 have tests of one example each in MojoProofTest/FloatCanon.lean. `nan_add32`
+and `nan_add16`: at the quiet NaNs `0x7fc00001` and `0x7fc00002` of binary32 and `0x7e01` and
+`0x7e02` of binary16, `Model.add x y ≠ Model.add y x` by evaluation, so statement 27's `NaNEq` is
+not equality. `canon3` and `canon5`: `canon` of `(2 + 0) + 1` is `1 + (0 + 2)` and `canon` of
+`(4 + (3 + 1)) + (0 + 2)` is `(0 + 2) + (4 + (1 + 3))`, over natural-number leaves by `decide`,
+and each result is its own `canon` (statement 28 at them). `swap5`: statement 31 in every format
+at the 5-leaf tree and the tree with the children of four of its nodes swapped, the premise by
+`decide`. `assoc_canon`, `assoc_vals`, `assoc_ne`: `(a + b) + c` and `a + (b + c)` have different
+`canon`, and at `a = 1`, `b = 2 ^ 24`, `c = -2 ^ 24` in binary32 their sums are `+0` (`1 + 2 ^ 24`
+is a tie, rounded to the even `2 ^ 24`) and `1`, not `NaNEq`: statement 30's relation does not
+hold between all trees with the same leaves.
+
+Statement 32 has tests at two sizes and three formats, and a mutant, in
+MojoProofTest/FloatCanonIff.lean. `assoc_sep`: `(a + b) + c` and `a + (b + c)` over `Fin 3`
+disagree beyond NaN payloads on some binary32 input, by `→` at their different `canon`
+(`assoc_canon`). Over `Fin 6`, `t6` is `((0 + 1) + 2) + (3 + (4 + 5))`, `t6s` is
+`((4 + 5) + 3) + ((1 + 0) + 2)` (the children of three nodes swapped) and `t6r` is
+`(0 + (1 + 2)) + ((4 + 5) + 3)` (the left child regrouped, the roots splitting the leaves alike):
+`swap6` is `←` in binary16 at `t6` and `t6s`, and `split6` is `→` in binary64 at `t6` and `t6r`,
+their `canon` and the premises on the leaves by `decide`. `eq_mutant`: with equality in place of
+`NaNEq` the statement fails at `0 + 1` and `1 + 0` over `Fin 2`, which have the same `canon` and
+differ at the binary32 quiet NaNs `0x7fc00001` and `0x7fc00002` (`nan_add32`).
+
+Statement 33 has tests in MojoProofTest/FloatCardSums.lean. `class_l3`: the binary32 class of
+`(a + b) + c` goes to `canon l3`, by evaluation. `classes_ne`: the binary32 classes of
+`(a + b) + c` and `a + (b + c)` differ, as their `canon` do (`assoc_canon`). `classes_eq`: the
+binary16 classes of `0 + 1` and `1 + 0` over `Fin 2` are one class, as their `canon` agree.
+`card3` is `card_sumFunction` in binary64 at `n = 3`. `canon1` and `canon2`: one canonical tree
+over `Fin 1` and one over `Fin 2`, by hand; so `card1` and `card2`: one binary32 sum of one input
+and one binary16 sum of two inputs. `canon3` and `canon4`: `card_canonTree` at 3 and 4 leaves,
+`3‼ = 3` and `5‼ = 15` canonical trees; `sums3` and `sums4`: `card_sums` at 3 inputs in binary32
+and 4 in binary16, 3 and 15 sums, the values by evaluation.
+
+Statements 34 to 37 have tests in MojoProofTest/FloatCanonHalve.lean, at 2, 4, 8 and 32 lanes or
+cells. `halve3`: `H 3` is `((0 + 4) + (2 + 6)) + ((1 + 5) + (3 + 7))`, by evaluation, and
+`succ2` is statement 34's `halve_succ` there; `canon3`: `H 3` is its own `canon`, by evaluation,
+and `canon5` is `canon_halve` at 32 cells. `lane13`: lane 13's tree after a warp's rounds
+`warpOffsets` has the canonical form `H 5`, by evaluation, and `lane13_canon` is statement 36
+there.
+`lane1_tree`: lane 1's tree after the rounds `2, 1` is `(1 + 3) + (0 + 2)`, not its own `canon`.
+`lane5_out`: lane 5's tree after the rounds `2, 1` has the leaves `4, …, 7` and another `canon`
+than the halving tree over 4 cells, so statement 36 needs `l < 2 ^ k`. `order6` is statement 35
+at the rounds `1, 4, 2` and lane 6; `order_ne`: in that order lane 0's `canon` is not `H 3`, so
+statement 36 is about the order `bflyOffsets k`. `warp13` is statement 37 in
+binary32 at a warp, lane 13, every value `1`. `payload_ne`: at 2 lanes holding the quiet NaNs
+`0x7fc00001` and `0x7fc00002`, lane 1's butterfly sum and cell 0's halving sum are different
+words, by evaluation: statement 37's `NaNEq` is not equality.
 
 ## Proofs
 
@@ -340,6 +528,99 @@ the real value of the word of a natural number `m ≤ 2 ^ 24`, at `4` and `8`.
     reciprocal's error `(q, η)`, and `Model.mixedError_toReal_mul` with statement 15's term
     error the entry's (both factors are finite by `Model.isFinite_of_isFinite_mul`); then
     `softmax_eq_exp_sub_div`, `a / Σ = a · (1 / Σ)` and `|1 / Σ| ≤ 1`, as `Σ ≥ 1`.
+27. With a NaN operand both sums are NaNs (`fbin_isNaN` at `fadd`). Otherwise FloatLib's
+    `Model.Proof.add_eq_spec` gives both sums as `Model.Spec.add`, and `Model.chooseNaN2` is
+    `none` in both orders (`Model.chooseNaN2_none_of_not_isNaN`). At two finite operands the sum
+    is the rounded `Model.addDyadic` of their values, which commutes (`Model.addDyadic_comm`); at
+    one infinite operand it is that operand in both orders; at two, equal signs make the operands
+    one word (`Model.eq_nativeOverflow_of_isInfinite`: an infinite word is `nativeOverflow` of its
+    sign) and different signs give `Model.invalidResult` in both orders.
+28. Induction on `t`, with the two properties of `treeCmp`: it is `.eq` exactly at equal trees
+    and swapping the trees swaps it (induction on the two trees, from the leaf order's
+    `compare_eq_iff_eq` and `Std.OrientedCmp.eq_swap`, with `Ordering.then_eq_eq` and
+    `Ordering.swap_then`). A node of two canonical children in order is its own `canon`; the
+    leaves and the depth are those of the children, in either order (`List.perm_append_comm`,
+    `max_comm`).
+29. By the cases of `treeCmp` at the children's forms; `node` is injective.
+30. Induction on `t`: at a node whose children `canon` swaps, `f` maps the related forms to
+    related results and commutes up to `R`, and `R` is transitive.
+31. Statement 30 at `t` and at `t'`, with the symmetry and transitivity of `NaNEq`
+    (`GPUProof.UpToNaN.equivalence`).
+32. `←` is statement 31. For `→`, the witness: with `f` fraction bits and `ε = 2^-f`
+    (`Model.roundDyadic fmt ⟨false, 1, -f⟩`), `+0` is an identity on `+0`, `ε`, `2` and `-2` on
+    both sides; `ε + 2 = 2 + ε = 2`, as `2 + 2^-f` lies halfway between `2` and the next word
+    `2 + 2^(1-f)` and rounds to the even `2`; `2 + (-2) = (-2) + 2 = +0`, an exact zero sum of
+    operands of opposite signs rounded to nearest; and `ε` and `+0` are different words that are
+    not NaNs. So `ε + (2 + -2)` is `ε` and `(ε + 2) + -2` is `+0`, whichever order each sum takes
+    its operands in. Evaluation with zeros, for every carrier, operation `f` and value `z` with
+    `f z z = z`: a tree reads only its leaves' values; leaves that all hold `z` give `z`; one leaf
+    holding `w` among zeros gives `w` when `z` is an identity on `w` on both sides; two leaves
+    holding `p` and `q` among zeros give `w` when `f p q = w = f q p` and `z` is an identity on
+    `p`, `q` and `w`. Then, if `canon t ≠ canon t'`, some input with values among `+0, ε, 2, -2`
+    gives `ε` at one tree and `+0` at the other, by induction on `t` for every `t'`. A leaf and a
+    node have different numbers of leaves (FloatLib's `ReductionTree.length_leaves`), and two
+    leaves with the same leaves are equal. At two nodes, let `L, R` be the leaves of the children
+    of `t`'s root and `L', R'` those of `t'`'s. If the roots split the leaves alike (`L` and `L'`
+    have the same members, or `L` and `R'`), the two children whose `canon` differ
+    (`canon_node_eq_iff`, statement 29) give an input by induction, set to `+0` on the other
+    children's leaves, which then give `+0`. Otherwise one child of `t`'s root meets both
+    children of `t'`'s root, and there are leaves `a, b, c` with `b, c` under one child of `t`'s
+    root and `a` under the other, and `a, b` under one child of `t'`'s root and `c` under the
+    other; `ε, 2, -2` on them and `+0` elsewhere give `ε + (2 + -2) = ε` at `t` and
+    `(ε + 2) + -2 = +0` at `t'`, in some orders.
+33. A class goes to the `canon` of a tree in it: `canon t` keeps `t`'s leaves up to permutation
+    (`perm_canon`) and is its own `canon` (`canon_canon`), and two related trees have the same
+    `canon` by statement 32's `→`, its premises as the leaves are a permutation of
+    `List.finRange n`, which has no repeats (`List.nodup_finRange`). A canonical tree goes to its
+    class. Back and forth: a tree is related to its `canon` by statement 31, and a canonical tree
+    is its own `canon`. `card_sumFunction` is `Nat.card_congr` at the equivalence. Over `Fin 1`, a
+    node has at least two leaves (`ReductionTree.length_leaves`), so the tree is the leaf `0`.
+    Over `Fin 2`, by the leaf count the tree is a node of two leaves `a, b`, and of the four pairs
+    only `a = 0, b = 1` has the leaves a permutation of `[0, 1]` and `canon t = t`, by
+    evaluation.
+
+    The count goes through other representatives of the trees up to swapping children: the
+    min-first trees, whose every node has the child with the smaller first leaf on the left
+    (`IsMinFirst`). `minFirst t` swaps the children of `t`'s nodes into that order; it keeps the
+    leaves up to permutation and the `canon`, and two trees without repeated leaves with the same
+    `canon` have the same `minFirst` (induction, by `canon_node_eq_iff`), so `minFirst` and
+    `canon` are inverse between the canonical trees and the min-first trees over `Fin n`
+    (`canonEquiv`). Then, for a list `z :: l` with `z` above every value of `l` and `l`
+    nonempty, the min-first trees over `z :: l` are the pairs of a min-first tree over `l` and
+    one of its `2 · |l| - 1` subtrees (`slots`), its `|l| - 1` nodes and `|l|` leaves numbered
+    in preorder from `0` at the root: `insLeaf z k t` puts the node of the subtree at place `k`
+    and `leaf z` in its place, and `cutLeaf z` removes `leaf z` with its parent node and records
+    the place (`graftEquiv`). The new leaf goes on the right, as it is above every
+    other, so a grafted tree is min-first, and the first leaf of every subtree is kept, so the
+    tree left by a cut is min-first too. By induction on the list sorted down
+    (`card_minFirstTree`), from the one tree over one value, with
+    `Nat.doubleFactorial_add_two`, the count over `n` values is `(2n - 3)‼`; at `List.finRange n`
+    reversed it is `card_canonTree`.
+34. The stride `2 ^ k` comes first in `bflyOffsets (k + 1)`, so `H (k + 1)` is `H k` with each
+    leaf `j` replaced by `halveStep (2 ^ k) j`, the node of `j` and `j + 2 ^ k` as `j < 2 ^ k`
+    (statement 9). `halve_succ`: induction on `k`. Replacing the leaves of `H (k + 1)`, by
+    induction the node of `H k` relabelled `2i` and `2i + 1`, with the nodes of `j` and
+    `j + 2 ^ (k + 1)` is replacing the leaves `i` of `H k` with the nodes of `2i` and
+    `2(i + 2 ^ k)`, and of `2i + 1` and `2(i + 2 ^ k) + 1`: the two halves of `H (k + 1)`
+    relabelled. `canon_halve`: induction on `k` by `halve_succ`. Relabelling the leaves by a
+    strictly increasing map keeps `treeCmp`, so it commutes with `canon`, and both children keep
+    their `canon`; `treeCmp` of a tree relabelled `2i` and the same tree relabelled `2i + 1`
+    reaches the first leaves first and returns `.lt`, so `canon` keeps the order.
+35. `canon_bflyTree_xor`: induction on the offsets from the last one. After the rounds `ms`, then
+    `m'`, lane `l`'s tree is the node of lane `l`'s and lane `l ^^^ m'`'s trees after `ms`. At
+    `m = m'` the two lanes' trees are the same node with the children swapped
+    (`canon_node_comm`); at `m ∈ ms` both children have the same `canon` as the other lane's, by
+    induction at `l` and at `l ^^^ m'`, as `l ^^^ m ^^^ m' = l ^^^ m' ^^^ m`
+    (`canon_node_eq_iff`). `canon_bflyTree_lane`: induction on `k`; a lane
+    `2 ^ k ≤ l < 2 ^ (k + 1)` is `(l - 2 ^ k) ^^^ 2 ^ k`, as the bit `k` of `l - 2 ^ k` is clear.
+36. By statement 35 at lane 0, induction on `k`. The offset `2 ^ k` comes first in
+    `bflyOffsets (k + 1)`, so lane 0's tree is its tree after `bflyOffsets k` with each leaf `j`
+    replaced by the node of `j` and `j ^^^ 2 ^ k`; grafting along two trees with the same `canon`
+    gives trees with the same `canon` (induction, by `canon_node_eq_iff`), so the tree has the
+    `canon` of `H k` with the same replacement, and there `j < 2 ^ k`, so
+    `j ^^^ 2 ^ k = j + 2 ^ k` and the tree is `H (k + 1)` (statement 34's first step).
+37. `eval_bflyTree` and `eval_roundsTree` make the sums the trees' evaluations, and statements 35
+    and 36 give the trees the same `canon`; `eval_nanEq_of_canon` (statement 31) concludes.
 
 ## Not proved
 
@@ -364,6 +645,10 @@ the real value of the word of a natural number `m ≤ 2 ^ 24`, at `4` and `8`.
   log-softmax entry in the order of Mojo's GPU softmax kernel, `log (e_j · (1 / s))`, stated, nor
   with Mojo's own `log`, which is not FloatLib's correctly rounded one.
 - Any bound when a result is infinite or a NaN.
+- The canonical form of a butterfly lane at or above `2 ^ k`, whose leaves are other lanes, and
+  the canonical form after offsets in another order than `bflyOffsets k`: statement 35 gives every
+  lane below `2 ^ k` lane 0's form, which is not computed there and is not the halving tree
+  (`order_ne`).
 
 ## Related results elsewhere
 

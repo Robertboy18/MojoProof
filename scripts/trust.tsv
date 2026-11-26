@@ -29,9 +29,10 @@ T14	const	MojoProof.Sem.quadC
 T14	const	MojoProof.Sem.gridAcc
 T14	const	MojoProof.Sem.mmaGrid
 T15	const	MojoProof.Sem.Async.Step
-T16	module	MojoProof.Layout.Basic
-T16	module	MojoProof.Layout.Algebra
-T16	module	MojoProof.Layout.Bits
-T16	module	MojoProof.Layout.Crd
-T16	module	MojoProof.Layout.TwoLevel
+T16	module	GPUProof.Layout.Basic
+T16	module	GPUProof.Layout.Algebra
+T16	module	GPUProof.Layout.Bits
+T16	module	GPUProof.Layout.Crd
+T16	module	GPUProof.Layout.TwoLevel
 T17	const	MojoProof.Float.Ex2Close
+T18	const	MojoProof.Import.torchLean

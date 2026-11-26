@@ -1,3 +1,4 @@
+import GPUProof.Spec.DecEq
 import GPUProof.Spec.Linear
 import FloatLib.Floats.Formats.BinaryInterchange.Format.Catalog
 import FloatLib.Floats.Formats.BinaryInterchange.DirectedSemantics.Basic
@@ -25,6 +26,16 @@ import FloatLib.Floats.Formats.BinaryInterchange.Arithmetic.Runtime
 * The `exact` rule's premise that some output word decodes to the sum: at two inputs `2 ^ 30` of
   `GPUProof.Spec.sumInt` stored in 32 bits, the 32-bit sum wraps to `-2 ^ 31`, and no output word
   decodes to `2 ^ 31` (`sumInt_wraps`), so the rule claims nothing there.
+* Equations between words of `GPUProof.Encodings.uniform`, at concrete positions and whole, are
+  decided by `decide` (`sumInt_words` and `sumInt_outWords`: `GPUProof.Spec.sumInt` with integers
+  stored in 32 bits, the output word and whole output words at size 2, an input word and whole
+  input words at size 3), through the instances of GPUProof/Spec/DecEq.lean and
+  `GPUProof.Spec.sumInt.fintypeOut`. Instance search finds the output positions of the uniform
+  encodings of the other specs of GPUProof/Spec/Linear.lean finite (`outPos_card`, at `(2, 3)`
+  and `4`), and those of a spec written as an `abbrev` of `GPUProof.Spec.ofReal`, the prefix sums
+  (`prefixSums`), through `GPUProof.Spec.ofReal.fintypeOut` (`prefixSums_outPos_card`, at sizes 3
+  and 7). Without its own instance, `GPUProof.Spec.matVec`'s outputs have none (a `#guard_msgs`
+  test).
 * A negation spec (`neg fmt`: the `bitwise` rule with every entry stored in the binary
   interchange format `fmt`, with FloatLib's `Model.neg` as its word function) holds of output
   words when each is, up to NaN payloads, the negation of its input (`neg_holds`). It is met by
@@ -356,6 +367,86 @@ theorem sumInt_wraps :
     simpa [Encodings.uniform, Encoding.ofScalars, ScalarEnc.std, ScalarEnc.int, Spec.sumInt,
       Fin.sum_univ_two] using hV ()
   exact absurd (BitVec.toInt_lt (x := (V () : BitVec 32))) (by omega)
+
+/-- One test spec (`GPUProof.Spec.sumInt`) with integers stored in 32 bits, by `decide`: at size
+2, the output word `2 ^ 30 + 2 ^ 30` (at the one output position) is the 32-bit word `2 ^ 31` and
+is not `0`; at size 3, the input word at position 2 of the words `i ↦ i` is `2`, and the whole
+input words `i ↦ i` are the words `i ↦ 2 i - i` and not the words `0`. A test of one example of
+`GPUProof.Encodings.decEqUniformOut`, `GPUProof.Encodings.decEqUniformInp` and, for the whole
+input words, `GPUProof.Encodings.fintypeUniformInp` with Mathlib's
+`Fintype.decidablePiFintype`; `sumInt_outWords` decides whole output words. -/
+theorem sumInt_words :
+    ((fun _ => (2 ^ 30 + 2 ^ 30 : BitVec 32)) :
+      (Encodings.uniform Spec.sumInt (ScalarEnc.std .binary32 32) 2).out.Words) () =
+        (2 ^ 31 : BitVec 32) ∧
+      ((fun _ => (2 ^ 30 + 2 ^ 30 : BitVec 32)) :
+        (Encodings.uniform Spec.sumInt (ScalarEnc.std .binary32 32) 2).out.Words) () ≠
+        (0 : BitVec 32) ∧
+      ((fun i => (i.val : BitVec 32)) :
+        (Encodings.uniform Spec.sumInt (ScalarEnc.std .binary32 32) 3).inp.Words) (2 : Fin 3) =
+        (2 : BitVec 32) ∧
+      ((fun i => (i.val : BitVec 32)) :
+        (Encodings.uniform Spec.sumInt (ScalarEnc.std .binary32 32) 3).inp.Words) =
+        (fun i => (2 * i.val - i.val : BitVec 32)) ∧
+      ((fun i => (i.val : BitVec 32)) :
+        (Encodings.uniform Spec.sumInt (ScalarEnc.std .binary32 32) 3).inp.Words) ≠
+        (fun _ => (0 : BitVec 32)) := by
+  decide
+
+/-- `GPUProof.Spec.sumInt` with integers stored in 32 bits at size 2, by `decide`: the whole output
+words `2 ^ 30 + 2 ^ 30` are the words `2 ^ 31`, a test of one example of
+`GPUProof.Encodings.fintypeUniformOut` with Mathlib's `Fintype.decidablePiFintype`. The outputs'
+`Fintype` is `GPUProof.Spec.sumInt.fintypeOut`, found by instance search. -/
+theorem sumInt_outWords :
+    ((fun _ => (2 ^ 30 + 2 ^ 30 : BitVec 32)) :
+      (Encodings.uniform Spec.sumInt (ScalarEnc.std .binary32 32) 2).out.Words) =
+      fun _ => (2 ^ 31 : BitVec 32) := by
+  decide
+
+/-- The output positions of the uniform encodings of `GPUProof.Spec.matVec`,
+`GPUProof.Spec.vecMat` and `GPUProof.Spec.sumReal`, at size `(2, 3)` and `4`, for every grade and
+storage `u`: instance search finds them finite (`GPUProof.Spec.matVec.fintypeOut`,
+`GPUProof.Spec.vecMat.fintypeOut`, `GPUProof.Spec.sumReal.fintypeOut`, with
+`GPUProof.Encodings.fintypeUniformOut`), and there are `2`, `3` and `1` of them. By `rfl`. -/
+theorem outPos_card {gm} {mm} {gv} {mv} {gs} {ms} (u : (d : DType) → ScalarEnc d) :
+    Fintype.card (Encodings.uniform (Spec.matVec gm mm) u (2, 3)).out.Pos = 2 ∧
+      Fintype.card (Encodings.uniform (Spec.vecMat gv mv) u (2, 3)).out.Pos = 3 ∧
+      Fintype.card (Encodings.uniform (Spec.sumReal gs ms) u 4).out.Pos = 1 :=
+  ⟨rfl, rfl, rfl⟩
+
+/-- A test spec written as an `abbrev` of `GPUProof.Spec.ofReal`, for every grade `g` and every
+size `n`: the `n + 1` prefix sums of `n` reals, output `o` the sum of the inputs below `o`. It has
+no `Fintype` instance of its own. -/
+abbrev prefixSums (g : RealGrades Fin fun n => Fin (n + 1)) (mono : ∀ σ E A, Monotone (g σ E A)) :
+    Spec ℕ :=
+  Spec.ofReal Fin (fun n => Fin (n + 1)) (fun _ x o => ∑ i, if i.val < o.val then x i else 0)
+    g mono
+
+/-- The output positions of the uniform encodings of `prefixSums g`, at sizes 3 and 7, for every
+grade and storage `u`: instance search finds them finite through `GPUProof.Spec.ofReal.fintypeOut`
+and `GPUProof.Encodings.fintypeUniformOut`, and there are `4` and `8` of them. By `rfl`. -/
+theorem prefixSums_outPos_card {g} {mono} (u : (d : DType) → ScalarEnc d) :
+    Fintype.card (Encodings.uniform (prefixSums g mono) u 3).out.Pos = 4 ∧
+      Fintype.card (Encodings.uniform (prefixSums g mono) u 7).out.Pos = 8 :=
+  ⟨rfl, rfl⟩
+
+section
+attribute [-instance] GPUProof.Spec.matVec.fintypeOut
+
+/--
+error: failed to synthesize instance of type class
+  Fintype ((Spec.matVec g mono).Out (2, 3))
+
+Hint: Type class instance resolution failures can be inspected with the
+`set_option trace.Meta.synthInstance true` command.
+-/
+#guard_msgs (whitespace := lax) in
+/-- The mutant: without `GPUProof.Spec.matVec.fintypeOut`, instance search finds no `Fintype` of
+`GPUProof.Spec.matVec g`'s outputs at `(2, 3)`, for every grade: `GPUProof.Spec.matVec` is a
+`def`, which it does not unfold to `GPUProof.Spec.ofReal`. -/
+example {g} {mono} : Fintype ((Spec.matVec g mono).Out (2, 3)) := inferInstance
+
+end
 
 /-- One test spec family (`GPUProof.Spec.matVec`), for every grade and size: output `i` is
 `∑ k, A i k * x k`. -/

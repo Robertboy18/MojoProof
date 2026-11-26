@@ -43,7 +43,8 @@ What each one checks:
   - `unused`: library declarations nothing mentions, except the targets in `scripts/targets.txt`.
   - `equivalences`: theorems `f as ↔ g bs` or `f as = g bs` whose two sides are headed by two
     different definitions or inductive types of the library, as the conclusion or as a conjunct
-    of it, except the pairs of definitions that a row of `scripts/laws.tsv` exempts in the one
+    of it, a conclusion headed by another definition being read as its value
+    (`Function.IsFixedPt f x` is `f x = x`), except the pairs of definitions that a row of `scripts/laws.tsv` exempts in the one
     statement it records (by its fingerprint). A further pair in an exempted statement is
     counted.
   - `laws` and `laws_stale`: the theorems that a row of `scripts/laws.tsv` exempts, and the rows
@@ -62,7 +63,11 @@ What each one checks:
   name (`MojoProofTest.NaiveOff.correct`, or the head of a term) must begin with a declaration or a
   module of the core, the library or its tests. A name that none of our files declares resolves
   also against the Lean files under `.lake/packages/` (Mathlib, Batteries); Lean's own library is
-  not read.
+  not read. `python3 scripts/cited.py --deleted <commit>`, run with the first commit of a change,
+  checks instead the names that commit declares and the working tree does not, in any case: no
+  suffix of such a name that names nothing now (`warpBound`, `Sem.warpBound`) may begin a
+  backticked span in a docstring or comment of our Lean files or in a tracked Markdown file, except
+  `docs/BUGS.md`, `docs/found-bugs.md` and `docs/UPSTREAM.md`, which record deleted names.
 - `scripts/corpus.py check`: every corpus file matches its manifest row (sha256, line count, kernel
   name, arch, PTX version), and no `.ll` file under `tests/corpus/` is missing from the manifest.
   A row whose source lacks the Apache-LLVM line is flagged `UNLICENSED`, and a row whose `lib` is

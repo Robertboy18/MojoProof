@@ -1,5 +1,12 @@
 import GPUProof.Chunks
 import GPUProof.Laminar
+import GPUProof.Layout.Algebra
+import GPUProof.Layout.Basic
+import GPUProof.Layout.Bits
+import GPUProof.Layout.Crd
+import GPUProof.Layout.Laws
+import GPUProof.Layout.Swizzle
+import GPUProof.Layout.TwoLevel
 import GPUProof.MixedRadix
 import GPUProof.NaN
 import GPUProof.OneRun
@@ -8,9 +15,13 @@ import GPUProof.Run
 import GPUProof.Sig
 import GPUProof.Sound
 import GPUProof.Spec.Basic
+import GPUProof.Spec.Comp
+import GPUProof.Spec.DecEq
+import GPUProof.Spec.Import
 import GPUProof.Spec.Linear
 import GPUProof.Transfer
 import GPUProof.Uses
+import GPUProof.View
 import Lean.Elab.Command
 
 /-!
@@ -154,8 +165,11 @@ def checkCore : CommandElabM Unit := do
 
 /--
 info: core modules: [GPUProof.Sig, GPUProof.Race, GPUProof.Chunks, GPUProof.Laminar,
-  GPUProof.MixedRadix, GPUProof.NaN, GPUProof.OneRun, GPUProof.Run, GPUProof.Sound,
-  GPUProof.Spec.Basic, GPUProof.Spec.Linear, GPUProof.Transfer, GPUProof.Uses]
+  GPUProof.Layout.Basic, GPUProof.Layout.Algebra, GPUProof.Layout.Crd, GPUProof.Layout.Laws,
+  GPUProof.Layout.Bits, GPUProof.Layout.Swizzle, GPUProof.Layout.TwoLevel, GPUProof.MixedRadix,
+  GPUProof.NaN, GPUProof.OneRun, GPUProof.Run, GPUProof.Sound, GPUProof.Spec.Basic,
+  GPUProof.Spec.Comp, GPUProof.Spec.DecEq, GPUProof.Spec.Import, GPUProof.Spec.Linear,
+  GPUProof.Transfer, GPUProof.Uses, GPUProof.View]
 ---
 info: refused: GPUProof.OneRun importing MojoProof.Sem.Trace
 ---

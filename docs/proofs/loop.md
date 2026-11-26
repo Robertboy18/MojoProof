@@ -401,9 +401,10 @@ Theorems.
    `ChainWith.enter` concludes the same from `coversChainAt alloca false P fn p0 l ds S E Ls =
    true` and `ChainWith false (BackWith false d q J) Ls (Valuation.entry c t.k m f) l ds S E`: a
    chain whose last path out stops after its last edge, into `d` at `q`, with no second chain
-   relation. A continuation from that frame joins it (`RunsVia.of_chain`,
+   relation. A continuation from that frame, given its `alloca` blocks (`bs` in front of `f`'s
+   with the flag on, `f`'s with it off), joins it (`RunsVia.of_chain`,
    MojoProof/Sym/OblSeg.lean); the instance is gemv_kernel's chain into `%78`
-   (`bfly_at`, MojoProofTest/SymGemvTail.lean).
+   (`tail78`, MojoProofTest/GemvWarp.lean), whose end memory frees `f`'s blocks.
 
 ## Proof
 

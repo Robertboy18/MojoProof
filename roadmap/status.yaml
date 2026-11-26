@@ -63,7 +63,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Sem.NaNEq, MojoProof.Sem.nanEq_deliver, MojoProof.Sem.isNaN_deliver, MojoProof.Sem.floatOp_isNaN, MojoProof.Sem.floatOp_nanEq, MojoProof.Sem.fbin_isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isSignaling, FloatLib.Floats.Formats.BinaryInterchange.Model.quietNaN]
+        lean: [MojoProof.Sem.NaNEq, MojoProof.Sem.nanEq_deliver, MojoProof.Sem.isNaN_deliver, MojoProof.Sem.floatOp_isNaN, MojoProof.Sem.floatOp_nanEq, MojoProof.Sem.fbin_isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isNaN, FloatLib.Floats.Formats.BinaryInterchange.Model.isSignaling, FloatLib.Floats.Formats.BinaryInterchange.Model.quietNaN, MojoProof.Float.add_comm_nanEq]
         depends: [floats/deliver]
       - id: rsqrt-approx
         title: "rsqrt.approx.ftz.f32, the approximate reciprocal square root"
@@ -183,7 +183,7 @@ areas:
         evidence_scope: {}
         next: "L1 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 2
-        lean: [TorchLean.Tensor.matVecLoop, MojoProof.Sem.matVec_cell_real, MojoProof.Sem.warpDot_matVec, MojoProof.Sem.warpDot_vecMat, MojoProof.Sem.warpDot_eq, MojoProof.Sem.racy_tpose, MojoProof.Sem.warpDot_tpose, MojoProof.Sem.castV_split, MojoProof.Sym.exec_laneid, MojoProof.Sym.SNode.eval_bitcast, MojoProof.Sym.SNode.eval_laneid, MojoProof.Sym.Seg.sound, MojoProof.Sym.Seg.through, MojoProof.Sym.SNode.eval_globalAt]
+        lean: [TorchLean.Tensor.matVecLoop, MojoProof.Sem.matVec_cell_real, MojoProof.Sem.warpDot_matVec, MojoProof.Sem.warpDot_vecMat, MojoProof.Sem.warpDot_eq, MojoProof.Sem.racy_tpose, MojoProof.Sem.warpDot_tpose, MojoProof.Sem.castV_split, MojoProof.Sym.exec_laneid, MojoProof.Sym.SNode.eval_bitcast, MojoProof.Sym.SNode.eval_laneid, MojoProof.Sym.Seg.sound, MojoProof.Sym.Seg.through, MojoProof.Sym.SNode.eval_globalAt, MojoProof.Tile.bflyRoundsAt_chain]
         depends: [gpu-model/launch, floats/binary-op-rounding]
       - id: layernorm
         title: "layer_norm_gpu, the 34 row-wise layer norm specializations (TorchLean.Tensor.layerNorm)"
@@ -318,7 +318,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Swizzle.call_xor, MojoProof.Layout.BitLayout, MojoProof.Layout.BitLayout.put, MojoProof.Layout.BitLayout.call, MojoProof.Layout.xorBits, MojoProof.Layout.BitLayout.call_xor, MojoProof.Layout.bitLinear, MojoProof.Layout.isBitLinear, MojoProof.Layout.placeModes, MojoProof.Layout.placement, MojoProof.Layout.xorBits_place, MojoProof.Layout.placement_call]
+        lean: [GPUProof.Layout.Swizzle.call_xor, GPUProof.Layout.BitLayout, GPUProof.Layout.BitLayout.put, GPUProof.Layout.BitLayout.call, GPUProof.Layout.xorBits, GPUProof.Layout.BitLayout.call_xor, GPUProof.Layout.bitLinear, GPUProof.Layout.isBitLinear, GPUProof.Layout.placeModes, GPUProof.Layout.placement, GPUProof.Layout.xorBits_place, GPUProof.Layout.placement_call]
         depends: [layout/swizzle]
       - id: blocked-product
         title: "`blocked_product`'s outer stride is documented as the block's cosize times the tiler's stride"
@@ -328,7 +328,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.blockedProduct, MojoProof.Layout.Lay.blockedProduct_call]
+        lean: [GPUProof.Layout.Lay.blockedProduct, GPUProof.Layout.Lay.blockedProduct_call]
         depends: [layout/cosize]
       - id: coalesce
         title: "`coalesce` keeps the offsets and merges contiguous modes"
@@ -338,7 +338,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.coalesce, MojoProof.Layout.coalesceStep, MojoProof.Layout.Lay.coalesce_call, MojoProof.Layout.Lay.coalesce_size]
+        lean: [GPUProof.Layout.Lay.coalesce, GPUProof.Layout.coalesceStep, GPUProof.Layout.Lay.coalesce_call, GPUProof.Layout.Lay.coalesce_size]
         depends: [layout/crd2idx]
       - id: composition
         title: "`composition(a, b)` maps a coordinate through `b`, then `a`"
@@ -348,7 +348,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.compose, MojoProof.Layout.composeLeaf, MojoProof.Layout.composeStep, MojoProof.Layout.composeDiv, MojoProof.Layout.composeLeaf_prod_dot, MojoProof.Layout.composeLeaf_flatMap, MojoProof.Layout.Lay.compose_modes, MojoProof.Layout.Lay.compose_sum, MojoProof.Layout.noCarry, MojoProof.Layout.noCarry_one, MojoProof.Layout.dotColex_sum, MojoProof.Layout.Lay.compose_call, MojoProof.Layout.carryFree, MojoProof.Layout.carryFree_pick, MojoProof.Layout.Lay.compose_all]
+        lean: [GPUProof.Layout.Lay.compose, GPUProof.Layout.composeLeaf, GPUProof.Layout.composeStep, GPUProof.Layout.composeDiv, GPUProof.Layout.composeLeaf_prod_dot, GPUProof.Layout.composeLeaf_flatMap, GPUProof.Layout.Lay.compose_modes, GPUProof.Layout.Lay.compose_sum, GPUProof.Layout.noCarry, GPUProof.Layout.noCarry_one, GPUProof.Layout.dotColex_sum, GPUProof.Layout.Lay.compose_call, GPUProof.Layout.carryFree, GPUProof.Layout.carryFree_pick, GPUProof.Layout.Lay.compose_all]
         depends: [layout/crd2idx]
       - id: cosize
         title: "`cosize` is the offset of the last coordinate plus one"
@@ -358,7 +358,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.cosize, MojoProof.Layout.Lay.cosize_eq, MojoProof.Layout.Lay.call_lt_cosize]
+        lean: [GPUProof.Layout.Lay.cosize, GPUProof.Layout.Lay.cosize_eq, GPUProof.Layout.Lay.call_lt_cosize]
         depends: [layout/crd2idx]
       - id: crd2idx
         title: "`crd2idx` is the dot product of a coordinate with the strides"
@@ -368,7 +368,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.crd2idx, MojoProof.Layout.Lay.call, MojoProof.Layout.Lay.call_scalar, MojoProof.Layout.crd2idx_flat, MojoProof.Layout.Lay.call_leaves, MojoProof.Layout.Lay.call_flat, MojoProof.Layout.crd2idx_leaf_leaf, MojoProof.Layout.fits, MojoProof.Layout.digits, MojoProof.Layout.crd2idx_mixed, MojoProof.Layout.Lay.call_mixed]
+        lean: [GPUProof.Layout.crd2idx, GPUProof.Layout.Lay.call, GPUProof.Layout.Lay.call_scalar, GPUProof.Layout.crd2idx_flat, GPUProof.Layout.Lay.call_leaves, GPUProof.Layout.Lay.call_flat, GPUProof.Layout.crd2idx_leaf_leaf, GPUProof.Layout.fits, GPUProof.Layout.digits, GPUProof.Layout.crd2idx_mixed, GPUProof.Layout.Lay.call_mixed]
         depends: []
       - id: idx2crd
         title: "`idx2crd` maps an offset back to a coordinate, documented as the inverse of `crd2idx`"
@@ -378,7 +378,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.idx2crd, MojoProof.Layout.idx2crd_flat, MojoProof.Layout.idx2crd_call, MojoProof.Layout.idx2crd_call_reverse]
+        lean: [GPUProof.Layout.idx2crd, GPUProof.Layout.idx2crd_flat, GPUProof.Layout.idx2crd_call, GPUProof.Layout.idx2crd_call_reverse]
         depends: [layout/crd2idx]
       - id: index-width
         title: "With a narrow index type the caller must ensure products and sums fit"
@@ -388,7 +388,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.call_flat_ofNat, MojoProof.Layout.Lay.call_flat_toNat]
+        lean: [GPUProof.Layout.Lay.call_flat_ofNat, GPUProof.Layout.Lay.call_flat_toNat]
         depends: [layout/crd2idx]
       - id: is-affine
         title: "Stepping by a stride is exact only for an affine layout"
@@ -398,7 +398,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.isAffine, MojoProof.Layout.Lay.isAffine_flat, MojoProof.Layout.Lay.call_add]
+        lean: [GPUProof.Layout.Lay.isAffine, GPUProof.Layout.Lay.isAffine_flat, GPUProof.Layout.Lay.call_add]
         depends: [layout/crd2idx]
       - id: reverse-transpose
         title: "`reverse` and `transpose` reverse the shape and the stride"
@@ -408,7 +408,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.reverse, MojoProof.Layout.Lay.call_reverse, MojoProof.Layout.Lay.reverse_reverse, MojoProof.Layout.Lay.size_reverse]
+        lean: [GPUProof.Layout.Lay.reverse, GPUProof.Layout.Lay.call_reverse, GPUProof.Layout.Lay.reverse_reverse, GPUProof.Layout.Lay.size_reverse]
         depends: []
       - id: row-major-views
         title: "`TileTensor.as_span`, `reshape` and `coalesce` need row-major contiguous strides"
@@ -418,7 +418,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.rowMajor, MojoProof.Layout.rowMajor_call_lt, MojoProof.Layout.rowMajor_onto, MojoProof.Layout.rowMajor_inj]
+        lean: [GPUProof.Layout.rowMajor, GPUProof.Layout.rowMajor_call_lt, GPUProof.Layout.rowMajor_onto, GPUProof.Layout.rowMajor_inj]
         depends: []
       - id: swizzle
         title: "`Swizzle` is `x ^ ((x & mask) >> shift)` and needs `abs(shift) >= bits`"
@@ -428,7 +428,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Swizzle, MojoProof.Layout.Swizzle.call, MojoProof.Layout.Swizzle.mask, MojoProof.Layout.shiftr, MojoProof.Layout.Swizzle.shiftr_and_mask, MojoProof.Layout.Swizzle.call_call]
+        lean: [GPUProof.Layout.Swizzle, GPUProof.Layout.Swizzle.call, GPUProof.Layout.Swizzle.mask, GPUProof.Layout.shiftr, GPUProof.Layout.Swizzle.shiftr_and_mask, GPUProof.Layout.Swizzle.call_call]
         depends: []
       - id: two-level-swizzle
         title: "`two_level_layout_from_swizzle` evaluates to `Swizzle(L(x))`"
@@ -438,7 +438,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.TwoLevel, MojoProof.Layout.TwoLevel.offset, MojoProof.Layout.TwoLevel.call, MojoProof.Layout.Swizzle.period, MojoProof.Layout.Swizzle.innerBits, MojoProof.Layout.Swizzle.twoLevel, MojoProof.Layout.swizzleValid, MojoProof.Layout.Swizzle.disjoint, MojoProof.Layout.Swizzle.testBit_call, MojoProof.Layout.Swizzle.call_add, MojoProof.Layout.xorBits_map, MojoProof.Layout.Swizzle.twoLevel_parts, MojoProof.Layout.Swizzle.twoLevel_call]
+        lean: [GPUProof.Layout.TwoLevel, GPUProof.Layout.TwoLevel.offset, GPUProof.Layout.TwoLevel.call, GPUProof.Layout.Swizzle.period, GPUProof.Layout.Swizzle.innerBits, GPUProof.Layout.Swizzle.twoLevel, GPUProof.Layout.swizzleValid, GPUProof.Layout.Swizzle.disjoint, GPUProof.Layout.Swizzle.testBit_call, GPUProof.Layout.Swizzle.call_add, GPUProof.Layout.xorBits_map, GPUProof.Layout.Swizzle.twoLevel_parts, GPUProof.Layout.Swizzle.twoLevel_call]
         depends: [layout/swizzle, layout/is-affine, layout/bit-layout]
       - id: upcast
         title: "`upcast` divides strides and shapes by the factor with `shape_div`"
@@ -448,7 +448,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.upcast, MojoProof.Layout.shapeDiv, MojoProof.Layout.shapeDiv_factor, MojoProof.Layout.shapeDiv_dvd, MojoProof.Layout.shapeDiv_mul, MojoProof.Layout.Lay.upcast_fuse, MojoProof.Layout.Lay.upcast_scale, MojoProof.Layout.Lay.upcast_modes, MojoProof.Layout.Lay.upcast_call]
+        lean: [GPUProof.Layout.Lay.upcast, GPUProof.Layout.shapeDiv, GPUProof.Layout.shapeDiv_factor, GPUProof.Layout.shapeDiv_dvd, GPUProof.Layout.shapeDiv_mul, GPUProof.Layout.Lay.upcast_fuse, GPUProof.Layout.Lay.upcast_scale, GPUProof.Layout.Lay.upcast_modes, GPUProof.Layout.Lay.upcast_call]
         depends: []
       - id: zipped-divide
         title: "`zipped_divide` splits a layout into tile and number-of-tiles modes"
@@ -458,7 +458,7 @@ areas:
         evidence_scope: {}
         next: "L2 needs a recorded GPU run (a conformance test, not a proof)"
         corpus_kernels: 0
-        lean: [MojoProof.Layout.Lay.zippedDivide, MojoProof.Layout.Lay.zippedDivide_call, MojoProof.Layout.Lay.zippedDivide_size]
+        lean: [GPUProof.Layout.Lay.zippedDivide, GPUProof.Layout.Lay.zippedDivide_call, GPUProof.Layout.Lay.zippedDivide_size]
         depends: [layout/crd2idx]
   - id: llvm-ir
     title: "LLVM IR constructs"

@@ -31,6 +31,12 @@ proves both from its scalars'. So at inputs that decode into the domain a `bitwi
 its word function's output words themselves (`FloatRule.Holds.bitwise_eq`), and the outputs of a
 `bitwise` rule decode as its word function's (`FloatRule.Holds.bitwise`).
 
+The scalar encodings `ScalarEnc.ieee`, `ScalarEnc.int`, `ScalarEnc.bool` and `ScalarEnc.std`,
+`Encoding.ofScalars` and `Encodings.uniform` are `[implicit_reducible]`: instance search unfolds
+them when it compares the type of a word or a position with another type, as it does when
+`decide` is asked an equation between a word at a concrete position and a value
+(GPUProof/Spec/DecEq.lean gives the instances).
+
 docs/proofs/spec.md gives the plan, what each definition reuses and where it departs from the
 design.
 -/
@@ -153,6 +159,7 @@ theorem ScalarEnc.decode_eq {d : DType} {e : ScalarEnc d} {x y : e.Word} (h : e.
 
 /-- One test format (`ieee fmt`), for every binary interchange format: words `Model fmt`, decoded
 by FloatLib's `Model.toReal?`, whose NaNs are FloatLib's `Model.isNaN`. -/
+@[implicit_reducible]
 noncomputable def ScalarEnc.ieee (fmt : FloatFormat) : ScalarEnc .real where
   Word := Model fmt
   decode := Model.toReal?
@@ -162,6 +169,7 @@ noncomputable def ScalarEnc.ieee (fmt : FloatFormat) : ScalarEnc .real where
 
 /-- Integers of `bits` bits, for every width: words `BitVec bits`, decoded as two's complement,
 with no NaN. -/
+@[implicit_reducible]
 def ScalarEnc.int (bits : Nat) : ScalarEnc .int where
   Word := BitVec bits
   decode w := some w.toInt
@@ -170,6 +178,7 @@ def ScalarEnc.int (bits : Nat) : ScalarEnc .int where
   decode_isNaN _ h := absurd h Bool.false_ne_true
 
 /-- Booleans, stored as Booleans with no NaN: one test storage of an entry of type `bool`. -/
+@[implicit_reducible]
 def ScalarEnc.bool : ScalarEnc .bool where
   Word := Bool
   decode := some
@@ -179,6 +188,7 @@ def ScalarEnc.bool : ScalarEnc .bool where
 
 /-- One storage per entry type, for every binary interchange format `fmt` and integer width
 `bits`: reals as words of `fmt`, integers as `bits`-bit words, Booleans as Booleans. -/
+@[implicit_reducible]
 noncomputable def ScalarEnc.std (fmt : FloatFormat) (bits : Nat) : (d : DType) → ScalarEnc d
   | .real => .ieee fmt
   | .int => .int bits
@@ -230,6 +240,7 @@ theorem Encoding.nanEq_equiv {ι : Type} {d : ι → DType} (e : Encoding ι d) 
 /-- The entrywise encoding, for every index type and every storage `e i` of each entry `i`: a
 position per entry holding a word of `e i` with `e i`'s NaN words, each decoded alone, so that
 words equal up to NaN payloads are `GPUProof.ScalarEnc.nanEq` at every entry. -/
+@[implicit_reducible]
 def Encoding.ofScalars {ι : Type} {d : ι → DType} (e : (i : ι) → ScalarEnc (d i)) :
     Encoding ι d where
   Pos := ι
@@ -365,6 +376,7 @@ theorem FloatRule.Holds.bitwise_eq {Dom : ∀ σ, Ents (In σ) (dIn σ) → Prop
     cases ho
 
 /-- The uniform encodings, for every spec: every entry of type `d` stored by `u d`. -/
+@[implicit_reducible]
 def Encodings.uniform (Sp : Spec Sz) (u : (d : DType) → ScalarEnc d) (σ : Sz) : Sp.Encs σ :=
   ⟨.ofScalars fun i => u (Sp.dIn σ i), .ofScalars fun o => u (Sp.dOut σ o)⟩
 

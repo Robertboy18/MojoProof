@@ -1,6 +1,6 @@
-import MojoProof.Layout.Bits
-import MojoProof.Layout.Swizzle
-import MojoProof.Layout.TwoLevel
+import GPUProof.Layout.Bits
+import GPUProof.Layout.Swizzle
+import GPUProof.Layout.TwoLevel
 
 /-!
 # Instances of the layout laws, and the counterexamples
@@ -21,7 +21,7 @@ premises.
 
 namespace MojoProofTest.LayoutLaws
 
-open MojoProof.Layout MojoProof.Layout.Tup
+open GPUProof.Layout GPUProof.Layout.Tup
 
 /-- A nested layout: shape (2, (2, 3)) and stride (1, (2, 4)), of size 12 and cosize 12. -/
 def nested : Lay :=

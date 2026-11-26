@@ -4,9 +4,9 @@ title: `coalesce` keeps the offsets and merges contiguous modes
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:2475
 quote: "The result is the simplest layout that maps coordinates to the same"
-lean: MojoProof.Layout.Lay.coalesce, MojoProof.Layout.coalesceStep, MojoProof.Layout.Lay.coalesce_call, MojoProof.Layout.Lay.coalesce_size
+lean: GPUProof.Layout.Lay.coalesce, GPUProof.Layout.coalesceStep, GPUProof.Layout.Lay.coalesce_call, GPUProof.Layout.Lay.coalesce_size
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 depends: crd2idx
 level: L1

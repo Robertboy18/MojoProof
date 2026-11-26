@@ -498,10 +498,14 @@ Its cases (MojoProof/Tile/MatVec.lean): `MojoProof.Tile.stride_approx`, the lane
 `stride W j` of the pairs, at `L = ⌈n / W⌉` (`length_stride_le`, `sum_stride`), along every tree
 over the lanes; `MojoProof.Tile.bfly_approx`, every lane `l < 2 ^ k` of the butterfly, at
 `W = 2 ^ k` and depth `k`; `MojoProof.Tile.groupDot_approx`, lane 0, that is `groupDot k` and so
-`warpDot` at `k = 5`; and `MojoProof.Tile.groupDot_holds`, `groupDot k` per row meeting the rule
-of `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)` through
-`MojoProof.Tile.holds_of`, which takes `W`, `d` and `L` (at `1`, `0`, `id` it is the rule of
-`GPUProof.Spec.matVec GPUProof.matVecGrade`). WarpDot's `groupDot_error` bounds the same word by
+`warpDot` at `k = 5`; `MojoProof.Tile.rowTrees_meetsAt`, the behaviors `rowTrees` (the strided
+lanes along a tree per row, at some oracle sequences) meeting
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade W t.depth fun n => ⌈n / W⌉)` at `matVecEnc`
+(`GPUProof.MeetsAt`) through `stride_approx` and `MojoProof.Tile.holds_of`, which takes `W`, `d`
+and `L` (at `1`, `0`, `id` it is the rule of `GPUProof.Spec.matVec GPUProof.matVecGrade`); and
+`MojoProof.Tile.groupDot_holds`, `groupDot k` per row meeting the rule of
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`, its case at lane
+0's butterfly tree. WarpDot's `groupDot_error` bounds the same word by
 the same error, with the exponent `⌈n / 2 ^ k⌉ + k` on the sum: it is `treeDot_error` at the
 butterfly's tree and the grades `⟨0, 0⟩` (warp-dot.md, statement 6).
 
@@ -509,7 +513,9 @@ Instances (MojoProofTest/TileLanes.lean), on the binary32 words `1`, `2`, `-1` c
 (`row`), with no input error, for every flag and oracle sequence: `stride_3x7`, 3 lanes, length 7,
 the tree `(0 + 1) + 2` of depth 2; `group_4x10` and `lane3_4x10`, `groupDot 2` and lane 3 of the
 butterfly at 4 lanes and length 10; their words unfused at the oracle 0 are `0` and `-4`, computed
-by the kernel (`value_3x7`, `value_4x10`).
+by the kernel (`value_3x7`, `value_4x10`); `rows_2x7` and `rows_3x10`, `rowTrees_meetsAt` at the
+tree `(0 + 1) + 2` at size 2 × 7 and at lane 0's butterfly tree (`groupDot 2` per row) at size
+3 × 10.
 
 The mutant (`depth_mutant`): the depth term is needed. On the binary32 pairs whose exact products
 are `1 / 2`, `2 ^ -26`, `2 ^ -25`, `2 ^ -26`, one per lane, `groupDot 2` unfused gives `1 / 2`:

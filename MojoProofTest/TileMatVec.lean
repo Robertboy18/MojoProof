@@ -4,10 +4,10 @@ import MojoProofTest.TileGrade
 /-!
 # Dot loops per row and the matrix-vector spec at instances
 
-MojoProof/Tile/MatVec.lean proves that a dot loop per row meets
-`GPUProof.Spec.matVec GPUProof.matVecGrade` at the uniform IEEE encoding (`rowLoops_meetsAt`),
-and that the tile matrix product whose second matrix has one row meets its rule (`meets_holds`,
-`mat_holds`). Here:
+MojoProof/Tile/MatVec.lean proves that a dot loop per row, the strided lanes of `rowTrees` at
+one lane and the tree `.leaf 0` (`rowLoops`), meets `GPUProof.Spec.matVec GPUProof.matVecGrade`
+at the uniform IEEE encoding (`rowLoops_meetsAt`), and that the tile matrix product whose
+second matrix has one row meets its rule (`meets_holds`, `mat_holds`). Here:
 
 * `rows_holds`: for every IEEE format, width, flag, tile oracle and sizes, the run of
   `dot c K (byRows m 1)` on `m` threads from `mats A B` with `B` of one row ends without a fault,
@@ -15,14 +15,15 @@ and that the tile matrix product whose second matrix has one row meets its rule 
   `meets_holds`);
 * `holds_3x4`, `holds_5x7`: `rows_holds` at sizes 3 × 4 and 5 × 7 over the generated binary32
   matrices `MojoProofTest.TileGrade.gen`, for every flag and tile oracle;
-* `rowLoops_binary32`: `rowLoops_meetsAt` at binary32;
+* `rowLoops_binary32`: `rowLoops_meetsAt` at binary32, the instance of `rowTrees_meetsAt` at one
+  lane;
 * `enc_grades`: `matVecEnc` is the uniform encoding of the spec at two other grades, `tight` at
   binary32 and size 3 × 4 and `GPUProof.laneVecGrade 4 2` at binary64 and size 5 × 7, by
   unfolding;
 * `rowLoops_mutant`: the spec graded one ulp tighter (`tight`, `GPUProof.matVecGrade`'s error less
   `2 ^ -149`) is not met by `rowLoops` at binary32 unfused: at size `(1, 1)`, on the words `subW`
   and `halfW` of `MojoProofTest.DotGrade.mutant_one` and their exact values `vals`, the rule
-  fails at output 0.
+  fails at output 0. The unfused loop there is a behavior of `rowLoops` by `rowLoops_dotLoop`.
 -/
 
 namespace MojoProofTest.TileMatVec
@@ -72,7 +73,8 @@ theorem holds_5x7 (c : Bool) (q : Site → Nat) :
         (matVecEnc .binary32 32 (5, 7)) (matIn (gen 5 7) (gen 1 7) le_rfl le_rfl) W' :=
   rows_holds rfl 32 c q _ _
 
-/-- `rowLoops_meetsAt` at binary32, for every flag. -/
+/-- `rowLoops_meetsAt` at binary32, for every flag: `rowTrees` at one lane and the tree `.leaf 0`
+meets the spec graded by `GPUProof.matVecGrade`. -/
 theorem rowLoops_binary32 (c : Bool) :
     GPUProof.MeetsAt (GPUProof.Spec.matVec GPUProof.matVecGrade GPUProof.matVecGrade_mono)
       (rowLoops .binary32 32 c) (matVecEnc .binary32 32) :=
@@ -116,7 +118,8 @@ theorem vals_f : (GPUProof.Spec.matVec tight tight_mono).f (1, 1) vals (0 : Fin 
 /-- **The mutant: one ulp tighter is not met.** The behaviors `rowLoops .binary32 32 false` do
 not meet `GPUProof.Spec.matVec tight` at `matVecEnc .binary32 32`: at size `(1, 1)`, the input
 words `subW` and `halfW` of the exact `vals` with no input error, and the unfused loop at the
-oracle 0, the rule fails at output 0 (`vals_f`, `mutant_one`). -/
+oracle 0, a behavior of `rowLoops` (`rowLoops_dotLoop`), the rule fails at output 0 (`vals_f`,
+`mutant_one`). -/
 theorem rowLoops_mutant :
     ¬ GPUProof.MeetsAt (GPUProof.Spec.matVec tight tight_mono) (rowLoops .binary32 32 false)
       (matVecEnc .binary32 32) := by
@@ -124,7 +127,7 @@ theorem rowLoops_mutant :
   have hm : (fun _ : Fin 1 => dotLoop false (fun _ => (0, 0)) (Model.zero .binary32 false)
       (List.ofFn fun _ : Fin 1 => (subW, halfW))) ∈ rowLoops .binary32 32 false (1, 1)
         (matVecEnc .binary32 32 (1, 1)) (Sum.elim (fun _ => subW) fun _ => halfW) :=
-    ⟨rfl, fun _ _ => (0, 0), fun _ => rfl⟩
+    rowLoops_dotLoop .binary32 32 false (fun _ _ => (0, 0)) _
   have h2 := h (1, 1) _ _ hm vals (fun _ => g0) trivial (by
     rintro (_ | _)
     · exact (GPUProof.Approx.model _ _ _).2 fun _ =>

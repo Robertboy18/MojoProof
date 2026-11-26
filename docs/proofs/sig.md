@@ -298,8 +298,8 @@ the core other than `GPUProof/Sound.lean`, which gained `Sound.of_lift` and then
      `Kernel.sound_entryWith` and `Kernel.sound_entry` through `hend`, `Sym/Kernel.lean`, and the
      theorems `KernelCmd.lean` generates) take it under the two premises, as
      `(hU → Trace.Shaped m'.trace.reverse → racy … = false) ∧ kept … = true`; so do
-     `Seq.start_sound_inv`'s `hb` (`Sched.lean`), `Sched.start_sound`'s and
-     `Seq.start_sound_bar`'s `hr` (`SchedWait.lean`) and `Sched.start_sound_inv`'s `hb`
+     `Seq.start_sound_inv`'s `hb` (`Sched.lean`), `Grid.start_done_sound`'s, `Sched.start_sound`'s
+     and `Seq.start_sound_bar`'s `hr` (`SchedWait.lean`) and `Sched.start_sound_inv`'s `hb`
      (`SchedChain.lean`). Their proofs discharge the premises at the reachable grids
      (`Grid.start_reach_fits` on the run's path).
    - The three changes a first attempt found:

@@ -1,4 +1,4 @@
-import MojoProof.Layout.Algebra
+import GPUProof.Layout.Algebra
 
 /-!
 # The laws of the swizzle
@@ -11,7 +11,7 @@ every value, base and shift:
 * `Swizzle.call_xor`: the swizzle is linear over the two-element field, for every swizzle.
 -/
 
-namespace MojoProof.Layout
+namespace GPUProof.Layout
 
 /-- `shiftr` distributes over XOR, for every shift, positive or not. -/
 theorem shiftr_xor (a b : Nat) (s : Int) : shiftr (a ^^^ b) s = shiftr a s ^^^ shiftr b s := by
@@ -54,4 +54,4 @@ theorem Swizzle.call_xor (S : Swizzle) (x y : Nat) :
   simp only [Nat.testBit_xor]
   cases x.testBit i <;> cases y.testBit i <;> cases a.testBit i <;> cases c.testBit i <;> rfl
 
-end MojoProof.Layout
+end GPUProof.Layout

@@ -21,6 +21,9 @@ a butterfly (`MojoProof.Tile.stride_approx`, `MojoProof.Tile.bfly_approx`,
 * `group_4x10`, `lane3_4x10`, `value_4x10`: `groupDot_approx` and `bfly_approx` at lane 3 with
   4 lanes (`k = 2`) and length 10, for every flag and oracle sequence; unfused at the oracle 0,
   `groupDot 2` is `-4` (evaluated by the kernel);
+* `rows_2x7`, `rows_3x10`: `rowTrees_meetsAt` at 3 lanes along `tree3` at size 2 × 7, and at
+  4 lanes along lane 0's butterfly tree at size 3 × 10, whose behaviors are `groupDot 2` per row;
+  for every flag and oracle sequences, the words are behaviors and meet the rule;
 * `depth_holds`, `depth_mutant`: the tree's depth is needed. On the binary32 pairs `depthW`,
   `depthV`, whose products `1 / 2`, `2 ^ -26`, `2 ^ -25`, `2 ^ -26` are exact, unfused at the
   oracle 0, `groupDot 2` (one pair per lane) gives `1 / 2` (`depth_vals`): lane 0's tree adds
@@ -113,6 +116,56 @@ theorem value_4x10 :
     (groupDot 2 false (fun _ _ => (0, 0))
       (List.ofFn fun k => (row 10 0 k, row 10 2 k))).toRat? = some (-4) := by
   decide +kernel
+
+/-- The binary32 input words at size 2 × 7: row `i` is `row 7 i`, the vector `row 7 2`. -/
+def in2x7 : Fin 2 × Fin 7 ⊕ Fin 7 → Model .binary32 :=
+  Sum.elim (fun ik => row 7 ik.1 ik.2) (row 7 2)
+
+/-- **3 lanes along `tree3` per row, size 2 × 7** (a test of `rowTrees_meetsAt`, not a
+kernel theorem): for every flag and oracle sequences, the words of the strided lanes added along
+`tree3` per row of `in2x7` are a behavior of `rowTrees` at 3 lanes and `tree3`, and they meet the
+rule of `GPUProof.Spec.matVec (GPUProof.laneVecGrade 3 2 fun n => ⌈n / 3⌉)` (the leaves by
+`decide`). -/
+theorem rows_2x7 (c : Bool) (o : Fin 2 → Nat → Nat → Nat × Nat) :
+    ∃ O ∈ rowTrees .binary32 32 3 tree3 c (2, 7) (matVecEnc .binary32 32 (2, 7)) in2x7,
+      (∀ i, O i = treeDot tree3 c (o i) fun j => stride 3 j
+        (List.ofFn fun k => (in2x7 (.inl (i, k)), in2x7 (.inr k)))) ∧
+      (GPUProof.Spec.matVec (GPUProof.laneVecGrade 3 2 fun n => (n + 3 - 1) / 3)
+        (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds (2, 7) (matVecEnc .binary32 32 (2, 7))
+        in2x7 O := by
+  have hm : (fun i => treeDot tree3 c (o i) fun j => stride 3 j
+      (List.ofFn fun k => (in2x7 (.inl (i, k)), in2x7 (.inr k)))) ∈
+      rowTrees .binary32 32 3 tree3 c (2, 7) (matVecEnc .binary32 32 (2, 7)) in2x7 :=
+    ⟨rfl, o, fun _ => rfl⟩
+  have h := rowTrees_meetsAt rfl 32 (W := 3) (t := tree3) (by decide) c (2, 7) in2x7 _ hm
+  rw [show tree3.depth = 2 from rfl] at h
+  exact ⟨_, hm, fun _ => rfl, h⟩
+
+/-- The binary32 input words at size 3 × 10: row `i` is `row 10 i`, the vector `row 10 2`. -/
+def in3x10 : Fin 3 × Fin 10 ⊕ Fin 10 → Model .binary32 :=
+  Sum.elim (fun ik => row 10 ik.1 ik.2) (row 10 2)
+
+/-- **The butterfly per row, size 3 × 10** (a test of `rowTrees_meetsAt`, not a kernel theorem):
+for every flag and oracle sequences, `groupDot 2` per row of `in3x10` (4 strided lanes and two
+butterfly rounds) is a behavior of `rowTrees` at 4 lanes and lane 0's tree
+`bflyTree (bflyOffsets 2) 0` (`eval_bflyTree`), and it meets the rule of
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade 4 2 fun n => ⌈n / 4⌉)` (`leaves_offsets`,
+`depth_bflyTree`). -/
+theorem rows_3x10 (c : Bool) (o : Fin 3 → Nat → Nat → Nat × Nat) :
+    ∃ O ∈ rowTrees .binary32 32 4 (bflyTree (bflyOffsets 2) 0) c (3, 10)
+        (matVecEnc .binary32 32 (3, 10)) in3x10,
+      (∀ i, O i = groupDot 2 c (o i) (List.ofFn fun k => (in3x10 (.inl (i, k)), in3x10 (.inr k)))) ∧
+      (GPUProof.Spec.matVec (GPUProof.laneVecGrade 4 2 fun n => (n + 4 - 1) / 4)
+        (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds (3, 10) (matVecEnc .binary32 32 (3, 10))
+        in3x10 O := by
+  have hm : (fun i => groupDot 2 c (o i)
+      (List.ofFn fun k => (in3x10 (.inl (i, k)), in3x10 (.inr k)))) ∈
+      rowTrees .binary32 32 4 (bflyTree (bflyOffsets 2) 0) c (3, 10)
+        (matVecEnc .binary32 32 (3, 10)) in3x10 :=
+    ⟨rfl, o, fun _ => (eval_bflyTree _ _ _ 0).symm⟩
+  have h := rowTrees_meetsAt rfl 32 (leaves_offsets 2 0 (by decide)) c (3, 10) in3x10 _ hm
+  rw [depth_bflyTree, show (bflyOffsets 2).length = 2 from rfl] at h
+  exact ⟨_, hm, fun _ => rfl, h⟩
 
 /-! ## The mutant: the depth of the tree -/
 

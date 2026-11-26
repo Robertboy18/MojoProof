@@ -1,4 +1,4 @@
-# The warp butterfly as a reduction tree (`bflyRounds`, `bflyRoundsAt`, `bflyOffsets`, `bflyTree`, `eval_bflyTree`, `depth_bflyTree`, `leaves_bfly`, `leaves_offsets`, `leaves_warp`, `shflSource_group`, `shflSource_bfly`, `bfly_warp_error`, `bfly_add_error`, `bflyRounds_congr`)
+# The warp butterfly as a reduction tree (`bflyRounds`, `bflyRoundsAt`, `bflyOffsets`, `bflyTree`, `eval_bflyTree`, `depth_bflyTree`, `leaves_bfly`, `leaves_offsets`, `leaves_warp`, `shflSource_group`, `shflSource_bfly`, `bfly_warp_error`, `bfly_add_error`, `bflyRounds_congr`, `bflyRoundsAt_deliver`)
 
 Lean: proved, for every carrier, combining operation, offsets, values and lane as stated below,
 in MojoProof/Sem/Bfly.lean. Instances and twins: MojoProofTest/Bfly.lean. The tree type is
@@ -90,6 +90,16 @@ node of its own tree and lane `l ^^^ m`'s.
 7. `bflyRounds_congr`: for every carrier, combining operation, offsets and lane, lane `l`'s value
    after the rounds depends only on the values of the leaves of `bflyTree ms l`: two families
    that agree there give the same value.
+8. `bflyRoundsAt_deliver`: in every format, for every operation `F`, oracle family `o`, offsets
+   `ms` below `2 ^ e`, values `v` and lane `l < 2 ^ e`: if for every `k < ms.length` and lane
+   `j < 2 ^ e` the value `bflyRounds F (ms.take (k + 1)) v j` is not a NaN (no sum of the rounds
+   of `F` at a lane below `2 ^ e` is a NaN), then
+   `bflyRoundsAt (fun r l x y => deliver (F x y) (o r l)) ms v l =
+   bflyRoundsAt (fun _ _ => F) ms v l`, whose right side is `bflyRounds F ms v l` by definition:
+   the semantics' `fadd` rounds, at `F = Model.add`, with an oracle number per round and lane,
+   are the rounds of `F`. `bflyDeliver_nanEq` (warp-dot.md, statement 9) relates the same two
+   sides at `F = Model.add` for every input, as the same word or two NaNs; this is an equality,
+   for every `F`, at inputs whose sums are not NaNs.
 
 The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule over 32 inputs
 (FloatLib's `clog_le_depth`); a loop over the 32 values (FloatLib's `leftChain`) has depth 31.
@@ -125,6 +135,11 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
    finite, and FloatLib's `Model.ReductionTree.abs_toReal_eval_sub_sum_le_depth` bounds it.
 7. Statement 1 on both sides, then induction on the tree: a leaf's value is the family's at the
    leaf, and a node's leaves are its two subtrees'.
+8. Induction on `ms`, for every oracle family and two families `w`, `v` equal below `2 ^ e`
+   (the semantics' and `F`'s values before the rounds): the first round's values at a lane
+   `j < 2 ^ e` are `deliver (F (v j) (v (j ^^^ m))) (o 0 j)`, as `j ^^^ m < 2 ^ e`
+   (`Nat.xor_lt_two_pow`), which is `F (v j) (v (j ^^^ m))` by `deliver_of_isNaN_eq_false` at the
+   premise's `k = 0`; the rest of the rounds take the premise at `k + 1`. Start with `w = v`.
 
 ## Instances and twins
 
@@ -148,6 +163,13 @@ The depth 5 of the bound is `⌈log₂ 32⌉`, the least depth of any schedule o
 - `exact4`: statement 5 away from a warp, at the offsets `2, 1`, lane 3 (leaves `3, 1, 2, 0`, by
   evaluation), `w = 4` and exact addition of reals (`u = 0`): for every `v`, lane 3's value is
   `Σ_{j<4} v j`.
+- `run4_deliver` (MojoProofTest/GemvWarp.lean): statement 8 at gemv_kernel's `run4` (binary32,
+  `F = Model.add`, `warpOffsets`, `e = 5`, the run's oracle numbers 0, lane 0, the row
+  `[2 ^ 24, 1, -2 ^ 24, 1]`), its premise decided by the kernel: `run4`'s output cell is the
+  word of the semantics' rounds. The twin after it: at the row `[+∞, -∞, 0, 0]` lane 0's last sum
+  is a NaN, and at the oracle number `0x7fc00001` in every round and lane the semantics' rounds
+  give the word `0x7fc00001` and `Model.add`'s rounds `0x7fc00000`, so statement 8 needs its
+  premise; at oracle 0 both give `0x7fc00000`, as 0 encodes no NaN.
 
 ## Not proved
 

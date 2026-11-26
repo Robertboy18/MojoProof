@@ -4,9 +4,9 @@ title: `zipped_divide` splits a layout into tile and number-of-tiles modes
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:1414
 quote: "component has shape = original_shape / tile with scaled strides."
-lean: MojoProof.Layout.Lay.zippedDivide, MojoProof.Layout.Lay.zippedDivide_call, MojoProof.Layout.Lay.zippedDivide_size
+lean: GPUProof.Layout.Lay.zippedDivide, GPUProof.Layout.Lay.zippedDivide_call, GPUProof.Layout.Lay.zippedDivide_size
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 depends: crd2idx
 level: L1

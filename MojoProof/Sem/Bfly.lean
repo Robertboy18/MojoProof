@@ -42,6 +42,13 @@ here, about the rounds as functions of the lanes' values:
   `1, ..., 2 ^ (k - 1)` in any order (`leaves_bfly`) it is `((1 + u) ^ k - 1) · Σ_{j<2^k} |v j|`.
 - `bflyRounds_congr`, for every carrier, combining operation, offsets and lane: the lane's value
   after the rounds depends only on the values at the leaves of its tree.
+- `bflyRoundsAt_deliver`, for every format, operation `F`, oracle family `o`, offsets below
+  `2 ^ e`, values and lane below `2 ^ e`: if no lane below `2 ^ e` holds a NaN after any of the
+  rounds of `F`, the lane's value after the semantics' rounds `deliver (F x y) (o r l)` is its
+  value after the rounds of `F` in every round and lane, `bflyRoundsAt (fun _ _ => F)`, which is
+  `bflyRounds F` by definition (`deliver_of_isNaN_eq_false`, MojoProof/Sem/Float.lean).
+  `bflyDeliver_nanEq` (MojoProof/Sem/WarpDot.lean) relates the same two sides at `F = Model.add`
+  with no premise, up to NaNs.
 
 `bflyRoundsAt F ms v` is the rounds with a combination `F r l` per round `r` and lane `l` (an
 oracle number per round and lane); `bflyRounds combine` is its case `F r l = combine`.
@@ -281,5 +288,43 @@ theorem bflyRounds_congr {β : Type} (combine : β → β → β) (ms : List Nat
   | node a b ha hb =>
     simp only [ReductionTree.leaves, List.mem_append] at h
     exact congrArg₂ combine (ha fun j hj => h j (.inl hj)) (hb fun j hj => h j (.inr hj))
+
+open FloatLib.Floats.Formats FloatLib.Floats.Formats.BinaryInterchange in
+/-- **The semantics' rounds are the rounds of the operation where no sum is a NaN.** In every
+format, for every operation `F`, oracle family `o`, offsets `ms` below `2 ^ e`, values `v` and
+lane `l < 2 ^ e`: if no lane below `2 ^ e` holds a NaN after any of the rounds of `F` (`bflyRounds
+F` at `ms.take (k + 1)` for `k < ms.length`), lane `l`'s value after the rounds of
+`deliver (F x y) (o r l)` in round `r` at lane `l` (`bflyRoundsAt`, the semantics' `fadd` at
+`F = Model.add`) is its value after the rounds of `F` in every round and lane, which is
+`bflyRounds F ms v l` by definition: `deliver_of_isNaN_eq_false` at every round,
+and a lane below `2 ^ e` reads only lanes below `2 ^ e` (`Nat.xor_lt_two_pow`). Where
+`bflyDeliver_nanEq` (MojoProof/Sem/WarpDot.lean) gives the same word or two NaNs at
+`F = Model.add` for every input, this gives the same value for every `F` at inputs whose sums are
+not NaNs. The premise is needed: at a NaN sum and an oracle number that encodes another NaN the
+two differ (MojoProofTest/GemvWarp.lean, after `run4_deliver`). -/
+theorem bflyRoundsAt_deliver {fmt : FloatFormat} (F : Model fmt → Model fmt → Model fmt)
+    (o : Nat → Nat → Nat) {e : Nat} {ms : List Nat} (hm : ∀ m ∈ ms, m < 2 ^ e)
+    (v : Nat → Model fmt)
+    (h : ∀ k < ms.length, ∀ j < 2 ^ e, (bflyRounds F (ms.take (k + 1)) v j).isNaN = false)
+    {l : Nat} (hl : l < 2 ^ e) :
+    bflyRoundsAt (fun r l x y => deliver (F x y) (o r l)) ms v l =
+      bflyRoundsAt (fun _ _ => F) ms v l := by
+  suffices H : ∀ ms : List Nat, (∀ m ∈ ms, m < 2 ^ e) → ∀ (o : Nat → Nat → Nat)
+      (v w : Nat → Model fmt), (∀ j < 2 ^ e, w j = v j) →
+      (∀ k < ms.length, ∀ j < 2 ^ e, (bflyRounds F (ms.take (k + 1)) v j).isNaN = false) →
+      ∀ l < 2 ^ e, bflyRoundsAt (fun r l x y => deliver (F x y) (o r l)) ms w l =
+        bflyRounds F ms v l from H ms hm o v v (fun _ _ => rfl) h l hl
+  intro ms
+  induction ms with
+  | nil => intro _ _ _ _ hw _ l hl; exact hw l hl
+  | cons m ms ih =>
+    intro hm o v w hw h l hl
+    have hm0 : m < 2 ^ e := hm m (List.mem_cons_self ..)
+    exact ih (fun m' hm' => hm m' (List.mem_cons_of_mem _ hm')) (fun r => o (r + 1))
+      (fun j => F (v j) (v (j ^^^ m))) (fun j => deliver (F (w j) (w (j ^^^ m))) (o 0 j))
+      (fun j hj => by
+        rw [hw j hj, hw _ (Nat.xor_lt_two_pow hj hm0)]
+        exact deliver_of_isNaN_eq_false (r := F (v j) (v (j ^^^ m))) (h 0 (by simp) j hj) _)
+      (fun k hk j hj => h (k + 1) (by simp only [List.length_cons]; omega) j hj) l hl
 
 end MojoProof.Sem

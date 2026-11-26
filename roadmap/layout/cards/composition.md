@@ -4,9 +4,9 @@ title: `composition(a, b)` maps a coordinate through `b`, then `a`
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/layout.mojo:1662
 quote: "`B`'s image lies in `A`'s domain."
-lean: MojoProof.Layout.Lay.compose, MojoProof.Layout.composeLeaf, MojoProof.Layout.composeStep, MojoProof.Layout.composeDiv, MojoProof.Layout.composeLeaf_prod_dot, MojoProof.Layout.composeLeaf_flatMap, MojoProof.Layout.Lay.compose_modes, MojoProof.Layout.Lay.compose_sum, MojoProof.Layout.noCarry, MojoProof.Layout.noCarry_one, MojoProof.Layout.dotColex_sum, MojoProof.Layout.Lay.compose_call, MojoProof.Layout.carryFree, MojoProof.Layout.carryFree_pick, MojoProof.Layout.Lay.compose_all
+lean: GPUProof.Layout.Lay.compose, GPUProof.Layout.composeLeaf, GPUProof.Layout.composeStep, GPUProof.Layout.composeDiv, GPUProof.Layout.composeLeaf_prod_dot, GPUProof.Layout.composeLeaf_flatMap, GPUProof.Layout.Lay.compose_modes, GPUProof.Layout.Lay.compose_sum, GPUProof.Layout.noCarry, GPUProof.Layout.noCarry_one, GPUProof.Layout.dotColex_sum, GPUProof.Layout.Lay.compose_call, GPUProof.Layout.carryFree, GPUProof.Layout.carryFree_pick, GPUProof.Layout.Lay.compose_all
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream: https://github.com/modular/modular/issues/7738
 depends: crd2idx
 level: L1

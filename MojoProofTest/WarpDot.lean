@@ -1,4 +1,4 @@
-import MojoProof.Sem.WarpDot
+import MojoProof.Tile.MatVec
 import MojoProofTest.FloatRel
 
 /-!
@@ -36,6 +36,17 @@ And with an oracle number per round and lane, `oracleAt r l = 32 r + l + 7`: `de
 instance of `bflyDeliver_nanEq` at `nan5`, lane 0's value is a NaN; `deliverAt_ones`, the
 instance of `bflyDeliver_error` at 32 lanes `1` (`ones32`), lane 0's value is finite, so it is
 the `Model.add` rounds' value and within `((1 + u) ^ 5 - 1) · 32` of `32`.
+
+gemv_kernel's lane order (`take_stride_succ`, `dotLoop_take_stride`,
+`MojoProof.Tile.bflyDeliver_holds`):
+* `rounds40`: at 40 pairs, lane 5's second round folds the pair at `37` (the arm `%70`), lane
+  8's folds nothing (`%75`), and after `⌈40 / 32⌉ = 2` rounds each lane has its whole list.
+* `mutant_index`, `mutant_order`: a round at position `2 j + l` (a wrong round stride, 2 in place
+  of 32) is not a round of the strided list, and over the 64 pairs `mut64` the blocked order
+  (`2 l + j`) gives the word `2 ^ 24` where gemv_kernel's order gives the exact `2 ^ 24 + 2`.
+* `holds40`: the spec's input words `in40` at size `1 × 40` have the row pairs `wd40`, and lane
+  0's word after the semantics' five rounds meets the rule of `GPUProof.Spec.matVec` at
+  `GPUProof.laneVecGrade 32 5`, for every flag and oracle.
 -/
 
 namespace MojoProofTest.WarpDot
@@ -185,5 +196,70 @@ theorem deliverAt_ones :
         ((1 + Model.unitRoundoffAt .binary32) ^ warpOffsets.length - 1) *
           ((List.range 32).map fun j => |(ones32 j).toReal|).sum :=
   bflyDeliver_error rfl oracleAt ones32 (leaves_warp 0 (by decide)) (by decide +kernel)
+
+/-! ## gemv_kernel's lane order -/
+
+/-- **gemv_kernel's loop rounds at 40 pairs** (`take_stride_succ` at `w = 32`), a test of one
+example: lane 5's second round folds the pair at `32 + 5 = 37 < 40` (the arm `%70`), lane 8's
+second round folds nothing (`32 + 8 = 40`, the arm `%75`), and after the loop's `⌈40 / 32⌉ = 2`
+rounds every lane `l < 32` has folded all of `stride 32 l wd40` (`length_stride_le`). -/
+theorem rounds40 :
+    (stride 32 5 wd40).take 2 = (stride 32 5 wd40).take 1 ++ wd40[37]?.toList ∧
+      (stride 32 8 wd40).take 2 = (stride 32 8 wd40).take 1 ∧
+      ∀ l < 32, (stride 32 l wd40).take 2 = stride 32 l wd40 :=
+  ⟨take_stride_succ (by decide) 1 wd40,
+    by rw [take_stride_succ (by decide) 1 wd40, List.getElem?_eq_none (by simp [wd40]),
+      Option.toList_none, List.append_nil],
+    fun l hl => List.take_of_length_le ((length_stride_le hl wd40).trans (by simp [wd40]))⟩
+
+/-- **The mutant index**, a test of one example: a round `j` that read position `2 j + l` in
+place of `32 j + l` (a wrong round stride, 2 in place of the warp's 32: lane `l`'s positions
+advance by two from round to round) is not a round of the strided list: lane 1's first two
+elements of `stride 32 1` of the positions `0, …, 39` are `[1, 33]`, not `[1, 3]`, by `decide`.
+The blocked layout of two positions per lane, `2 l + j` (lane 1: `[2, 3]`), is `mutant_order`'s. -/
+theorem mutant_index :
+    (stride 32 1 (List.range 40)).take 2 ≠
+      (stride 32 1 (List.range 40)).take 1 ++ (List.range 40)[2 * 1 + 1]?.toList := by
+  decide
+
+/-- The 64 binary32 factor pairs `(a k, 1)` with `a 0 = 2 ^ 24` (word `0x4b800000`),
+`a 1 = a 33 = 1` (`0x3f800000`) and `a k = 0` otherwise. -/
+def mut64 : List (Model .binary32 × Model .binary32) :=
+  List.ofFn fun k : Fin 64 => (if k.val = 0 then f32 0x4b800000 else
+    if k.val = 1 ∨ k.val = 33 then f32 0x3f800000 else f32 0, f32 0x3f800000)
+
+/-- **The mutant order changes the word**, a test of one example: without the `contract` flag, the
+warp's word over `mut64` in gemv_kernel's order (lane `l` folds the pairs at `32 j + l`,
+`warpDot`) is the exact `2 ^ 24 + 2`: lane 1 adds the two `1`s before the butterfly. In the
+blocked order (lane `l` folds the pairs at `2 l` and `2 l + 1`), lane 0 adds `1` to `2 ^ 24`, a
+tie that rounds to the even `2 ^ 24`, and lane 16's `1` is lost the same way in the first round
+(offset 16): the word is `2 ^ 24`. By evaluation. -/
+theorem mutant_order :
+    (warpDot false (fun _ _ => (0, 0)) mut64).toRat? = some 16777218 ∧
+      (bflyRounds (fun x y => Model.add x y) warpOffsets (fun l => dotLoop false (fun _ => (0, 0))
+        (Model.zero _ false) ((mut64.drop (2 * l)).take 2)) 0).toRat? = some 16777216 := by
+  decide +kernel
+
+/-- The binary32 input words of the matrix-vector spec at size `1 × 40` whose row pairs are
+`wd40`: entry `(0, 0)` of the matrix is `2 ^ 24`, the others and the vector `1`. -/
+def in40 : Fin 1 × Fin 40 ⊕ Fin 40 → Model .binary32 :=
+  Sum.elim (fun ik => if ik.2.val = 0 then f32 0x4b800000 else f32 0x3f800000)
+    fun _ => f32 0x3f800000
+
+/-- **gemv_kernel's output at size `1 × 40` meets the spec** (an instance of
+`MojoProof.Tile.bflyDeliver_holds` at `k = 5`, not a kernel theorem): the row pairs of `in40` are
+`wd40` (by evaluation), and for every flag, oracle sequences of the 32 lane loops and oracle
+numbers of the five rounds' `fadd`, lane 0's word after the rounds of `deliver (Model.add x y)`
+meets the rule of `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)`. -/
+theorem holds40 (c : Bool) (o : Fin 1 → Nat → Nat → Nat × Nat) (ob : Fin 1 → Nat → Nat → Nat) :
+    (List.ofFn fun j => (in40 (.inl (0, j)), in40 (.inr j))) = wd40 ∧
+      (GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
+          (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds (1, 40)
+        (MojoProof.Tile.matVecEnc .binary32 32 (1, 40)) in40
+        fun i => bflyRoundsAt (fun r l x y => deliver (Model.add x y) (ob i r l)) (bflyOffsets 5)
+          (fun l => dotLoop c (o i l) (Model.zero _ false)
+            (stride (2 ^ 5) l (List.ofFn fun j => (in40 (.inl (i, j)), in40 (.inr j))))) 0 :=
+  ⟨by decide +kernel,
+    MojoProof.Tile.bflyDeliver_holds (fmt := .binary32) (σ := (1, 40)) rfl 32 5 c o ob in40⟩
 
 end MojoProofTest.WarpDot

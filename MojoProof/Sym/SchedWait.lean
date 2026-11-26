@@ -33,9 +33,10 @@ collectives, then resumes.
   the callee's return attributes, for every block size, so for every width the shuffles allow.
 * `Sched`: a schedule of any number of phases, each threads in turn to their waits (`Seq.ToWait`)
   and then a fire (`Fires`), and last threads in turn to their ends (`Seq`). `Sched.grid`: it is a
-  run of grid steps to a finished grid. `Sched.start_sound`: a start whose threads (`Grid.thread`)
-  have a schedule whose final memory is kept, race-free when its trace has the premises of
-  `racy_iff`, and observed as `y` with `R y` is sound (`Grid.Sound`), through `Grid.start_sound`.
+  run of grid steps to a finished grid. `Grid.start_done_sound`: a start that steps to a done grid
+  whose memory is kept, race-free when its trace has the premises of `racy_iff`, and observed as
+  `y` with `R y` is sound (`Grid.Sound`), through `Grid.start_sound`. `Sched.start_sound`: the
+  same for a start whose threads (`Grid.thread`) have a schedule, by `Sched.grid`.
 * `Seq.start_sound_bar`: the case of `Sched.start_sound` at one barrier phase. The per-thread
   premises have the forms the segments give: the run to the barrier is `Waits.toWait` of
   `Seg.sound`, and the run after it is from the resumed thread with no value on the memory the
@@ -492,6 +493,32 @@ theorem Sched.grid {L : Launch} {c : Nat → Ctx} {N : Nat} {t : Nat → Thread}
     exact ⟨z, Path.exists_iff.2 ((Path.exists_iff.1 ⟨_, hp₁⟩).trans
       ((Path.exists_iff.1 hp₂).trans (Path.exists_iff.1 hp₃))), hd, hz⟩
 
+/-- **A start that reaches a done grid, sound.** For every program, kernel `fn`, launch `L`,
+arguments, address choice and oracle whose start (`Grid.start`) gives grid `g₀` and contexts `c`,
+on a caller's memory `m` meeting `Mem.BytesIn`, and every observation `obs` that reads only the
+blocks: if `g₀` steps (`Grid.Step`) to a done grid `z` (`GPUProof.Done` at `sig`) whose memory's
+trace keeps the promise of `!invariant.load` (the core's `GPUProof.kept` at `sig`), has no data
+race (the core's `racy` at `sig`) when it has the premises of `racy_iff`, and has
+`obs z.mem = some y` with `R y`, then `g₀` is sound (`Grid.Sound`): `Grid.Done.bad_iff` (with
+`Grid.start_reach_size`), `Grid.start_reach_fits` (the done grid, reachable, has the premises of
+`racy_iff`) and `Grid.start_sound`. -/
+theorem Grid.start_done_sound {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
+    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
+    {β : Type} {obs : Mem → Option β} {R : β → Prop}
+    (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') {i : Nat} {z : Grid}
+    (hp : Path (Grid.Step L c) i g₀ z) (hd : GPUProof.Done sig (z, L, c))
+    (hr : ((∀ a, Sem.Event.access a ∈ z.mem.trace → a.who.thread < volume L.grid * volume L.block ∧
+        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped z.mem.trace.reverse →
+      GPUProof.racy sig (z.mem.trace.map (Event.toCore L)).reverse = false))
+    (hk : GPUProof.kept sig (z.mem.trace.map (Event.toCore L)).reverse = true)
+    {y : β} (hy : obs z.mem = some y) (hR : R y) : Grid.Sound L c g₀ obs R := by
+  have hf := Grid.start_reach_fits h (Path.exists_iff.1 ⟨_, hp⟩)
+  exact Grid.start_sound h hm hO hp hd (fun hb => ((Grid.Done.bad_iff
+    (Grid.start_reach_size h (Path.exists_iff.1 ⟨_, hp⟩)).le hd).1 hb).elim
+    (fun h' => Bool.false_ne_true ((hr hf.trace hf.2).symm.trans h'))
+    fun h' => Bool.false_ne_true (h'.symm.trans hk)) hy hR
+
 /-- **A start through collective calls, sound.** For every program, kernel `fn`, launch `L`,
 arguments, address choice and oracle whose start (`Grid.start`) gives grid `g₀` and contexts `c`,
 on a caller's memory `m` meeting `Mem.BytesIn`, and every observation `obs` that reads only the
@@ -500,9 +527,7 @@ collective calls (`Sched`: phases of runs in turn to waits and the phase's colle
 in turn to the ends) to `m'`, and `m'`'s trace keeps the promise of `!invariant.load` (the
 core's `GPUProof.kept` at `sig`), has no data race (the core's `racy` at `sig`) when it has the
 premises of `racy_iff`, and has `obs m' = some y` with `R y`, then `g₀` is sound
-(`Grid.Sound`): `Sched.grid`, `Grid.start_threads`, `Grid.Done.bad_iff` (with
-`Grid.start_reach_size`), `Grid.start_reach_fits` (the finished grid, reachable, has the
-premises of `racy_iff`) and `Grid.start_sound`. -/
+(`Grid.Sound`): `Sched.grid` with `Grid.start_threads`, then `Grid.start_done_sound`. -/
 theorem Sched.start_sound {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
     {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
     (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
@@ -515,11 +540,7 @@ theorem Sched.start_sound {prog : Program} {fn : Func} {L : Launch} {args : List
     (hk : GPUProof.kept sig (m'.trace.map (Event.toCore L)).reverse = true)
     {y : β} (hy : obs m' = some y) (hR : R y) : Grid.Sound L c g₀ obs R := by
   obtain ⟨z, ⟨_, hp⟩, hd, rfl⟩ := Sched.grid (g := g₀) hs rfl (Grid.start_threads h) rfl
-  have hf := Grid.start_reach_fits h (Path.exists_iff.1 ⟨_, hp⟩)
-  exact Grid.start_sound h hm hO hp hd (fun hb => ((Grid.Done.bad_iff
-    (Grid.start_reach_size h (Path.exists_iff.1 ⟨_, hp⟩)).le hd).1 hb).elim
-    (fun h' => Bool.false_ne_true ((hr hf.trace hf.2).symm.trans h'))
-    fun h' => Bool.false_ne_true (h'.symm.trans hk)) hy hR
+  exact Grid.start_done_sound h hm hO hp hd hr hk hy hR
 
 /-- **The barriers as a phase's collectives.** For every launch `L` with blocks of
 `volume L.block > 0` threads, contexts `c`, number `B` of blocks, `N = B * volume L.block` and

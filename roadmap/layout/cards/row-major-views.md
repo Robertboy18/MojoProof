@@ -4,9 +4,9 @@ title: `TileTensor.as_span`, `reshape` and `coalesce` need row-major contiguous 
 kind: construct
 ref: modular/modular@bbc13a71:max/kernels/src/layout/tile_tensor.mojo:2087
 quote: "TileTensor.as_span requires row-major (contiguous) strides"
-lean: MojoProof.Layout.rowMajor, MojoProof.Layout.rowMajor_call_lt, MojoProof.Layout.rowMajor_onto, MojoProof.Layout.rowMajor_inj
+lean: GPUProof.Layout.rowMajor, GPUProof.Layout.rowMajor_call_lt, GPUProof.Layout.rowMajor_onto, GPUProof.Layout.rowMajor_inj
 corpus: none
-tests: MojoProofTest.LayoutLaws, MojoProofTest.LayoutConformance
+tests: MojoProofTest.GPUProof.LayoutLaws, MojoProofTest.LayoutConformance
 upstream:
 level: L1
 ---

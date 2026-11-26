@@ -1,4 +1,4 @@
-# The warp's dot product: strided loops and a butterfly (`stride`, `groupDot`, `warpDot`, `sum_stride`, `length_stride`, `bfly_stride`, `bfly_matVec`, `bfly_vecMat`, `bfly_stride_error`, `groupDot_error`, `groupDot_matVec`, `groupDot_vecMat`, `warpDot_error`, `warpDot_matVec`, `warpDot_vecMat`, `bflyRounds_nanEq`, `bfly_stride_nanEq`, `groupDot_nanEq`, `groupDot_eq`, `warpDot_nanEq`, `warpDot_eq`, `bflyRoundsAt_nanEq`, `bflyDeliver_nanEq`, `bflyDeliver_error`)
+# The warp's dot product: strided loops and a butterfly (`stride`, `groupDot`, `warpDot`, `sum_stride`, `length_stride`, `bfly_stride`, `bfly_matVec`, `bfly_vecMat`, `bfly_stride_error`, `groupDot_error`, `groupDot_matVec`, `groupDot_vecMat`, `warpDot_error`, `warpDot_matVec`, `warpDot_vecMat`, `bflyRounds_nanEq`, `bfly_stride_nanEq`, `groupDot_nanEq`, `groupDot_eq`, `warpDot_nanEq`, `warpDot_eq`, `bflyRoundsAt_nanEq`, `bflyDeliver_nanEq`, `bflyDeliver_error`, `getElem?_stride`, `take_stride_succ`, `dotLoop_append`, `dotLoop_take_stride`)
 
 Lean: proved, for every format, length, group of `2 ^ k` lanes, flag and oracle as stated below, in
 MojoProof/Sem/WarpDot.lean, and `gevm_kernel`'s transposition through shared memory in
@@ -99,6 +99,20 @@ the graded `GPUProof.Approx` statements of MojoProof/Tile/MatVec.lean (`stride_a
    and width `w` with lane `l`'s tree over the lanes below `w`, each once: if the lane's
    delivered value is finite, it is the `Model.add` rounds' value, every value below `w` is
    finite, and it is within `((1 + u) ^ ms.length - 1) · Σ_{j<w} |v j|` of `Σ_{j<w} v j`.
+10. `getElem?_stride`: for all `l < w`, numbers `i` and lists `xs`, element `i` of
+    `stride w l xs` is `xs[w i + l]`, or neither exists. `take_stride_succ`: for every round `j`,
+    the first `j + 1` elements of `stride w l xs` are its first `j`, then `xs[w j + l]` when
+    `w j + l < xs.length`, and nothing more otherwise. `dotLoop_append`: in every format, for
+    every flag, oracle sequence `o`, word `a` and lists `qs`, `rs`, `dotLoop c o a (qs ++ rs)` is
+    the loop over `rs` from `dotLoop c o a qs` with the oracle sequence `j ↦ o (qs.length + j)`.
+    `dotLoop_take_stride`: so the loop over the first `j + 1` elements of `stride w l ps` is one
+    more `dotStep` at the pair `ps[w j + l]` and the oracle numbers `o j` when
+    `w j + l < ps.length`, and the loop over the first `j` otherwise. That is round `j` of lane
+    `l` of `gemv_kernel`'s row loop at `w = 32`
+    (gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, lines 89-108): the
+    index `%65 = 32 %55 + %40`, the guard `%69` (`%65 < K`), the arm `%70` that loads and folds
+    the pair, and the arm `%75` that keeps the sum. After `⌈K / w⌉` rounds the first elements are
+    the whole list (statement 2's `length_stride_le` and `List.take_of_length_le`).
 
 With `K` pairs the bound's exponent is `⌈K / 32⌉ + 5`, against `K` for the sequential loop
 (`GPUProof.dotGrade`, `laneGrade` at one lane and depth `0`), and its underflow term has
@@ -139,6 +153,12 @@ With `K` pairs the bound's exponent is `⌈K / 32⌉ + 5`, against `K` for the s
    `nanEq_deliver` followed by `NaNEq.op` at `fadd`. `bflyDeliver_error`: a finite value is not a
    NaN, so `NaNEq.eq_isNaN` makes it the `Model.add` rounds' value; then `bfly_add_error` (bfly.md,
    statement 6).
+10. `getElem?_stride` is induction on `xs` from the right: appending `x` at position
+    `xs.length` appends it to `stride w l xs` exactly when `xs.length % w = l`, and then
+    `stride w l xs` has `xs.length / w` elements (`length_stride`), so the new element is number
+    `xs.length / w`, at `w (xs.length / w) + l = xs.length`. `take_stride_succ` is
+    `List.take_add_one` and `getElem?_stride`. `dotLoop_append` is induction on `qs`; for
+    `dotLoop_take_stride`, the first `j` elements have length `j` when element `j` exists.
 
 ## Instances
 
@@ -167,6 +187,20 @@ times `(1, 1)`, the pairs of entry 0 of the product of the vector `[2 ^ 24, 1, �
   the oracle number `32 r + l + 7` in round `r` at lane `l` (`oracleAt`): over `nan5` lane 0's
   value is a NaN; over 32 lanes `1` (`ones32`) it is finite (by evaluation), so it is the
   `Model.add` rounds' value and within `((1 + u) ^ 5 - 1) · 32` of `32`.
+- `rounds40`: statement 10 at `w = 32` and the 40 pairs `wd40`: lane 5's second round folds
+  the pair at `37` (the arm `%70`), lane 8's folds nothing (`32 + 8 = 40`, the arm `%75`), and
+  after `⌈40 / 32⌉ = 2` rounds every lane has its whole list.
+- `mutant_index`: a round `j` at position `2 j + l` (a wrong round stride, 2 in place of 32) is
+  not a round of the strided list: lane 1's first two positions of `0, …, 39` are `1, 33`, not
+  `1, 3`. The blocked layout of two positions per lane (`2 l + j`) is `mutant_order`'s.
+- `mutant_order`: the order matters for the word. Over the 64 pairs `(a k, 1)` with
+  `a 0 = 2 ^ 24`, `a 1 = a 33 = 1` and `0` otherwise (`mut64`), without the `contract` flag the
+  warp's word in `gemv_kernel`'s order is the exact `2 ^ 24 + 2`, and in the blocked order
+  (lane `l` folds the pairs at `2 l` and `2 l + 1`) it is `2 ^ 24`.
+- `holds40`: at size `1 × 40`, input words `in40` whose row pairs are `wd40`, lane 0's word after
+  the semantics' five rounds meets the rule of `GPUProof.Spec.matVec` at
+  `GPUProof.laneVecGrade 32 5`, for every flag and oracle (`MojoProof.Tile.bflyDeliver_holds`,
+  spec.md).
 
 ## The transposition through shared memory (`tpose`, `tpose_lt`, `tpose_tpose`, `tpose_bijOn`, `Launch.tpose_env`, `Tiling.tpose`, `racy_tpose`, `warpDot_tpose`)
 
@@ -236,7 +270,8 @@ loop computes `dotLoop` of the strided lists, which needs `K` and `N` multiples 
 ## Not proved
 
 - That a grid run of `gemv_kernel` or `gevm_kernel` computes `warpDot` of its loaded pairs: the
-  loops' loads, the shuffles of every lane of the warp at the same round, and that `gevm_kernel`'s
+  loops' trip count and loads (statement 10 is the order of a lane's rounds, not a run), the
+  shuffles of every lane of the warp at the same round, and that `gevm_kernel`'s
   run stores and loads the transposed cells (the cells' arithmetic, the race freedom of a trace
   that does, and the values each warp then reduces are proved, in the section above); both
   kernels are outside the block checker's fragment from their entry block (bfly.md).

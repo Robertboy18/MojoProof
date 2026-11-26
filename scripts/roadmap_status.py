@@ -13,12 +13,12 @@ card and checks, reporting every problem it finds:
   string; upstream is empty or an issue number (`#123` or a URL ending in one);
 * a ref `repo:<path>:<line>` names a file of this repository, and its line contains the quote;
 * every name in lean is a declaration (`lean: not stated yet` names none). The declaration
-  index is scripts/cited.py's `scan` over MojoProof/ and MojoProofTest/, plus the names the
-  command `mojo_kernel n := ...` adds that `scan` does not list (`n.covers`, `n.correct`, ...,
-  with `mat` its names and with an invariant `n.runInv` and `n.sound_inv`; below, `generated`)
-  and the blocks `n.b<i>`, plus, for a name whose first component is another package's root
-  (`FloatLib`, `TorchLean`), `scan` over that package's sources under .lake/packages. No Lean
-  runs;
+  index is scripts/cited.py's `scan` over GPUProof/, MojoProof/ and MojoProofTest/, plus the
+  names the command `mojo_kernel n := ...` adds that `scan` does not list (`n.covers`,
+  `n.correct`, ..., with `mat` its names and with an invariant `n.runInv` and `n.sound_inv`;
+  below, `generated`) and the blocks `n.b<i>`, plus, for a name whose first component is another
+  package's root (`FloatLib`, `TorchLean`), `scan` over that package's sources under
+  .lake/packages. No Lean runs;
 * every name in tests is a declaration or a module MojoProofTest.<M> with a file
   MojoProofTest/<M>.lean;
 * every corpus entry is a path or a glob under tests/corpus/ that matches at least one file
@@ -178,7 +178,7 @@ def binders(text: str) -> list[tuple[list[str], str]]:
 def premises_of(text: str) -> dict[str, str]:
     """The theorems a Lean file declares, by full name, each with the text of its statement and of
     the section variables it takes (those it `include`s or names). Comments are blanked first."""
-    text = cited.COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text)
+    text = cited.blank(text)
     lines = text.split('\n')
     out: dict[str, str] = {}
     stack: list[tuple[str, list, set]] = []   # (namespace segment or '', variables, included)
@@ -293,7 +293,8 @@ def level_scope(scopes: dict[str, list[str]]) -> str:
 
 
 class Index:
-    """The declaration index: MojoProof/ and MojoProofTest/, and other packages on demand."""
+    """The declaration index: GPUProof/, MojoProof/ and MojoProofTest/, and other packages on
+    demand."""
 
     def __init__(self):
         self.decls: set[str] = set()
@@ -301,7 +302,7 @@ class Index:
         self.kernels: set[str] = set()     # their kernels' full names, for `n.b<i>`
         self.statements: dict[str, str] = {}   # theorem name: its statement with premises
         self.templates: dict[str, str] = {}    # generated suffix: the command's statement text
-        for d in ('MojoProof', 'MojoProofTest'):
+        for d in ('GPUProof', 'MojoProof', 'MojoProofTest'):
             for p in sorted((ROOT / d).rglob('*.lean')):
                 self.add_file(p.read_text())
         cmd = (ROOT / 'MojoProof' / 'Sym' / 'KernelCmd.lean').read_text()
@@ -322,7 +323,7 @@ class Index:
         self.statements.update(premises_of(text))
         # as `cited.scan` reads the file: comments blanked, the kernel's full name from the
         # namespaces open at the command
-        lines = cited.COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text).split('\n')
+        lines = cited.blank(text).split('\n')
         stack: list[str] = []   # namespace segments, '' for a section or a mutual block
         prev = ''
         for i, line in enumerate(lines):
@@ -381,7 +382,7 @@ class Index:
         if BLOCK.fullmatch(last) and head in self.kernels:
             return True
         root = name.split('.')[0]
-        if root in ('MojoProof', 'MojoProofTest'):
+        if root in ('GPUProof', 'MojoProof', 'MojoProofTest'):
             return False
         pkg = self.package(root)
         return pkg is not None and name in pkg

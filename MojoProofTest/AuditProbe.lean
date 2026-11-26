@@ -15,6 +15,10 @@ fails unless it classifies them so:
   definitions, must be counted;
 * `evenA_iff`, an `iff` between two inductive predicates (`EvenA` and `EvenB`, the even numbers
   by the same two constructors), must be counted.
+* `addZero_fixed`, `Function.IsFixedPt addZero (mulOne 0)`, an equation between two public
+  definitions under a definition that unfolds to it, must be counted;
+* `addZero_injective`, `Function.Injective addZero`, which unfolds to an equation between bound
+  variables, must not be.
 
 The definitions compute `n`, the predicates hold of the even numbers, and nothing else uses
 them.
@@ -110,6 +114,17 @@ inductive EvenB : Nat → Prop
 every natural `n`, `EvenA n` holds exactly when `EvenB n` does. -/
 theorem evenA_iff {n : Nat} : EvenA n ↔ EvenB n := by
   constructor <;> intro h <;> induction h <;> constructor <;> assumption
+
+/-- **A fixed point, which the audit counts as an equivalence**:
+`Function.IsFixedPt addZero (mulOne 0)`, which is the equation `addZero (mulOne 0) = mulOne 0`
+between two public definitions once `Function.IsFixedPt` is unfolded. -/
+theorem addZero_fixed : Function.IsFixedPt addZero (mulOne 0) :=
+  show addZero (mulOne 0) = mulOne 0 from rfl
+
+/-- **An injectivity, which the audit does not count**: `Function.Injective addZero`, which
+unfolds to `addZero a = addZero b → a = b`, an equation between two bound variables. -/
+theorem addZero_injective : Function.Injective addZero := fun a b h => by
+  simpa [addZero] using h
 
 /-- `n + n`, for every natural `n`: one side of the probe's law. -/
 def double (n : Nat) : Nat := n + n
