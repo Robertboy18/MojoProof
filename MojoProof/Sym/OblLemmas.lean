@@ -987,12 +987,31 @@ theorem SEff.apply_store_ex {V : Valuation} {vs : List (Except Fault Val)} {m : 
   simp only [SEff.apply, Valuation.stmt_of_fn hF hs, hv, hp]
   exact h
 
+/-- **The run of one `store` effect is the semantics' store**: for every valuation `V` whose
+function is `F` and program is `P`, node values `vs`, statement `pc` of block `lbl` storing a
+value of type `t` through a pointer of space `a` with alignment `al`, value term `v` of value `x`
+and pointer term `p` of pointer `q`: the run of that one effect from `V.mem` is the store of `x`
+at `q` on `V.mem`, at the statement's type and alignment. -/
+theorem SEff.run_store_eq {V : Valuation} {vs : List (Except Fault Val)} {P : Program}
+    {F : Func} {lbl pc : Nat} {v p : SVal} {dst : Option Nat} {vol : Bool} {t : Ty} {pv : Value}
+    {a : Nat} {pv' : Value} {al : Option Nat} {md : List (String × Nat)} {x : Val} {q : Ptr}
+    (hF : V.fn = F) (hP : V.ctx.prog = P)
+    (hs : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
+      some ⟨dst, .store vol (.mk t pv) (.mk (.ptr a) pv') al, md⟩)
+    (hv : v.eval V vs = .ok x) (hp : p.eval V vs = .ok (.ptr q)) :
+    SEff.run V vs [.store lbl pc v p] =
+      V.mem.store P.layout V.ctx.who a t x q (some (al.getD (P.layout.align t))) := by
+  subst hP
+  simp only [SEff.run, List.foldlM_cons, List.foldlM_nil, bind_pure, SEff.apply,
+    Valuation.stmt_of_fn hF hs, hv, hp]
+  rfl
+
 /-- **The memory one `store` effect makes from a valuation's memory**: for every valuation `V`
 whose function is `F` and program is `P`, node values `vs`, statement `pc` of block `lbl` storing
 a value of type `t` through a pointer of space `a` with alignment `al`, value term `v` of value
 `x`, pointer term `p` of pointer `q` and memory `M`: if the run of that one effect from `V.mem`
 gives `M`, the semantics' store of `x` at `q` on `V.mem`, at the statement's type and alignment,
-gives `M`. -/
+gives `M` (`SEff.run_store_eq`). -/
 theorem SEff.run_store_one {V : Valuation} {vs : List (Except Fault Val)} {P : Program}
     {F : Func} {lbl pc : Nat} {v p : SVal} {dst : Option Nat} {vol : Bool} {t : Ty} {pv : Value}
     {a : Nat} {pv' : Value} {al : Option Nat} {md : List (String × Nat)} {x : Val} {q : Ptr}
@@ -1001,12 +1020,8 @@ theorem SEff.run_store_one {V : Valuation} {vs : List (Except Fault Val)} {P : P
       some ⟨dst, .store vol (.mk t pv) (.mk (.ptr a) pv') al, md⟩)
     (hv : v.eval V vs = .ok x) (hp : p.eval V vs = .ok (.ptr q))
     (h : SEff.run V vs [.store lbl pc v p] = .ok M) :
-    V.mem.store P.layout V.ctx.who a t x q (some (al.getD (P.layout.align t))) = .ok M := by
-  subst hP
-  refine Eq.trans ?_ h
-  simp only [SEff.run, List.foldlM_cons, List.foldlM_nil, bind_pure, SEff.apply,
-    Valuation.stmt_of_fn hF hs, hv, hp]
-  rfl
+    V.mem.store P.layout V.ctx.who a t x q (some (al.getD (P.layout.align t))) = .ok M :=
+  (SEff.run_store_eq hF hP hs hv hp).symm.trans h
 
 /-! ## Loads after a store, at a known program
 

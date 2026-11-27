@@ -18,11 +18,12 @@ tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nv
   divides the block's `x` size (`gemv_warp`, MojoProofTest/GPUProof/MixedRadix.lean).
   `idx_row`: `%24` and `%25` deliver lane 0's halves of the row word, the premises `hd₁`, `hd₂`
   of `MojoProofTest.GemvThread.run` at `r` lane 0's row, which is the lane's own.
-* Tests, by evaluation: `deliver7`'s value is what `shfl_of`'s check `r` computes at a block of
-  32 threads and at the second warp of a block of 64, with offers that differ by phase and lane
-  (`tag`). The mutant: at a block of 16 threads the first `bfly`'s source lane `j ^^^ 16` is not
-  one of the warp's lanes, and `poison` is delivered, not the source's offer (`poison16`). At two
-  blocks of 48 threads thread 64's row is not its warp's lane 0's: `row_lane` needs its premise.
+* Tests, by evaluation: `deliver7`'s value is what `r`, the delivery `ok78` checks, computes at a
+  block of 32 threads and at the second warp of a block of 64, with offers that differ by phase
+  and lane (`tag`). The mutant: at a block of 16 threads the first `bfly`'s source lane `j ^^^ 16`
+  is not one of the warp's lanes, and `poison` is delivered, not the source's offer (`poison16`).
+  At two blocks of 48 threads thread 64's row is not its warp's lane 0's: `row_lane` needs its
+  premise.
 -/
 
 namespace MojoProofTest.GemvShfl
@@ -124,13 +125,14 @@ theorem idx_row {c : Ctx} (hcp : c.prog = gemv.prog) {L : Launch} (hs : 0 < volu
 source lane changes the delivery. -/
 def tag (i j : Nat) : Val := .bits 32 (.ofNat 32 (32 * i + j))
 
-/-- Test: at one block of 32 threads (`x32`, warp 0), what `shfl_of`'s check `r` computes at the
-seven shuffles is `deliver7`'s value at `tag`, by evaluation. -/
+/-- Test: at one block of 32 threads (`x32`, warp 0), what `r`, the delivery `ok78` checks,
+computes at the seven shuffles is `deliver7`'s value at `tag`, by evaluation. -/
 example : ∀ i < 7, ∀ j < 32, r { w32 with v := tag } i j = some (tag i (src i j)) := by
   decide +kernel
 
-/-- Test: at one block of 64 threads (`x64`, warp 32, lanes 0 to 31), what `shfl_of`'s check `r`
-computes at the seven shuffles is `deliver7`'s value at `tag`, by evaluation. -/
+/-- Test: at one block of 64 threads (`x64`, warp 32, lanes 0 to 31), what `r`, the
+delivery `ok78` checks, computes at the seven shuffles is `deliver7`'s value at `tag`, by
+evaluation. -/
 example : ∀ i < 7, ∀ j < 32, r { wb with v := tag } i j = some (tag i (src i j)) := by
   decide +kernel
 
@@ -144,7 +146,7 @@ example : warpLanes (L x64) 37 = List.range 32 := by decide
 
 /-- Test (mutant): at one block of 16 threads (`x16`), the first `bfly`'s source lane
 `j ^^^ 16` is not one of the warp's lanes, so the premise of `Program.shfl_deliver` fails, and
-`shfl_of`'s check delivers `poison` (`poison16`), not the source lane's offer. -/
+`r`, the delivery `ok78` checks, is `poison` (`poison16`), not the source lane's offer. -/
 example : ∀ j < 16, shflSource .bfly j 16 31 ∉ warpLanes (L x16) 0 ∧
     r w16 2 j = some .poison ∧ r w16 2 j ≠ some (w16.v 2 (src 2 j)) := fun j hj =>
   ⟨by interval_cases j <;> decide, poison16.1 j hj, by

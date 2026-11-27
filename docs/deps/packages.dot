@@ -1,7 +1,7 @@
 digraph packages {
   rankdir=LR;
   node [shape=box, fontname="Helvetica"];
-  "MojoProof" [label="MojoProof\nthis repository\n332 modules loaded"];
+  "MojoProof" [label="MojoProof\nthis repository\n352 modules loaded"];
   "mathlib" [label="mathlib\nfc4f59e577fe (v4.36.0)\n2740 modules loaded"];
   "TorchLean" [label="TorchLean\n6e4b63353b87 (v1.5)\n87 modules loaded"];
   "floatlib" [label="floatlib\nfc2fad1f9c7d (v4.1.0)\n587 modules loaded"];

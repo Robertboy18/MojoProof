@@ -1,5 +1,6 @@
 import MojoProofTest.GemvWarpWord
 import MojoProofTest.Theorem0
+import MojoProof.Tile.Words
 
 /-!
 # gemv_kernel's grid is sound, from its lanes' events
@@ -24,7 +25,7 @@ against `GPUProof.Spec.matVec` (`GPUProof.Kernel.Sound` at `sig`, through Theore
   of the output are thread `32 i`'s, and the matrix and the vector are only read;
 * `kept_ev`: such a trace keeps the promise (`kept_of_split`): the `!invariant.load`s read the
   matrix and the vector, which no event writes;
-* `mem0_trace`, `ext_of_trace`, `ext_chain`, `ext_out`, `lanes_ext`, `out_ext`: a warp's run
+* `mem0_trace`, `ext_out`, `lanes_ext`, `out_ext`: a warp's run
   extends the trace by events of `Ev` (`Ext`) if each lane's run from its second `idx` shuffle
   (`%25`) to its next wait (`Lanes.mem2`) or its end (`Out.memE`) does: the `alloca`s log
   nothing, the butterfly shuffles change no memory, and the last phase (`GemvThread.out`) logs
@@ -40,16 +41,20 @@ against `GPUProof.Spec.matVec` (`GPUProof.Kernel.Sound` at `sig`, through Theore
   at the invariant "the trace since the start is of `Ev`", `rows_of_loads` at the same run's
   memory), so on a caller's memory meeting `Mem.BytesIn` the start's grid is sound
   (`CanonRun.start_sound`);
-* `RowsRule`, `rows_holds`, `starts`, `kernel_sound`: rows that are their `warpDot`s up to NaNs
-  meet the rule of `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 _)`
-  (`MojoProof.Tile.holds_of`, `MojoProof.Tile.groupDot_approx`); gemv_kernel's launch starts on
+* `RowsRule`, `rows_holds`, `starts`, `kernel_sound`: rows that load as their `warpDot`s up to
+  NaNs meet the rule of `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 _)`
+  (`MojoProof.Tile.warpDot_matVec_holds`); gemv_kernel's launch starts on
   a memory closed for its arguments (`Sym.Grid.start_ok`); so gemv_kernel is sound at `sig`
   for the admission "address choice below `2 ^ 60`"
   (`grid_end`, `CanonRun.start_done`, `Grid.Done.bad_iff`, `MojoProofTest.Theorem0.sound_sig`);
-* `m3_bytesIn`: `GemvThread.m3` meets `Mem.BytesIn`, so `grid_sound` has an instance at one
-  block of 32 threads, `M = 1`, `K = 4`, on `m3`, with no premise but the start;
+* instances, every premise proved (`GemvThread.mem_caller`), no run evaluated: the example after
+  `kernel_sound` (`grid_sound`, one warp, from `starts`) and `sound64` (two warps, `words`);
 * `row_race`: why the launch is one-dimensional: at one block of 32 × 2 threads, two warps have
   row 0, and their lanes 0's stores at row 0 race.
+
+`rowsObs`, `RowsDot` and `RowsRule` are the cases at gemv_kernel of MojoProof/Tile/Words.lean's
+`MojoProof.Tile.warpObs`, `MojoProof.Tile.WarpWords` and `MojoProof.Tile.Loads`, which
+MojoProofTest/GevmSpec.lean also uses for gevm_kernel's columns.
 
 `Grid.sound_cells` (MojoProof/Sem/Shared.lean) is not used: its `racy_kept_of_cells` takes
 every block other than the output cells read-only, and gemv_kernel writes its `alloca` slots.
@@ -155,19 +160,6 @@ theorem mem0_trace (w : Alloc) : ∀ j, (w.mem0 j).trace = w.m.trace
     simp only [Alloc.mem0, GemvEntryRun.slots, Mem.alloc_trace]
     exact mem0_trace w j
 
-/-- For every property `P` of events and memories `m`, `m'`: a memory with `m`'s trace extends
-it by events of `P` (none). -/
-theorem ext_of_trace {P : Event → Prop} {m m' : Mem} (h : m'.trace = m.trace) : Ext P m m' :=
-  ⟨[], by rw [h, List.nil_append], fun _ he => by simp at he⟩
-
-/-- For every property `P` of events, family of memories `mm` and count `n`: if each `mm (j + 1)`
-extends `mm j`'s trace by events of `P` for `j < n`, each `mm j` for `j ≤ n` extends `mm 0`'s
-(`Ext.trans`). -/
-theorem ext_chain {P : Event → Prop} {mm : Nat → Mem} {n : Nat}
-    (h : ∀ j < n, Ext P (mm j) (mm (j + 1))) : ∀ j ≤ n, Ext P (mm 0) (mm j)
-  | 0, _ => ext_of_trace rfl
-  | j + 1, hj => (ext_chain h j (by omega)).trans (h j (by omega))
-
 /-- **A thread's final memory logs its store only**: for every property `P` of events, layout
 `l`, thread `who`, value, block numbers `p0`, `b7`, `b8`, `b9`, offset `o`, decidable `z` and
 memory `my`: `GemvThread.out` extends `my`'s trace by events of `P` if the binary32 store of
@@ -178,7 +170,7 @@ theorem ext_out {P : Event → Prop} (l : Layout) (who : Who) (x : Val) (p0 b7 b
     (hP : z → P (.access ⟨who, ⟨p0, o⟩, l.stored (.fp .float), true, none, false⟩)) :
     Ext P my (GemvThread.out l who x p0 b7 b8 b9 o z my) := by
   unfold GemvThread.out
-  refine (fun m' (h : Ext P my m') => h.trans (ext_of_trace (Mem.foldl_setLive_trace _ _ _))) _ ?_
+  refine (fun m' (h : Ext P my m') => h.trans (Ext.of_trace (Mem.foldl_setLive_trace _ _ _))) _ ?_
   by_cases hz : z
   · simp only [hz, ↓reduceIte]
     split
@@ -186,9 +178,9 @@ theorem ext_out {P : Event → Prop} (l : Layout) (who : Who) (x : Val) (p0 b7 b
       exact ⟨[_], by rw [Mem.store_trace hme]; rfl, fun e he => by
         rw [List.mem_singleton] at he
         exact he ▸ hP hz⟩
-    · exact ext_of_trace rfl
+    · exact Ext.refl _ _
   · simp only [hz, ↓reduceIte]
-    exact ext_of_trace rfl
+    exact Ext.refl _ _
 
 /-- **An in-range warp's events**: gemv_kernel, for every warp `w` with its premises
 (`Lanes.Pre`) whose first thread `k` is its context's thread, a multiple of 32 with row
@@ -200,7 +192,7 @@ theorem lanes_ext {bA bV N : Nat} {w : Lanes} (h : w.Pre bA bV)
     (hwk : (w.c w.k).who.thread = w.k) (hk : w.k % 32 = 0) (hr : w.r.val = w.k / 32)
     (h2 : ∀ j < 32, Ext (Ev N w.p0 bA bV w.M) (w.mem2 j) (w.mem2 (j + 1))) :
     Ext (Ev N w.p0 bA bV w.M) w.m (w.mem7 32) := by
-  have e0 : Ext (Ev N w.p0 bA bV w.M) w.m (w.mem2 0) := ext_of_trace (mem0_trace w.toAlloc 32)
+  have e0 : Ext (Ev N w.p0 bA bV w.M) w.m (w.mem2 0) := Ext.of_trace (mem0_trace w.toAlloc 32)
   have e7 : ∀ j < 32, Ext (Ev N w.p0 bA bV w.M) (w.mem7 j) (w.mem7 (j + 1)) := by
     intro j hj
     refine ext_out gemv.prog.layout _ _ _ _ _ _ _ _ (w.mem7 j) fun hz => ?_
@@ -214,7 +206,7 @@ theorem lanes_ext {bA bV N : Nat} {w : Lanes} (h : w.Pre bA bV)
       exact hk
     · rw [hw, ← hr]
       exact w.r.isLt
-  exact (e0.trans (ext_chain h2 32 le_rfl)).trans (ext_chain e7 32 le_rfl)
+  exact (e0.trans (Ext.chain h2 32 le_rfl)).trans (Ext.chain e7 32 le_rfl)
 
 /-- **An out-of-range warp's events**: gemv_kernel, for every warp `w` whose row is `M` or more
 and every number `N`: if each lane's run from `%25`'s shuffle to its end (`Out.memE`) extends
@@ -223,7 +215,7 @@ the trace by events of `Ev`, the warp's run to `memE 32` does (the `alloca`s log
 theorem out_ext {bA bV N : Nat} {w : Out}
     (hE : ∀ j < 32, Ext (Ev N w.p0 bA bV w.M) (w.memE j) (w.memE (j + 1))) :
     Ext (Ev N w.p0 bA bV w.M) w.m (w.memE 32) :=
-  (ext_of_trace (mem0_trace w.toAlloc 32)).trans (ext_chain hE 32 le_rfl)
+  (Ext.of_trace (mem0_trace w.toAlloc 32)).trans (Ext.chain hE 32 le_rfl)
 
 /-- **A slot access is one of `Ev`**, for every memory `m`, thread `who`, step numbers `k₀`,
 `k₁`, `k₂`, blocks `p0`, `bA`, `bV`, row count `M` and event: an access of `SlotEv` at the
@@ -247,7 +239,7 @@ premises (`Out.Pre`) and lane `j < 32`: lane `j`'s run from `%25`'s shuffle to i
 (`Out.memE_ext`, `slotEv_ev`). -/
 theorem out_events {bA bV : Nat} {w : Out} (h : w.Pre bA bV) {j : Nat} (hj : j < 32) :
     Ext (Ev w.m.next w.p0 bA bV w.M) (w.memE j) (w.memE (j + 1)) :=
-  GemvLoop.ext_mono (Out.memE_ext h hj) fun _ he => slotEv_ev (m := w.m)
+  (Out.memE_ext h hj).mono fun _ he => slotEv_ev (m := w.m)
     (k₀ := (w.t (w.k + j)).k + 0) (k₁ := (w.t (w.k + j)).k + 1) (k₂ := (w.t (w.k + j)).k + 2) he
 
 /-- **The events of a warp whose row is below `M`**: gemv_kernel, for every warp `w` with its
@@ -256,7 +248,7 @@ extends `mem2 j`'s trace by events of `Ev` at the warp's `next`, its accesses of
 slots and its reads of the matrix and the vector (`Lanes.mem2_ext`, `slotEv_ev`). -/
 theorem lanes_events {bA bV : Nat} {w : Lanes} (h : w.Pre bA bV) {j : Nat} (hj : j < 32) :
     Ext (Ev w.m.next w.p0 bA bV w.M) (w.mem2 j) (w.mem2 (j + 1)) :=
-  GemvLoop.ext_mono (Lanes.mem2_ext h hj) fun _ he => he.elim
+  (Lanes.mem2_ext h hj).mono fun _ he => he.elim
     (fun he => slotEv_ev (m := w.m) (k₀ := (w.t (w.k + j)).k + 0)
       (k₁ := (w.t (w.k + j)).k + 1) (k₂ := (w.t (w.k + j)).k + 2) he)
     fun ⟨a, e, hw, hat, hb⟩ => ⟨a, e, hat, .inr (.inl ⟨hw, hb⟩)⟩
@@ -264,22 +256,22 @@ theorem lanes_events {bA bV : Nat} {w : Lanes} (h : w.Pre bA bV) {j : Nat} (hj :
 /-- The output rows of a memory, for every launch `L`, row count `M` and output block `p0`:
 row `i`'s binary32 load at offset `4 i` of `p0` by thread `32 i` of `L`
 (`⟨32 i, 32 i / volume L.block⟩`, the `who` the start gives it, `Grid.start_ctx`), for each
-`i < M`. It reads only the blocks (`Mem.load_of_block`), and names no start's contexts. -/
+`i < M`: `MojoProof.Tile.warpObs` at gemv_kernel's layout (gemv IR line 136 stores row `i` from
+lane 0 of warp `i`). It reads only the blocks (`Mem.load_of_block`), and names no start's
+contexts. -/
 def rowsObs (L : Launch) (M p0 : Nat) (m : Mem) : Option (Fin M → Except Fault Val) :=
-  some fun i => m.load gemv.prog.layout ⟨32 * i.val, 32 * i.val / volume L.block⟩ 0 (.fp .float)
-    ⟨p0, ((i.val * 4 : Nat) : Int)⟩ (some 4)
+  MojoProof.Tile.warpObs gemv.prog.layout L M p0 m
 
 /-- `grid_rows`' relation of the output rows, for every launch, grid, contexts, sizes, output
 block, matrix and vector: each row `i < M` loads as a word that is row `i`'s
 `MojoProof.Sem.warpDot true` at the loop oracle numbers of the warp from thread `32 i` up to
-NaNs (`NaNEq`). -/
+NaNs (`NaNEq`): `MojoProof.Tile.WarpWords` at the pairs `matVecPairs A v`. -/
 def RowsDot (L : Launch) (g : Grid) (c : Nat → Ctx) (M K p0 : Nat)
     (A : TorchLean.Tensor (Model FloatTy.float.fmt) [M, K])
     (v : TorchLean.Tensor (Model FloatTy.float.fmt) [K]) (f : Fin M → Except Fault Val) :
     Prop :=
-  ∀ i : Fin M, ∃ x, f i = .ok (Val.ofFloat .float x) ∧
-    NaNEq x (warpDot true (lo (Lanes.ofStart L g c (32 * i.val) M K p0 A v i) i)
-      (matVecPairs A v i))
+  MojoProof.Tile.WarpWords .float true
+    (fun i => lo (Lanes.ofStart L g c (32 * i.val) M K p0 A v i) i) (matVecPairs A v) f
 
 /-- **gemv_kernel's grid runs to a sound end**: gemv_kernel, for every valid launch `L` whose blocks
 and grid are one-dimensional (`y` and `z` sizes 1), whose block's `x` size 32 divides and whose
@@ -345,7 +337,7 @@ theorem grid_end {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
   obtain ⟨Es, m', hc, ⟨-, E, hE, hP⟩, hl⟩ := Lanes.grid_run_inv hs ha hL hx hby hbz hgy hgz hch
     hM hK hMK hm hb0 hf0 hbA hbV hfA hfV hA hV
     (fun m₁ => m₁.next = g.mem.next ∧ Ext (Ev g.mem.next p0 bA bV M) g.mem m₁)
-    ⟨rfl, ext_of_trace rfl⟩
+    ⟨rfl, Ext.refl _ _⟩
     (fun k hk r m₁ hr h ⟨hn, hx⟩ => by
       have e : Ext (Ev m₁.next p0 bA bV M) m₁
           ((⟨⟨k, c, Grid.thread g, m₁⟩, L, M, K, p0, A, v, r⟩ : Lanes).mem7 32) :=
@@ -404,41 +396,31 @@ theorem grid_sound {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
 /-- The matrix-vector rule's relation of the output rows, for every sizes `M`, `K`, width `bits`
 and input words `I`: the rows load as binary32 words `W i` (`Val.ofFloat`) that meet the rule of
 `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)` at size `(M, K)`, encoding
-`MojoProof.Tile.matVecEnc FloatTy.float.fmt bits` and inputs `I` (`GPUProof.FloatRule.Holds`). It
-names no oracle. -/
+`MojoProof.Tile.matVecEnc FloatTy.float.fmt bits` and inputs `I` (`GPUProof.FloatRule.Holds`):
+`MojoProof.Tile.Loads` at that rule. It names no oracle. -/
 def RowsRule {M : Nat} (K bits : Nat)
     (I : (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)).inp.Words)
     (f : Fin M → Except Fault Val) : Prop :=
-  ∃ W : Fin M → Model FloatTy.float.fmt, (∀ i, f i = .ok (Val.ofFloat .float (W i))) ∧
-    (GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
+  MojoProof.Tile.Loads .float
+    ((GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
         (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds (M, K)
-        (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)) I W
+        (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)) I) f
 
-/-- **Rows that are their `warpDot`s up to NaNs meet the matrix-vector rule** (test of
-gemv_kernel's relation, for every width `bits`, sizes, matrix `A`, vector `v`, input words `I`
-that hold them, oracle sequences `o i` of each row and words `W`): if each `W i` is
-`MojoProof.Sem.warpDot true (o i)` of row `i`'s pairs up to NaNs (`NaNEq`), `W` meets the rule
-of `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)` at `I`. A NaN pair
-decodes alike (`GPUProof.ScalarEnc.decode_eq`), and `MojoProof.Tile.groupDot_approx` grades
-each row (`MojoProof.Tile.holds_of`), whatever its oracle. -/
+/-- **Rows that load as their `warpDot`s up to NaNs meet the matrix-vector rule** (test of
+gemv_kernel's relation, gemv_kernel float32 `b79a852b`; for every width `bits`, sizes, matrix `A`,
+vector `v`, input words `I` that hold them, oracle sequences `o i` of each row and loads `f`): if
+each row `i` loads as a binary32 word that is `MojoProof.Sem.warpDot true (o i)` of row `i`'s pairs
+up to NaNs (`MojoProof.Tile.WarpWords` at `matVecPairs A v`, `RowsDot`'s form at every oracle),
+the rows meet `RowsRule`, whatever the oracle: `MojoProof.Tile.warpDot_matVec_holds` at the words
+the rows load as. That a run stores such words is a premise here (`grid_end`). -/
 theorem rows_holds (bits : Nat) {M K : Nat} {A : TorchLean.Tensor (Model FloatTy.float.fmt) [M, K]}
     {v : TorchLean.Tensor (Model FloatTy.float.fmt) [K]}
     {I : (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)).inp.Words}
     (hA : ∀ i j, I (.inl (i, j)) = TorchLean.Tensor.get2 A i j)
-    (hv : ∀ j, I (.inr j) = v.getScalar j) (o : Fin M → Nat → Nat → Nat × Nat)
-    (W : Fin M → Model FloatTy.float.fmt)
-    (h : ∀ i, NaNEq (W i) (warpDot true (o i) (matVecPairs A v i))) :
-    (GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
-        (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds (M, K)
-        (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)) I W :=
-  MojoProof.Tile.holds_of bits (2 ^ 5) 5 _ fun i a x ga gx ha hx => by
-    have e : matVecPairs A v i = List.ofFn fun j => (I (.inl (i, j)), I (.inr j)) := by
-      simp only [matVecPairs, hA, hv]
-    have hd : Model.toReal? (W i) = Model.toReal? (warpDot true (o i) (matVecPairs A v i)) :=
-      GPUProof.ScalarEnc.decode_eq (e := GPUProof.ScalarEnc.ieee FloatTy.float.fmt) (h i)
-    rw [hd, e]
-    exact MojoProof.Tile.groupDot_approx rfl 5 true (o i) (fun j => I (.inl (i, j)))
-      (fun j => I (.inr j)) a x ga gx ha hx
+    (hv : ∀ j, I (.inr j) = v.getScalar j) {o : Fin M → Nat → Nat → Nat × Nat}
+    {f : Fin M → Except Fault Val}
+    (h : MojoProof.Tile.WarpWords .float true o (matVecPairs A v) f) : RowsRule K bits I f :=
+  h.loads fun _ hW => MojoProof.Tile.warpDot_matVec_holds (σ := (M, K)) rfl bits true o A v hA hv hW
 
 unseal Array.anyM.loop in
 /-- **gemv_kernel's launch starts** (test of gemv_kernel, for every launch, argument values
@@ -508,39 +490,57 @@ theorem kernel_sound {L : Launch} {m : Mem} {M K p0 bA bV : Nat} {x4 : BitVec 32
       fun h' => Bool.false_ne_true (h'.symm.trans hk)
   refine ⟨(g, L, c), ?_, MojoProofTest.Theorem0.sound_sig hs hC.bytesIn
     (fun m₁ m₂ hb => congrArg some (funext fun _ => Mem.load_of_block (congrFun hb _) _ _ _ _))
-    hp hd hb hy ⟨fun i => (hR i).choose, fun i => (hR i).choose_spec.1,
-      rows_holds bits hIA hIv _ _ fun i => (hR i).choose_spec.2⟩⟩
+    hp hd hb hy (rows_holds bits hIA hIv hR)⟩
   show (Grid.start gemv.prog gemv.fn_0 L _ m ch oracle).map _ = _
   rw [hs]
   rfl
 
-/-- `GemvThread.m3` has no pointer byte: the matrix's and the vector's bytes are binary32 words
-(`tensorBytes_namesIn`), and the output starts with none (`Mem.alloc_bytesIn`). -/
-theorem m3_bytesIn : GemvThread.m3.BytesIn GemvThread.m3.Known := by
-  have h0 : ({} : Mem).BytesIn GemvThread.m3.Known := fun _ _ _ _ _ h => by cases h
-  have hT : ∀ {s : TorchLean.Shape} (x : TorchLean.Tensor (Model FloatTy.float.fmt) s) p j,
-      MemByte.ptr p j ∈ tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) x →
-        GemvThread.m3.Known p.block := fun x p j h =>
-    (tensorBytes_namesIn (S := fun _ => False)
-      (fun _ => by simp [Val.NamesIn, Val.ofFloat]) x p j h).elim
-  exact Mem.alloc_bytesIn (Mem.alloc_bytesIn (Mem.alloc_bytesIn h0 (hT _) _ _ _ _ _ _ _ _ _ _)
-    (hT _) _ _ _ _ _ _ _ _ _ _) (init := []) (fun _ _ h => by cases h) _ _ _ _ _ _ _ _ _ _
+/-- Test: `grid_sound` at one block of 32 threads (`launch2 1 1 32 1`), `M = 1`, `K = 4`, the
+memory `GemvThread.m3` (`GemvThread.mem` at the matrix `GemvThread.A3` and the vector
+`GemvThread.v3`: the output at block 3, the matrix and vector at blocks 1 and 2), `%4 = 0`, every
+address choice below `2 ^ 60` and every oracle: the launch starts (`starts`), and the start's
+grid is sound for row 0 of the output and its row's `warpDot` up to NaNs, every other premise
+from `GemvThread.m3_caller` (`m.BytesIn m.Known` by `Mem.Closed.bytesIn`, no block from `next`
+on by `Mem.Closed.above`). -/
+example {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) (oracle : Nat → Nat → Nat) :
+    ∃ g c, Grid.start gemv.prog gemv.fn_0 (launch2 1 1 32 1) [.ptr ⟨3, 0⟩, .ptr ⟨1, 0⟩,
+      .ptr ⟨2, 0⟩, .bits 32 (BitVec.ofNat 32 1), .bits 32 0, .bits 32 (BitVec.ofNat 32 4)]
+        GemvThread.m3 ch oracle = .ok (g, c) ∧
+      Grid.Sound (launch2 1 1 32 1) c g (rowsObs (launch2 1 1 32 1) 1 3)
+        (RowsDot (launch2 1 1 32 1) g c 1 4 3 GemvThread.A3 GemvThread.v3) :=
+  have h := GemvThread.m3_caller
+  have ⟨g, c, hs⟩ := starts _ (h.closed 0) ch oracle
+  ⟨g, c, hs, grid_sound hs (h.closed 0).bytesIn rfl (launch2_valid (by decide)) (by decide) rfl
+    rfl rfl rfl hch (by decide) (by decide) (by decide) (by decide) (h.closed 0).above h.hb0 h.hf0
+    h.hbA h.hbV h.hfA h.hfV h.hA h.hV⟩
 
-/-- Test: `grid_sound` at one block of 32 threads (`launch2 1 1 32 1`), `M = 1`, `K = 4`, the output
-at block 3, the matrix `GemvThread.A3` and vector `GemvThread.v3` at blocks 1 and 2 of
-`GemvThread.m3` (no pointer byte, `m3_bytesIn`), any `%4` and every address choice below `2 ^ 60`
-and oracle whose start gives `(g, c)`: the start's grid is sound for row 0 of the output and its
-row's `warpDot` up to NaNs. -/
-example {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : Nat → Nat → Nat} {g : Grid}
-    {c : Nat → Ctx} {x4 : Val}
-    (hs : Grid.start gemv.prog gemv.fn_0 (launch2 1 1 32 1) [.ptr ⟨3, 0⟩, .ptr ⟨1, 0⟩,
-      .ptr ⟨2, 0⟩, .bits 32 (BitVec.ofNat 32 1), x4, .bits 32 (BitVec.ofNat 32 4)]
-        GemvThread.m3 ch oracle = .ok (g, c)) :
-    Grid.Sound (launch2 1 1 32 1) c g (rowsObs (launch2 1 1 32 1) 1 3)
-      (RowsDot (launch2 1 1 32 1) g c 1 4 3 GemvThread.A3 GemvThread.v3) :=
-  grid_sound hs m3_bytesIn rfl (launch2_valid (by decide)) (by decide) rfl rfl rfl rfl hch
-    (by decide) (by decide) (by decide) (by decide) m3_free w0_pre.hb0 w0_pre.hf0 w0_pre.hbA
-    w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
+/-- The input words of `MojoProof.Tile.matVecEnc` at size `(M, K)` read from a matrix `A`
+(`M × K`) and a vector `v` (length `K`) of binary32 words, for every sizes and width `bits`:
+entry `(i, j)` of `A` at input `(i, j)` and entry `j` of `v` at input `j`, so that
+`kernel_sound`'s premises `hIA` and `hIv` hold by `rfl`. A test definition. -/
+def words {M K : Nat} (bits : Nat) (A : TorchLean.Tensor (Model FloatTy.float.fmt) [M, K])
+    (v : TorchLean.Tensor (Model FloatTy.float.fmt) [K]) :
+    (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)).inp.Words :=
+  Sum.elim (fun ij => TorchLean.Tensor.get2 A ij.1 ij.2) v.getScalar
+
+/-- **Test: `kernel_sound` with every premise proved, at two output warps**: gemv_kernel at one
+block of 64 threads (`launch2 1 1 64 1`: two warps, rows 0 and 1), `M = 2`, `K = 4`, the memory
+`GemvWarpRun.n3` (`GemvThread.mem` at the `2 × 4` matrix of ones `GemvWarpRun.A24` and the vector
+of twos `GemvThread.v3`: the output at block 3, the matrix and vector at blocks 1 and 2), `%4 = 0`,
+width 32 and the input words `words 32 A24 v3`: gemv_kernel is sound at `sig` for the admission
+"address choice below `2 ^ 60`", the output rows (`rowsObs`) and `RowsRule`. The memory premises
+by `GemvWarpRun.n3_caller` (`GemvThread.mem_caller`), the launch's by `launch2_valid`, `decide` on
+numerals and `rfl`, `hIA` and `hIv` by `rfl`; no run is evaluated. -/
+theorem sound64 :
+    GPUProof.Kernel.Sound sig (gemv.prog, gemv.fn_0) (launch2 1 1 64 1) [.ptr ⟨3, 0⟩,
+      .ptr ⟨1, 0⟩, .ptr ⟨2, 0⟩, .bits 32 (BitVec.ofNat 32 2), .bits 32 0,
+      .bits 32 (BitVec.ofNat 32 4)] n3 (fun ω => ∀ q, ω.1 q < 2 ^ 60)
+      (fun b => rowsObs (launch2 1 1 64 1) 2 3 { blocks := b })
+      (RowsRule 4 32 (words 32 A24 GemvThread.v3)) :=
+  kernel_sound (n3_caller.closed 0) (launch2_valid (by decide)) (by decide) rfl rfl rfl rfl
+    (by decide) (by decide) (by decide) (by decide) n3_caller.hb0 n3_caller.hf0 n3_caller.hbA
+    n3_caller.hbV n3_caller.hfA n3_caller.hfV n3_caller.hA n3_caller.hV 32 _ (fun _ _ => rfl)
+    fun _ => rfl
 
 /-- **Two warps of one row at a two-dimensional block** (test of gemv_kernel's row, at one block of
 32 × 2 threads, `launch2 1 1 32 2`, the output at block 3): threads 0 and 32, the first threads of

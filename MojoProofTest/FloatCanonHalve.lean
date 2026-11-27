@@ -18,6 +18,15 @@ Tests at 2, 4, 8 and 32 lanes or cells (docs/proofs/float-reductions.md, stateme
 * `order6`: `canon_bflyTree_lane` at the rounds `1, 4, 2` over 8 lanes and lane 6;
   `order_ne`: in that order lane 0's `canon` is not the halving tree, by evaluation, so
   `canon_bflyOffsets` is about the order `bflyOffsets k`.
+* `zero_order`: after the rounds `1, 4, 2` lane 0's tree is
+  `((0 + 1) + (4 + 5)) + ((2 + 3) + (6 + 7))`, its own `canon`, by evaluation; `perm6`:
+  `canon_bflyTree_perm` there at lane 6, whose canonical form is lane 0's tree; `xor13`:
+  `bflyTree_xor` there at lane 13; `perm13`: `canon_bflyTree_perm` at lane 13, lane 0's tree
+  shifted by `8`.
+* `perm_four`: `canon_bflyTree_perm` at the rounds `1, 2` over 4 lanes and lane 6, lane 0's tree
+  shifted by `4`; `lane5_canon`: at the rounds `2, 1` and lane 5, the halving tree over 4 cells
+  shifted by `4`.
+* `dup_ne`: the mutant with the offset `1` twice, where lane 0's tree is not its own `canon`.
 * `warp13`: `bfly_nanEq_halve` in binary32 at a warp (`k = 5`), lane 13, every value `1`.
 * `payload_ne`: at 2 lanes (`k = 1`) holding the binary32 quiet NaNs `0x7fc00001` and
   `0x7fc00002`, lane 1's butterfly sum and cell 0's halving sum are different words, by
@@ -79,6 +88,52 @@ theorem order6 := canon_bflyTree_lane (k := 3) (ms := [1, 4, 2]) (by decide) (l 
 /-- **In another order the form is not the halving tree** (test at 8): after the rounds
 `1, 4, 2`, lane 0's `canon` is not the halving tree over 8 cells. By evaluation. -/
 theorem order_ne : canon (bflyTree [1, 4, 2] 0) ≠ roundsTree halveStep (bflyOffsets 3) 0 := by
+  decide
+
+/-- **Lane 0's tree in another order** (test at 8): after the rounds `1, 4, 2`, lane 0's tree is
+`((0 + 1) + (4 + 5)) + ((2 + 3) + (6 + 7))`, and it is its own `canon`. By evaluation. -/
+theorem zero_order : bflyTree [1, 4, 2] 0 =
+      .node (.node (.node (.leaf 0) (.leaf 1)) (.node (.leaf 4) (.leaf 5)))
+        (.node (.node (.leaf 2) (.leaf 3)) (.node (.leaf 6) (.leaf 7))) ∧
+    canon (bflyTree [1, 4, 2] 0) = bflyTree [1, 4, 2] 0 := by
+  decide
+
+/-- **`canon_bflyTree_perm` below `2 ^ k`** (test at 8): after the rounds `1, 4, 2`, lane 6's
+canonical form is lane 0's tree, the premise and the shift `2 ^ 3 ⌊6 / 2 ^ 3⌋ = 0` by
+evaluation. -/
+theorem perm6 : canon (bflyTree [1, 4, 2] 6) = bflyTree [1, 4, 2] 0 :=
+  (canon_bflyTree_perm (k := 3) (ms := [1, 4, 2]) (by decide) 6).trans (by decide)
+
+/-- **`bflyTree_xor` at a lane above `2 ^ k`** (test at 8): after the rounds `1, 4, 2`, lane 13's
+tree is lane 0's with each leaf `j` relabelled `j ^^^ 13`. -/
+theorem xor13 := bflyTree_xor [1, 4, 2] 13
+
+/-- **`canon_bflyTree_perm` above `2 ^ k`** (test at 8): after the rounds `1, 4, 2`, lane 13's
+canonical form is `((8 + 9) + (12 + 13)) + ((10 + 11) + (14 + 15))`, lane 0's tree shifted by
+`2 ^ 3 ⌊13 / 2 ^ 3⌋ = 8`, the premise and the tree by evaluation. -/
+theorem perm13 : canon (bflyTree [1, 4, 2] 13) =
+    .node (.node (.node (.leaf 8) (.leaf 9)) (.node (.leaf 12) (.leaf 13)))
+      (.node (.node (.leaf 10) (.leaf 11)) (.node (.leaf 14) (.leaf 15))) :=
+  (canon_bflyTree_perm (k := 3) (ms := [1, 4, 2]) (by decide) 13).trans (by decide)
+
+/-- **`canon_bflyTree_perm` at 4 lanes in another order** (test at 4): after the rounds `1, 2`,
+lane 6's canonical form is `(4 + 5) + (6 + 7)`, lane 0's tree `(0 + 1) + (2 + 3)` shifted by
+`4`, the premise and the tree by evaluation. -/
+theorem perm_four : canon (bflyTree [1, 2] 6) =
+    .node (.node (.leaf 4) (.leaf 5)) (.node (.leaf 6) (.leaf 7)) :=
+  (canon_bflyTree_perm (k := 2) (ms := [1, 2]) (by decide) 6).trans (by decide)
+
+/-- **Lane 5's canonical form** (test at 4): after the rounds `2, 1` (`bflyOffsets 2`), lane 5's
+canonical form is `(4 + 6) + (5 + 7)`, the halving tree over 4 cells shifted by `4`, which
+`lane5_out` shows is not the halving tree; the tree by evaluation. -/
+theorem lane5_canon : canon (bflyTree (bflyOffsets 2) 5) =
+    .node (.node (.leaf 4) (.leaf 6)) (.node (.leaf 5) (.leaf 7)) :=
+  (canon_bflyTree_perm (k := 2) (List.Perm.refl _) 5).trans (by decide)
+
+/-- **A repeated offset** (mutant, test at 2): after the rounds `1, 1`, which are not
+`bflyOffsets k` in any order, lane 0's tree `(0 + 1) + (1 + 0)` is not its own `canon`, so
+`canon_bflyTree_perm` needs its premise. By evaluation. -/
+theorem dup_ne : canon (bflyTree [1, 1] 0) ≠ bflyTree [1, 1] 0 := by
   decide
 
 /-- **`bfly_nanEq_halve` at a warp** (test at 32): in binary32 with every value `1`, lane 13's

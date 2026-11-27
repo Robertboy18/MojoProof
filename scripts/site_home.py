@@ -1,8 +1,9 @@
-"""The website's home page: what MojoProof is, Figure 1 (how it works), what is proved, Figure 2 (the roadmap as a
-map) and how to take part. Called by scripts/site.py; everything shown is read from the repository when the site is
+"""The website's home page: what MojoProof is, Figure 1 (how it works), what is proved, Figures 2 and 3 (how much
+of Modular's GPU code is proved, and the progress over time, from scripts/site_coverage.py), Figure 4 (the roadmap as
+a map) and how to take part. Called by scripts/site.py; everything shown is read from the repository when the site is
 built, so the page never says more than the code does.
 
-The two figures are inline SVG, coloured by the site's stylesheet (so they follow light and dark mode). Their only
+The figures are inline SVG, coloured by the site's stylesheet (so they follow light and dark mode). Their only
 text is part labels, a legend and per-mark tooltips; what they show is said in their numbered captions. They use no
 JavaScript: shapes are links, hover is CSS, and the one moving part is an SVG animation that CSS hides for readers
 who ask for reduced motion.
@@ -175,7 +176,11 @@ def stats(site) -> list[tuple[int, str, str]]:
     found = site.root / 'docs' / 'found-bugs.md'
     filed = len(re.findall(r'^\| \[#\d+\]\(https://github\.com/modular/modular/issues/\d+\)', found.read_text(), re.M)) \
         if found.is_file() else 0
-    return [(len(ll), 'compiled kernels in the corpus', f'{site.tree}tests/corpus'),
+    import site_coverage
+    cov = site_coverage.summary(site)
+    return [(f'{cov["proved"]} of {cov["n"]}', "Modular's GPU kernels with a proved specialization",
+             'roadmap/kernels/coverage.html'),
+            (len(ll), 'compiled kernels in the corpus', f'{site.tree}tests/corpus'),
             (len(lean), 'Lean modules in the library', f'{site.tree}MojoProof'),
             (len(proved), 'kernels with a kernel theorem', 'roadmap/kernels/index.html'),
             (cards, 'roadmap cards', 'roadmap/index.html')] + \
@@ -228,6 +233,8 @@ def home_body(site) -> str:
                        f'<p>{esc(sentence)}</p><p class="decls">{links}</p></div>')
     why_mojo = readme_section(site, 'Why Mojo')
     why_ver = readme_section(site, 'Why verification')
+    import site_coverage
+    cov = site_coverage.summary(site)
     return f'''
 <section class="hero">
 <h1>MojoProof</h1>
@@ -264,10 +271,31 @@ need to change, and every theorem says how far it reaches: every program, a fami
 <a href="docs/proved.html">What is proved</a>, and what the proofs trust is in the
 <a href="docs/trust.html">trusted base</a>.</p>
 
+<h2 id="how-much-is-proved">How much is proved</h2>
+<p>Modular's open-source code launches {cov["n"]} GPU kernel functions. {cov["proved"]} of them have a proved
+specialization (a kernel theorem about one compiled program of the function, from the source at the revision its card
+names), {cov["roadmap"]} more are on the roadmap, and {cov["none"]} are not started, so most of the work is ahead: the
+tensor-core matmuls, attention, normalization, collectives and quantization.
+<a href="roadmap/kernels/coverage.html">The coverage page</a> lists every kernel with its status.</p>
+<figure class="map">
+{site_coverage.coverage_svg(site, "", "fig2")}
+<figcaption><span class="fig">Figure 2.</span> Modular's GPU kernels, one square per kernel function, grouped by area.
+Filled squares have a proved specialization (the darkest, L4, also an IEEE error bound or exact bits), outlined ones are on
+the roadmap, and grey ones are not started. Hover a square for its function and file, and click it to open its card
+or its source.</figcaption>
+</figure>
+<figure class="map">
+{site_coverage.progress_svg(site, "fig3")}
+<figcaption><span class="fig">Figure 3.</span> Progress over time: (a) Modular's kernels with a proved specialization, by
+day; (b) the <code>theorem</code> and <code>lemma</code> declarations in the source at the last commit of each day, in
+the library and in the kernel and test programs (the theorems that commands generate are not counted). The
+last day is the tree this site was built from. Hover a point for its numbers.</figcaption>
+</figure>
+
 <h2 id="roadmap">The roadmap</h2>
 <figure class="map">
 {roadmap_svg(site)}
-<figcaption><span class="fig">Figure 2.</span> The roadmap, one square per card, grouped by area and coloured by
+<figcaption><span class="fig">Figure 4.</span> The roadmap, one square per card, grouped by area and coloured by
 its level, from L0, a written card, to L4; the <a href="roadmap/index.html">roadmap page</a> says what each
 level needs, for a kernel and for a construct. A dot marks a card that already has evidence for a level above its own, for example a kernel theorem
 waiting for its recorded GPU run. Levels are computed from the code when the site is built. Hover a square for

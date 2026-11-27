@@ -485,11 +485,13 @@ theorem dotGrade_one_zero (fmt : FloatFormat) :
   exact ⟨h, h ▸ by positivity⟩
 
 /-- One test spec (`GPUProof.Spec.matVec` at `GPUProof.matVecGrade`): the matrix-vector product
-graded by `GPUProof.dotGrade` at each output. -/
+graded at each output by `GPUProof.dotGrade` where the grades of the inputs it reads are at most
+their formats' `safeMax`, and elsewhere by a grade that claims nothing (`GPUProof.laneGradeIn`). -/
 noncomputable def matVecDot : Spec (ℕ × ℕ) := Spec.matVec matVecGrade matVecGrade_mono
 
 /-- One test spec (`GPUProof.Spec.vecMat` at `GPUProof.vecMatGrade`): the vector-matrix product
-graded by `GPUProof.dotGrade` at each output. -/
+graded at each output by `GPUProof.dotGrade` where the grades of the inputs it reads are at most
+their formats' `safeMax`, and elsewhere by a grade that claims nothing (`GPUProof.laneGradeIn`). -/
 noncomputable def vecMatDot : Spec (ℕ × ℕ) := Spec.vecMat vecMatGrade vecMatGrade_mono
 
 end MojoProofTest.GPUProof.Spec

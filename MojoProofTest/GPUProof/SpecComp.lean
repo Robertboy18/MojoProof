@@ -36,14 +36,15 @@ import FloatLib.Floats.Formats.BinaryInterchange.DirectedSemantics.Basic
   `GPUProof.Spec.sumInt` (`copySum`): the input words are the intermediate's, so
   `GPUProof.Wiring.MidRep` holds at every size and storage (`copySum_rep`, `copySum_meets`), and
   with 32-bit integers the composition of the behaviors that allow every output their rule allows
-  (`ruleK`) gives the sum `6` at size 3 and `-7` at size 7 (the two `example`s after
-  `copySum_meets`); with 32-bit integers at size 2, `decide` decides the composite's whole output
-  words, whose positions instance search finds finite (`copySum_outWords`). The mutant:
-  `GPUProof.Spec.sumInt` into a negation (`negInt`, `sumNeg`) with 32-bit integers, where at size
-  2 and inputs `2 ^ 30` the sum has no 32-bit word and its negation has one; there `ruleK`'s
-  composition does not meet the composite (`sumNeg_refused`), so `GPUProof.Wiring.MidRep` fails
-  (`sumNeg_norep`). These tests are stated for every binary interchange format, which integer
-  entries do not read.
+  (`ruleK`) has an output, the sum `6` at size 3 and `-7` at size 7, and every output decodes to
+  it (the two `example`s after `copySum_meets`, by `GPUProof.FloatRule.Holds.exact_of`,
+  `GPUProof.Wiring.mem_behav` and `out_and_all`); with 32-bit integers at size 2, `decide` decides
+  the composite's whole output words, whose positions instance search finds finite
+  (`copySum_outWords`). The mutant: `GPUProof.Spec.sumInt` into a negation (`negInt`, `sumNeg`) with
+  32-bit integers, where at size 2 and inputs `2 ^ 30` the sum has no 32-bit word and its negation
+  has one; there `ruleK`'s composition does not meet the composite (`sumNeg_refused`), so
+  `GPUProof.Wiring.MidRep` fails (`sumNeg_norep`). These tests are stated for every binary
+  interchange format, which integer entries do not read.
 * At every encoding (`GPUProof.Meets.comp`, `GPUProof.Meets.comp_exact`, the behavior
   `GPUProof.Wiring.behavMid`): `ruleK` after `ruleK` along `chain`, at every encoding of the
   intermediate (`chain_meetsAll`); along `copySum` with the intermediate encoded as the
@@ -58,8 +59,9 @@ import FloatLib.Floats.Formats.BinaryInterchange.DirectedSemantics.Basic
   intermediate's, so `GPUProof.Wiring.FstRep` holds at every size and storage (`copyNegG_rep`,
   `copyNegG_meets`) and at every encoding (`copyNegG_repAll`, `copyNegG_meetsAll`); at exact
   input grades the composite's grade is `⟨0, 0⟩` (`copyNegG_grade`). With 32-bit integers at
-  size 3, the input words `1, 2, 3` and input grades `⟨0, 0⟩`, every output word of `ruleK`'s
-  composition decodes to `-1, -2, -3` (the `example` after `copyNegG_grade`). The mutant:
+  size 3 and the input words `1, 2, 3`, `ruleK`'s composition has the output words `-1, -2, -3`,
+  and at input grades `⟨0, 0⟩` every output word decodes to `-1, -2, -3` (the `example` after
+  `copyNegG_grade`). The mutant:
   `GPUProof.Spec.sumInt` into the graded negation (`sumNegG`) with 32-bit integers, at size 2 and
   inputs `2 ^ 30`, where `ruleK`'s composition does not meet the composite at its encodings
   (`sumNegG_refused`) or at every encoding (`sumNegG_refusedAll`), through the steps
@@ -67,9 +69,10 @@ import FloatLib.Floats.Formats.BinaryInterchange.DirectedSemantics.Basic
   (`sumNegG_norep`).
 * Pairs with a `bitwise` rule, at every size and storage `u` of the integers, with the
   behaviors `ruleK`'s compositions in the two `example`s after each at 32-bit integers, size 3
-  (words `1, 2, 3`) and size 7 (seven words `-1`). `n` integers copied by `copyBit u` (`bitwise`
-  at `copyInt`'s uniform encodings, the identity word function) into `GPUProof.Spec.sumInt` along
-  `bitSum`, with no representability premise (`bitSum_meets`,
+  (words `1, 2, 3`) and size 7 (seven words `-1`): each has an output, at a `bitwise` stage the
+  word function's own output words (`ruleK_bitwise`), and every output's value. `n` integers
+  copied by `copyBit u` (`bitwise` at `copyInt`'s uniform encodings, the identity word function)
+  into `GPUProof.Spec.sumInt` along `bitSum`, with no representability premise (`bitSum_meets`,
   `GPUProof.MeetsAt.comp_bitwise_exact`); `copyInt` into `copyW u` (`bitwise` at the wired
   encodings `wiredEncs u`, the word function that reads the wired position) along `copyCp`, where
   the input words are the intermediate's (`copyCp_rep`, `copyCp_meets`,
@@ -307,6 +310,30 @@ definition. -/
 theorem ruleK_meets {Sz : Type} (Sp : Spec Sz) : Meets Sp (ruleK Sp) :=
   fun _ _ _ _ h => h
 
+/-- **The word function's output is in `ruleK` at a `bitwise` rule's encodings**, for every spec
+`Sp` whose rule is `bitwise E₀ w hw`, size `σ`, input words `W` at `E₀ σ` and output words `W'`
+equal to `w σ W`: `W'` meets the rule, which asks the output words to equal `w σ W` up to NaN
+payloads (`GPUProof.Encoding.nanEq_equiv`). -/
+theorem ruleK_bitwise {Sz : Type} {Sp : Spec Sz} {E₀ : ∀ σ, Sp.Encs σ}
+    {w : ∀ σ, (E₀ σ).inp.Words → (E₀ σ).out.Words}
+    {hw : DecodesAs Sp.In Sp.Out Sp.dIn Sp.dOut Sp.Dom Sp.f E₀ w} {σ : Sz} {W : (E₀ σ).inp.Words}
+    {W' : (E₀ σ).out.Words} (hr : Sp.rule = .bitwise E₀ w hw) (hW' : W' = w σ W) :
+    W' ∈ ruleK Sp σ (E₀ σ) W := by
+  subst hW'
+  show Sp.rule.Holds σ (E₀ σ) W (w σ W)
+  rw [hr]
+  intro h
+  obtain rfl : h = rfl := rfl
+  exact (Encoding.nanEq_equiv _).refl _
+
+/-- One member and a property of every member give both, for every set `B` and property `P`: if
+`a ∈ B` and every member of `B` has `P`, then some member of `B` has `P` and every member has it,
+the form of the `ruleK` examples below (an output of a composed behavior and every output's
+value), so that none holds of an empty behavior. -/
+theorem out_and_all {α : Type*} {B : Set α} {P : α → Prop} (a : α) (h : a ∈ B)
+    (H : ∀ x ∈ B, P x) : (∃ x ∈ B, P x) ∧ ∀ x ∈ B, P x :=
+  ⟨⟨a, h, H a h⟩, H⟩
+
 /-- One test spec (`copyInt`), at every size `n`: `n` integer inputs as `n` integer outputs, the
 identity, meant everywhere, with the `exact` rule. -/
 def copyInt : Spec ℕ where
@@ -352,34 +379,59 @@ theorem copySum_meets (u : (d : DType) → ScalarEnc d)
   MeetsAt.comp_exact copySum rfl rfl _ noExtra Eo (copySum_rep u Eo) hk₁ hk₂
 
 -- `copySum_meets` at two sizes, for every binary interchange format `fmt` (which integer entries
--- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`, its
--- premises by evaluation: at size 3 and the input words `1, 2, 3` every output word of the
--- composition decodes to `6`.
+-- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`: at size 3
+-- and the input words `1, 2, 3` the composition has an output, the word `6` after the
+-- intermediate words `1, 2, 3` (`GPUProof.FloatRule.Holds.exact_of` at both stages,
+-- `GPUProof.Wiring.mem_behav`), and every output word decodes to `6` (`out_and_all`). `rfl`
+-- evaluates the words' integers (`BitVec.toInt`) and their sums.
 example (fmt : FloatFormat) :
+    (∃ W' ∈ copySum.behav (ruleK _) (ruleK _) (Encodings.uniform _ (ScalarEnc.std fmt 32))
+        noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3
+        (copySum.encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+          (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3)
+        (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
+      (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 3).out.decode W' () =
+        some (6 : ℤ)) ∧
     ∀ W' ∈ copySum.behav (ruleK _) (ruleK _) (Encodings.uniform _ (ScalarEnc.std fmt 32))
         noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3
         (copySum.encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
           (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3)
         (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
       (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 3).out.decode W' () =
-        some (6 : ℤ) := fun W' hW' =>
-  (copySum_meets (ScalarEnc.std fmt 32)
+        some (6 : ℤ) := by
+  refine out_and_all (fun _ => (6 : BitVec 32))
+    (Wiring.mem_behav _ (V := fun i : Fin 3 => BitVec.ofNat 32 (i.val + 1))
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)) fun W' hW' => ?_
+  exact (copySum_meets (ScalarEnc.std fmt 32)
     (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out)
     (ruleK_meets _ _) (ruleK_meets _ _) 3 _ W' hW'
     (fun | .inl i => (BitVec.ofNat 32 (i.val + 1)).toInt | .inr e => e.elim)
     (fun | .inl _ => rfl | .inr e => e.elim) ⟨trivial, trivial⟩
     ⟨fun _ => (6 : BitVec 32), fun _ => rfl⟩ ()).trans rfl
 
--- The same at size 7 and seven input words `-1`: every output word decodes to `-7`.
+-- The same at size 7 and seven input words `-1`: the output word `-7` after the intermediate
+-- words `-1`, and every output word decodes to `-7`.
 example (fmt : FloatFormat) :
+    (∃ W' ∈ copySum.behav (ruleK _) (ruleK _) (Encodings.uniform _ (ScalarEnc.std fmt 32))
+        noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7
+        (copySum.encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+          (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7)
+        (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
+      (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 7).out.decode W' () =
+        some (-7 : ℤ)) ∧
     ∀ W' ∈ copySum.behav (ruleK _) (ruleK _) (Encodings.uniform _ (ScalarEnc.std fmt 32))
         noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7
         (copySum.encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
           (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7)
         (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
       (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 7).out.decode W' () =
-        some (-7 : ℤ) := fun W' hW' =>
-  (copySum_meets (ScalarEnc.std fmt 32)
+        some (-7 : ℤ) := by
+  refine out_and_all (fun _ => (-7 : BitVec 32))
+    (Wiring.mem_behav _ (V := fun _ : Fin 7 => (-1 : BitVec 32))
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)) fun W' hW' => ?_
+  exact (copySum_meets (ScalarEnc.std fmt 32)
     (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out)
     (ruleK_meets _ _) (ruleK_meets _ _) 7 _ W' hW' (fun | .inl _ => (-1 : ℤ) | .inr e => e.elim)
     (fun | .inl _ => rfl | .inr e => e.elim) ⟨trivial, trivial⟩
@@ -605,18 +657,40 @@ theorem safeMax_int32 : (0 : ℝ) ≤ NumFormat.safeMax (.int 32) := by
   norm_num [NumFormat.safeMax]
 
 -- `copyNegG_meets` at size 3, for every binary interchange format `fmt` (which integer entries
--- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`, its
--- premises by evaluation: at the input words `1, 2, 3` and input grades `⟨0, 0⟩` the
--- composite's grade is `⟨0, 0⟩` (as in `copyNegG_grade`), and every output word of the
--- composition decodes to `-1, -2, -3`.
+-- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`: at the
+-- input words `1, 2, 3` the composition has the output words `-1, -2, -3` after the
+-- intermediate words `1, 2, 3` (`GPUProof.FloatRule.Holds.exact_of`, then `negG Fin`'s graded
+-- rule, where each output's grade is its input's, so the output's premise gives the input's,
+-- which fixes the exact input; `GPUProof.Wiring.mem_behav`). At input grades `⟨0, 0⟩` the
+-- composite's grade claims (its magnitude `0` is at most the 32-bit `safeMax`, by
+-- `GPUProof.Grade.onlyIf_pos` and `safeMax_int32`), so every output word decodes to
+-- `-1, -2, -3` (`out_and_all`). `rfl` evaluates the words' integers (`BitVec.toInt`) and their
+-- negations at each output (`fin_cases`).
 example (fmt : FloatFormat) :
+    (∃ W' ∈ copyNegG.behav (ruleK _) (ruleK _) (Encodings.uniform _ (ScalarEnc.std fmt 32))
+        noExtra (fun n => (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) n).out) 3
+        (copyNegG.encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+          (fun n => (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) n).out) 3)
+        (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
+      ∀ o : Fin 3, (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) 3).out.decode W' o =
+        some (-((o.val : ℤ) + 1))) ∧
     ∀ W' ∈ copyNegG.behav (ruleK _) (ruleK _) (Encodings.uniform _ (ScalarEnc.std fmt 32))
         noExtra (fun n => (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) n).out) 3
         (copyNegG.encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
           (fun n => (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) n).out) 3)
         (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
       ∀ o : Fin 3, (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) 3).out.decode W' o =
-        some (-((o.val : ℤ) + 1)) := fun W' hW' o => by
+        some (-((o.val : ℤ) + 1)) := by
+  refine out_and_all (fun o => -BitVec.ofNat 32 (o.val + 1))
+    (Wiring.mem_behav _ (V := fun i : Fin 3 => BitVec.ofNat 32 (i.val + 1))
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl) fun A G _ hA o hm => ?_)
+    fun W' hW' o => ?_
+  · have e := Option.some.inj ((hA o hm).symm.trans
+      (show _ = some (BitVec.ofNat 32 (o.val + 1)).toInt from rfl))
+    show _ = some (Int.neg (A o))
+    rw [e]
+    change Fin 3 at o
+    fin_cases o <;> rfl
   have H := copyNegG_meets (ScalarEnc.std fmt 32)
     (fun n => (Encodings.uniform (negG Fin) (ScalarEnc.std fmt 32) n).out)
     (ruleK_meets _ _) (ruleK_meets _ _) 3 _ W' hW'
@@ -931,10 +1005,21 @@ theorem bitSum_meets (u : (d : DType) → ScalarEnc d)
   MeetsAt.comp_bitwise_exact (bitSum u) (Encodings.uniform copyInt u) noExtra Eo rfl rfl hk₁ hk₂
 
 -- `bitSum_meets` at two sizes, for every binary interchange format `fmt` (which integer entries
--- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`, its
--- premises by evaluation: at size 3 and the input words `1, 2, 3` every output word of the
--- composition decodes to `6`.
+-- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`: at size 3
+-- and the input words `1, 2, 3` the composition has an output, the word `6` after the
+-- intermediate words `1, 2, 3`, the identity word function's own output (`ruleK_bitwise`, then
+-- `GPUProof.FloatRule.Holds.exact_of`; `GPUProof.Wiring.mem_behav`), and every output word
+-- decodes to `6` (`out_and_all`). `rfl` evaluates the words' integers (`BitVec.toInt`) and their
+-- sums.
 example (fmt : FloatFormat) :
+    (∃ W' ∈ (bitSum (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
+        (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
+        (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3
+        ((bitSum (ScalarEnc.std fmt 32)).encs (Encodings.uniform copyInt (ScalarEnc.std fmt 32))
+          noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3)
+        (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
+      (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 3).out.decode W' () =
+        some (6 : ℤ)) ∧
     ∀ W' ∈ (bitSum (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
         (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
         (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3
@@ -942,16 +1027,29 @@ example (fmt : FloatFormat) :
           noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 3)
         (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
       (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 3).out.decode W' () =
-        some (6 : ℤ) := fun W' hW' =>
-  (bitSum_meets (ScalarEnc.std fmt 32)
+        some (6 : ℤ) := by
+  refine out_and_all (fun _ => (6 : BitVec 32))
+    (Wiring.mem_behav _ (V := fun i : Fin 3 => BitVec.ofNat 32 (i.val + 1))
+      (ruleK_bitwise rfl rfl)
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)) fun W' hW' => ?_
+  exact (bitSum_meets (ScalarEnc.std fmt 32)
     (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out)
     (ruleK_meets _ _) (ruleK_meets _ _) 3 _ W' hW'
     (fun | .inl i => (BitVec.ofNat 32 (i.val + 1)).toInt | .inr e => e.elim)
     (fun | .inl _ => rfl | .inr e => e.elim) ⟨trivial, trivial⟩
     ⟨fun _ => (6 : BitVec 32), fun _ => rfl⟩ ()).trans rfl
 
--- The same at size 7 and seven input words `-1`: every output word decodes to `-7`.
+-- The same at size 7 and seven input words `-1`: the output word `-7` after the intermediate
+-- words `-1`, and every output word decodes to `-7`.
 example (fmt : FloatFormat) :
+    (∃ W' ∈ (bitSum (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
+        (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
+        (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7
+        ((bitSum (ScalarEnc.std fmt 32)).encs (Encodings.uniform copyInt (ScalarEnc.std fmt 32))
+          noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7)
+        (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
+      (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 7).out.decode W' () =
+        some (-7 : ℤ)) ∧
     ∀ W' ∈ (bitSum (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
         (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
         (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7
@@ -959,8 +1057,12 @@ example (fmt : FloatFormat) :
           noExtra (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out) 7)
         (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
       (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) 7).out.decode W' () =
-        some (-7 : ℤ) := fun W' hW' =>
-  (bitSum_meets (ScalarEnc.std fmt 32)
+        some (-7 : ℤ) := by
+  refine out_and_all (fun _ => (-7 : BitVec 32))
+    (Wiring.mem_behav _ (V := fun _ : Fin 7 => (-1 : BitVec 32))
+      (ruleK_bitwise rfl rfl)
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)) fun W' hW' => ?_
+  exact (bitSum_meets (ScalarEnc.std fmt 32)
     (fun n => (Encodings.uniform Spec.sumInt (ScalarEnc.std fmt 32) n).out)
     (ruleK_meets _ _) (ruleK_meets _ _) 7 _ W' hW' (fun | .inl _ => (-1 : ℤ) | .inr e => e.elim)
     (fun | .inl _ => rfl | .inr e => e.elim) ⟨trivial, trivial⟩
@@ -1022,10 +1124,21 @@ theorem copyCp_meets (u : (d : DType) → ScalarEnc d)
     (fun n => (Encodings.uniform copyInt u n).out) rfl rfl (copyCp_rep u) hk₁ hk₂
 
 -- `copyCp_meets` at two sizes, for every binary interchange format `fmt` (which integer entries
--- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`, its
--- premises by evaluation: at size 3 and the input words `1, 2, 3` every output word of the
--- composition decodes to `1, 2, 3`.
+-- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`: at size 3
+-- and the input words `1, 2, 3` the composition has the output words `1, 2, 3` after the
+-- intermediate words `1, 2, 3` (`GPUProof.FloatRule.Holds.exact_of`, then `ruleK_bitwise` at
+-- `copyW u`'s word function, which reads the wired position; `GPUProof.Wiring.mem_behav`), and
+-- every output word decodes to `1, 2, 3` (`out_and_all`). `rfl` evaluates the words' integers
+-- (`BitVec.toInt`) at each output (`fin_cases`).
 example (fmt : FloatFormat) :
+    (∃ W' ∈ (copyCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
+        (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+        (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3
+        ((copyCp (ScalarEnc.std fmt 32)).encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+          (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3)
+        (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
+      ∀ o : Fin 3, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 3).out.decode W' o =
+        some ((o.val : ℤ) + 1)) ∧
     ∀ W' ∈ (copyCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
         (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
         (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3
@@ -1033,7 +1146,11 @@ example (fmt : FloatFormat) :
           (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3)
         (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
       ∀ o : Fin 3, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 3).out.decode W' o =
-        some ((o.val : ℤ) + 1) := fun W' hW' o => by
+        some ((o.val : ℤ) + 1) := by
+  refine out_and_all (fun i => BitVec.ofNat 32 (i.val + 1))
+    (Wiring.mem_behav _ (V := fun i : Fin 3 => BitVec.ofNat 32 (i.val + 1))
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)
+      (ruleK_bitwise rfl rfl)) fun W' hW' o => ?_
   have H := copyCp_meets (ScalarEnc.std fmt 32) (ruleK_meets _ _) (ruleK_meets _ _) 3 _ W' hW'
     (fun | .inl i => (BitVec.ofNat 32 (i.val + 1)).toInt | .inr e => e.elim)
     (fun | .inl _ => rfl | .inr e => e.elim) ⟨trivial, trivial⟩
@@ -1041,8 +1158,17 @@ example (fmt : FloatFormat) :
   refine H.trans ?_
   fin_cases o <;> rfl
 
--- The same at size 7 and seven input words `-1`: every output word decodes to `-1`.
+-- The same at size 7 and seven input words `-1`: the output words `-1` after the intermediate
+-- words `-1`, and every output word decodes to `-1`.
 example (fmt : FloatFormat) :
+    (∃ W' ∈ (copyCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
+        (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+        (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7
+        ((copyCp (ScalarEnc.std fmt 32)).encs (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
+          (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7)
+        (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
+      ∀ o : Fin 7, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 7).out.decode W' o =
+        some (-1 : ℤ)) ∧
     ∀ W' ∈ (copyCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
         (Encodings.uniform _ (ScalarEnc.std fmt 32)) noExtra
         (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7
@@ -1050,8 +1176,12 @@ example (fmt : FloatFormat) :
           (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7)
         (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
       ∀ o : Fin 7, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 7).out.decode W' o =
-        some (-1 : ℤ) := fun W' hW' o =>
-  (copyCp_meets (ScalarEnc.std fmt 32) (ruleK_meets _ _) (ruleK_meets _ _) 7 _ W' hW'
+        some (-1 : ℤ) := by
+  refine out_and_all (fun _ => (-1 : BitVec 32))
+    (Wiring.mem_behav _ (V := fun _ : Fin 7 => (-1 : BitVec 32))
+      (FloatRule.Holds.exact_of (fun _ => rfl) fun _ => rfl)
+      (ruleK_bitwise rfl rfl)) fun W' hW' o => ?_
+  exact (copyCp_meets (ScalarEnc.std fmt 32) (ruleK_meets _ _) (ruleK_meets _ _) 7 _ W' hW'
     (fun | .inl _ => (-1 : ℤ) | .inr e => e.elim) (fun | .inl _ => rfl | .inr e => e.elim)
     ⟨trivial, trivial⟩ ⟨fun _ => (-1 : BitVec 32), fun _ => rfl⟩ o).trans rfl
 
@@ -1168,10 +1298,21 @@ theorem bitCp_meets (u : (d : DType) → ScalarEnc d)
     (fun n => (Encodings.uniform copyInt u n).out) rfl rfl (fun _ _ _ h i => h (.inl i)) hk₁ hk₂
 
 -- `bitCp_meets` at two sizes, for every binary interchange format `fmt` (which integer entries
--- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`, its
--- premises by evaluation: at size 3 and the input words `1, 2, 3` every output word of the
--- composition decodes to `1, 2, 3` (`GPUProof.FloatRule.Holds.bitwise`).
+-- do not read), with every entry stored as a 32-bit integer and the behaviors `ruleK`: at size 3
+-- and the input words `1, 2, 3` the composition has the output words `1, 2, 3` after the
+-- intermediate words `1, 2, 3`, each stage's word function's own output (`ruleK_bitwise` at both
+-- stages; `GPUProof.Wiring.mem_behav`), and every output word decodes to `1, 2, 3`
+-- (`GPUProof.FloatRule.Holds.bitwise`, `out_and_all`). `rfl` evaluates the words' integers
+-- (`BitVec.toInt`) at each output (`fin_cases`).
 example (fmt : FloatFormat) :
+    (∃ W' ∈ (bitCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
+        (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
+        (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3
+        ((bitCp (ScalarEnc.std fmt 32)).encs (Encodings.uniform copyInt (ScalarEnc.std fmt 32))
+          noExtra (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3)
+        (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
+      ∀ o : Fin 3, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 3).out.decode W' o =
+        some ((o.val : ℤ) + 1)) ∧
     ∀ W' ∈ (bitCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
         (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
         (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3
@@ -1179,7 +1320,11 @@ example (fmt : FloatFormat) :
           noExtra (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 3)
         (fun | .inl i => BitVec.ofNat 32 (i.val + 1) | .inr e => e.elim),
       ∀ o : Fin 3, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 3).out.decode W' o =
-        some ((o.val : ℤ) + 1) := fun W' hW' o => by
+        some ((o.val : ℤ) + 1) := by
+  refine out_and_all (fun i => BitVec.ofNat 32 (i.val + 1))
+    (Wiring.mem_behav _ (V := fun i : Fin 3 => BitVec.ofNat 32 (i.val + 1))
+      (ruleK_bitwise rfl rfl)
+      (ruleK_bitwise rfl rfl)) fun W' hW' o => ?_
   have H := FloatRule.Holds.bitwise
     (bitCp_meets (ScalarEnc.std fmt 32) (ruleK_meets _ _) (ruleK_meets _ _) 3 _ W' hW')
     (A := fun | .inl i => (BitVec.ofNat 32 (i.val + 1)).toInt | .inr e => e.elim)
@@ -1187,8 +1332,17 @@ example (fmt : FloatFormat) :
   refine H.trans ?_
   fin_cases o <;> rfl
 
--- The same at size 7 and seven input words `-1`: every output word decodes to `-1`.
+-- The same at size 7 and seven input words `-1`: the output words `-1` after the intermediate
+-- words `-1`, and every output word decodes to `-1`.
 example (fmt : FloatFormat) :
+    (∃ W' ∈ (bitCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
+        (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
+        (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7
+        ((bitCp (ScalarEnc.std fmt 32)).encs (Encodings.uniform copyInt (ScalarEnc.std fmt 32))
+          noExtra (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7)
+        (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
+      ∀ o : Fin 7, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 7).out.decode W' o =
+        some (-1 : ℤ)) ∧
     ∀ W' ∈ (bitCp (ScalarEnc.std fmt 32)).behav (ruleK _) (ruleK _)
         (Encodings.uniform copyInt (ScalarEnc.std fmt 32)) noExtra
         (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7
@@ -1196,8 +1350,12 @@ example (fmt : FloatFormat) :
           noExtra (fun n => (Encodings.uniform copyInt (ScalarEnc.std fmt 32) n).out) 7)
         (fun | .inl _ => (-1 : BitVec 32) | .inr e => e.elim),
       ∀ o : Fin 7, (Encodings.uniform copyInt (ScalarEnc.std fmt 32) 7).out.decode W' o =
-        some (-1 : ℤ) := fun W' hW' o =>
-  (FloatRule.Holds.bitwise
+        some (-1 : ℤ) := by
+  refine out_and_all (fun _ => (-1 : BitVec 32))
+    (Wiring.mem_behav _ (V := fun _ : Fin 7 => (-1 : BitVec 32))
+      (ruleK_bitwise rfl rfl)
+      (ruleK_bitwise rfl rfl)) fun W' hW' o => ?_
+  exact (FloatRule.Holds.bitwise
     (bitCp_meets (ScalarEnc.std fmt 32) (ruleK_meets _ _) (ruleK_meets _ _) 7 _ W' hW')
     (A := fun | .inl _ => (-1 : ℤ) | .inr e => e.elim)
     (fun | .inl _ => rfl | .inr e => e.elim) ⟨trivial, trivial⟩ o).trans rfl

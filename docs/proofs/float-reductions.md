@@ -358,11 +358,19 @@ Write `H k` for cell 0's tree after the halving rounds over `2 ^ k` cells,
     `canon (bflyTree ms (l ^^^ m)) = canon (bflyTree ms l)`, with no other premise.
     `canon_bflyTree_lane`: for every `k` and offsets `ms` among which are
     `1, 2, …, 2 ^ (k - 1)` (in any order, other offsets allowed), every lane `l < 2 ^ k` has
-    `canon (bflyTree ms l) = canon (bflyTree ms 0)`.
+    `canon (bflyTree ms l) = canon (bflyTree ms 0)`. `bflyTree_xor`: for every list of offsets
+    `ms` and every lane `l`, at or above `2 ^ k` too, `bflyTree ms l` is `bflyTree ms 0` with each
+    leaf `j` relabelled `j ^^^ l`.
 36. `canon_bflyOffsets`: for every `k` and lane `l < 2 ^ k`, lane `l`'s tree after the rounds
     `bflyOffsets k` (`2 ^ (k - 1), …, 2, 1`) has the canonical form of `H k`, which is `H k`
     (statement 34): the butterfly's trees and the halving tree are one tree up to swapping the
-    children of nodes.
+    children of nodes. `canon_bflyTree_perm`: for every `k`, offsets `ms` that are `bflyOffsets k`
+    in any order (`List.Perm`) and every lane `l`, `canon (bflyTree ms l)` is `bflyTree ms 0` with
+    each leaf `j` relabelled `j + 2 ^ k ⌊l / 2 ^ k⌋`. At `l = 0` it says that lane 0's tree is its
+    own `canon`; so every lane below `2 ^ k` has lane 0's tree as its canonical form, and a lane at
+    or above `2 ^ k` has that tree over the lanes `2 ^ k ⌊l / 2 ^ k⌋` to
+    `2 ^ k ⌊l / 2 ^ k⌋ + 2 ^ k - 1` of its group. In another order lane 0's tree is not `H k`
+    (`order_ne` below), so statement 36's first form is about `bflyOffsets k` itself.
 37. `bfly_nanEq_lane`: in every format, for every `k`, offsets `ms` as in statement 35, values
     `v` and lane `l < 2 ^ k`, lane `l`'s and lane 0's sums after the butterfly rounds of
     `Model.add` are `NaNEq`. `bfly_nanEq_halve`: in every format, for every `k`, values `v` and
@@ -372,6 +380,9 @@ Write `H k` for cell 0's tree after the halving rounds over `2 ^ k` cells,
     ```lean
     theorem canon_bflyOffsets (k : Nat) {l : Nat} (hl : l < 2 ^ k) :
         canon (bflyTree (bflyOffsets k) l) = canon (roundsTree halveStep (bflyOffsets k) 0)
+
+    theorem canon_bflyTree_perm {k : Nat} {ms : List Nat} (hms : ms.Perm (bflyOffsets k))
+        (l : Nat) : canon (bflyTree ms l) = (bflyTree ms 0).map (· + 2 ^ k * (l / 2 ^ k))
 
     theorem bfly_nanEq_halve {fmt : FloatFormat} (k : Nat) (v : Nat → Model fmt) {l : Nat}
         (hl : l < 2 ^ k) :
@@ -451,7 +462,16 @@ there.
 `lane5_out`: lane 5's tree after the rounds `2, 1` has the leaves `4, …, 7` and another `canon`
 than the halving tree over 4 cells, so statement 36 needs `l < 2 ^ k`. `order6` is statement 35
 at the rounds `1, 4, 2` and lane 6; `order_ne`: in that order lane 0's `canon` is not `H 3`, so
-statement 36 is about the order `bflyOffsets k`. `warp13` is statement 37 in
+statement 36's `canon_bflyOffsets` is about the order `bflyOffsets k`. `zero_order`: in that order
+lane 0's tree is `((0 + 1) + (4 + 5)) + ((2 + 3) + (6 + 7))` and its own `canon`, by evaluation;
+`perm6` is `canon_bflyTree_perm` there at lane 6, whose canonical form is lane 0's tree, and
+`xor13` is `bflyTree_xor` there at lane 13. `perm13`: lane 13's canonical form in that order is
+`((8 + 9) + (12 + 13)) + ((10 + 11) + (14 + 15))`, lane 0's tree shifted by 8, and
+`perm_four`: after the rounds `1, 2` lane 6's is `(4 + 5) + (6 + 7)`, both by
+`canon_bflyTree_perm` then evaluation; `lane5_canon`: lane 5's canonical form after the rounds
+`2, 1` is `(4 + 6) + (5 + 7)`, `lane5_out`'s tree computed. `dup_ne`: after the rounds `1, 1`,
+not a permutation of `bflyOffsets 2`, lane 0's tree `(0 + 1) + (1 + 0)` is not its own `canon`.
+`warp13` is statement 37 in
 binary32 at a warp, lane 13, every value `1`. `payload_ne`: at 2 lanes holding the quiet NaNs
 `0x7fc00001` and `0x7fc00002`, lane 1's butterfly sum and cell 0's halving sum are different
 words, by evaluation: statement 37's `NaNEq` is not equality.
@@ -619,6 +639,18 @@ words, by evaluation: statement 37's `NaNEq` is not equality.
     gives trees with the same `canon` (induction, by `canon_node_eq_iff`), so the tree has the
     `canon` of `H k` with the same replacement, and there `j < 2 ^ k`, so
     `j ^^^ 2 ^ k = j + 2 ^ k` and the tree is `H (k + 1)` (statement 34's first step).
+    `bflyTree_xor`: induction on the offsets from the last one; after the rounds `ms`, then `m`,
+    lane `l`'s tree is the node of lane `l`'s and lane `l ^^^ m`'s trees after `ms`, by induction
+    lane 0's relabelled `j ^^^ l` and `j ^^^ m ^^^ l`, the node of lane 0's and lane `m`'s
+    relabelled `j ^^^ l`. Every leaf of lane 0's tree is the XOR of some of the offsets, so each
+    of its bits is some offset's. `canon_bflyTree_perm`: lane 0's tree is canonical by induction
+    on the offsets from the last one, which is some `2 ^ i` not among the others: the tree is the
+    node of a canonical tree `T` and lane `2 ^ i`'s tree, which is `T` relabelled `j ^^^ 2 ^ i`;
+    the bit `i` of every leaf of `T` is clear, so that is `j + 2 ^ i`, strictly increasing, so it
+    commutes with `canon` and `treeCmp` returns `.lt` as in statement 34. The leaves of lane 0's
+    tree are below `2 ^ k`, and at `j < 2 ^ k`, `j ^^^ l` is `j ^^^ (l % 2 ^ k)` plus
+    `2 ^ k ⌊l / 2 ^ k⌋`; so lane `l`'s tree is lane `l % 2 ^ k`'s shifted, and its `canon` is lane
+    0's (statement 35) shifted.
 37. `eval_bflyTree` and `eval_roundsTree` make the sums the trees' evaluations, and statements 35
     and 36 give the trees the same `canon`; `eval_nanEq_of_canon` (statement 31) concludes.
 
@@ -645,10 +677,10 @@ words, by evaluation: statement 37's `NaNEq` is not equality.
   log-softmax entry in the order of Mojo's GPU softmax kernel, `log (e_j · (1 / s))`, stated, nor
   with Mojo's own `log`, which is not FloatLib's correctly rounded one.
 - Any bound when a result is infinite or a NaN.
-- The canonical form of a butterfly lane at or above `2 ^ k`, whose leaves are other lanes, and
-  the canonical form after offsets in another order than `bflyOffsets k`: statement 35 gives every
-  lane below `2 ^ k` lane 0's form, which is not computed there and is not the halving tree
-  (`order_ne`).
+- The butterfly's canonical forms after offsets that are not `bflyOffsets k` in some order: an
+  offset repeated (as in `dup_ne`, where lane 0's tree is not its own `canon`), one that is not a
+  power of two, or more offsets than `k`. Statement 35 still gives every lane below `2 ^ k` lane
+  0's form when `1, 2, …, 2 ^ (k - 1)` are among them; that form is not computed.
 
 ## Related results elsewhere
 

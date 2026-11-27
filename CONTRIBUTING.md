@@ -62,9 +62,10 @@ What each one checks:
   roadmap card (`roadmap/**/cards/*.md`), every backticked span that begins with a fully qualified
   name (`MojoProofTest.NaiveOff.correct`, or the head of a term) must begin with a declaration or a
   module of the core, the library or its tests. A name that none of our files declares resolves
-  also against the Lean files under `.lake/packages/` (Mathlib, Batteries); Lean's own library is
-  not read. `python3 scripts/cited.py --deleted <commit>`, run with the first commit of a change,
-  checks instead the names that commit declares and the working tree does not, in any case: no
+  also against the Lean files under `.lake/packages/` (Mathlib, Batteries) and the toolchain's
+  `Init`, `Std` and `Lean` sources. `python3 scripts/cited.py --deleted <commit>`, run with the
+  first commit of a change, checks instead the names that commit declares and the working tree
+  does not, in any case: no
   suffix of such a name that names nothing now (`warpBound`, `Sem.warpBound`) may begin a
   backticked span in a docstring or comment of our Lean files or in a tracked Markdown file, except
   `docs/BUGS.md`, `docs/found-bugs.md` and `docs/UPSTREAM.md`, which record deleted names.
@@ -86,8 +87,8 @@ private), the laws probe (with rows that exempt the pair
 duplicates probe (the two statements that
 differ through an `abbrev` must pair) and the instances probe (`outS_eight` must be reported and
 `outS_eight_of_lt` not). The counts it prints have limits in `scripts/counts.tsv`, which are all
-0 except `laws`, at 7, and `instances_tests`, at 1; if a count drops below its limit, lower the
-limit.
+0 except those of `laws` and `instances_tests` (the file has their values, so this guide does not
+repeat them); if a count drops below its limit, lower the limit.
 `near_dups` and `width_families` in that file are the `near-duplicate clusters` and `width families`
 counts that `scripts/near_dups.py` prints. `python3 scripts/counts.py <audit output> <near_dups
 output>` checks every limit and exits 1 if a count exceeds its limit or is missing; CI saves the

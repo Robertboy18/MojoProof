@@ -1,5 +1,6 @@
 import MojoProof.Sym.OblLemmas
 import MojoProofTest.GPUProof.View
+import MojoProofTest.GPUProof.ViewStride
 
 /-!
 # The views' offsets as the kernels' words
@@ -18,8 +19,9 @@ matmul's :18-25 and :29-36, in the files below): at every valid launch those wor
 That a run of the kernel reaches the store with these words, and stores at this pointer, is not
 proved here.
 
-* `icmp_sge`, `sge_sext` and `rowMajor_words`, for every width: `icmp sge` of two words whose
-  doubles fit is `≤` of their numbers, after a `sext` when the first fits its narrower width; and
+* `icmp_bits`, `icmp_sge`, `sge_sext` and `rowMajor_words`, for every width: `icmp` of two words
+  of its width is its predicate on them; `icmp sge` of two words whose doubles fit is `≤` of their
+  numbers, after a `sext` when the first fits its narrower width; and
   `trunc`, `mul`, `add` and `sext` of a row-major index `r · s + k`, `r < m` and `k < s`, give
   its word, at every flags value, when `m · s < 2 ^ (w - 1)`.
 * `naive_words`, `naive_guards` and `naive_gep`: the naive matmul at every row stride `N`
@@ -33,14 +35,28 @@ proved here.
   every admissible assignment and valid launch with `m < 2 ^ 31`: the `udiv` of :21 gives the row,
   the `sext` of :11 keeps `m`, the guard :55 is false exactly when the warp owns its tile, and the
   `getelementptr` of :50 by the row is the pointer to the tile's first byte.
+* `ln_offAt`, `ln_tid_lt`, `ln_words`, `ln_gep` and `ln_second`: layer norm's loop
+  (tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll, block size 128)
+  at every block size `B`, row length `n`, thread and step `j < X`, at every admissible assignment
+  and valid launch with `8 B X < 2 ^ 64` and `2 n < 2 ^ 64`: from the loop index's word `B j` and
+  the 32-bit word of `tid.x`, the words of :32 and :699 give the 64-bit word of `B j + tid`, whose
+  float's bytes are at the offsets `View.offAt` gives coordinates `4 j + b` at the key stride 4,
+  the guard :708 is the boolean `B j + tid < n` (the guarded tile's bound `4 n`), the exit test
+  :684 is `n ≤ B j`, the step :681 is the word of `B j + B` and its overflow test :682 is false,
+  the `getelementptr` of :700 is the pointer to the float's first byte, and the second test of
+  the bound (the `sub`, `llvm.smin` and `icmp eq` of :704-707, on which :712 branches to the
+  store :722) is the guard's boolean. These are the semantics' operations at symbolic words, not
+  an evaluation, and not a run theorem: that the index at step `j` is the word of `B j` and that
+  a run reaches these words and stores there are not proved.
 * The premises' instances: the `example`s after each, with the `getelementptr`s into `oneBuf`, a
   memory of one buffer, at the default layout (64-bit pointers, 4-byte floats).
-* The mutants at the two launches where the premise fails (`gemv_wrap`, `naive_wrap`): gemv at
-  one block of 32 threads and `m = 2 ^ 31` skips row 0's store, which its view owns; the naive
-  kernel at `N = 50257`, grid `(2 ^ 20 + 1, 1, 1)` and block `(1, 1, 1)` computes the word
-  `1105 · 2 ^ 20` at row `2 ^ 20`, whose byte is not in that row's tile. `naive_edge`: at `N = 0`
-  the premise holds at every `m`, and the row guard alone is true at `m = 2 ^ 31`, while the
-  thread owns no tile.
+* The mutants at the launches where the premise fails (`gemv_wrap`, `naive_wrap`, `ln_wrap`):
+  gemv at one block of 32 threads and `m = 2 ^ 31` skips row 0's store, which its view owns; the
+  naive kernel at `N = 50257`, grid `(2 ^ 20 + 1, 1, 1)` and block `(1, 1, 1)` computes the word
+  `1105 · 2 ^ 20` at row `2 ^ 20`, whose byte is not in that row's tile; layer norm at one block
+  of 128 threads and `n = 2 ^ 63` skips the store of float 0, whose bytes are in thread 0's
+  guarded tile, at both tests. `naive_edge`: at `N = 0` the premise holds at every `m`, and the
+  row guard alone is true at `m = 2 ^ 31`, while the thread owns no tile.
 -/
 
 namespace MojoProofTest.GPUProof.ViewWords
@@ -49,19 +65,27 @@ open _root_.GPUProof MojoProof.LLVM MojoProof.Sem MojoProof.Sym
 open MojoProofTest.GPUProof.MixedRadix (warpIdx entryIdx asg)
 open MojoProofTest.GPUProof.View (gemvView gemvAdm gemvBind gemv_row naiveView naiveAdm naiveBind
   naive_val naive_tile naive_wf inst_sig place_inj elem_cosize elem_call)
+open MojoProofTest.GPUProof.ViewStride (lnView lnAdm lnLay lnKey lnBind ln_regs ln_key lnLay_call
+  ln_guard_tile)
 
 /-! ## Words, for every width -/
 
+/-- **`icmp` of two words of its width is the predicate on them**, for every width `w`,
+predicate `p`, layout, memory and words `a`, `b`: `icmpV` at the integer type of `w` bits is the
+boolean `p.holds a b`. -/
+theorem icmp_bits {w : Nat} (l : Layout) (m : Mem) (p : ICmp) (a b : BitVec w) :
+    icmpV l m p (.int w) (.bits w a) (.bits w b) = .ok (.ofBool (p.holds a b)) := by
+  show (if h : w = w then pure (Val.ofBool (p.holds a (b.cast h))) else _ : Except Fault Val) = _
+  rw [dite_eq_left rfl, BitVec.cast_eq]
+  rfl
+
 /-- **`icmp sge` of two words is `≤` of their numbers**, for every width `w`, layout and memory:
 of the `w`-bit words of `v` and `a` with `2 v` and `2 a` below `2 ^ w`, `icmpV` with the
-predicate `sge` is the boolean `a ≤ v` (`ICmp.sge_ofNat`). -/
+predicate `sge` is the boolean `a ≤ v` (`icmp_bits`, `ICmp.sge_ofNat`). -/
 theorem icmp_sge {w a v : Nat} (l : Layout) (m : Mem) (hv : 2 * v < 2 ^ w) (ha : 2 * a < 2 ^ w) :
     icmpV l m .sge (.int w) (.bits w (BitVec.ofNat w v)) (.bits w (BitVec.ofNat w a)) =
       .ok (.ofBool (decide (a ≤ v))) := by
-  show (if h : w = w then pure (Val.ofBool (ICmp.sge.holds (BitVec.ofNat w v)
-    ((BitVec.ofNat w a).cast h))) else _ : Except Fault Val) = _
-  rw [dite_eq_left rfl, BitVec.cast_eq, ICmp.sge_ofNat hv ha]
-  rfl
+  rw [icmp_bits, ICmp.sge_ofNat hv ha]
 
 /-- **A guard on a sign-extended bound**, for every pair of widths `w ≤ w'`, layout and memory:
 the `sext` to `w'` bits of the `w`-bit word of `a`, with `2 a` below `2 ^ w`, compared by
@@ -373,6 +397,265 @@ example (fl : GepFlags) :
       (sig.group (launch2 4 1 128 1) 1 200) (asg [0, 0, 0, 0, 128, 32, 4, 500])) <
         asg [0, 0, 0, 0, 128, 32, 4, 500] 7)
     rfl (oneBuf_in _) (.inl rfl) ⟨_, rfl, by decide⟩ rfl rfl (by decide)
+
+/-! ## Layer norm: the loop's words at every thread and step -/
+
+/-- **Layer norm's offsets of one float at the key stride.** At MojoProof's `sig`, for every
+buffer `y`, block size `B`, assignment `σ`, launch `L`, thread `t`, step `j < X` (the variable 5)
+and byte `b < 4`: the offset at the key stride 4 of coordinate `4 j + b` of `t`'s tile is
+`4 (B j + tid) + b`, `tid` the thread's `tid.x` (`ln_key`, `lnLay_call`). -/
+theorem ln_offAt (y B : Nat) {σ : Sizes} (L : Launch) (t : Nat) {j : Nat} (hj : j < σ 5)
+    {b : Nat} (hb : b < 4) :
+    (lnView y B).offAt (fun _ => 4) σ L (sig.group L 0 t) (4 * j + b) =
+      4 * (B * j + (L.env t).sreg .tid .x) + b := by
+  show lnKey.val (lnBind L (0, t) σ) * 4 +
+    (lnLay (σ 5) B).call (GPUProof.Layout.Tup.leaf (4 * j + b) false) = _
+  rw [ln_key]
+  show (L.env t).sreg .tid .x * 4 + _ = _
+  rw [lnLay_call (by omega), show (4 * j + b) % 4 = b by omega,
+    show (4 * j + b) / 4 = j by omega, Nat.mod_eq_of_lt hj]
+  ring
+
+/-- The thread's `tid.x` is below the block size, at every assignment and launch of the kernel
+of block size `B` and every thread below the thread count (`ln_regs`). -/
+theorem ln_tid_lt {B : Nat} {σ : Sizes} {L : Launch} (ha : lnAdm B σ L) {t : Nat}
+    (ht : t < volume L.grid * volume L.block) : (L.env t).sreg .tid .x < B := by
+  obtain ⟨hg, hb, -, hB, -⟩ := ha
+  have hv : volume L.block = L.block .x := by simp [volume, hb.1, hb.2]
+  have hpos : 0 < L.block .x := Nat.pos_of_ne_zero fun h => by simp [hv, h] at ht
+  rw [(ln_regs hg hb ht).1, ← hB]
+  exact Nat.mod_lt _ hpos
+
+/-- **Layer norm's loop words are its view's offsets and guard at the key stride.** At
+MojoProof's `sig`, for the kernel of every block size `B` and every row length `n`, at every
+assignment and valid launch of the kernel (`lnAdm B`) with the word premises `hw` (the row's
+`4 B X` bytes, `X` the variable 5, have their double below `2 ^ 64`) and `hn` (`2 n < 2 ^ 64`),
+every thread `t` below the thread count, step `j < X`, flags, layout and memory, from the loop
+index's word `B j` (`%471`, :679, at step `j`) and the 32-bit word of `tid.x` the special
+register gives (:31):
+
+* the `zext` (:32) is the 64-bit word of `tid`;
+* the `add` (:699) is the word of `B j + tid`, the index of the `getelementptr` at :700, whose
+  pointer is byte `offAt (4 j)` of `y` (`ln_gep`), and the 4 bytes the store (:722) writes there
+  are the coordinates `4 j + b`, `b < 4`, at the offsets `4 (B j + tid) + b` (`ln_offAt`);
+* the guard `icmp slt` with `n` (:708, on which :709 skips the store) is the boolean
+  `B j + tid < n`, which is `View.guardAt`'s bound `offAt (4 j + b) < 4 n` at each of those `b`
+  (`ln_guard_tile`);
+* the exit test `icmp sge` (:684) is the boolean `n ≤ B j`, the step `add` (:681) the word of
+  `B j + B`, the index at step `j + 1`, and its overflow test (:682) is false.
+
+The line numbers are those of
+tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll, at `B = 128`. The
+words are the semantics' operations at symbolic words (`intCast`, `intBin`, `icmpV`), for every
+thread and step, not an evaluation. It is not a run theorem: that the index at step `j` is the
+word of `B j` (by induction from `0` at :679 over this step), that a run reaches these words and
+that it stores there are not proved. The second test of the same bound (:704-707) is
+`ln_second`. -/
+theorem ln_words (y n : Nat) {B : Nat} {σ : Sizes} {L : Launch} (ha : lnAdm B σ L)
+    (hL : L.Valid) (hw : 2 * (4 * (B * σ 5)) < 2 ^ 64) (hn : 2 * n < 2 ^ 64) {t : Nat}
+    (ht : t < volume L.grid * volume L.block) {j : Nat} (hj : j < σ 5) (fl fl' : IntFlags)
+    (l : Layout) (m : Mem) :
+    intCast .zext 64 (.bits 32 (BitVec.ofNat 32 ((L.env t).sreg .tid .x))) =
+        .ok (.bits 64 (BitVec.ofNat 64 ((L.env t).sreg .tid .x))) ∧
+      intBin 64 .add fl (.bits 64 (BitVec.ofNat 64 (B * j)))
+          (.bits 64 (BitVec.ofNat 64 ((L.env t).sreg .tid .x))) =
+        .ok (.bits 64 (BitVec.ofNat 64 (B * j + (L.env t).sreg .tid .x))) ∧
+      (∀ b < 4, (lnView y B).offAt (fun _ => 4) σ L (sig.group L 0 t) (4 * j + b) =
+        4 * (B * j + (L.env t).sreg .tid .x) + b) ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 (B * j + (L.env t).sreg .tid .x)))
+          (.bits 64 (BitVec.ofNat 64 n)) =
+        .ok (.ofBool (decide (B * j + (L.env t).sreg .tid .x < n))) ∧
+      icmpV l m .sge (.int 64) (.bits 64 (BitVec.ofNat 64 (B * j)))
+          (.bits 64 (BitVec.ofNat 64 n)) = .ok (.ofBool (decide (n ≤ B * j))) ∧
+      intBin 64 .add fl' (.bits 64 (BitVec.ofNat 64 (B * j))) (.bits 64 (BitVec.ofNat 64 B)) =
+        .ok (.bits 64 (BitVec.ofNat 64 (B * j + B))) ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 (B * j + B)))
+          (.bits 64 (BitVec.ofNat 64 (B * j))) = .ok (.ofBool false) := by
+  have htid := ln_tid_lt ha ht
+  have h32 : (L.env t).sreg .tid .x < 2 ^ 32 :=
+    (Launch.sreg_bound hL t .tid .x).2.trans_le (by decide)
+  have hBj : B * j + B ≤ B * σ 5 := by
+    rw [show B * j + B = B * (j + 1) by ring]
+    exact Nat.mul_le_mul_left B hj
+  refine ⟨intCast_ofNat (.inr rfl) 64 h32, intBin_add_ofNat fl (by omega),
+    fun b hb => ln_offAt y B L t hj hb, ?_, icmp_sge l m (by omega) hn,
+    intBin_add_ofNat fl' (by omega), ?_⟩
+  · rw [icmp_bits, ICmp.slt_ofNat (by omega) hn]
+  · rw [icmp_bits, ICmp.slt_ofNat (by omega) (by omega),
+      decide_eq_false (by omega : ¬ B * j + B < B * j)]
+
+/-- **Layer norm's `getelementptr` is its float's first byte at the key stride.** At MojoProof's
+`sig`, for every buffer `y` and block size `B`, at every assignment and launch of the kernel of
+block size `B` (`lnAdm B`) with the word premise `hw` (as `ln_words`), every thread `t` below the
+thread count and step `j < X`, every layout whose floats have 4 bytes and whose address space `a`
+(0 or the buffer's) has 64-bit pointers, and every memory in which `y` is a buffer
+(`Mem.BufferIn`) of at least `4 B X` bytes that fits space `a`: the `getelementptr` of a float
+from `⟨y, 0⟩` by the 64-bit word of `B j + tid` (:700, the word of `ln_words`' `add` :699) is the
+pointer to byte `offAt (4 j)` at the key stride 4 of `y`, the first byte of float `B j + tid` of
+`t`'s tile, at all flags (`gep_buffer`). Not a run theorem, as `ln_words`. -/
+theorem ln_gep (y : Nat) {B : Nat} {σ : Sizes} {L : Launch} (ha : lnAdm B σ L)
+    (hw : 2 * (4 * (B * σ 5)) < 2 ^ 64) {t : Nat} (ht : t < volume L.grid * volume L.block)
+    {j : Nat} (hj : j < σ 5) {l : Layout} {M m : Mem} {fl : GepFlags} {s a size al : Nat}
+    {ow : Owner} {wr : Bool} (hMb : M.blocks = m.blocks) (hB : m.BufferIn s y size al ow wr)
+    (ha' : a = 0 ∨ a = s)
+    (hF : ∃ blk, m.blocks y = some blk ∧ (if a = s then blk.addr else blk.gaddr) + size ≤
+      2 ^ (l.ptr a).1)
+    (hp : (l.ptr a).1 = 64) (h4 : l.size (.fp .float) = 4) (hsz : 4 * (B * σ 5) ≤ size) :
+    gep l M fl (.fp .float) a [.bits 64 (BitVec.ofNat 64 (B * j + (L.env t).sreg .tid .x))]
+        (.ptr ⟨y, 0⟩) =
+      .ok (.ptr ⟨y, ((lnView y B).offAt (fun _ => 4) σ L (sig.group L 0 t) (4 * j) : Int)⟩) := by
+  have htid := ln_tid_lt ha ht
+  have hBj : B * j + B ≤ B * σ 5 := by
+    rw [show B * j + B = B * (j + 1) by ring]
+    exact Nat.mul_le_mul_left B hj
+  have h0 := ln_offAt y B L t hj (b := 0) (by decide)
+  simp only [Nat.add_zero] at h0
+  rw [h0]
+  have e := gep_buffer (fl := fl) (src := .fp .float) (K := B * j + (L.env t).sreg .tid .x)
+    (w := 64) hMb hB ha' hF (by omega) (by omega) (by rw [h4, hp]; omega) (by rw [h4]; omega)
+  rw [h4, Nat.mul_comm _ 4] at e
+  exact e
+
+/-- **Layer norm's second test of the bound is the guard.** For every row length `n` and index
+`k` (the word of `B j + tid` of `ln_words`' `add`, :699) with `2 n` and `2 k` below `2 ^ 64`, at
+every flags of the `sub` without `nuw` and `nsw` (the IR's has none), layout and memory: the `sub`
+of `k` from `n` (:704), the `llvm.smin` of that and 1 (:705, which `MojoProof.Sem.intrinsic`
+evaluates by `intMinMax true false` on scalars) and the `icmp eq` of the minimum with 1 (:707), on
+which :712 branches to the store (:722), give the boolean `k < n`, the guard's (:708,
+`ln_words`). So where the guard is true the branch :712 goes to the store. The `llvm.smax` of :706
+is read only on the other path (:731, :741). Not a run theorem, as `ln_words`. -/
+theorem ln_second {n k : Nat} (hn : 2 * n < 2 ^ 64) (hk : 2 * k < 2 ^ 64) {fl : IntFlags}
+    (hu : fl.nuw = false) (hs : fl.nsw = false) (l : Layout) (m : Mem) :
+    (intBin 64 .sub fl (.bits 64 (BitVec.ofNat 64 n)) (.bits 64 (BitVec.ofNat 64 k)) >>= fun d =>
+      intMinMax true false d (.bits 64 (BitVec.ofNat 64 1)) >>= fun e =>
+        icmpV l m .eq (.int 64) e (.bits 64 (BitVec.ofNat 64 1))) =
+      .ok (.ofBool (decide (k < n))) := by
+  have hmin : ∀ a b : BitVec 64, intMinMax true false (.bits 64 a) (.bits 64 b) =
+      .ok (.bits 64 (if a.slt b then a else b)) := by
+    intro a b
+    cases h : a.slt b <;> simp [intMinMax, strict2, pure, Except.pure, h]
+  rw [intBin_sub_wrap hu hs]
+  simp only [bind, Except.bind, hmin, icmp_bits]
+  have hd : (BitVec.ofNat 64 ((2 ^ 64 - k % 2 ^ 64 + n) % 2 ^ 64)).toNat =
+      (2 ^ 64 - k + n) % 2 ^ 64 := by
+    rw [BitVec.toNat_ofNat, Nat.mod_mod, Nat.mod_eq_of_lt (by omega : k < 2 ^ 64)]
+  by_cases hkn : k < n
+  · have hs1 : (BitVec.ofNat 64 ((2 ^ 64 - k % 2 ^ 64 + n) % 2 ^ 64)).slt (BitVec.ofNat 64 1) =
+        false := by
+      simp only [BitVec.slt, BitVec.toInt_eq_toNat_cond, hd, BitVec.toNat_ofNat]
+      split_ifs <;> simp <;> omega
+    simp only [hs1, Bool.false_eq_true, ↓reduceIte, decide_eq_true hkn]
+    rfl
+  · have hs1 : (BitVec.ofNat 64 ((2 ^ 64 - k % 2 ^ 64 + n) % 2 ^ 64)).slt (BitVec.ofNat 64 1) =
+        true := by
+      simp only [BitVec.slt, BitVec.toInt_eq_toNat_cond, hd, BitVec.toNat_ofNat]
+      split_ifs <;> simp <;> omega
+    simp only [hs1, ↓reduceIte, decide_eq_false hkn]
+    rw [ICmp.eq_ofNat (Nat.mod_lt _ (by decide)) (by decide), decide_eq_false (by omega)]
+
+/-- `ln_words` at the kernel of block size 128 (the IR's), one block of 128 threads, `n = 300`
+and `X = 3`, step 2 (the index word `256`), the IR's flags (none): at thread 43 the index word is
+`299` and the guard is true, its float's offsets are `4 · 299 + b`; at thread 44 the index word is
+`300` and the guard is false (`ln_guard_300`: float 300 is in no guarded tile). -/
+example (y : Nat) (l : Layout) (m : Mem) :
+    intBin 64 .add {} (.bits 64 (BitVec.ofNat 64 (128 * 2)))
+        (.bits 64 (BitVec.ofNat 64 (((launch2 1 1 128 1).env 43).sreg .tid .x))) =
+        .ok (.bits 64 (BitVec.ofNat 64 299)) ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 299)) (.bits 64 (BitVec.ofNat 64 300)) =
+        .ok (.ofBool true) ∧
+      (lnView y 128).offAt (fun _ => 4) (asg [0, 0, 0, 0, 128, 3]) (launch2 1 1 128 1)
+        (sig.group (launch2 1 1 128 1) 0 43) (4 * 2 + 3) = 4 * 299 + 3 ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 (128 * 2 +
+          ((launch2 1 1 128 1).env 44).sreg .tid .x))) (.bits 64 (BitVec.ofNat 64 300)) =
+        .ok (.ofBool false) := by
+  have ha : lnAdm 128 (asg [0, 0, 0, 0, 128, 3]) (launch2 1 1 128 1) :=
+    ⟨⟨rfl, rfl⟩, ⟨rfl, rfl⟩, rfl, rfl, by decide⟩
+  have hL : (launch2 1 1 128 1).Valid := launch2_valid (by decide)
+  obtain ⟨-, e2, e3, -⟩ := ln_words y 300 ha hL (by decide) (by decide) (t := 43) (by decide)
+    (j := 2) (by decide) {} {} l m
+  obtain ⟨-, -, -, e4, -⟩ := ln_words y 300 ha hL (by decide) (by decide) (t := 44) (by decide)
+    (j := 2) (by decide) {} {} l m
+  exact ⟨e2, rfl, e3 3 (by decide), e4⟩
+
+/-- `ln_words` at the kernel of block size 64, two blocks of 64 threads, `n = 170` and `X = 3`,
+step 2 (the index word `128`): thread 41 (`tid.x` 41) has the index word `169` and the guard
+true; thread 106 (`tid.x` 42, block 1, which owns no tile) has the index word `170` and the guard
+false. -/
+example (l : Layout) (m : Mem) :
+    intBin 64 .add {} (.bits 64 (BitVec.ofNat 64 (64 * 2)))
+        (.bits 64 (BitVec.ofNat 64 (((launch2 2 1 64 1).env 41).sreg .tid .x))) =
+        .ok (.bits 64 (BitVec.ofNat 64 169)) ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 169)) (.bits 64 (BitVec.ofNat 64 170)) =
+        .ok (.ofBool true) ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 (64 * 2 +
+          ((launch2 2 1 64 1).env 106).sreg .tid .x))) (.bits 64 (BitVec.ofNat 64 170)) =
+        .ok (.ofBool false) := by
+  have ha : lnAdm 64 (asg [0, 0, 0, 0, 64, 3]) (launch2 2 1 64 1) :=
+    ⟨⟨rfl, rfl⟩, ⟨rfl, rfl⟩, rfl, rfl, by decide⟩
+  have hL : (launch2 2 1 64 1).Valid := launch2_valid (by decide)
+  obtain ⟨-, e2, -⟩ := ln_words 0 170 ha hL (by decide) (by decide) (t := 41) (by decide)
+    (j := 2) (by decide) {} {} l m
+  obtain ⟨-, -, -, e4, -⟩ := ln_words 0 170 ha hL (by decide) (by decide) (t := 106)
+    (by decide) (j := 2) (by decide) {} {} l m
+  exact ⟨e2, rfl, e4⟩
+
+/-- `ln_gep`'s premises at one memory: the kernel of block size 128, one block, `X = 3`, thread
+43 at step 2, the default layout and the buffer `oneBuf` of `4 · 384` bytes: the pointer is byte
+`offAt (4 · 2)` of buffer 1, `4 · 299` (`ln_offAt`). -/
+example (fl : GepFlags) :
+    gep {} (oneBuf (4 * (128 * 3))) fl (.fp .float) 0
+        [.bits 64 (BitVec.ofNat 64 (128 * 2 + ((launch2 1 1 128 1).env 43).sreg .tid .x))]
+        (.ptr ⟨1, 0⟩) =
+      .ok (.ptr ⟨1, ((lnView 1 128).offAt (fun _ => 4) (asg [0, 0, 0, 0, 128, 3])
+        (launch2 1 1 128 1) (sig.group (launch2 1 1 128 1) 0 43) (4 * 2) : Int)⟩) :=
+  ln_gep 1 (B := 128) (σ := asg [0, 0, 0, 0, 128, 3]) (L := launch2 1 1 128 1)
+    ⟨⟨rfl, rfl⟩, ⟨rfl, rfl⟩, rfl, rfl, by decide⟩ (by decide) (t := 43) (by decide) (j := 2)
+    (by decide) rfl (oneBuf_in _) (.inl rfl) ⟨_, rfl, by decide⟩ rfl rfl (by decide)
+
+/-- `ln_second` at the kernel of block size 128, one block of 128 threads, `n = 300`, step 2,
+the IR's flags (none): the second test is true at thread 43 (index word `299`) and false at thread
+44 (index word `300`), as the guard of `ln_words`' first example. -/
+example (l : Layout) (m : Mem) :
+    (intBin 64 .sub {} (.bits 64 (BitVec.ofNat 64 300))
+        (.bits 64 (BitVec.ofNat 64 (128 * 2 + ((launch2 1 1 128 1).env 43).sreg .tid .x))) >>=
+        fun d => intMinMax true false d (.bits 64 (BitVec.ofNat 64 1)) >>= fun e =>
+          icmpV l m .eq (.int 64) e (.bits 64 (BitVec.ofNat 64 1))) = .ok (.ofBool true) ∧
+      (intBin 64 .sub {} (.bits 64 (BitVec.ofNat 64 300))
+        (.bits 64 (BitVec.ofNat 64 (128 * 2 + ((launch2 1 1 128 1).env 44).sreg .tid .x))) >>=
+        fun d => intMinMax true false d (.bits 64 (BitVec.ofNat 64 1)) >>= fun e =>
+          icmpV l m .eq (.int 64) e (.bits 64 (BitVec.ofNat 64 1))) = .ok (.ofBool false) :=
+  ⟨ln_second (by decide) (by decide) rfl rfl l m, ln_second (by decide) (by decide) rfl rfl l m⟩
+
+/-- **Mutant: layer norm at `n = 2 ^ 63`.** At MojoProof's `sig`, the kernel of block size 128 at
+one block of 128 threads, `X = 1` and `n = 2 ^ 63`, every buffer, layout and memory: the
+assignment and launch are admissible and valid and the word premise `hw` holds, but `hn` fails
+(`2 n = 2 ^ 64`): `n`'s 64-bit word is negative, so the guard `icmp slt` (:708) of thread 0 at
+step 0 (index word 0) is false, and the kernel skips the store of float 0, whose bytes are in
+thread 0's guarded tile under the bound `4 n` (`ln_guard_tile`). The second test (:704-707) is
+false there too: the `sub` is the negative word `2 ^ 63`, its minimum with 1 is itself (the
+premise `hn` of `ln_second` fails). -/
+theorem ln_wrap (y : Nat) (l : Layout) (m : Mem) :
+    lnAdm 128 (asg [0, 0, 0, 0, 128, 1]) (launch2 1 1 128 1) ∧ (launch2 1 1 128 1).Valid ∧
+      2 * (4 * (128 * asg [0, 0, 0, 0, 128, 1] 5)) < 2 ^ 64 ∧ ¬ 2 * 2 ^ 63 < 2 ^ 64 ∧
+      sig.place y 0 ∈ (lnView y 128).guardAt (fun _ => 4) (fun _ => 4 * 2 ^ 63)
+        (asg [0, 0, 0, 0, 128, 1]) (launch2 1 1 128 1) (sig.group (launch2 1 1 128 1) 0 0) ∧
+      icmpV l m .slt (.int 64) (.bits 64 (BitVec.ofNat 64 (128 * 0 +
+          ((launch2 1 1 128 1).env 0).sreg .tid .x))) (.bits 64 (BitVec.ofNat 64 (2 ^ 63))) =
+        .ok (.ofBool false) ∧
+      (intBin 64 .sub {} (.bits 64 (BitVec.ofNat 64 (2 ^ 63)))
+        (.bits 64 (BitVec.ofNat 64 (128 * 0 + ((launch2 1 1 128 1).env 0).sreg .tid .x))) >>=
+        fun d => intMinMax true false d (.bits 64 (BitVec.ofNat 64 1)) >>= fun e =>
+          icmpV l m .eq (.int 64) e (.bits 64 (BitVec.ofNat 64 1))) = .ok (.ofBool false) := by
+  have ha : lnAdm 128 (asg [0, 0, 0, 0, 128, 1]) (launch2 1 1 128 1) :=
+    ⟨⟨rfl, rfl⟩, ⟨rfl, rfl⟩, rfl, rfl, by decide⟩
+  refine ⟨ha, launch2_valid (by decide), by decide, by decide,
+    (ln_guard_tile y 128 (2 ^ 63) ha (by decide) _).2
+      ⟨by decide, 0, by decide, by decide, 0, by decide, rfl⟩, ?_, ?_⟩
+  · rw [icmp_bits]
+    rfl
+  · rw [show 128 * 0 + ((launch2 1 1 128 1).env 0).sreg .tid .x = 0 from rfl,
+      intBin_sub_wrap rfl rfl]
+    rfl
 
 /-! ## Mutants: the premise fails -/
 

@@ -7,9 +7,10 @@ MojoProofTest/KernelLoop.lean, for a kernel whose threads run a loop and store t
 only on the storing threads MojoProofTest/KernelCells.lean, for a kernel whose threads run a loop
 with `fmul contract` MojoProofTest/KernelContract.lean, and for 2-D cells and `Elem.Out` at the
 end of a run MojoProofTest/KernelXY.lean. The section "Plan: the naive matmul's kernel theorem"
-is a plan, not a proof. The section "Through collective calls" is the schedule through barriers
-and warp shuffles (MojoProof/Sym/SchedWait.lean, MojoProofTest/SymWait.lean) and its plan. The command that generates a kernel's theorem from these is described in
-docs/kernel.md.
+is a plan, not a proof. The section "Through collective calls" is the run through barriers and
+warp shuffles (MojoProof/Sym/SchedWait.lean, MojoProof/Sym/CanonBar.lean,
+MojoProofTest/SymWait.lean) and its plan. The command that generates a kernel's theorem from these
+is described in docs/kernel.md.
 
 The kernel theorem composes four facts proved once: the block checker's path theorem with
 `phi`s (`Block.sound_retWith`, MojoProof/Sym/Path.lean), the loop theorem for a thread through a
@@ -1624,9 +1625,10 @@ declaration when `n.runInv`'s proof would run `mojo_obl` on the round.
 
 ## Through collective calls: `Seq.ToWait` and its fire
 
-Lean: MojoProof/Sym/SchedWait.lean, on `Turns` (MojoProof/Sym/Sched.lean); instances and twins:
-MojoProofTest/SymWait.lean and MojoProofTest/SymColl.lean. The statements in "Proved" hold for every program, launch and
-contexts; "Not built" is a plan, not a proof.
+Lean: MojoProof/Sym/SchedWait.lean, on `Turns` (MojoProof/Sym/Sched.lean), and the canonical run
+(MojoProof/Sym/Canon.lean, MojoProof/Sym/CanonBar.lean); instances and twins:
+MojoProofTest/SymWait.lean and MojoProofTest/SymColl.lean. The statements in "Proved" hold for
+every program, launch and contexts; "Not built" is a plan, not a proof.
 
 The schedule: each thread of the grid in turn runs alone to its next wait, a call of the barrier
 or of a warp shuffle (`step` gives `.wait`, and `Grid.advance` sets the thread's status to
@@ -1684,25 +1686,27 @@ complete; `shfl2_fire` is `Grid.fire_shfl` on two lanes at a butterfly shuffle, 
 with the other's value; `shfl_twin`: with the lanes at shuffles of different modes the fire
 faults.
 
-**Proved: a schedule of several collectives.**
+**Proved: a run through several collectives.** The run is the canonical one, warp by warp and
+block by block (docs/proofs/canon.md; MojoProof/Sym/Canon.lean and MojoProof/Sym/CanonBar.lean,
+for every program, launch, contexts, thread and memory).
 
-7. `Fires L c N s m t' m'`, a phase's collectives: from every grid of `N` threads at the statuses
-   `s` on memory `m`, grid steps reach a grid of `N` threads running `t'` on `m'`.
-   `Fires.barriers`: the barrier phase, for every launch with blocks of `volume L.block > 0`
-   threads and `N = B * volume L.block` (`Grid.fire_barriers`; the threads resumed with no
-   value, the blocks' `.barrier`s logged in turn). `Fires.shfls`: the shuffle phase, for every
-   mode and every such `N`, with the full member mask, lane operand `b n` and clamp `cl n`
-   (`Grid.fire_shfl` at every warp's first lane in turn; thread `n` resumed with `r n`, what its
-   callee's return attributes give to the operand of lane
-   `shflSource mode (n % volume L.block % 32) (b n) (cl n)` of its warp; the memory unchanged).
-8. `Sched L c N t m m'`, a list of phases: the threads in turn to their waits (`Seq.ToWait`), the
-   phase's `Fires`, the schedule from the resumed threads; the last phase runs them in turn to
-   their ends (`Seq`). `Sched.grid`: a run of grid steps to a done grid with memory `m'`.
-   `Sched.start_sound`: a start (`Grid.start`, `Grid.start_threads`) with a schedule whose last
-   memory's trace has no race, keeps the promise of `!invariant.load` and observes `y` with
-   `R y` is sound (`Grid.Sound`), by `Sched.grid` and `Grid.start_done_sound` (the same from any
-   path of grid steps to a done grid). `Seq.start_sound_bar` (item 6) is now its one-line case at
-   one barrier phase, `Sched.wait` of `Fires.barriers` and `Sched.ends`.
+7. `WarpRun L c k t m Es m'`, a warp's run: its lanes (`warpLanes`) in turn to their ends
+   (`Seq`), or in turn to their waits (`Seq.ToWait`), the warp's shuffle (`WarpShfl`: every lane
+   at one shuffle of one mode, with the full member mask, at one instruction, each resumed with
+   what its callee's return attributes give to lane `shflSource mode j (b j) (cl j)`'s value),
+   and the warp's run from the resumed lanes. `CanonRun`: the warps in turn. `BlockRun`, a
+   block's run: its warps in turn to their ends (`CanonRun`), or in turn to their waits
+   (`CanonWait`, `WarpWait`), the block's barrier (`BlockBar`: every thread of the block at the
+   barrier with one number below 16, at its first thread's instruction, each resumed with no
+   value, the block's `.barrier` logged), and the block's run from the resumed threads.
+   `PhaseRun`: the blocks in turn. `WarpShfl.fire` and `BlockBar.fire`: each fire is a grid step
+   (`Grid.fire_shfl`, `Grid.fire_barrier`); `PhaseRun.grid` and `PhaseRun.done`: a `PhaseRun`
+   over every block is a run of grid steps to a done grid with its memory.
+8. `PhaseRun.start_sound`: a start (`Grid.start`, `Grid.start_size`) whose threads have a
+   `PhaseRun` over every block to `m'`, whose trace has no race, keeps the promise of
+   `!invariant.load` and observes `y` with `R y` (`EndChecks`), is sound (`Grid.Sound`), by
+   `PhaseRun.start_done` and `Grid.start_done_sound` (the same from any path of grid steps to a
+   done grid). `CanonRun.start_sound` is its case at one phase per block (`PhaseRun.of_canon`).
 9. `bflyRoundsAt_of_shfl`: for every combination `F r l` per round and lane, width `2 ^ k` with
    `k ≤ 5`, list of offsets below `2 ^ k`, family `v r l` of lane values by round and first
    values `w`: if `v 0 l = w l` and each round's value of lane `l` combines, by `F r l`, its own
@@ -1714,41 +1718,35 @@ faults.
     their waits (or their ends) from `mem 0` to `mem N` (`Turns.of_inv`, `Seq.of_inv`).
 
 The instance (MojoProofTest/SymColl.lean): a hand-built kernel (`tid.x`, a barrier, two
-butterfly shuffles at offsets 1 and 2, each followed by an `add`, `ret`) on one block of 4
-threads. `sound` is `Sched.start_sound` with the three phases (`Fires.barriers`, then
-`Fires.shfls` twice, each lane resumed with `shflSource`'s lane's value) and the ends, with the
-runs `runTo` computes and the kernel's evaluation (`kernel_rfl`, MojoProofTest/KernelRfl.lean);
-`lanes`: each lane holds in `%4` `bflyRounds (· + ·) [1, 2] (fun l => l) l`, by
-`bflyRoundsAt_of_shfl` at the registers `%0`, `%2`, `%4`, which is 6 (`lanes_six`). The open-goal
-twin (`#guard_msgs`) leaves the second shuffle's `Fires` as the goal when its fire is missing.
+butterfly shuffles at offsets 1 and 2, each followed by an `add`, `ret`) at one block of four
+threads. `sound` is `PhaseRun.start_sound` at the block's run: its warp's lanes to the barrier and
+`BlockBar` (`hb1`), then the warp's run through the two shuffles (`WarpShfl`, `hx2` and `hx3`,
+each lane resumed with `shflSource`'s lane's value) to the ends, with the runs `runTo` computes
+and the kernel's evaluation (`kernel_rfl`, MojoProofTest/KernelRfl.lean); `lanes`: each lane
+holds in `%4` `bflyRounds (· + ·) [1, 2] (fun l => l) l`, by `bflyRoundsAt_of_shfl` at the
+registers `%0`, `%2`, `%4`, which is 6 (`lanes_six`). The open-goal twin (`#guard_msgs`) leaves
+the second shuffle's `WarpShfl` as the goal when its fire is missing.
 
-**The schedule from the threads' segments.** Lean: MojoProof/Sym/SchedChain.lean, for every
-program, launch and contexts; tests in MojoProofTest/SymChain.lean.
+**The runs from the threads' segments.** Lean: MojoProof/Sym/SchedChain.lean, and
+`WarpRun.of_inv` (MojoProof/Sym/Canon.lean) and `BlockRun.of_inv` and `PhaseRun.of_inv`
+(MojoProof/Sym/CanonBar.lean), for every program, launch and contexts; tests in
+MojoProofTest/SymChain.lean.
 
-- Phases by invariants. A thread of a kernel with collectives is a chain: a run to the first
+- Runs by invariants. A thread of a kernel with collectives is a chain: a run to the first
   collective, the collective, a run from the resumed thread to the next one, and last a run to
-  its end. `Sched`'s premises are about threads and memories the schedule reaches, which a proof
-  does not compute; so the theorem takes, for phase `j`, a predicate `T j n` on thread `n`'s
-  thread, `W j n` on the status it waits at and `P j k` on the memory after `k` threads have run
-  the phase, and asks: each thread of `T j n` from a memory of `P j n` runs to a wait of
-  `W j n` leaving a memory of `P j (n + 1)`; from statuses of `W j n` on a memory of `P j N` the
-  phase's collectives fire (`Fires`) to threads of `T (j + 1) n` on a memory of `P (j + 1) 0`;
-  in the last phase `J` each thread runs to its end. `Seq.ToWait.of_inv` (each thread's status
-  is chosen by its own run, so the statuses are built thread by thread), `Sched.of_inv` (by
-  induction on the phases left) and `Sched.start_sound_inv` (`Sched.start_sound` at the start's
-  threads, `Grid.start_threads`, with the trace and observation premises on every memory of
-  `P J N`). One theorem for every chain: any number of phases, any collectives.
-- The fires from the statuses' facts. `Fires.barriers` and `Fires.shfls` take the waiting
-  threads and arguments as functions; a phase of `Sched.of_inv` gives a predicate on each
-  status. `Fires.barriers_at`: when every thread's status is a wait at the barrier with its
-  block's number below 16, at its block's instruction, the barrier phase fires, each thread
-  resumed with no value. `Fires.bfly`: when every thread waits at a butterfly shuffle with the
-  full mask, offset `o < 32`, clamp 31, offering `A n`, at its warp's instruction, with a callee
-  whose return attributes keep the value, and the lane it reads is in its block, each thread
-  `n` is resumed with the value of thread `n - p + (p ^^^ o)` (`p` its lane): the values
-  `bflyRoundsAt_of_shfl` takes.
+  its end. A run's premises are about threads and memories the run reaches, which a proof does
+  not compute; so `WarpRun.of_inv` takes, for phase `i` and lane `j`, a predicate `T i j` on the
+  lane's thread, `W i j` on the status it waits at and `P i j` on the memory after `j` lanes
+  have run the phase, and asks: each lane of `T i j` from a memory of `P i j` runs to a wait of
+  `W i j` leaving a memory of `P i (j + 1)`; from statuses of `W i j` on a memory after all the
+  lanes the warp's shuffle fires (`WarpShfl`) to lanes of `T (i + 1) j` on a memory of
+  `P (i + 1) 0`; in the last phase each lane runs to its end. `Seq.ToWait.of_inv` (each
+  thread's status is chosen by its own run, so the statuses are built thread by thread);
+  `WarpWait.of_inv`, `BlockRun.of_inv` (the block's barriers the same way) and
+  `PhaseRun.of_inv` (the blocks in turn, by an invariant on the memory between them). One
+  theorem for every chain: any number of phases, any collectives.
 - The runs from the segments. `Seg.through` gives a thread's chain for every delivery `w`; a
-  schedule knows the delivery only after the phase. `Seg.Through.wait`: from the chain for every
+  run knows the delivery only after the phase. `Seg.Through.wait`: from the chain for every
   delivery and the first segment's obligations, the run to the first collective (`ToWait`) at
   the instruction `(f.fn.name, lbl, f.pc + S.len)`, the registers and the arguments the summary
   gives, and, for every delivered value and memory, the chain of the other segments from the
@@ -1760,12 +1758,18 @@ program, launch and contexts; tests in MojoProofTest/SymChain.lean.
   combines the lane's with the delivered one by `F r l`, a combination per round and lane, such
   as `fadd` at each lane's own oracle numbers (`bflyRoundsAt_of_shfl`).
 - Instances: the hand-built kernel of MojoProofTest/SymColl.lean (`tid.x`, a barrier, butterfly
-  shuffles at offsets 1 and 2, `ret`) on one block of `k` threads, `k = 4` and `k = 8`, in one
-  proof (`SymChain.sound_inv`): `Sched.start_sound_inv` at three phases, the invariants being
-  equations with the threads, statuses and memories `runTo` computes (`ph`, `stat`, `memAt`), the
-  fires by `Fires.barriers_at` and `Fires.bfly`. The open-goal twin (`#guard_msgs`) leaves the
-  second shuffle's `Fires` as the goal when its fire is left out.
-- Not built: gevm_kernel's `%59` phases (barrier and shuffles) from MojoProofTest/OblGevm.lean's
-  segments. Each thread's run before `%59` is a premise there. `RunsVia`'s waits state the
-  instruction a thread waits at (`Thread.at`), which both fires need: `OblGevmThread.thread`
-  gives statement 6 of `%59` for the barrier and 11, 15, 19, 23 and 27 for the shuffles.
+  shuffles at offsets 1 and 2, `ret`) at 4 and at 8 threads, one block, in one proof
+  (`SymChain.sound_inv`): `PhaseRun.start_sound` at the block's run by `BlockRun.of_inv`, its
+  barrier phase by `WarpWait.of_inv` and `BlockBar` (`bar0`), its warp's two shuffles by
+  `WarpRun.of_inv` (`warp`), the invariants being equations with the threads, statuses and
+  memories `runTo` computes (`ph`, `stat`, `memAt`), each fire's `WarpShfl` from those statuses
+  (`fires`). The open-goal twin (`#guard_msgs`) leaves the second shuffle's fire as the goal when
+  it is left out.
+- Not built: gevm_kernel's `PhaseRun` (its barrier and shuffles, docs/proofs/gemv.md, "The order
+  of the work", item 7 (c)) from MojoProofTest/OblGevm.lean's segments. `RunsVia`'s waits state
+  the instruction a thread waits at (`Thread.at`), which both fires need (`BlockBar`,
+  `WarpShfl`): `OblGevmThread.thread` gives statement 6 of `%59` for the barrier and 11, 15, 19,
+  23 and 27 for the shuffles, and MojoProofTest/GevmLane.lean's `thread` the waits whole as
+  `Piece.Wait.via` states them (the barrier's `i32 0`, each shuffle's mask, value, offset and
+  clamp). MojoProofTest/GevmBar.lean's `bar` runs each thread from the entry to the barrier's
+  call (`ToWait`); the warps' and blocks' runs from these are not built.

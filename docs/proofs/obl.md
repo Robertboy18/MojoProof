@@ -300,6 +300,18 @@ Its test is MojoProofTest/Inv.lean's `naive_store`. Not covered: a block of seve
 a store, a write or an access to the output block other than the thread's store, and
 `Mem.BufferIn`.
 
+The run of one `store` effect is the semantics' store, as an equation: `SEff.run_store_eq`
+(MojoProof/Sym/OblLemmas.lean) says that `SEff.run V vs [.store lbl pc v p]` is
+`V.mem.store P.layout V.ctx.who a t x q (some (al.getD (P.layout.align t)))` when `V`'s function
+is `F`, its program `P`, statement `pc` of block `lbl` is a store of a value of type `t` through a
+pointer of space `a` with alignment `al`, and `v` and `p` evaluate to `x` and `.ptr q`. The audit
+lists it as an equivalence of `SEff.run` and `Mem.store`; it is kept with an `unfold` row in
+scripts/laws.tsv (`SEff.run` is a fold of `SEff.apply` over the effects and is the store in the
+case the premises select), not hidden behind a premise that names the store's result.
+`SEff.run_store_one` is its corollary for a run that gives a memory `M`. gemv_kernel's entry
+(`GemvEntryRun.entry`, its three stores) and gevm_kernel's `%59` thread (`GevmLane.thread`, the
+store to the shared array) take the equation and its `.trans` with the store's result.
+
 Done as planned (`Inv.memFact`, MojoProofTest/Inv.lean's `naive_mem` and `naive_mem_open`).
 `head_in`'s `obl_have` names only `%47` and `%48`, and mojo_inv evaluated the registers and
 operands of the facts at the loop head (then a structure in the invariant; now the clause's

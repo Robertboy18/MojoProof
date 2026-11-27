@@ -382,8 +382,8 @@ example {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : Nat → Nat �
           (lo (Lanes.ofStart (launch2 1 1 64 1) g c (32 * i.val) 2 4 3 A24 GemvThread.v3 i) i)
           (matVecPairs A24 GemvThread.v3 i)) :=
   grid_rows hs rfl (launch2_valid (by decide)) (by decide) rfl rfl rfl rfl hch (by decide)
-    (by decide) (by decide) (by decide) n3_free w64_pre.hb0 w64_pre.hf0 w64_pre.hbA w64_pre.hbV
-    w64_pre.hfA w64_pre.hfV w64_pre.hA w64_pre.hV
+    (by decide) (by decide) (by decide) (n3_caller.closed 0).above w64_pre.hb0 w64_pre.hf0
+    w64_pre.hbA w64_pre.hbV w64_pre.hfA w64_pre.hfV w64_pre.hA w64_pre.hV
 
 /-- Test: `grid_rows` at one block of 64 threads (`launch2 1 1 64 1`), `M = 1`, `K = 4`, the
 output at block 3, the matrix `GemvThread.A3` and vector `GemvThread.v3` at blocks 1 and 2 of
@@ -402,7 +402,7 @@ example {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : Nat → Nat �
         NaNEq x (warpDot true (lo (Lanes.ofStart (launch2 1 1 64 1) g c (32 * i.val) 1 4 3
           GemvThread.A3 GemvThread.v3 i) i) (matVecPairs GemvThread.A3 GemvThread.v3 i)) :=
   grid_rows hs rfl (launch2_valid (by decide)) (by decide) rfl rfl rfl rfl hch (by decide)
-    (by decide) (by decide) (by decide) m3_free w0_pre.hb0 w0_pre.hf0 w0_pre.hbA w0_pre.hbV
-    w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
+    (by decide) (by decide) (by decide) (GemvThread.m3_caller.closed 0).above w0_pre.hb0
+    w0_pre.hf0 w0_pre.hbA w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
 
 end MojoProofTest.GemvWarpWord

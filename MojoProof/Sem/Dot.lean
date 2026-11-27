@@ -55,8 +55,8 @@ Proved:
   their grades of exact entries is `GPUProof.Approx` at `GPUProof.laneGrade (.ieee fmt) W
   t.depth L n` of the exact dot product; `treeDot_error` is the error half, from
   `Float.sum_error` (the tree's sum of the lanes), `lanes_error` (the lanes' loops) and
-  `sum_mul_sub_le` (the inputs' error). Every order of the lanes' sum is covered, so each lane of
-  a butterfly is an instance (MojoProof/Tile/MatVec.lean).
+  `GPUProof.sum_mul_sub_le` (the inputs' error). Every order of the lanes' sum is covered, so
+  each lane of a butterfly is an instance (MojoProof/Tile/MatVec.lean).
 * `dotLoop_approx`: for every IEEE format, flag, oracle sequence, length and input grade, the word
   of `dotLoop` from `+0` over words that are `GPUProof.Approx` at their grades of exact entries
   is `GPUProof.Approx` at `GPUProof.dotGrade` of the exact dot product: `treeDot_approx` at one
@@ -74,8 +74,7 @@ With the lemmas they use: `NaNEq.symm`, `NaNEq.trans`, `NaNEq.eq_isNaN`, `nanEq_
 `dotStep_bound`, `dotStep_loopBound`, `dotStep_zero_bound`, `dotLoop_nanEq_foldl` (for every map
 of the factors that keeps each non-NaN word, so MojoProof/Sem/Matmul.lean uses it for TorchLean's
 fold), `dotLoop_error_step`, `dotLoop_error_of`, `dotLoopBound_le_dotBound`, `dotLoopBound_succ`,
-`dotLoopBound_mono`, `dotStep_finite`, `isFinite_dotLoop_of`, `sum_abs_mul_le_graded` and
-`sum_mul_sub_le`;
+`dotLoopBound_mono`, `dotStep_finite`, `isFinite_dotLoop_of` and `sum_abs_mul_le_graded`;
 `dotBound_le_dotGrade` compares `dotBound` after `K` iterations with `GPUProof.dotGrade` at
 length `K + 1`.
 -/
@@ -804,28 +803,6 @@ theorem sum_abs_mul_le_graded {n : Nat} (w v : Fin n → Model fmt) (a x : Fin n
   have h2 := abs_sub_abs_le_abs_sub (v k).toReal (x k)
   exact mul_le_mul (by linarith) (by linarith) (abs_nonneg _) (add_nonneg (abs_nonneg _) pa)
 
-/-- The words' dot product is within the cross sum of the exact one, for every format, length
-and input grade: when each word `w k`, `v k` is within `(ga k).err`, `(gx k).err` of the exact
-`a k`, `x k`, `|Σₖ wₖ vₖ - Σₖ aₖ xₖ| ≤ Σₖ (|aₖ| eₓₖ + |xₖ| eₐₖ + eₐₖ eₓₖ)` (real values of the
-words), with `e = GPUProof.Grade.pos`. -/
-theorem sum_mul_sub_le {n : Nat} (w v : Fin n → Model fmt) (a x : Fin n → ℝ)
-    (ga gx : Fin n → GPUProof.Grade) (hw : ∀ k, |(w k).toReal - a k| ≤ (ga k).err)
-    (hv : ∀ k, |(v k).toReal - x k| ≤ (gx k).err) :
-    |∑ k, (w k).toReal * (v k).toReal - ∑ k, a k * x k| ≤
-      ∑ k, (|a k| * (gx k).pos + |x k| * (ga k).pos + (ga k).pos * (gx k).pos) := by
-  have ea : ∀ k, |(w k).toReal - a k| ≤ (ga k).pos := fun k => (hw k).trans (le_max_left _ _)
-  have ex : ∀ k, |(v k).toReal - x k| ≤ (gx k).pos := fun k => (hv k).trans (le_max_left _ _)
-  have pa : ∀ k, 0 ≤ (ga k).pos := fun k => le_max_right _ _
-  rw [← Finset.sum_sub_distrib]
-  refine (Finset.abs_sum_le_sum_abs _ _).trans (Finset.sum_le_sum fun k _ => ?_)
-  have hk : (w k).toReal * (v k).toReal - a k * x k = a k * ((v k).toReal - x k) +
-      x k * ((w k).toReal - a k) + ((w k).toReal - a k) * ((v k).toReal - x k) := by ring
-  rw [hk]
-  refine (abs_add_le _ _).trans (add_le_add ((abs_add_le _ _).trans (add_le_add ?_ ?_)) ?_)
-  · rw [abs_mul]; exact mul_le_mul_of_nonneg_left (ex k) (abs_nonneg _)
-  · rw [abs_mul]; exact mul_le_mul_of_nonneg_left (ea k) (abs_nonneg _)
-  · rw [abs_mul]; exact mul_le_mul (ea k) (ex k) (abs_nonneg _) (pa k)
-
 /-- **Dot loops per lane, added along a tree**, for every format, tree `t` of lane numbers, flag
 `c`, oracle sequences `o j` and lists `ls j` of factor pairs: each lane `j`'s word is
 `dotLoop c (o j)` from `+0` over `ls j`, and the lanes' words are added by FloatLib's `Model.add`
@@ -901,7 +878,7 @@ together are the pairs `(w k, v k)`, `k < n` (`hs`: every sum over the lanes' pa
 over `k`), and input grades: when each word `w k`, `v k` is within `(ga k).err`, `(gx k).err` of
 the exact `a k`, `x k`, a finite `treeDot t c o ls` is within the error of
 `laneGrade (.ieee fmt) W t.depth L n a x ga gx` of `Σₖ aₖ xₖ` (`Float.sum_error`, `lanes_error`,
-`sum_abs_mul_le_graded`, `sum_mul_sub_le`). -/
+`sum_abs_mul_le_graded`, `GPUProof.sum_mul_sub_le`). -/
 theorem treeDot_error (hfmt : fmt.isIEEE = true) (c : Bool) (o : Nat → Nat → Nat × Nat)
     {W L n : Nat} (t : Numerics.ReductionTree Nat) (ht : t.leaves.Perm (List.range W))
     (ls : Nat → List (Model fmt × Model fmt)) (hL : ∀ j < W, (ls j).length ≤ L)
@@ -927,7 +904,7 @@ theorem treeDot_error (hfmt : fmt.isIEEE = true) (c : Bool) (o : Nat → Nat →
   rw [hsP, hsQ] at e1
   rw [hsQ] at e2
   have hT := sum_abs_mul_le_graded w v a x ga gx hw hv
-  have hD := sum_mul_sub_le w v a x ga gx hw hv
+  have hD := GPUProof.sum_mul_sub_le (fun k => (w k).toReal) (fun k => (v k).toReal) a x ga gx hw hv
   have hu := Model.unitRoundoffAt_pos fmt
   have hq1 : 1 ≤ (1 + Model.unitRoundoffAt fmt) ^ t.depth := one_le_pow₀ (by linarith)
   have hqL : 1 ≤ (1 + Model.unitRoundoffAt fmt) ^ L := one_le_pow₀ (by linarith)

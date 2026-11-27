@@ -6,15 +6,20 @@ import GPUProof.Spec.DecEq
 # Dot loops per row meet the matrix-vector spec
 
 `GPUProof.Spec.matVec GPUProof.matVecGrade` is the core's spec of `Matrix.mulVec` at sizes
-`(m, n)`, graded at output `i` by `GPUProof.dotGrade` of row `i` and the vector. A matrix
-product whose second matrix has one row is a matrix-vector product, so the kernels of
-`mojo_kernel`'s `mat` clause meet that spec when `B` has one row. This module defines:
+`(m, n)`, graded at output `i` by `GPUProof.dotGrade` of row `i` and the vector where the grades
+of those inputs are at most their formats' `GPUProof.NumFormat.safeMax` (`GPUProof.laneGradeIn`).
+A matrix product whose second matrix has one row is a matrix-vector product, so the kernels of
+`mojo_kernel`'s `mat` clause meet that spec when `B` has one row.
+`GPUProof.Spec.vecMat GPUProof.vecMatGrade`, of `Matrix.vecMul`, is graded the same way at output
+`j` by the vector and column `j` (`GPUProof.vecMatLaneGrade`). This module defines:
 
 * `MatVecEncs σ`, `matVecEnc fmt bits`: the encodings of the spec's entries, at every grade, and
   its uniform encoding with every real stored in the binary interchange format `fmt`
   (`GPUProof.Encodings.uniform` at `GPUProof.ScalarEnc.std fmt bits`, by definition), whose
   words at every position have decidable equality (`GPUProof.Encodings.decEqUniformInp`,
   `GPUProof.Encodings.decEqUniformOut`, from GPUProof/Spec/DecEq.lean, imported here);
+* `vecMatEnc fmt bits`: the same uniform encoding of `GPUProof.Spec.vecMat`'s entries, inputs
+  the vector then the matrix, outputs the columns;
 * `rowTrees fmt bits W t c`: the behaviors whose output `i`, at that encoding, is `W` lanes, each
   a `dotLoop c` from `+0` at some oracle sequence over the pairs of row `i` and the vector strided
   by `W`, added along the tree `t` (`MojoProof.Sem.treeDot`); there are none at another encoding;
@@ -31,8 +36,12 @@ It proves:
 * `holds_of`: for every IEEE format, width, lane count, depth, lane length and size, output words
   that are `GPUProof.Approx` at `GPUProof.laneGrade` of every exact row and vector at which their
   inputs are `GPUProof.Approx` meet the rule of `GPUProof.Spec.matVec GPUProof.laneVecGrade`
-  (`GPUProof.FloatRule.Holds`); that is the rule unfolded, and at one lane and depth 0 it is the
-  rule of `GPUProof.Spec.matVec GPUProof.matVecGrade`, by definition;
+  (`GPUProof.FloatRule.Holds`); that is the rule unfolded but for the grade's guard on the input
+  grades' magnitudes (`GPUProof.laneGradeIn`), which claims at most what `GPUProof.laneGrade`
+  claims (`GPUProof.Approx.onlyIf_of`), and at one lane and depth 0 it is the rule of
+  `GPUProof.Spec.matVec GPUProof.matVecGrade`, by definition;
+* `vecMat_holds_of`: the same for `GPUProof.Spec.vecMat GPUProof.vecMatLaneGrade` at
+  `vecMatEnc`, at output `j` the vector and column `j`;
 * `meets_holds`: for every IEEE format, width, sizes, matrices, flag, oracle sequences and words
   that meet the product at the cells `(i, 0)` (`Meets`), the words meet the spec's rule at
   `matIn A B hA hB` (by `holds_of` and `Meets`' graded clause);
@@ -48,23 +57,37 @@ It proves:
   strided by `W` (`stride`), added along the tree, are `GPUProof.Approx` at
   `GPUProof.laneGrade` at the tree's depth and lane length `⌈n / W⌉`
   (`MojoProof.Sem.treeDot_approx`);
-* `bfly_approx`, `groupDot_approx`: for every IEEE format, number of rounds `k`, flag, oracle
-  sequences, length and input grades, every lane of the butterfly over `2 ^ k` strided loops, and
-  so `groupDot k` (`warpDot` at `k = 5`), is `GPUProof.Approx` at `GPUProof.laneGrade` at `2 ^ k`
-  lanes and depth `k`: each lane adds along its own tree `bflyTree (bflyOffsets k) l`, over all
-  the lanes in an order that differs by lane;
+* `bfly_approx`, `groupDot_nanEq_approx`, `groupDot_approx`: for every IEEE format, number of
+  rounds `k`, flag, oracle sequences, length and input grades, every lane of the butterfly over
+  `2 ^ k` strided loops, and so `groupDot k` (`warpDot` at `k = 5`) and every word NaN-equal to
+  it, is `GPUProof.Approx` at `GPUProof.laneGrade` at `2 ^ k` lanes and depth `k`: each lane adds
+  along its own tree `bflyTree (bflyOffsets k) l`, over all the lanes in an order that differs by
+  lane;
 * `rowTrees_meetsAt`: for every IEEE format, width, lane count, tree whose leaves are the lanes,
   each once, and flag, `rowTrees` meets
   `GPUProof.Spec.matVec (GPUProof.laneVecGrade W t.depth fun n => ⌈n / W⌉)` at `matVecEnc`
   (`GPUProof.MeetsAt`; by `holds_of` and `stride_approx`);
-* `groupDot_holds`: for every IEEE format, width, `k`, flag, size, oracle sequences and input
-  words, `groupDot k` per row meets the rule of
-  `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`, the case of
-  `rowTrees_meetsAt` at lane 0's butterfly tree;
-* `bflyDeliver_holds`: the same for the semantics' rounds, whose `fadd` goes through `deliver`
-  with an oracle number per round and lane (`bflyRoundsAt`): each row's word is `groupDot k`'s or
-  both are NaNs (`MojoProof.Sem.bflyDeliver_nanEq`), and the two decode alike, so the words meet
-  the same rule; at `k = 5` the spec side of gemv_kernel's output;
+* `groupDot_rows_holds`: for every IEEE format, width, `k`, flag, size, oracle sequences, input
+  words and output words, output words each `groupDot k` of its row and the vector or both NaNs
+  meet the rule of
+  `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)` at `matVecEnc`
+  (by `holds_of` and `groupDot_nanEq_approx`); its cases:
+  * `groupDot_holds`: the words `groupDot k` per row themselves (also a behavior of
+    `rowTrees_meetsAt` at lane 0's butterfly tree);
+  * `bflyDeliver_holds`: the semantics' rounds, whose `fadd` goes through `deliver` with an oracle
+    number per round and lane (`bflyRoundsAt`): each row's word is `groupDot k`'s or both are
+    NaNs (`MojoProof.Sem.bflyDeliver_nanEq`);
+  * `warpDot_matVec_holds`: at `k = 5`, inputs read from a matrix and a vector and words
+    NaN-equal to `warpDot` of `matVecPairs`, the spec side of gemv_kernel's output;
+* `groupDot_cols_holds`, `warpDot_vecMat_holds`: the column forms, for every IEEE format, width,
+  `k`, flag, size, oracle sequences, input words and output words: output words each `groupDot k`
+  of the vector and its column or both NaNs meet the rule of
+  `GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade (2 ^ k) k fun m => ⌈m / 2 ^ k⌉)` at
+  `vecMatEnc` (by `vecMat_holds_of` and `groupDot_nanEq_approx`); at `k = 5`, inputs read from a
+  vector and a matrix and `warpDot` of `vecMatPairs`, the spec side of gevm_kernel's output. The
+  column rule is not the row rule at the transposed matrix by a definitional unfolding (the
+  input positions, the order of each product's factors and the grades' arguments differ;
+  docs/proofs/tile.md), so each form is proved from its own `holds_of`;
 * `bflyRoundsAt_take_succ`: for every carrier, combination per round and lane, offsets, round,
   values and lane, the value after the first `r + 1` rounds is round `r`'s combination of the
   lane's and its partner's values after the first `r` rounds;
@@ -108,14 +131,29 @@ noncomputable abbrev matVecEnc (fmt : FloatFormat) (bits : Nat) (σ : ℕ × ℕ
   GPUProof.Encodings.uniform (GPUProof.Spec.matVec GPUProof.matVecGrade GPUProof.matVecGrade_mono)
     (GPUProof.ScalarEnc.std fmt bits) σ
 
+/-- The uniform encoding of a vector-matrix product at every size, for every binary interchange
+format `fmt` and integer width `bits`: inputs `Fin m ⊕ Fin m × Fin n` (the vector, then the
+matrix), outputs `Fin n`, every entry stored as a word of `fmt`, by definition
+`GPUProof.Encodings.uniform` at `GPUProof.ScalarEnc.std fmt bits` of
+`GPUProof.Spec.vecMat GPUProof.vecMatGrade`. As for `matVecEnc`, its entries' types do not depend
+on the grade, so it is the uniform encoding of `GPUProof.Spec.vecMat` at every grade, by unfolding
+(instances: `MojoProofTest.TileLanes.cols_3x5`, at `GPUProof.vecMatLaneGrade 4 2`). -/
+noncomputable abbrev vecMatEnc (fmt : FloatFormat) (bits : Nat) (σ : ℕ × ℕ) :
+    GPUProof.Encodings (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) (fun σ => Fin σ.2)
+      (fun _ _ => .real) (fun _ _ => .real) σ :=
+  GPUProof.Encodings.uniform (GPUProof.Spec.vecMat GPUProof.vecMatGrade GPUProof.vecMatGrade_mono)
+    (GPUProof.ScalarEnc.std fmt bits) σ
+
 /-- **The spec's rule unfolded.** For every IEEE format `fmt`, width `bits`, lane count `W`,
 depth `d`, lane length `L`, size `(m, n)`, input words `I` and output words `O` at
 `matVecEnc fmt bits`: if for every output `i`, exact row `a` and vector `x` and grades `ga`, `gx`
 at which the words of row `i` and of the vector are `GPUProof.Approx`, `O i` is `GPUProof.Approx`
 at `GPUProof.laneGrade (.ieee fmt) W d (L n) n a x ga gx` of `Σₖ aₖ xₖ`, then `O` meets
-`GPUProof.Spec.matVec (GPUProof.laneVecGrade W d L)`'s rule at `I`. At `W = 1`, `d = 0`,
-`L = id` that is `GPUProof.Spec.matVec GPUProof.matVecGrade` and `GPUProof.dotGrade`, by
-definition. -/
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade W d L)`'s rule at `I`: the rule's grade is that
+`laneGrade` where the input grades of row `i` and the vector are at most `fmt`'s largest finite
+value (`GPUProof.laneGradeIn`), and it claims at most what `laneGrade` claims
+(`GPUProof.Approx.onlyIf_of`). At `W = 1`, `d = 0`, `L = id` that is
+`GPUProof.Spec.matVec GPUProof.matVecGrade` and `GPUProof.dotGrade`, by definition. -/
 theorem holds_of {fmt : FloatFormat} (bits W d : Nat) (L : ℕ → ℕ) {σ : ℕ × ℕ}
     {I : (matVecEnc fmt bits σ).inp.Words} {O : (matVecEnc fmt bits σ).out.Words}
     (h : ∀ (i : Fin σ.1) (a x : Fin σ.2 → ℝ) (ga gx : Fin σ.2 → GPUProof.Grade),
@@ -125,7 +163,30 @@ theorem holds_of {fmt : FloatFormat} (bits W d : Nat) (L : ℕ → ℕ) {σ : �
         (Model.toReal? (O i)) (∑ k, a k * x k)) :
     (GPUProof.Spec.matVec (GPUProof.laneVecGrade W d L)
       (GPUProof.laneVecGrade_mono W d L)).rule.Holds σ (matVecEnc fmt bits σ) I O :=
-  fun _ _ _ hA o => h o _ _ _ _ (fun k => hA (.inl (o, k))) (fun k => hA (.inr k))
+  fun _ _ _ hA o => GPUProof.Approx.onlyIf_of _
+    (h o _ _ _ _ (fun k => hA (.inl (o, k))) fun k => hA (.inr k))
+
+/-- **The vector-matrix spec's rule unfolded.** For every format `fmt`, width `bits`, lane count
+`W`, depth `d`, lane length `L`, size `(m, n)`, input words `I` and output words `O` at
+`vecMatEnc fmt bits`: if for every output `j`, exact vector `a` and column `x` and grades `ga`,
+`gx` at which the words of the vector and of column `j` are `GPUProof.Approx`, `O j` is
+`GPUProof.Approx` at `GPUProof.laneGrade (.ieee fmt) W d (L m) m a x ga gx` of `Σᵢ aᵢ xᵢ`, then
+`O` meets `GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade W d L)`'s rule at `I`: the rule's grade
+is that `laneGrade` where the input grades of the vector and column `j` are at most `fmt`'s
+largest finite value (`GPUProof.laneGradeIn`), and it claims at most what `laneGrade` claims
+(`GPUProof.Approx.onlyIf_of`), as in `holds_of`. At `W = 1`, `d = 0`, `L = id` that is
+`GPUProof.Spec.vecMat GPUProof.vecMatGrade`, by definition. -/
+theorem vecMat_holds_of {fmt : FloatFormat} (bits W d : Nat) (L : ℕ → ℕ) {σ : ℕ × ℕ}
+    {I : (vecMatEnc fmt bits σ).inp.Words} {O : (vecMatEnc fmt bits σ).out.Words}
+    (h : ∀ (j : Fin σ.2) (a x : Fin σ.1 → ℝ) (ga gx : Fin σ.1 → GPUProof.Grade),
+      (∀ i, GPUProof.Approx .real (ga i) (.ieee fmt) (Model.toReal? (I (.inl i))) (a i)) →
+      (∀ i, GPUProof.Approx .real (gx i) (.ieee fmt) (Model.toReal? (I (.inr (i, j)))) (x i)) →
+      GPUProof.Approx .real (GPUProof.laneGrade (.ieee fmt) W d (L σ.1) σ.1 a x ga gx) (.ieee fmt)
+        (Model.toReal? (O j)) (∑ i, a i * x i)) :
+    (GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade W d L)
+      (GPUProof.vecMatLaneGrade_mono W d L)).rule.Holds σ (vecMatEnc fmt bits σ) I O :=
+  fun _ _ _ hA o => GPUProof.Approx.onlyIf_of _
+    (h o _ _ _ _ (fun i => hA (.inl i)) fun i => hA (.inr (i, o)))
 
 /-- The input words of `GPUProof.Spec.matVec` at size `(m, K)` read from matrices `A` (`m × sA`)
 and `B` (`1 × sB`), for every format and `K ≤ sA`, `K ≤ sB`: entry `(i, k)` of `A` at input
@@ -349,12 +410,33 @@ theorem bfly_approx {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (k : Nat) (c 
   rwa [depth_bflyTree, show (bflyOffsets k).length = k by simp [bflyOffsets], treeDot,
     eval_bflyTree] at h
 
+/-- **A word NaN-equal to a lane group's dot product meets `GPUProof.laneGrade`**: for every IEEE
+format `fmt`, number of rounds `k`, flag `c`, oracle sequences, length `n`, input grades and word
+`y`, when each word `w i`, `v i` is `GPUProof.Approx` at its grade of the exact entry and `y` is
+`groupDot k c o` of the pairs (lane 0 of the butterfly; `warpDot` at `k = 5`) or both are NaNs
+(`NaNEq`), `y` is `GPUProof.Approx` at
+`GPUProof.laneGrade (.ieee fmt) (2 ^ k) k ⌈n / 2 ^ k⌉ n` of `Σᵢ aᵢ xᵢ`: the two words decode alike
+(`GPUProof.ScalarEnc.decode_eq`), and `bfly_approx` at lane 0 grades the group's word. -/
+theorem groupDot_nanEq_approx {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (k : Nat)
+    (c : Bool) (o : Nat → Nat → Nat × Nat) {n : Nat} (w v : Fin n → Model fmt) (a x : Fin n → ℝ)
+    (ga gx : Fin n → GPUProof.Grade)
+    (hw : ∀ i, GPUProof.Approx .real (ga i) (.ieee fmt) (w i).toReal? (a i))
+    (hv : ∀ i, GPUProof.Approx .real (gx i) (.ieee fmt) (v i).toReal? (x i)) {y : Model fmt}
+    (hy : NaNEq y (groupDot k c o (List.ofFn fun i => (w i, v i)))) :
+    GPUProof.Approx .real
+      (GPUProof.laneGrade (.ieee fmt) (2 ^ k) k ((n + 2 ^ k - 1) / 2 ^ k) n a x ga gx) (.ieee fmt)
+      y.toReal? (∑ i, a i * x i) := by
+  have e : y.toReal? = (groupDot k c o (List.ofFn fun i => (w i, v i))).toReal? :=
+    GPUProof.ScalarEnc.decode_eq (e := GPUProof.ScalarEnc.ieee fmt) hy
+  rw [e]
+  exact bfly_approx hfmt k c o (Nat.two_pow_pos k) w v a x ga gx hw hv
+
 /-- **A lane group's dot product meets `GPUProof.laneGrade`**: for every IEEE format `fmt`,
 number of rounds `k`, flag `c`, oracle sequences, length `n` and input grades, when each word
 `w i`, `v i` is `GPUProof.Approx` at its grade of the exact entry, `groupDot k c o` of the pairs
 (lane 0 of the butterfly; `warpDot` at `k = 5`, the gemv kernel's reduction) is
 `GPUProof.Approx` at `GPUProof.laneGrade (.ieee fmt) (2 ^ k) k ⌈n / 2 ^ k⌉ n` of `Σᵢ aᵢ xᵢ`:
-`bfly_approx` at lane 0. -/
+`groupDot_nanEq_approx` at the word itself (`NaNEq` is reflexive). -/
 theorem groupDot_approx {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (k : Nat) (c : Bool)
     (o : Nat → Nat → Nat × Nat) {n : Nat} (w v : Fin n → Model fmt) (a x : Fin n → ℝ)
     (ga gx : Fin n → GPUProof.Grade)
@@ -363,7 +445,7 @@ theorem groupDot_approx {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (k : Nat)
     GPUProof.Approx .real
       (GPUProof.laneGrade (.ieee fmt) (2 ^ k) k ((n + 2 ^ k - 1) / 2 ^ k) n a x ga gx) (.ieee fmt)
       (groupDot k c o (List.ofFn fun i => (w i, v i))).toReal? (∑ i, a i * x i) :=
-  bfly_approx hfmt k c o (Nat.two_pow_pos k) w v a x ga gx hw hv
+  groupDot_nanEq_approx hfmt k c o w v a x ga gx hw hv ((GPUProof.UpToNaN.equivalence _).refl _)
 
 /-- **The behaviors of strided lanes added along a tree, per row**, for every binary interchange
 format `fmt`, width `bits`, lane count `W`, tree `t` of lane numbers, flag `c` and size `(m, n)`:
@@ -403,24 +485,38 @@ theorem rowTrees_meetsAt {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits : 
   exact stride_approx hfmt c (o i) t ht (fun k => I (.inl (i, k))) (fun k => I (.inr k)) a x ga
     gx ha hx
 
+/-- **Words NaN-equal to a lane group per row meet the matrix-vector spec's rule**: for every
+IEEE format `fmt`, width `bits`, number of rounds `k`, flag `c`, size `(m, n)`, oracle sequences
+`o i` of each row, input words `I` at `matVecEnc fmt bits` and output words `O` of which each
+`O i` is `groupDot k c (o i)` over the pairs `(I (i, j), I j)` of row `i` and the vector or both
+are NaNs (`NaNEq`), `O` meets the rule of
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`:
+`groupDot_nanEq_approx` at each row (`holds_of`). The row form of `groupDot_cols_holds`;
+`groupDot_holds`, `bflyDeliver_holds` and `warpDot_matVec_holds` are its cases. -/
+theorem groupDot_rows_holds {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits k : Nat)
+    (c : Bool) {σ : ℕ × ℕ} (o : Fin σ.1 → Nat → Nat → Nat × Nat)
+    (I : (matVecEnc fmt bits σ).inp.Words) {O : (matVecEnc fmt bits σ).out.Words}
+    (hO : ∀ i, NaNEq (O i)
+      (groupDot k c (o i) (List.ofFn fun j => (I (.inl (i, j)), I (.inr j))))) :
+    (GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => (n + 2 ^ k - 1) / 2 ^ k)
+        (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds σ (matVecEnc fmt bits σ) I O :=
+  holds_of bits (2 ^ k) k _ fun i a x ga gx ha hx =>
+    groupDot_nanEq_approx hfmt k c (o i) _ _ a x ga gx ha hx (hO i)
+
 /-- **A lane group per row meets the matrix-vector spec's rule**: for every IEEE format `fmt`,
 width `bits`, number of rounds `k`, flag `c`, size `(m, n)`, oracle sequences `o i` of each row
 and input words `I` at `matVecEnc fmt bits`, the words `groupDot k c (o i)` over the pairs
 `(I (i, j), I j)` of row `i` and the vector meet the rule of
-`GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`. This is the case of
-`rowTrees_meetsAt` at `2 ^ k` lanes and lane 0's butterfly tree `bflyTree (bflyOffsets k) 0`:
-the words are a behavior of `rowTrees` there (`eval_bflyTree`), the tree's leaves are the lanes
-(`leaves_offsets k 0`), and its depth is `k` (`depth_bflyTree`). The depth is a rewrite, not a
-definitional step, since the length of `bflyOffsets k` is `k` only by a lemma at symbolic `k`. -/
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`:
+`groupDot_rows_holds` at the words themselves (`NaNEq` is reflexive). They are also a behavior
+of `rowTrees` at lane 0's butterfly tree `bflyTree (bflyOffsets k) 0` (`eval_bflyTree`), whose
+leaves are the lanes (`leaves_offsets k 0`) and whose depth is `k` (`depth_bflyTree`). -/
 theorem groupDot_holds {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits k : Nat) (c : Bool)
     {σ : ℕ × ℕ} (o : Fin σ.1 → Nat → Nat → Nat × Nat) (I : (matVecEnc fmt bits σ).inp.Words) :
     (GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => (n + 2 ^ k - 1) / 2 ^ k)
         (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds σ (matVecEnc fmt bits σ) I
-      fun i => groupDot k c (o i) (List.ofFn fun j => (I (.inl (i, j)), I (.inr j))) := by
-  have h := rowTrees_meetsAt hfmt bits (leaves_offsets k 0 (Nat.two_pow_pos k)) c σ I
-    (fun i => groupDot k c (o i) (List.ofFn fun j => (I (.inl (i, j)), I (.inr j))))
-    ⟨rfl, o, fun _ => (eval_bflyTree _ _ _ 0).symm⟩
-  rwa [depth_bflyTree, show (bflyOffsets k).length = k by simp [bflyOffsets]] at h
+      fun i => groupDot k c (o i) (List.ofFn fun j => (I (.inl (i, j)), I (.inr j))) :=
+  groupDot_rows_holds hfmt bits k c o I fun _ => (GPUProof.UpToNaN.equivalence _).refl _
 
 /-- **The semantics' butterfly per row meets the matrix-vector spec's rule**: for every IEEE
 format `fmt`, width `bits`, number of rounds `k`, flag `c`, size `(m, n)`, oracle sequences
@@ -430,8 +526,8 @@ the semantics' `fadd`, `deliver (Model.add x y) (ob i r l)` (`bflyRoundsAt`), fr
 `dotLoop c (o i l)` from `+0` over `stride (2 ^ k) l` of the pairs `(I (i, j), I j)` of row `i`
 and the vector, meet the rule of
 `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`. Each word is
-`groupDot k c (o i)` of the row's pairs or both are NaNs (`bflyDeliver_nanEq`), so the two decode
-alike (`GPUProof.ScalarEnc.decode_eq`), and `groupDot_approx` gives the grade (`holds_of`). This
+`groupDot k c (o i)` of the row's pairs or both are NaNs (`bflyDeliver_nanEq`), so
+`groupDot_rows_holds` gives the rule. This
 is the spec side of a kernel whose lane `l` of row `i` folds the pairs at `2 ^ k j + l`
 (`dotLoop_take_stride`) and whose lane 0 stores the rounds' word: gemv_kernel at `k = 5`. That a
 run of the kernel stores that word is not proved here. -/
@@ -443,13 +539,74 @@ theorem bflyDeliver_holds {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits k
       fun i => bflyRoundsAt (fun r l x y => deliver (Model.add x y) (ob i r l)) (bflyOffsets k)
         (fun l => dotLoop c (o i l) (Model.zero fmt false)
           (stride (2 ^ k) l (List.ofFn fun j => (I (.inl (i, j)), I (.inr j))))) 0 :=
-  holds_of bits (2 ^ k) k _ fun i a x ga gx ha hx =>
-    (congrArg (fun v => GPUProof.Approx .real
-      (GPUProof.laneGrade (.ieee fmt) (2 ^ k) k ((σ.2 + 2 ^ k - 1) / 2 ^ k) σ.2 a x ga gx)
-      (.ieee fmt) v (∑ j, a j * x j))
-      (GPUProof.ScalarEnc.decode_eq (e := GPUProof.ScalarEnc.ieee fmt)
-        (bflyDeliver_nanEq (ob i) (bflyOffsets k) _ 0))).mpr
-      (groupDot_approx hfmt k c (o i) _ _ a x ga gx ha hx)
+  groupDot_rows_holds hfmt bits k c o I fun i => bflyDeliver_nanEq (ob i) (bflyOffsets k) _ 0
+
+/-- **A lane group per column meets the vector-matrix spec's rule**: for every IEEE format `fmt`,
+width `bits`, number of rounds `k`, flag `c`, size `(m, n)`, oracle sequences `o j` of each
+column, input words `I` at `vecMatEnc fmt bits` and output words `O` of which each `O j` is
+`groupDot k c (o j)` over the pairs `(I i, I (i, j))` of the vector and column `j` or both are
+NaNs (`NaNEq`), `O` meets the rule of
+`GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade (2 ^ k) k fun m => ⌈m / 2 ^ k⌉)`:
+`groupDot_nanEq_approx` at each column (`vecMat_holds_of`). The column form of
+`groupDot_rows_holds`. -/
+theorem groupDot_cols_holds {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits k : Nat)
+    (c : Bool) {σ : ℕ × ℕ} (o : Fin σ.2 → Nat → Nat → Nat × Nat)
+    (I : (vecMatEnc fmt bits σ).inp.Words) {O : (vecMatEnc fmt bits σ).out.Words}
+    (hO : ∀ j, NaNEq (O j)
+      (groupDot k c (o j) (List.ofFn fun i => (I (.inl i), I (.inr (i, j)))))) :
+    (GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade (2 ^ k) k fun m => (m + 2 ^ k - 1) / 2 ^ k)
+        (GPUProof.vecMatLaneGrade_mono _ _ _)).rule.Holds σ (vecMatEnc fmt bits σ) I O :=
+  vecMat_holds_of bits (2 ^ k) k _ fun j a x ga gx ha hx =>
+    groupDot_nanEq_approx hfmt k c (o j) _ _ a x ga gx ha hx (hO j)
+
+/-- **The warp's words per column meet the vector-matrix spec's rule**: for every IEEE format
+`fmt`, width `bits`, flag `c`, size `(m, n)`, oracle sequences `o j`, vector `v` and matrix `A` of
+`fmt`'s floats, input words `I` at `vecMatEnc fmt bits` that are `v`'s and `A`'s entries (`hIv`,
+`hIA`), and output words `O` of which each `O j` is `warpDot c (o j) (vecMatPairs v A j)` or both
+are NaNs (`NaNEq`), `O` meets the rule of
+`GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade 32 5 fun m => ⌈m / 32⌉)`. It is
+`groupDot_cols_holds` at `k = 5`: `vecMatPairs v A j` is the list of the pairs of `I` at column
+`j` (by `hIv`, `hIA`), and `warpDot` is `groupDot 5` by definition. These are the words that
+`MojoProof.Sem.warpDot_vecMat` bounds, the spec side of gevm_kernel's output (warp `w`'s lane 0
+after the transposition holds `warpDot` of column `32 β + w`'s pairs, docs/proofs/warp-dot.md);
+that a run of the kernel stores that word is not proved here. -/
+theorem warpDot_vecMat_holds {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits : Nat)
+    (c : Bool) {σ : ℕ × ℕ} (o : Fin σ.2 → Nat → Nat → Nat × Nat)
+    (v : Tensor (Model fmt) [σ.1]) (A : Tensor (Model fmt) [σ.1, σ.2])
+    {I : (vecMatEnc fmt bits σ).inp.Words} (hIv : ∀ i, I (.inl i) = v.getScalar i)
+    (hIA : ∀ i j, I (.inr (i, j)) = Tensor.get2 A i j) {O : (vecMatEnc fmt bits σ).out.Words}
+    (hO : ∀ j, NaNEq (O j) (warpDot c (o j) (vecMatPairs v A j))) :
+    (GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade (2 ^ 5) 5 fun m => (m + 2 ^ 5 - 1) / 2 ^ 5)
+        (GPUProof.vecMatLaneGrade_mono _ _ _)).rule.Holds σ (vecMatEnc fmt bits σ) I O :=
+  groupDot_cols_holds hfmt bits 5 c o I fun j => by
+    have e : vecMatPairs v A j = List.ofFn fun i => (I (.inl i), I (.inr (i, j))) := by
+      simp only [vecMatPairs, hIv, hIA]
+    rw [← e]
+    exact hO j
+
+/-- **The warp's words per row meet the matrix-vector spec's rule**: for every IEEE format `fmt`,
+width `bits`, flag `c`, size `(m, n)`, oracle sequences `o i`, matrix `A` and vector `v` of
+`fmt`'s floats, input words `I` at `matVecEnc fmt bits` that are `A`'s and `v`'s entries (`hIA`,
+`hIv`), and output words `O` of which each `O i` is `warpDot c (o i) (matVecPairs A v i)` or both
+are NaNs (`NaNEq`), `O` meets the rule of
+`GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)`. It is
+`groupDot_rows_holds` at `k = 5`: `matVecPairs A v i` is the list of the pairs of `I` at row `i`
+(by `hIA`, `hIv`), and `warpDot` is `groupDot 5` by definition; the twin of
+`warpDot_vecMat_holds`. These are the words of gemv_kernel's rows
+(`MojoProofTest.GemvSound.rows_holds`); that a run of the kernel stores them is not proved here. -/
+theorem warpDot_matVec_holds {fmt : FloatFormat} (hfmt : fmt.isIEEE = true) (bits : Nat)
+    (c : Bool) {σ : ℕ × ℕ} (o : Fin σ.1 → Nat → Nat → Nat × Nat)
+    (A : Tensor (Model fmt) [σ.1, σ.2]) (v : Tensor (Model fmt) [σ.2])
+    {I : (matVecEnc fmt bits σ).inp.Words} (hIA : ∀ i j, I (.inl (i, j)) = Tensor.get2 A i j)
+    (hIv : ∀ j, I (.inr j) = v.getScalar j) {O : (matVecEnc fmt bits σ).out.Words}
+    (hO : ∀ i, NaNEq (O i) (warpDot c (o i) (matVecPairs A v i))) :
+    (GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
+        (GPUProof.laneVecGrade_mono _ _ _)).rule.Holds σ (matVecEnc fmt bits σ) I O :=
+  groupDot_rows_holds hfmt bits 5 c o I fun i => by
+    have e : matVecPairs A v i = List.ofFn fun j => (I (.inl (i, j)), I (.inr j)) := by
+      simp only [matVecPairs, hIA, hIv]
+    rw [← e]
+    exact hO i
 
 /-- **The last of the first `r + 1` rounds**: for every carrier `β`, combination `F r l` per round
 `r` and lane `l`, offsets `ms`, round `r < ms.length`, values `v` and lane `l`, lane `l`'s value

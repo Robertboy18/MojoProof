@@ -16,6 +16,7 @@ import GPUProof.Sig
 import GPUProof.Sound
 import GPUProof.Spec.Basic
 import GPUProof.Spec.Comp
+import GPUProof.Spec.CompGraded
 import GPUProof.Spec.DecEq
 import GPUProof.Spec.Import
 import GPUProof.Spec.Linear
@@ -168,8 +169,8 @@ info: core modules: [GPUProof.Sig, GPUProof.Race, GPUProof.Chunks, GPUProof.Lami
   GPUProof.Layout.Basic, GPUProof.Layout.Algebra, GPUProof.Layout.Crd, GPUProof.Layout.Laws,
   GPUProof.Layout.Bits, GPUProof.Layout.Swizzle, GPUProof.Layout.TwoLevel, GPUProof.MixedRadix,
   GPUProof.NaN, GPUProof.OneRun, GPUProof.Run, GPUProof.Sound, GPUProof.Spec.Basic,
-  GPUProof.Spec.Comp, GPUProof.Spec.DecEq, GPUProof.Spec.Import, GPUProof.Spec.Linear,
-  GPUProof.Transfer, GPUProof.Uses, GPUProof.View]
+  GPUProof.Spec.Comp, GPUProof.Spec.CompGraded, GPUProof.Spec.DecEq, GPUProof.Spec.Import,
+  GPUProof.Spec.Linear, GPUProof.Transfer, GPUProof.Uses, GPUProof.View]
 ---
 info: refused: GPUProof.OneRun importing MojoProof.Sem.Trace
 ---

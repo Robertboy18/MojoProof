@@ -29,15 +29,15 @@ The values the other lanes' shuffles deliver are premises. `run_out`: the final 
 memory (`out`), the final predicate `WarpRun.of_waits` takes; `waits_range`: the seven waits as
 `WarpRun.of_waits` takes them, the `i`-th of one list for `i < 7`.
 
-The instance: thread 3 of one block of 32 threads, `M = 1`, `K = 4`, row 0, on a memory `m3`
-whose blocks 1 and 2 hold a `1 × 4` matrix and a vector of four binary32 words. Thread 3 starts
-after lanes 0 to 2's `alloca`s (`mUpTo 3`), and `Grid.fire` delivers `%24` and `%25`, the halves
-of row 0, on the memory with every lane's `alloca` blocks (`mUpTo 32`): every premise of `run`
-holds, thread 3's slots by `lane3_inv` (the other lanes allocate at other numbers) and the
-buffers by `mUpTo_blocks`. `allocas_mutant`: with an `alloca` block in the frame the final memory
-differs (the premise `f.allocas = []`); `slots_mutant`: the memory with every other lane's slots
-but not thread 3's does not meet `EntryInv`, and `%9`'s store faults there; `lane3_counts`: the
-conclusion's step count, pairs and lane.
+The instance: thread 3 of one block of 32 threads, `M = 1`, `K = 4`, row 0, on `m3 = mem A3 v3`
+(`mem`: the caller's memory at every sizes, its premises `mem_caller`), whose blocks 1 and 2 hold a
+`1 × 4` matrix and a vector of binary32 words. Thread 3 starts after lanes 0 to 2's `alloca`s
+(`mUpTo 3`), and `Grid.fire` delivers `%24` and `%25`, the halves of row 0, on the memory with every
+lane's `alloca` blocks (`mUpTo 32`): every premise of `run` holds, thread 3's slots by `lane3_inv`
+(the other lanes allocate at other numbers) and the buffers by `mUpTo_blocks`. `allocas_mutant`:
+with an `alloca` block in the frame the final memory differs (the premise `f.allocas = []`);
+`slots_mutant`: the memory with every other lane's slots but not thread 3's does not meet
+`EntryInv`, and `%9`'s store faults there; `lane3_counts`: `run`'s step count, pairs and lane.
 -/
 
 namespace MojoProofTest.GemvThread
@@ -219,7 +219,7 @@ theorem run (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = gemv
     exact ⟨hI'.of_blocks hb₀, (Mem.liveAt_blocks (congrFun hb₀ _)).trans l7,
       (Mem.liveAt_blocks (congrFun hb₀ _)).trans l8,
       (Mem.liveAt_blocks (congrFun hb₀ _)).trans l9,
-      Ext.trans (ext_mono hX' fun _ => Or.inl) (ext_mono hX₀ fun _ => Or.inr)⟩
+      Ext.trans (hX'.mono fun _ => Or.inl) (hX₀.mono fun _ => Or.inr)⟩
   obtain ⟨M₀, hF, hM⟩ := RunsVia.pin (R := fun M₀ =>
     (Piece.Wait.via gemv.fn_0 gemv.fn_0.b_10.label ⟨2, .shfl .bfly,
       [.bits 32 (BitVec.ofInt 32 (-1)), .ofFloat .float x, .bits 32 (BitVec.ofInt 32 16),
@@ -278,7 +278,14 @@ theorem waits_range (w₁ w₂ d : Piece.Wait) (c : Ctx) (k0 : Nat)
         d).via gemv.fn_0 (if i < 2 then 6 else 65) :=
   Piece.Wait.map_via_append (a := [w₁, w₂]) (p := 2) (n := 5) rfl rfl
 
-/-! ## The instance: lane 3 of one block of 32 threads, `M = 1`, `K = 4` -/
+/-! ## The instance: lane 3 of one block of 32 threads, `M = 1`, `K = 4`
+
+The caller's memory is generated once for every sizes: `mem A v` has blocks 1 and 2 holding a
+matrix `A` (`M × K`) and a vector `v` (length `K`) of binary32 words and block 3 a writable
+output of `M` words; `mem_caller` proves on it gemv_kernel's memory premises (`Caller`: the
+closed memory, buffers, fits and holds, as `GemvSound.kernel_sound` takes them) for every `M`,
+`K < 2 ^ 31` with `M K < 2 ^ 61`. `m3_caller` is its instance at `m3`, and
+`GemvWarpRun.n3_caller` at the two warps' memory. -/
 
 /-- The `1 × 4` matrix of binary32 ones. -/
 def A3 : TorchLean.Tensor (Model FloatTy.float.fmt) [1, 4] :=
@@ -288,20 +295,98 @@ def A3 : TorchLean.Tensor (Model FloatTy.float.fmt) [1, 4] :=
 def v3 : TorchLean.Tensor (Model FloatTy.float.fmt) [4] :=
   TorchLean.Tensor.Rep.ofFn fun _ => Model.ofNatBits 0x40000000
 
-/-- Block 1 of the empty memory: `A3`'s bytes, global, read-only, at address 16. -/
-def m1 : Mem × Nat :=
-  ({} : Mem).alloc gemv.prog.layout 1
-    (TorchLean.Shape.size [1, 4] * gemv.prog.layout.size (.fp .float)) 16 true true .all 1 1
-    (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) A3)
+/-- gemv_kernel's caller memory, for every sizes `M`, `K`, matrix `A` (`M × K`) and vector `v`
+(length `K`) of binary32 words: from the empty memory, block 1 holding `A`'s bytes and block 2
+`v`'s (`tensorBytes`, read-only), and block 3 a writable output of `M` undefined words, all
+global, live and owned by all threads, at addresses 16, 32 and 48 in space 1 and in the generic
+space. It is `Mem.three` at these sizes, flags and bytes, by unfolding. A test definition. -/
+def mem {M K : Nat} (A : TorchLean.Tensor (Model FloatTy.float.fmt) [M, K])
+    (v : TorchLean.Tensor (Model FloatTy.float.fmt) [K]) : Mem :=
+  let m₁ := (({} : Mem).alloc gemv.prog.layout 1
+    (TorchLean.Shape.size [M, K] * gemv.prog.layout.size (.fp .float)) 16 true true .all 1 1
+    (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) A)).1
+  let m₂ := (m₁.alloc gemv.prog.layout 1
+    (TorchLean.Shape.size [K] * gemv.prog.layout.size (.fp .float)) 16 true true .all 2 2
+    (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) v)).1
+  (m₂.alloc gemv.prog.layout 1 (M * gemv.prog.layout.size (.fp .float)) 16 true false .all 3 3).1
 
-/-- Block 2 after `m1`: `v3`'s bytes, global, read-only, at address 32. -/
-def m2 : Mem × Nat :=
-  m1.1.alloc gemv.prog.layout 1 (TorchLean.Shape.size [4] * gemv.prog.layout.size (.fp .float))
-    16 true true .all 2 2 (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) v3)
+/-- gemv_kernel's premises on the caller's memory, as `GemvSound.kernel_sound` takes them, for
+every memory `m`, block numbers `p0` (the output), `bA` and `bV` (the inputs), sizes `M`, `K`,
+matrix `A` (`M × K`) and vector `v` (length `K`) of binary32 words: `m` is closed for gemv_kernel's
+six arguments at every word `%4`, `p0` is a writable buffer of `M` words and `bA`, `bV` are
+read-only buffers of `M K` and `K` words, at addresses 4 divides, that fit (`Mem.Fits`), and `bA`,
+`bV` hold `A` and `v` row-major from offset 0. A test definition. -/
+structure Caller (m : Mem) (p0 bA bV M K : Nat)
+    (A : TorchLean.Tensor (Model FloatTy.float.fmt) [M, K])
+    (v : TorchLean.Tensor (Model FloatTy.float.fmt) [K]) : Prop where
+  /-- Builds `Caller` from its nine fields. -/
+  mk ::
+  /-- `m` is closed for the arguments, at every word `%4`. -/
+  closed : ∀ x4 : BitVec 32, m.Closed [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bV, 0⟩,
+    .bits 32 (BitVec.ofNat 32 M), .bits 32 x4, .bits 32 (BitVec.ofNat 32 K)]
+  /-- `p0` is a writable buffer of `M` words. -/
+  hb0 : m.Buffer p0 (M * 4) 4 true
+  /-- `p0` fits. -/
+  hf0 : m.Fits gemv.prog.layout p0 (M * 4)
+  /-- `bA` is a read-only buffer of `M K` words. -/
+  hbA : m.Buffer bA (M * K * 4) 4 false
+  /-- `bV` is a read-only buffer of `K` words. -/
+  hbV : m.Buffer bV (K * 4) 4 false
+  /-- `bA` fits. -/
+  hfA : m.Fits gemv.prog.layout bA (M * K * 4)
+  /-- `bV` fits. -/
+  hfV : m.Fits gemv.prog.layout bV (K * 4)
+  /-- `bA` holds `A` row-major from offset 0. -/
+  hA : m.Holds gemv.prog.layout bA (.fp .float) (Val.ofFloat .float)
+    (rowMajor gemv.prog.layout (.fp .float) 0) A
+  /-- `bV` holds `v` row-major from offset 0. -/
+  hV : m.Holds gemv.prog.layout bV (.fp .float) (Val.ofFloat .float)
+    (rowMajor gemv.prog.layout (.fp .float) 0) v
 
-/-- The memory: blocks 1 and 2 hold `A3` and `v3`, block 3 is a writable global output of 4
-bytes at address 48. -/
-def m3 : Mem := (m2.1.alloc gemv.prog.layout 1 4 16 true false .all 3 3).1
+/-- **The caller memory meets gemv_kernel's memory premises** (test of gemv_kernel's premises, for
+every sizes `M`, `K < 2 ^ 31` with `M K < 2 ^ 61`, matrix `A` and vector `v`): `mem A v` meets
+`Caller` with the output at block 3 and `A`, `v` at blocks 1 and 2 (`Mem.three_spec` at
+alignment 16, which 4 divides, and `Mem.holds_alloc`). -/
+theorem mem_caller {M K : Nat} (hM : M < 2 ^ 31) (hK : K < 2 ^ 31) (hMK : M * K < 2 ^ 61)
+    (A : TorchLean.Tensor (Model FloatTy.float.fmt) [M, K])
+    (v : TorchLean.Tensor (Model FloatTy.float.fmt) [K]) : Caller (mem A v) 3 1 2 M K A v := by
+  have h4 : gemv.prog.layout.size (.fp .float) = 4 := rfl
+  have hw0 : (gemv.prog.layout.ptr 0).1 = 64 := rfl
+  have hw1 : (gemv.prog.layout.ptr 1).1 = 64 := rfl
+  have hn : ∀ x : Model FloatTy.float.fmt, (Val.ofFloat .float x).NamesIn fun _ => False :=
+    fun _ => by simp [Val.NamesIn, Val.ofFloat]
+  have h := Mem.three_spec gemv.prog.layout 16
+    ![TorchLean.Shape.size [M, K] * gemv.prog.layout.size (.fp .float),
+      TorchLean.Shape.size [K] * gemv.prog.layout.size (.fp .float),
+      M * gemv.prog.layout.size (.fp .float)] ![true, true, false]
+    (I := ![tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) A,
+      tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) v, []])
+    (fun i p j hp => by
+      fin_cases i <;> simp at hp
+      exacts [tensorBytes_namesIn hn A p j hp, tensorBytes_namesIn hn v p j hp])
+    (A := ![1, 2, 3]) (G := ![1, 2, 3]) (n := ![M * K * 4, K * 4, M * 4])
+    (fun i => by fin_cases i <;> simp [TorchLean.Shape.size, h4])
+    (fun i => by fin_cases i <;> simp [hw1])
+    (fun i => by fin_cases i <;> simp [hw0] <;> omega)
+  have al : ∀ {q n : Nat} {w : Bool}, (mem A v).Buffer q n 16 w → (mem A v).Buffer q n 4 w :=
+    fun ⟨b, hb, hs, hl, ho, hr, hn, ha, hg⟩ =>
+      ⟨b, hb, hs, hl, ho, hr, hn, dvd_trans (by decide) ha, dvd_trans (by decide) hg⟩
+  obtain ⟨bx, hbx, hx⟩ := Mem.holds_alloc (Layout.Codec.float _ .float) A ({} : Mem) 1 16 true
+    true .all 1 1
+  obtain ⟨by', hby, hy⟩ := Mem.holds_alloc (Layout.Codec.float _ .float) v
+    (({} : Mem).alloc gemv.prog.layout 1
+      (TorchLean.Shape.size [M, K] * gemv.prog.layout.size (.fp .float)) 16 true true .all 1 1
+      (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) A)).1 1 16 true true .all 2 2
+  exact ⟨fun _ => h.1 _ (by simp only [Val.bounds, Val.bound]; omega), al (h.2 2).1, (h.2 2).2,
+    al (h.2 0).1, al (h.2 1).1, (h.2 0).2, (h.2 1).2, ⟨bx, hbx, hx⟩, ⟨by', hby, hy⟩⟩
+
+/-- The memory of one warp's instance: `mem` at `A3` and `v3`, `M = 1`, `K = 4`, the output a
+block of 4 bytes. A test definition. -/
+def m3 : Mem := mem A3 v3
+
+/-- Test: `mem_caller` at `m3`, `M = 1`, `K = 4`. -/
+theorem m3_caller : Caller m3 3 1 2 1 4 A3 v3 :=
+  mem_caller (by decide) (by decide) (by decide) A3 v3
 
 /-- Thread `i`'s context at one block of 32 threads: gemv's program, no globals, thread `i` of
 block 0, every skeleton and oracle choice 0. -/
@@ -339,17 +424,6 @@ theorem mUpTo_blocks (j : Nat) {q : Nat} (hq : q < 4) :
     ∀ x, m3.blocks q = some x → (mUpTo j).blocks q = some x :=
   (slotsAll_off cl (fun _ => 0) m3 (List.range j)).block (Mem.not_freshOf_lt hq)
 
-/-- `m3`'s blocks 1 and 2 hold `A3` and `v3` row-major (`Mem.holds_alloc`). -/
-theorem m3_holds :
-    m3.Holds gemv.prog.layout 1 (.fp .float) (Val.ofFloat .float)
-      (rowMajor gemv.prog.layout (.fp .float) 0) A3 ∧
-    m3.Holds gemv.prog.layout 2 (.fp .float) (Val.ofFloat .float)
-      (rowMajor gemv.prog.layout (.fp .float) 0) v3 :=
-  ⟨.of_block (fun _ h => (show m3.blocks 1 = m1.1.blocks 1 from rfl).trans h)
-      (Mem.holds_alloc (Layout.Codec.float _ .float) A3 ({} : Mem) 1 16 true true .all 1 1),
-    .of_block (fun _ h => (show m3.blocks 2 = m2.1.blocks 2 from rfl).trans h)
-      (Mem.holds_alloc (Layout.Codec.float _ .float) v3 m1.1 1 16 true true .all 2 2)⟩
-
 /-- **Thread 3's slots through the other lanes' `alloca`s**: `mUpTo 32` meets `run`'s premise
 `EntryInv` at thread 3's blocks 16, 17 and 18. Thread 3's own `alloca`s give it at `mUpTo 4`
 (by evaluation); threads 4 to 31 allocate only at their own numbers (`slotsAll_off`), which are
@@ -378,17 +452,14 @@ example : (waitAt (cl 3) [e1, e2] ⟨[f3], 0⟩ (mUpTo 3)).blocks 3 = (mUpTo 32)
     (mUpTo 3) f3 rfl rfl (by decide +kernel) rfl rfl 1 4 0 3 1 2 (by decide) (by decide)
     (by decide) (by decide) rfl rfl rfl rfl rfl 16 17 18 rfl rfl rfl (by decide) rfl rfl rfl A3 v3
     e1 e2 rfl rfl lane3_inv
-    (.of_block (mUpTo_blocks 32 (by decide))
-      ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩)
-    (.of_block (mUpTo_blocks 32 (by decide)) ⟨_, rfl, by decide +kernel⟩)
-    (.of_block (mUpTo_blocks 32 (by decide))
-      ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩)
-    (.of_block (mUpTo_blocks 32 (by decide))
-      ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩)
-    (.of_block (mUpTo_blocks 32 (by decide)) ⟨_, rfl, by decide +kernel⟩)
-    (.of_block (mUpTo_blocks 32 (by decide)) ⟨_, rfl, by decide +kernel⟩)
-    (.of_block (mUpTo_blocks 32 (by decide)) m3_holds.1)
-    (.of_block (mUpTo_blocks 32 (by decide)) m3_holds.2)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hb0)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hf0)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hbA)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hbV)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hfA)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hfV)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hA)
+    (.of_block (mUpTo_blocks 32 (by decide)) m3_caller.hV)
   exact ⟨h.1.1.2.2.2 3 (by decide) (by decide) (by decide), h.1.2.1⟩
 
 /-- Test (gemv_kernel at one block of 32 threads, `M = 1`, `K = 4`, lane 3, for every memories

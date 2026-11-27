@@ -154,7 +154,7 @@ theorem run (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = gemv
   have hR := out_ret L hL k c hcp hce t' m' f' ht' hf' hl' hp' M K r p0 hM hK hr hr' g0 g10 g11
     g35 (hb0.of_block (hq hb0))
   rw [ha', hfa, List.append_nil] at hR
-  refine ⟨_, hR, fun q hq' => ?_, ext_keep hX' (Mem.foldl_setLive_trace _ _ _)⟩
+  refine ⟨_, hR, fun q hq' => ?_, hX'.trans (.of_trace (Mem.foldl_setLive_trace _ _ _))⟩
   rw [Mem.foldl_setLive_blocks (by simp only [List.mem_cons, List.not_mem_nil, or_false]; tauto)]
   exact hI'.off q hq'
 

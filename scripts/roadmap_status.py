@@ -13,12 +13,11 @@ card and checks, reporting every problem it finds:
   string; upstream is empty or an issue number (`#123` or a URL ending in one);
 * a ref `repo:<path>:<line>` names a file of this repository, and its line contains the quote;
 * every name in lean is a declaration (`lean: not stated yet` names none). The declaration
-  index is scripts/cited.py's `scan` over GPUProof/, MojoProof/ and MojoProofTest/, plus the
-  names the command `mojo_kernel n := ...` adds that `scan` does not list (`n.covers`,
-  `n.correct`, ..., with `mat` its names and with an invariant `n.runInv` and `n.sound_inv`;
-  below, `generated`) and the blocks `n.b<i>`, plus, for a name whose first component is another
-  package's root (`FloatLib`, `TorchLean`), `scan` over that package's sources under
-  .lake/packages. No Lean runs;
+  index is scripts/cited.py's `scan` over GPUProof/, MojoProof/ and MojoProofTest/, which lists
+  the theorems each command `mojo_kernel n := ...` adds by its clauses (`n.covers`, `n.sound`,
+  `n.correct`, ...; below, `generated`), plus the blocks `n.b<i>`, plus, for a name whose first
+  component is another package's root (`FloatLib`, `TorchLean`), `scan` over that package's
+  sources under .lake/packages. No Lean runs;
 * every name in tests is a declaration or a module MojoProofTest.<M> with a file
   MojoProofTest/<M>.lean;
 * every corpus entry is a path or a glob under tests/corpus/ that matches at least one file
@@ -126,17 +125,6 @@ NEXT = {
     ('construct', 'L3'): 'L3 needs a proved kernel that uses it',
 }
 
-# Names `mojo_kernel n := ...` adds (MojoProof/Sym/KernelCmd.lean), by the clause that adds them:
-# `None`, `map2` and `loop` for a command without `mat`; with `mat` the command adds only the names
-# of `mat`, and with an invariant (the word `inv` in a `mat` command) also those of `inv`.
-GENERATED = {
-    None: ('paths', 'covers', 'sound_of', 'args', 'starts', 'sound'),
-    'map2': ('argTy', 'argTail', 'ret', 'correct'),
-    'loop': ('chains', 'coversChains', 'entry', 'init', 'step', 'exit', 'loop'),
-    'mat': ('names', 'starts', 'out', 'sound_mat'),
-    'inv': ('runInv', 'sound_inv'),
-}
-CLAUSES = re.compile(r'\b(map2|loop|mat|inv)\b')
 BLOCK = re.compile(r'b\d+')
 KERNEL = re.compile(r'^mojo_kernel\s+([^\s:]+)\s+:=')
 EVIDENCE = re.compile(r'^\s*(L\d)\s*:\s*(.*?)\s*$')
@@ -298,7 +286,7 @@ class Index:
 
     def __init__(self):
         self.decls: set[str] = set()
-        self.generated: set[str] = set()   # the names mojo_kernel commands add
+        self.generated: set[str] = set()   # the names `scan` lists under a mojo_kernel command
         self.kernels: set[str] = set()     # their kernels' full names, for `n.b<i>`
         self.statements: dict[str, str] = {}   # theorem name: its statement with premises
         self.templates: dict[str, str] = {}    # generated suffix: the command's statement text
@@ -326,7 +314,7 @@ class Index:
         lines = cited.blank(text).split('\n')
         stack: list[str] = []   # namespace segments, '' for a section or a mutual block
         prev = ''
-        for i, line in enumerate(lines):
+        for line in lines:
             if m := cited.SCOPE.match(line):
                 kind, rest = m.group(1), m.group(2).split()
                 if kind == 'namespace' and rest:
@@ -336,20 +324,11 @@ class Index:
                 elif kind == 'end' and stack:
                     stack.pop()
             m = KERNEL.match(line)
-            if m and prev.strip() != '#guard_msgs in':
+            if m and not cited.GUARD.match(prev.strip()):
                 base = '.'.join([s for s in stack if s] + [m.group(1)])
-                body = []
-                for cont in lines[i:]:
-                    if not cont.strip():
-                        break
-                    body.append(cont)
-                words = set(CLAUSES.findall('\n'.join(body)))
-                clauses = ['mat'] + (['inv'] if 'inv' in words else []) if 'mat' in words else \
-                    [None] + [w for w in ('map2', 'loop') if w in words]
                 if base in decls:
                     self.kernels.add(base)
-                    for clause in clauses:
-                        self.generated |= {f'{base}.{s}' for s in GENERATED[clause]}
+                    self.generated |= {d for d in decls if d.rpartition('.')[0] == base}
             if line.strip():
                 prev = line
 

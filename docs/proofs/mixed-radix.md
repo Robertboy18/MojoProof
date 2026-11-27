@@ -154,18 +154,30 @@ instances that own a tile, `owns`), `View.Owner`, `View.WF`, `View.off`, `View.t
 for every machine, and proves the six statements below, `View.tiling`, `View.cover`,
 `View.cover_iff`, `View.tile_subset_coarsen`, `View.coarsen_tile` and `View.key_fits`, with the
 lemmas the proofs name (`off_lt`, `coarsen_size`, `coarsen_congruent`, `coarsen_call`,
-`coarsen_cosize`, `inner_at`, `off_coarsen`). It imports Mathlib's `Disjoint` on sets, `Pairwise`,
+`coarsen_cosize`, `inner_at`, `coarsen_tileAt`). At a key stride it defines `View.offAt`,
+`View.tileAt`, `View.tilesAt`, `View.bytesAt`, `View.Interleaved`, `View.Separated` and
+`View.coarsenAt` and proves `View.tilingAt`, with the lemmas `key_eq_of_mod` and
+`interleaved_cosize` (below, "Interleaved footprints"), `View.tiling_separated`,
+`View.separated_of_disjoint` and `View.separated_of_interleaved` (below, "Separated
+footprints"), and `View.coverAt`, `View.cover_iffAt`, `View.tile_subset_coarsenAt` and
+`View.coarsenAt_tile`, of which `cover`, `cover_iff`, `tile_subset_coarsen` and `coarsen_tile`
+are the cases at the cosize (below, "Coverage and coarsening at a key stride"). Under a bound
+on the offset it defines `View.guardAt` and `View.guardsAt` and proves `GPUProof.Tiling.mono`,
+`View.guardAt_subset`, `View.tile_subset_guardAt` and `View.cover_guardAt` (below, "Guarded
+tiles"). It imports Mathlib's `Disjoint` on sets, `Pairwise`,
 the notation for `⋃` and `ring`. Its test, MojoProofTest/GPUProof/View.lean, has the two views at
 MojoProof's machine, with the tile of each instance, their tilings and coverage at two launches
 each, a view whose tiles overlap, gemv's warps past its rows, whose bytes no tile covers, gemv
 coarsened at the block level with its partly owned last block, and the refused coarsening (below,
 "Instances and tests"); MojoProofTest/GPUProof/ViewTiling.lean gives a well formed view's tiles at
-that machine as MojoProof's `Tiling` of byte intervals, and MojoProofTest/GPUProof/ViewWords.lean
-relates the two views' offsets to the kernels' 32- and 64-bit words. A view's offsets and tiles are
-natural numbers, a model of the addresses a kernel computes in words that wrap; the tile
-theorems are about that model, and the theorems that relate it to the words name the word
-premise (`View.key_fits`). That a run of a kernel stores at the address of its tile is not
-proved here.
+that machine as MojoProof's `Tiling` of byte intervals, MojoProofTest/GPUProof/ViewWords.lean
+relates the two views' offsets, and layer norm's at its key stride, to the kernels' 32- and 64-bit
+words, and MojoProofTest/GPUProof/ViewStride.lean has layer norm's interleaved view at a key
+stride, at every row length under the guard. A view's
+offsets and tiles are natural numbers, a model of the addresses a kernel computes in words that
+wrap; the tile theorems are about that model, and the theorems that relate it to the words name
+the word premise (`View.key_fits`). That a run of a kernel stores at the address of its tile is
+not proved here.
 `View.lay` and `WF`'s `congruent` and `pos` read `Lay`, `congruentL` and `leavesL`, which the
 core has since the layout algebra's move (below); a core module imports only `GPUProof.*`,
 Mathlib and FloatLib (MojoProofTest/GPUProof/Imports.lean). The code opens `GPUProof.Layout` and
@@ -331,12 +343,18 @@ Two changes to this module that they need are made (**Status.** Proved, with the
   `k` is below the radix product at `bind L g σ` (`MixedRadix.lt_prod`, `WF.range`), which is
   the radix product at `σ` (`WF.radices`), and `a < C` (`Lay.call_lt_cosize`, `WF.congruent`,
   `WF.pos`), so `k C + a < (k + 1) C ≤ radixProd σ · C`.
-* `View.tiling`, disjointness: a byte of two tiles is `place buf (k C + a) = place buf (k' C + a')`;
-  `PlaceInj` gives `k C + a = k' C + a'`, `MixedRadix.add_mul_eq_iff` with `a, a' < C` gives
-  `k = k'`, the two-assignment `eq_iff_digits` (with `WF.range` and `WF.radices` at both) equal
-  digits, and `WF.key_inj` the same instance. Only `PlaceInj`'s injectivity in the offset is
-  used, since a view has one buffer; two views on different buffers are disjoint by its other
-  half (`b = b'`).
+* `View.tiling`, disjointness: `View.tilingAt`'s at the key stride `C`, the cosize, where the
+  layout interleaves as every offset is below `C` (`interleaved_cosize`). `View.tilingAt`,
+  disjointness: `View.tiling_separated`'s, as an interleaving layout is separated
+  (`separated_of_interleaved`: with `R` the radix product and `a, a'` below `d` modulo `R d`,
+  `a = a' + m d` with `0 < m < R` would give `0 = m` by `key_eq_of_mod`). `tiling_separated`,
+  disjointness: a byte of two tiles is `place buf (k d + a) = place buf (k' d + a')`; `PlaceInj`
+  gives `k d + a = k' d + a'`; with `k, k' < R`, `k < k'` would make `a = a' + (k' - k) d`, which
+  `Separated` forbids, so `k = k'`, the two-assignment `eq_iff_digits` (with `WF.range` and
+  `WF.radices` at both) equal digits, and `WF.key_inj` the same instance. Its bounds:
+  `k + 1 ≤ R` and `a` below the cosize put `k d + a` below `R d + cosize - d`. Only
+  `PlaceInj`'s injectivity in the offset is used, since a view has one buffer; two views on
+  different buffers are disjoint by its other half (`b = b'`).
 * `View.cover`: byte `i < B C` is `place buf i`, with `C` the cosize (positive, as a cosize is
   `call (size - 1) + 1`); `hk` gives the owner `g` whose key value is `i / C < B`, and `hl` the
   coordinate `c` at offset `i % C < C`, so `off g c = (i / C) C + i % C = i`. No `WF`: the step
@@ -353,8 +371,8 @@ Two changes to this module that they need are made (**Status.** Proved, with the
   (`coarsen_call`: the layout algebra's `colex_append` through `Lay.call_scalar`), and its
   cosize is `C R` (`coarsen_cosize`, `Lay.cosize_eq`).
   `val_append` splits the key at `j` as `inner + R · outer`, where `R` at `bind L j σ` is `R` at
-  `σ` (`WF.radices`, `inner_at`) and `outer` is the coarse key at `i` (`hn`); `off_coarsen` is
-  the step below. So an offset of `j`'s tile at `c` is the coarse offset at
+  `σ` (`WF.radices`, `inner_at`) and `outer` is the coarse key at `i` (`hn`); `off_coarsenAt`
+  is the step below, at every key stride. So an offset of `j`'s tile at `c` is the coarse offset at
   `inner · size + c` (with `inner < R` by `lt_prod`), and a coarse offset at `c'` is the offset of
   the owner `j` that `ho` gives for `k = c' / size`, at `c' % size`. A byte of `j`'s tile is at
   an owner `j`, which is the coarse `owns`'s witness; a byte of the coarse tile is in the tile of
@@ -592,6 +610,372 @@ the store at :84); below, "gemv's IR" and "the naive matmul's IR" are these two 
   `m = 2 ^ 31` and grid (1,1,1) and block (1,1,1), the premise holds (`m · n = 0`), the row
   guard is true at row 0 (the `sext` of `m`'s word is negative) and so is the column guard, and
   the thread owns no tile, as `naive_guards` says.
+
+### Interleaved footprints: `View.tilingAt`
+
+**Status.** Proved: GPUProof/View.lean, with the test MojoProofTest/GPUProof/ViewStride.lean. A
+view's tile lies in the bytes `[key · cosize, (key + 1) · cosize)`, so a footprint that
+interleaves with other owners' is not one view tile. A target kernel has one: MAX's
+layer norm, at its block kernel of rank 1 and block size 128,
+tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll. Its row loop runs the
+body at block 0 only (the row starts at `ctaid.x`, :39, and the exit test :58, :65 is `row ≥ 1` on
+the first trip), and there thread `tid` (:31-32) stores the floats `tid + 128 j` of the output for
+the `j` with `128 j < n` (the step :681, the exit :684, the index and `getelementptr` :699-700, the
+guard `tid + 128 j < n` :708-709, the store :722), `n` the first field of the arguments (:101). The
+second store (:744, :755-756) is on the branch where `min (n - tid - 128 j) 1` is not 1 (:704-707,
+:712), which the guard leaves unreached, and at element `tid + 128 j + e` for `e` below
+`max (min (n - tid - 128 j) 1) 0` (:706, :731), so at the same float. The kernels of block size 64,
+256 and 1024 in the same folder step by 64, 256 and 1024 (:681). At `n = 128 X` a thread's floats
+are `X` floats at stride 128, and the threads' floats interleave.
+
+The design: the key gets its own stride. At a key stride `d σ`, instance `g`'s offset of coordinate
+`c` is `key · d σ + lay(c)` (`View.offAt`), its tile is `View.tileAt`, and the tiles lie in the
+first `radixProd · d + cosize - d` bytes (`View.bytesAt`); at `d σ` the cosize these are `View.off`,
+`View.tile` and `View.bytes`. Two keys below the radix product `R` have disjoint tiles when every
+offset of the layout, modulo `R · d`, is below `d` (`View.Interleaved`): then `k d + a` modulo
+`R d`, divided by `d`, is `k`. The contiguous view meets it at `d = cosize`, where every offset is
+below `d`; layer norm's view meets it at `d = 4` bytes with the layout of one thread's `X` floats,
+modes `(4, 1)` and `(X, 4 · 128)`, and `R = 128` threads, every offset modulo `512` being its byte
+in its float. So `View.tiling` becomes the case `d = cosize` of `View.tilingAt`, with no second
+disjointness proof. The other form, the layout applied to the key and the coordinate together, is
+the case where `d σ` is the stride of one more layout mode; its premise, the combined layout one to
+one, holds where `Interleaved` does but has no law in the core for modes out of order
+(`idx2crd_call` wants them nested in order), so the premise here is the remainder bound, which an
+instance proves by `Nat.add_mul_mod_self_right`.
+
+```lean
+/-- The offset of coordinate `c` of instance `g` at the key stride `d`. -/
+def View.offAt (v : View S) (d : Sizes → Nat) (σ : Sizes) (L : S.Launch) (g : S.Gid)
+    (c : Nat) : Nat :=
+  v.key.val (v.bind L g σ) * d σ + (v.lay σ).call (leaf c false)
+
+/-- Every offset of the layout, modulo the radix product times `d`, is below `d`. -/
+def View.Interleaved (v : View S) (d : Sizes → Nat) (σ : Sizes) : Prop :=
+  ∀ c < (v.lay σ).size, (v.lay σ).call (leaf c false) % (v.key.radixProd σ * d σ) < d σ
+
+/-- For every machine whose placement is injective, view, key stride `d`, size assignment and
+launch at which the view is well formed and interleaves at `d`: the tiles at `d` are in bounds
+and pairwise disjoint. -/
+theorem View.tilingAt (v : View S) (d : Sizes → Nat) (hp : PlaceInj S.place) {σ : Sizes}
+    {L : S.Launch} (hv : v.WF σ L) (hd : v.Interleaved d σ) :
+    Tiling (v.tilesAt d σ L) (v.bytesAt d σ)
+```
+
+Tests, MojoProofTest/GPUProof/ViewStride.lean: layer norm's view at MojoProof's `sig` for the
+kernel of block size `B` (`lnView`), well formed and interleaved at every admissible assignment
+and launch (`ln_wf`, `ln_interleaved`; `lnAdm B`, a 1-D launch of `B` threads a block, `X ≥ 1`),
+its tile (`ln_tile`: thread `t` of block 0 owns the floats `t + B j`, `j < X`), its tiling
+(`ln_tiling`, with `example`s at block size 128, one block and `X = 1`, and at block size 256, two
+blocks and `X = 3`), and the mutant (`ln_stride64`): the stride of the kernel of block size 64 at
+a launch of 128 threads, where the view is well formed, not interleaved, the tiles of threads 0
+and 64 share byte 256, and the tiles are not a tiling. Coverage and coarsening at a key stride
+are the next section. A row length `n` that `B` does not divide, where the last float of some
+threads is past `n` and the guard (:708) skips it, is in "Guarded tiles" below.
+
+### Coverage and coarsening at a key stride
+
+**Status.** Proved: GPUProof/View.lean, with the tests MojoProofTest/GPUProof/ViewStride.lean
+and, through the cases at the cosize, MojoProofTest/GPUProof/View.lean. `View.cover`,
+`View.cover_iff` and the coarsening lemmas were stated at `d = cosize` only.
+
+The plan. At a key stride `d` the owners' bytes come in periods of `P · d` bytes, `P` the key
+values: key `k`'s bytes in period `q` are `k d + r + P d q` for `r < d`, the layout's offsets
+`r + P d q`. So the bound `B · cosize` becomes `P · d · Q`, `Q` periods, and the premise on the
+offsets below the cosize becomes one on the offsets `r + P d q`. At `d = cosize`, `P = B` and
+`Q = 1` they are `cover`'s, so `cover` and `cover_iff` are the case `d = cosize`, `Q = 1`
+(corollaries of three and five lines: the period `q < 1` is `0`, and `B · cosize · 1` is
+`B · cosize`, by rewriting, not by definition). Byte `i` below `P d Q` is the offset `r + P d q`
+of key `k`, with `q = i / (P d)`, `k = (i % (P d)) / d` and `r = (i % (P d)) % d`.
+
+```lean
+/-- For every machine, view, key stride `d`, size assignment, launch, key bound `P` and period
+count `Q`: the owners' tiles at `d` cover the first `P · d · Q` bytes when every offset
+`r + P d q` (`r < d`, `q < Q`) is a coordinate's and every key value below `P` an owner's. -/
+theorem View.coverAt (v : View S) (d : Sizes → Nat) {σ : Sizes} {L : S.Launch} {P Q : Nat}
+    (hl : ∀ q < Q, ∀ r < d σ, ∃ c < (v.lay σ).size,
+      (v.lay σ).call (leaf c false) = r + P * d σ * q)
+    (hk : ∀ k < P, ∃ g, v.Owner σ L g ∧ v.key.val (v.bind L g σ) = k) :
+    {x | ∃ i : Nat, i < P * d σ * Q ∧ x = S.place v.buf i} ⊆ ⋃ g, v.tilesAt d σ L g
+
+/-- For every machine whose placement is injective, view, key stride `d`, size assignment and
+launch at which the view is well formed, positive `P` and `Q`, where the layout interleaves at
+the period `P · d` (`hd`) and `Q = 1` or `P` is at least the radix product (`hPQ`): the two
+premises of `coverAt` are the least. -/
+theorem View.cover_iffAt (v : View S) (d : Sizes → Nat) (hp : PlaceInj S.place) {σ : Sizes}
+    {L : S.Launch} (hv : v.WF σ L) {P Q : Nat} (hP : 0 < P) (hQ : 0 < Q)
+    (hd : ∀ c < (v.lay σ).size, (v.lay σ).call (leaf c false) % (P * d σ) < d σ)
+    (hPQ : Q = 1 ∨ v.key.radixProd σ ≤ P) :
+    {x | ∃ i : Nat, i < P * d σ * Q ∧ x = S.place v.buf i} ⊆ ⋃ g, v.tilesAt d σ L g ↔
+      (∀ q < Q, ∀ r < d σ, ∃ c < (v.lay σ).size,
+        (v.lay σ).call (leaf c false) = r + P * d σ * q) ∧
+        ∀ k < P, ∃ g, v.Owner σ L g ∧ v.key.val (v.bind L g σ) = k
+```
+
+`cover_iff` is false at a key stride as it is stated at the cosize, and `hd` and `hPQ` are what
+is true. Layer norm's view of block size 128 at `X = 2`, at `d = 4`, interleaves at its radix
+product `R = 128`. At `P = 256 = 2 R` and `Q = 1` its tiles cover the first `256 · 4` bytes (both
+floats of every thread) while key value 128 is no owner's: `hd` fails at the period `256 · 4`
+(offset 512, a thread's second float, modulo 1024 is 512). At `P = 64`, `Q = 2` the layout
+interleaves at the period `64 · 4` and the tiles cover the first `512` bytes (every thread's first
+float), while the offset `256 = 0 + 64 · 4 · 1` is no coordinate's: `hPQ` fails, as `Q = 2` and
+`64 < 128`. At the cosize both premises hold for every positive `B` at `Q = 1`, as every offset
+is below the cosize. With `hd` and `hPQ`, a byte `k d + r + P d q` of an owner's tile at its key
+value `k'` and offset `a` has `k' < P` (from `hPQ`: `k' < R ≤ P`, or `k' d ≤ k d + r < P d` at
+`Q = 1`), so `View.key_eq_of_mod` at the bound `P` gives `k' = k`, and `a = r + P d q`.
+
+Coarsening. `View.coarsenAt v d ℓ n bind'` is `coarsen`'s view with the inner digits' mode at
+stride `d σ` in place of the cosize, and `View.coarsen` is now `coarsenAt` at `d = cosize` (by
+definition). The coarse key stride is `R_in · d`, `R_in` the inner radix product: an owner `j`
+inside `i` with key `inner + R_in · outer` has the offset `key · d + lay(c)`, which is the coarse
+offset of `i` at `inner · size + c`, `outer · (R_in d) + (lay(c) + inner · d)`
+(`View.off_coarsenAt`). The size and offsets: `coarsenAt_size`, `coarsenAt_congruent` and
+`coarsenAt_call` (offset of `c'`: `lay(c' % size) + (c' / size) · d`), and `coarsen_size`,
+`coarsen_congruent` and `coarsen_call` their cases at the cosize, one line each. `coarsen_cosize`
+stays at the cosize. The tiles:
+
+```lean
+/-- For every machine, view, key stride `d`, level, digit count, binding, size assignment and
+launch at which the view is well formed, and instance `i` whose owners agree on the outer
+digits: the tiles at `d` inside `i` lie in the coarse tile of `i` at the stride `R_in · d`. -/
+theorem View.tile_subset_coarsenAt (v : View S) (d : Sizes → Nat) {ℓ : S.Level} (n : Nat)
+    (bind' : S.Launch → S.Gid → Sizes → Sizes) {σ : Sizes} {L : S.Launch} {i : S.Gid}
+    (hv : v.WF σ L)
+    (hn : ∀ j, v.Inside L ℓ i j → v.owns L j σ →
+      (v.outer n).val (v.bind L j σ) = (v.outer n).val (bind' L i σ)) :
+    ⋃ j ∈ {j | v.Inside L ℓ i j}, v.tileAt d σ L j ⊆
+      (v.coarsenAt d ℓ n bind').tileAt (fun σ => (v.inner n).radixProd σ * d σ) σ L i
+
+/-- ... and when the owners inside `i` realize every inner key value, the coarse tile is their
+union. -/
+theorem View.coarsenAt_tile (v : View S) (d : Sizes → Nat) {ℓ : S.Level} (n : Nat)
+    (bind' : S.Launch → S.Gid → Sizes → Sizes) {σ : Sizes} {L : S.Launch} {i : S.Gid}
+    (hv : v.WF σ L)
+    (hn : ∀ j, v.Inside L ℓ i j → v.owns L j σ →
+      (v.outer n).val (v.bind L j σ) = (v.outer n).val (bind' L i σ))
+    (ho : ∀ k < (v.inner n).radixProd σ,
+      ∃ j, v.Inside L ℓ i j ∧ v.owns L j σ ∧ (v.inner n).val (v.bind L j σ) = k) :
+    (v.coarsenAt d ℓ n bind').tileAt (fun σ => (v.inner n).radixProd σ * d σ) σ L i =
+      ⋃ j ∈ {j | v.Inside L ℓ i j}, v.tileAt d σ L j
+```
+
+The old `tile_subset_coarsen` and `coarsen_tile` are their cases at `d = cosize`, by
+`View.coarsen_tileAt`: at a well formed view the coarse tile at the coarse cosize is the one at
+the stride `R_in · cosize` (`coarsen_cosize` where `R_in` is positive; at `R_in = 0` the coarse
+layout has no coordinate and both are empty). `off_coarsen` is deleted: `off_coarsenAt` replaces
+its two uses, in View.lean.
+
+Tests, MojoProofTest/GPUProof/ViewStride.lean: `ln_cover`, layer norm's tiles at `d = 4` cover
+the `B X` floats of `y` at every admissible assignment and launch with a block (`coverAt` at
+`P = B`, `Q = X`), with `example`s at block size 128 (one block, `X = 1`) and 256 (two blocks,
+`X = 3`); the mutant `ln_stride64_uncovered`, the view of block size 64 at 128 threads and
+`X = 2`, whose tiles miss byte 768 of the first `128 · 4 · 2`, float 192; and the two
+counterexamples above, `ln_cover_period` (`P = 256`, `Q = 1`: covered, key value 128 no owner's,
+`hd` false) and `ln_cover_short` (`P = 64`, `Q = 2`: covered, `hd` true, offset 256 no
+coordinate's, `hPQ` false). The cases at the cosize keep their uses in
+MojoProofTest/GPUProof/View.lean (`cover` in `gemv_cover` and `naive_cover`,
+`tile_subset_coarsen` and `coarsen_tile` in `gemv_coarsen`, `coarsen_size`, `coarsen_call` and
+`coarsen_cosize` in `gemv_partial` and `gemv_coarsen_radix`), unchanged. The layer norm view's
+key has one digit, so its own coarsening test is at a grid-stride loop's view, `gsView y T own`:
+thread `t` of the grid holds the floats `t + T j`, with the key `gsKey` of two digits, `tid.x`
+then `ctaid.x`, at 2 blocks of 2 threads and `X = 2` (`gsAsg`, `gsLaunch`), where `gs_wf` and
+`gs_hn` (the threads of a block agree on `ctaid.x`) hold by evaluation. `gs_coarsen`: at `T = 4`
+and every thread an owner, coarsened to the block level at `d = 4` (the layout's cosize is 20),
+the tile of block 1 at the key stride `2 · 4` is the union of its threads' tiles
+(`coarsenAt_tile`, with `ho` by evaluation). The mutant `gs_gap`: when the threads of `tid.x` 1
+own no tile, `tile_subset_coarsenAt` still holds at block 1, `ho` fails at the inner key value 1,
+and byte 12 of `y`, float 3, is in the coarse tile and in no owner's tile.
+
+### Guarded tiles: a row of `n` floats at every `n`
+
+**Status.** Proved: GPUProof/View.lean ("Guarded tiles"), with the tests in
+MojoProofTest/GPUProof/ViewStride.lean ("A row of `n` floats: the guard"). At `n = B X` every
+float of a thread's tile is below `n`. Otherwise, at `X = ⌈n / B⌉`, the last float `t + B (X - 1)`
+of a thread `t` with `t + B (X - 1) ≥ n` is in its tile, and the kernel's guard `%485 < n` (:708)
+skips its store (:709), so the unguarded tile holds bytes the kernel does not write
+(`ln_unguarded_300`).
+
+The form: a guard on the offset, not a layout. `View.guardAt d N σ L g` is `View.tileAt`'s bytes
+whose offset `offAt d σ L g c` is below a bound `N σ`, here `4 n`, the bytes of the row; the
+layout still lists every iteration `j < X`. A layout cannot express the guard: `View.lay` is one
+function of the sizes for every instance, so a last float present at some threads and absent at
+others would need two views (the threads with `X` floats and those with `X - 1`) and a proof that
+the two views' tiles are disjoint, which the core has no law for. The bound on the offset is the
+kernel's own test (the float's index below `n` is its first byte below `4 n`), it is one
+definition for every view, and its laws are short:
+
+* `GPUProof.Tiling.mono`: sets inside the sets of a tiling tile its domain;
+* `View.guardAt_subset`: a guarded tile lies in its tile, so guarded tiles of a tiling are a
+  tiling (`Tiling.mono`);
+* `View.tile_subset_guardAt`: where every offset is below the bound, the tile lies in the guarded
+  tile, which is then the tile (with `guardAt_subset`); the core states the inclusion, and a test
+  that needs the equation takes both (`ln_guard_dvd`);
+* `View.cover_guardAt`: at an injective placement, the guarded tiles cover the bytes below the
+  bound that the tiles cover.
+
+Layer norm's tests, for every block size `B` and row length `n` at every admissible assignment
+and launch: `ln_guard_tile` (thread `t` of block 0 owns the bytes of the floats `t + B j`,
+`j < X`, below `n`), `ln_guard_dvd` (at the bound `4 B X` the guarded tile is `ln_tile`'s, by
+`guardAt_subset` and `tile_subset_guardAt`, so `ln_wf`, `ln_tile`, `ln_tiling`, `ln_cover` and
+their tests are the case `B ∣ n`),
+`ln_guard_tiling` (by `ln_tiling` and `Tiling.mono`) and `ln_guard_cover` (at `n ≤ B X`, by
+`ln_cover` and `cover_guardAt`). `lnLoop` and `lnStores` model the IR's loop (exit at `i ≥ n`,
+store float `i + t` when `i + t < n`, step `i + B`). The model's floats are proved for every block
+size `B`, row length `n`, thread `t` and count `X` with `n ≤ t + B X`: `lnStores_eq` says
+`lnStores B n t` is the floats `t + B j`, `j < X`, below `n`, in order. It is `lnLoop_eq` from the
+index 0, an induction on the fuel: from the index `B m`, with fuel `k` and count `X` such that
+`n ≤ t + B (m + k)` and `n ≤ t + B (m + X)`, the loop stores the floats `t + B j`,
+`m ≤ j < m + X`, below `n`. `lnStores`' fuel `n` meets the first premise at every `B ≥ 1`
+(`n ≤ B n`), and at `B = 0` the premise `n ≤ t` does. The premise `n ≤ t + B X` is needed: at
+`B ≥ 1` and `n > t + B X`, float `t + B X` is in `lnStores B n t` and is not `t + B j` for any
+`j < X`. `ln_guard_stores` says that, for every `B`, `n` and admissible assignment and launch,
+thread `t`'s guarded tile is the bytes of `lnStores B n t` when `n ≤ t + B X` holds at the threads
+`t < B` of block 0, which `n ≤ B X` (as at `X = ⌈n / B⌉`) gives. Its uses are `ln_guard_300`
+(`B = 128`, one block, `n = 300`, `X = 3`) and `ln_guard_170` (`B = 64`, two blocks, `n = 170`,
+`X = 3`, where block 1 owns nothing), each one application with the premise by `omega`; an
+`example` evaluates `lnStores` at both sizes. The mutant `ln_unguarded_300`: byte 1532, float
+`383 = 127 + 128 · 2`, is in thread 127's unguarded tile and no thread's stores write it.
+`lnLoop` is defined as a model of the IR's loop; at the IR's block size 128 the run of the loop
+stores at `lnStores 128 n tid`'s floats (MojoProofTest/LnRun.lean's `run`, below).
+
+### Layer norm's loop words at every thread and step
+
+**Status.** Proved: MojoProofTest/GPUProof/ViewWords.lean ("Layer norm: the loop's words at every
+thread and step"). It is not a run theorem. The address words of the IR's loop body (:699-722)
+are related to `View.offAt` at the key stride 4 and the guarded tile's bound for every block size
+`B`, row length `n`, thread `t` and step `j < X`, by the semantics' operations at symbolic words:
+the word lemmas `intCast_ofNat` and `intBin_add_ofNat` (MojoProof/Sem/Index.lean) and
+`ICmp.slt_ofNat`, `ICmp.sge_ofNat`, `ICmp.eq_ofNat`, `intBin_sub_wrap` and `gep_buffer`
+(MojoProof/Sym/OblLemmas.lean), under the word premises `8 B X < 2 ^ 64` and `2 n < 2 ^ 64`
+(and `2 k < 2 ^ 64` for the index word of `ln_second`). Neither the symbolic executor nor an
+evaluation of the kernel is used; the examples at two launches are instances of the theorems.
+
+* `ln_offAt`: the offset at the key stride 4 of coordinate `4 j + b`, `b < 4`, of thread `t`'s
+  tile is `4 (B j + tid) + b`, for every assignment, launch and thread.
+* `ln_words`: from the loop index's word `B j` (`%471`, :679) and the 32-bit word of `tid.x`
+  (:31), the `zext` (:32) is the 64-bit word of `tid`, the `add` (:699) the word of `B j + tid`,
+  whose float's bytes are at `ln_offAt`'s offsets, the guard `icmp slt` with `n` (:708) the
+  boolean `B j + tid < n`, which is the bound `offAt (4 j + b) < 4 n` of `ln_guard_tile`, the exit
+  test `icmp sge` (:684) the boolean `n ≤ B j`, the step `add` (:681) the word of `B j + B`, and its
+  overflow test (:682) false.
+* `ln_gep`: the `getelementptr` of a float from `⟨y, 0⟩` by that word (:700) is the pointer to
+  byte `offAt (4 j)` of `y`, at every layout of 4-byte floats and 64-bit pointers and every
+  memory in which `y` is a buffer of at least `4 B X` bytes.
+* `ln_second`: the second test of the bound is the guard. For every `n` and index word `k` with
+  `2 n` and `2 k` below `2 ^ 64`, the `sub` of `k` from `n` (:704), the `llvm.smin` of that and 1
+  (:705) and the `icmp eq` of the minimum with 1 (:707) give the boolean `k < n`. So where the
+  guard (:708) is true, the branch :712 goes to the store (:722), and the second store (:744) is
+  not reached. The `llvm.smax` (:706) is read only on that other path (:731, :741). The proof
+  splits on `k < n`. Where `k < n`, the difference's word is that of `n - k ≥ 1`, whose
+  minimum with 1 is 1. Otherwise it is 0 or negative as a signed word, so its minimum with 1 is
+  itself, which is not 1.
+* Examples: at `B = 128`, one block, `n = 300`, `X = 3`, step 2, thread 43 has the index word 299
+  and the guard true and thread 44 the word 300 and the guard false, and the second test is
+  likewise true at 43 and false at 44; at `B = 64`, two blocks, `n = 170`, `X = 3`, step 2,
+  thread 41 has the word 169 and the guard true and thread 106 (`tid.x` 42 of block 1) the guard
+  false; the `getelementptr` at one buffer of `4 · 384` bytes.
+* The mutant `ln_wrap`: at `n = 2 ^ 63` (`hn` fails, `hw` holds) the word of `n` is negative, so
+  the guard of thread 0 at step 0 is false and the kernel skips the store of float 0, whose bytes
+  are in thread 0's guarded tile under the bound `4 n`. The second test is false there too (the
+  `sub` is the negative word `2 ^ 63`, whose minimum with 1 is itself).
+
+The run that reaches these words and stores the float at the pointer (:722) is the next
+section's, at the IR's block size 128.
+
+### Layer norm's loop run at every row length
+
+**Status.** Proved at block size 128 (the corpus file is that kernel): MojoProofTest/LnGep.lean,
+MojoProofTest/LnRound.lean and MojoProofTest/LnRun.lean. These are run theorems of the symbolic
+layer (`Block.sound_edge`), for one thread, every context (so every launch and thread),
+`tid < 1024`, row length `n < 2 ^ 32` and memory in which `y` (writable), `g`, `b` and `x`
+(read-only) are buffers of `4 n` bytes that fit, `x`, `g` and `b` hold the rows and `y` is none
+of the other three. The value side is not proved: the mean `%460` and the inverse deviation
+`%464` are given registers, and the bytes stored are given (4 bytes for each float); the
+addresses and the guard are proved.
+
+* The inactive threads' pointers (MojoProofTest/LnGep.lean). At a buffer of exactly the row's
+  `4 n` bytes, the `getelementptr inbounds` of float `128 j + tid` (:700) is `ln_gep`'s pointer
+  inside the row (`ln_gep_row`), the pointer one past the end at float `n`, and poison past the
+  block (`gep_inbounds_past`, `ln_gep_past`: `gepPtr`'s rule for `inbounds`,
+  MojoProof/Sem/Eval.lean, as LangRef's "getelementptr Instruction" says). The semantics never
+  faults there (`gep_buffer_ok`), so it accepts the step LLVM accepts.
+* One round (MojoProofTest/LnRound.lean). `round_false`: with `i < n ≤ i + tid` the round on the
+  path `%469`, `%483`, `%484`, `%531`, `%532` has its premises (`RoundWith`); it evaluates the
+  `getelementptr`s by `i + tid ≥ n` and has no store. `round_true`: with `i + tid < n` the round
+  through `%495`, `%496` (the three loads and the store at :722) has its premises.
+* The run (MojoProofTest/LnRun.lean). `AtHead` is the state at the header after its `phi`s at
+  index `i`. `AtHead.roundT` and `AtHead.roundF` give the round's premises, `AtHead` at `i + 128`
+  and the memory: `LnOut y [i + tid]` (4 bytes put at byte `4 (i + tid)` of `y`, by `run_put`
+  from the store's effect) or `LnOut y []`. `AtHead.exit` is the path out `%469`, `%482` to
+  `%534`. `run_from`, the hand-proved run lemma (57 lines, 68 with its docstring), is an induction
+  on the fuel `K` with `n ≤ i + 128 K`: one `Block.sound_edge` per round and `run_exit` at the
+  end, giving `LnOut y (lnLoop 128 n tid K i)`. `run` is `run_from` at `K = n`, `i = 0`:
+
+```lean
+theorem run ... (hA : AtHead n tid 0 y g b x X G Bt mu rs (Valuation.entry c t.k m f)) :
+    ∃ t' m' f', Steps c t m t' m' ∧ t'.frames = f' :: rest ∧ f'.fn = ln.fn_0 ∧
+      f'.label = ln.fn_0.b_58.label ∧ f'.pc = 0 ∧ f'.dest = f.dest ∧
+      LnOut y (lnStores 128 n tid) m m'
+```
+
+  `entry_edge` and `run_entry` add the edge from `%453`'s branch (:675), whose `phi`s
+  (:678-680) set the index to 0, so the run is from the loop's entry to `%534` (:774). With
+  `lnStores_eq` and `ln_guard_stores`, the floats stored are thread `tid`'s guarded tile when
+  `n ≤ tid + 128 X`.
+
+Not proved: the floats stored (`%503`, from `%460`, `%464`, `x`, `g` and `b`), the loops before
+this one (the mean and the deviation) and block sizes other than the corpus file's 128.
+
+### Separated footprints: a condition both necessary and sufficient
+
+**Status.** Proved: GPUProof/View.lean, with the tests MojoProofTest/GPUProof/ViewStride.lean.
+`View.Interleaved` is sufficient for `View.tilingAt`'s disjointness but not necessary: `R = 2`
+threads owning two of the three float columns of a row-major matrix, at `d = 4`, own the bytes
+`4 j + 12 i + b` (`j < 2`, `i < 2` rows, `b < 4`), and their tiles are disjoint, while the
+offset 12 modulo `2 · 4` is 4, not below 4.
+
+The condition. The tiles at `d` of key values `k < k'` meet exactly when an offset `a` of the
+layout is another offset `a'` plus `(k' - k) d`. So the layout is separated at `d`
+(`View.Separated`) when no two offsets differ by `m d` with `0 < m < R`:
+
+```lean
+def View.Separated (v : View S) (d : Sizes → Nat) (σ : Sizes) : Prop :=
+  ∀ c < (v.lay σ).size, ∀ c' < (v.lay σ).size, ∀ m, 0 < m → m < v.key.radixProd σ →
+    (v.lay σ).call (leaf c false) ≠ (v.lay σ).call (leaf c' false) + m * d σ
+
+/-- Sufficient, for every machine with an injective placement, view, key stride, size assignment
+and launch at which the view is well formed. -/
+theorem View.tiling_separated (v : View S) (d : Sizes → Nat) (hp : PlaceInj S.place)
+    {σ : Sizes} {L : S.Launch} (hv : v.WF σ L) (hs : v.Separated d σ) :
+    Tiling (v.tilesAt d σ L) (v.bytesAt d σ)
+
+/-- Necessary, for every machine, view, key stride, size assignment and launch at which every key
+value below the radix product is an owner's. -/
+theorem View.separated_of_disjoint (v : View S) (d : Sizes → Nat) {σ : Sizes} {L : S.Launch}
+    (hk : ∀ k < v.key.radixProd σ, ∃ g, v.Owner σ L g ∧ v.key.val (v.bind L g σ) = k)
+    (hd : Pairwise fun i j => Disjoint (v.tilesAt d σ L i) (v.tilesAt d σ L j)) :
+    v.Separated d σ
+
+theorem View.separated_of_interleaved (v : View S) {d : Sizes → Nat} {σ : Sizes}
+    (hd : v.Interleaved d σ) : v.Separated d σ
+```
+
+Necessity reads `hk`: an offset `a = a' + m d` puts the byte `0 · d + a = m d + a'` in the tiles
+of the owners of key values `0` and `m`, two instances. Without `hk` a layout that is not
+separated can have disjoint tiles, when the key values that would meet have no owner; there the
+condition both necessary and sufficient is disjointness itself. `View.tilingAt` keeps its
+statement and is now `tiling_separated` at `separated_of_interleaved`, one line, so the
+disjointness argument is written once. The two are stated apart, not as one `iff`, as the sides
+would be two definitions of the library (`Tiling` and `Separated`).
+
+Tests, MojoProofTest/GPUProof/ViewStride.lean: `ln_separated`, the view `lnView y C` of stride `C`
+floats at the kernel of block size `B ≤ C` (thread `t` owns column `t` of a row-major matrix of
+`C` float columns) is separated at `d = 4` at every admissible assignment and launch;
+`ln_tiling_cols`, its tiles are a tiling (`tiling_separated`); `ln_cols_not_interleaved`, the
+example above at `B = 2`, `C = 3` and `X = 2` rows, a tiling that does not interleave; and the
+mutant `ln_stride64_not_separated`, `ln_stride64`'s view (`C = 64`, 128 threads, `X = 2`) is not
+separated (offset 256 is offset 0 plus `64 · 4`), so its tiles are not pairwise disjoint
+(`separated_of_disjoint` at `ln_owners`, every key value below 128 an owner's), a second route
+to `ln_stride64`'s non-tiling.
 
 ### The layout algebra's move into the core
 

@@ -27,9 +27,9 @@ nodes, whose values `vals V S.nodes` give the terms' values. Proved for every pr
   effects are loads changes only the trace. `Waits.resume`: every run to the collective, resumed
   with any value, is at the position after the call, with the summary's value at every register
   but the call's result.
-* `Ext`: a memory extends another's trace by events with a property; `Ext.trans`: extensions
-  compose. `EndsWith.reads`: a block whose effects are loads extends the trace by reads by its
-  thread.
+* `Ext`: a memory extends another's trace by events with a property; `Ext.of_trace`, `Ext.refl`:
+  by none; `Ext.mono`: by a weaker one's; `Ext.trans`, `Ext.chain`: extensions compose.
+  `EndsWith.reads`: a block whose effects are loads extends the trace by reads by its thread.
 * `Turns.events`: an event of threads run in turn (`Turns`) is an event of one thread's run;
   `Ext.turns`: threads in turn whose runs each extend the trace by events of a property extend it
   by such events.
@@ -316,6 +316,31 @@ theorem Ext.trans {P : Event → Prop} {m₁ m₂ m₃ : Mem} (h₁ : Ext P m₁
   have ⟨E₂, e₂, p₂⟩ := h₂
   ⟨E₂ ++ E₁, by rw [e₂, e₁, List.append_assoc], fun e he =>
     (List.mem_append.1 he).elim (p₂ e) (p₁ e)⟩
+
+/-- **A memory with the same trace extends it**, for every property `P` of events and memories
+`m`, `m'`: if `m'`'s trace is `m`'s, `m'` extends `m`'s trace by events of `P` (none). -/
+theorem Ext.of_trace {P : Event → Prop} {m m' : Mem} (h : m'.trace = m.trace) : Ext P m m' :=
+  ⟨[], by rw [h, List.nil_append], fun _ he => by simp at he⟩
+
+/-- **A memory extends its own trace** (by no event), for every property `P` of events and
+memory `m`. -/
+theorem Ext.refl (P : Event → Prop) (m : Mem) : Ext P m m := .of_trace rfl
+
+/-- **A weaker property of the events**, for every properties `P`, `Q` of events and memories
+`m`, `m'`: if `m'` extends `m`'s trace by events of `P` and every event of `P` is one of `Q`, it
+extends it by events of `Q`. -/
+theorem Ext.mono {P Q : Event → Prop} {m m' : Mem} (h : Ext P m m') (hPQ : ∀ e, P e → Q e) :
+    Ext Q m m' :=
+  have ⟨E, hE, hP⟩ := h
+  ⟨E, hE, fun e he => hPQ e (hP e he)⟩
+
+/-- **A chain of extensions**, for every property `P` of events, family of memories `mm` and
+count `n`: if each `mm (j + 1)` extends `mm j`'s trace by events of `P` for `j < n`, each `mm j`
+for `j ≤ n` extends `mm 0`'s (`Ext.trans`). -/
+theorem Ext.chain {P : Event → Prop} {mm : Nat → Mem} {n : Nat}
+    (h : ∀ j < n, Ext P (mm j) (mm (j + 1))) : ∀ j ≤ n, Ext P (mm 0) (mm j)
+  | 0, _ => .of_trace rfl
+  | j + 1, hj => (Ext.chain h j (by omega)).trans (h j (by omega))
 
 /-- **A block of loads reads**, for every program, `fmul contract` setting, context, thread,
 memory, frames, valuation `V`, block and summary `S` with the facts of `EndsWith` (which

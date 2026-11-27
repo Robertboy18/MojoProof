@@ -356,6 +356,63 @@ What is not automated:
   the `phi` `%48` is its node 0, `pre_covers`, MojoProofTest/SymPhi.lean); `coversC` accepts all
   nine.
 
+## A warp's run through its shuffles: what is automated and what is not
+
+A warp's run (`WarpRun`, MojoProof/Sym/Canon.lean) through `J` shuffles is `WarpRun.of_waits`
+from four premises over the lanes `j ∈ warpLanes L k` and, but for the first, the phases
+`i < J`: the lanes' runs through their waits (`hr`), the waits' shuffles (`hW`: the intrinsic and
+mode, the position lane 0's, the four arguments with the value `X i j`, and the delivery under the
+declaration's attributes), the waits' memories (`hm`) and each phase's start (`h0`). Four warps are
+proved this way: `warp78` and `warp43` (MojoProofTest/GemvWarp.lean, seven and two phases),
+`skipWarp` (no phase) and `shflWarp` (one phase, MojoProofTest/SymCanon.lean).
+
+`warp_route` (MojoProof/Sym/WarpRoute.lean, `docs/tactics.md`) does all of it in the four:
+
+- it takes the goal `∃ Es, WarpRun L c k t m Es m'`, the of_waits arguments by name (`J`, `fn`,
+  `lbl`, `W`, `mo`, `X`, `M`), optional terms (`using`) and the hypotheses, found by their types:
+  every `∀ j < N, P j` with `N` the lane count, directly or through a hypothesis
+  `(warpLanes L k).length = N`;
+- it emits the proof term of `WarpRun.of_waits` with each premise it closes and leaves the others
+  as goals, in of_waits's order and form; the hypotheses `∀ j < N` become `∀ j ∈ warpLanes L k`
+  under their names;
+- the lanes' runs (`hr`): from a lane's run in `RunsVia.of_fires`'s form (a hypothesis, or a lane
+  lemma after `using` whose premises the lane's facts fill), `Runs` with no wait or `RunsVia`
+  through `ws.map (Piece.Wait.via fn l)` or `a.map (Piece.Wait.via fn l₁) ++
+  b.map (Piece.Wait.via fn l₂)`, by `RunsVia.of_runs`, `RunsVia.of_block` or
+  `RunsVia.of_blocks`, the lists' lengths found among the lane's facts and the labels decided;
+- the shuffles (`hW`): by `WarpRun.shfl_of`, for every launch, contexts, warp, number of phases,
+  program, modes, positions, lane operands, clamps, offers, memories, default wait and lanes'
+  waits, from the lanes' one program and each lane's `Piece.Wait.shflOk` (a Boolean: each wait's
+  shuffle mode, position, full mask, offer, lane operand, clamp and `Grid.fire`'s delivery), its
+  keeping premise from a fact, a term or `Program.shfl_nil` with `Program.shflNil` (no shuffle
+  declaration of the program puts an attribute on its result);
+- the waits' memories (`hm`) and the phases' starts (`h0`): by a term or hypothesis whole, or lane
+  by lane and phase by phase (a case per phase for a numeral `J`) by the facts at the lane, `rfl`
+  or their conjuncts.
+
+Each of the four is one call with no other proof line: `warp78` and `warp43` `using` gemv's lane
+lemma (`lane` or `lane43`), `start_frame`, `out_covers` (`warp78` only), `mems_of` and `gemv_nil`
+(`gemv.prog.shflNil`, by `decide +kernel`); `skipWarp` `using skipLane`; `shflWarp` `using`
+SymCanon's `lane`, `prog_eq` (every thread's context runs `prog ra`) and `keep` (the shuffle's
+declaration keeps a delivery the attributes `ra` keep). Gemv's own check, its no-attribute
+lemma and its shuffle premise are deleted: `Piece.Wait.shflOk`, `Program.shflNil`,
+`Program.shfl_nil` and `WarpRun.shfl_of` are their library forms, and gemv's `ok78` and `ok43`
+decide `Piece.Wait.shflOk`. The two files' proofs have 278 proof lines (147 and 131) where they
+had 365 (216 and 149).
+
+Left to the user:
+
+- the lane lemma (the run of one lane through its waits, in `RunsVia.of_fires`'s form) and the
+  Boolean checks a kernel's proof decides (`ok78`, `ok43`, `gemv_nil`, `shflWarp`'s `Checks` and
+  per-lane `Piece.Wait.shflOk`);
+- a keeping lemma when the program's shuffle declarations put attributes on their results
+  (SymCanon's `keep`, from `shfl_decl`), and lemmas for the waits' memories that no lane fact
+  states (gemv's `mems_of`);
+- a lane's run in another form (waits that are not a `List.map` of `Piece.Wait.via`, or more than
+  two blocks) and shuffles that `Piece.Wait.shflOk` does not state: they stay goals, as
+  `WarpRun.of_waits` states them. SymColl's and SymChain's butterflies prove `WarpShfl` on the
+  lanes' statuses, not through `WarpRun.of_waits`, so `WarpRun.shfl_of` does not apply there.
+
 ## Running the checker on a new kernel
 
 1. Compile the kernel to LLVM IR with the Mojo version that `tests/corpus/MANIFEST.tsv` records

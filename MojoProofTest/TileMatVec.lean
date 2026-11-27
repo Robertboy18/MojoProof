@@ -87,9 +87,12 @@ noncomputable def tight :
     (GPUProof.matVecGrade σ E A G i).mag⟩
 
 /-- `tight` grows with the inputs' grades, as `GPUProof.matVecGrade` does. -/
-theorem tight_mono : ∀ σ E A, Monotone (tight σ E A) := fun σ E A _ _ h i =>
-  ⟨sub_le_sub_right (GPUProof.matVecGrade_mono σ E A h i).1 _,
-    (GPUProof.matVecGrade_mono σ E A h i).2⟩
+theorem tight_mono : ∀ σ E A, Monotone (tight σ E A) := fun σ E A G G' h i => by
+  have hm := GPUProof.matVecGrade_mono σ E A h i
+  change (⟨_ - _, _⟩ : GPUProof.Grade) ≤ ⟨_ - _, _⟩
+  generalize GPUProof.matVecGrade σ E A G i = g at hm ⊢
+  generalize GPUProof.matVecGrade σ E A G' i = g' at hm ⊢
+  exact ⟨sub_le_sub_right hm.1 _, hm.2⟩
 
 /-- `matVecEnc` at grades other than `GPUProof.matVecGrade`, by unfolding: at binary32 and size
 3 × 4 it is the uniform encoding of the spec graded by `tight`, and at binary64 and size 5 × 7 of
@@ -119,7 +122,8 @@ theorem vals_f : (GPUProof.Spec.matVec tight tight_mono).f (1, 1) vals (0 : Fin 
 not meet `GPUProof.Spec.matVec tight` at `matVecEnc .binary32 32`: at size `(1, 1)`, the input
 words `subW` and `halfW` of the exact `vals` with no input error, and the unfused loop at the
 oracle 0, a behavior of `rowLoops` (`rowLoops_dotLoop`), the rule fails at output 0 (`vals_f`,
-`mutant_one`). -/
+`mutant_one`): the input grades `⟨0, 0⟩` are below binary32's largest finite value, so
+`GPUProof.matVecGrade` there is `GPUProof.dotGrade` (`GPUProof.Grade.onlyIf_pos`). -/
 theorem rowLoops_mutant :
     ¬ GPUProof.MeetsAt (GPUProof.Spec.matVec tight tight_mono) (rowLoops .binary32 32 false)
       (matVecEnc .binary32 32) := by
@@ -134,7 +138,17 @@ theorem rowLoops_mutant :
         ⟨sub_vals.1, by simp [vals, sub_vals.2.2.1, g0]⟩
     · exact (GPUProof.Approx.model _ _ _).2 fun _ =>
         ⟨sub_vals.2.1, by simp [vals, sub_vals.2.2.2, g0]⟩) (0 : Fin 1)
-  rw [vals_f] at h2
+  have h0 : g0.mag ≤ (GPUProof.NumFormat.ieee .binary32).safeMax :=
+    show (0 : ℝ) ≤ (Model.posMaxFinite .binary32).toReal from
+      zero_le_one.trans (Model.one_le_toReal_posMaxFinite .binary32)
+  have e : GPUProof.matVecGrade (1, 1) (matVecEnc .binary32 32 (1, 1)) vals (fun _ => g0)
+      (0 : Fin 1) = GPUProof.dotGrade (.ieee .binary32) 1 (fun _ => 3 / 2 ^ 149) (fun _ => 1 / 2)
+        (fun _ => g0) (fun _ => g0) :=
+    GPUProof.Grade.onlyIf_pos (fun _ => ⟨h0, h0⟩) _ _
+  change GPUProof.Approx .real ⟨(GPUProof.matVecGrade (1, 1) (matVecEnc .binary32 32 (1, 1)) vals
+      (fun _ => g0) (0 : Fin 1)).err - 1 / 2 ^ 149, (GPUProof.matVecGrade (1, 1)
+      (matVecEnc .binary32 32 (1, 1)) vals (fun _ => g0) (0 : Fin 1)).mag⟩ _ _ _ at h2
+  rw [vals_f, e] at h2
   exact mutant_one h2
 
 end MojoProofTest.TileMatVec

@@ -400,7 +400,8 @@ finite value:
     each word is finite and within its grade's error; then the loop's word is finite (statement
     13, since `Σₖ |wₖ vₖ| ≤ S`, `sum_abs_mul_le_graded`) and within the grade's error of
     `Σₖ aₖ xₖ` (`dotLoop_error_graded`: statement 12 at the words, `dotLoopBound` grows with `T`
-    (`dotLoopBound_mono`), and `|Σₖ wₖ vₖ - Σₖ aₖ xₖ| ≤ P` term by term, `sum_mul_sub_le`).
+    (`dotLoopBound_mono`), and `|Σₖ wₖ vₖ - Σₖ aₖ xₖ| ≤ P` term by term,
+    `GPUProof.sum_mul_sub_le`).
     Both are proved once, for lanes: `dotLoop_error_graded` and `dotLoop_approx` are
     `treeDot_error` and `treeDot_approx` (statement 16) at one lane, the tree `.leaf 0` and the
     list `List.ofFn fun k => (w k, v k)`, one term each.
@@ -432,10 +433,10 @@ error `4 u η < η`, and `GPUProof.Approx` at it is false. So the allowance `(2 
 
 ## Lanes added along a tree
 
-Lean: MojoProof/Sem/Dot.lean (`sum_mul_sub_le` to `treeDot_approx`), GPUProof/Spec/Linear.lean
-(`GPUProof.laneGrade`), MojoProof/Float/Tree.lean (`MojoProof.Float.sum_error`,
-`MojoProof.Float.isFinite_eval`) and MojoProof/Tile/MatVec.lean (section "Dot products over
-lanes"). Instances and the mutant: MojoProofTest/TileLanes.lean.
+Lean: MojoProof/Sem/Dot.lean (`treeDot` to `treeDot_approx`), GPUProof/Spec/Linear.lean
+(`GPUProof.laneGrade`, `GPUProof.sum_mul_sub_le`), MojoProof/Float/Tree.lean
+(`MojoProof.Float.sum_error`, `MojoProof.Float.isFinite_eval`) and MojoProof/Tile/MatVec.lean
+(section "Dot products over lanes"). Instances and the mutant: MojoProofTest/TileLanes.lean.
 
 The gemv kernel's warp splits a row's pairs over its lanes: lane `j` runs the loop over the pairs
 `k ≡ j` modulo the lane count (`stride`, MojoProof/Sem/WarpDot.lean), and the butterfly's rounds
@@ -454,9 +455,14 @@ add the lanes' words (`groupDot`, `warpDot`). The plan:
   its magnitude the larger of `S` plus the error and every input grade's magnitude
   (`GPUProof.laneGrade_mag`). It grows with the input grades (`GPUProof.laneGrade_mono`), so
   `GPUProof.laneVecGrade W d L` (`L n` pairs per lane at length `n`) is a grade of
-  `GPUProof.Spec.matVec` (`GPUProof.laneVecGrade_mono`). `GPUProof.dotGrade fmt n` is
-  `laneGrade fmt 1 0 n n` and `GPUProof.matVecGrade` is `laneVecGrade 1 0 id`, both by
-  definition; there is no second grade and no equivalence between two.
+  `GPUProof.Spec.matVec` (`GPUProof.laneVecGrade_mono`): `laneGrade` of row `i` and the vector
+  where every input grade it reads has magnitude at most its input format's `safeMax`, and
+  elsewhere a grade that claims nothing (`GPUProof.laneGradeIn`, through `GPUProof.Grade.onlyIf`).
+  `GPUProof.vecMatLaneGrade W d L` is the same of the vector and column `j` for
+  `GPUProof.Spec.vecMat`. `GPUProof.dotGrade fmt n` is `laneGrade fmt 1 0 n n`,
+  `GPUProof.matVecGrade` is `laneVecGrade 1 0 id` and `GPUProof.vecMatGrade` is
+  `vecMatLaneGrade 1 0 id`, all by definition; there is no second grade and no equivalence
+  between two.
 * The theorem (statement 16) for every IEEE format, flag, oracle sequences, lane count `W`, lane
   length `L`, length `n`, tree whose leaves are the lanes `0, …, W - 1`, each once, lists that
   together are the pairs, and input grades.
@@ -491,7 +497,7 @@ exact accumulator, rounded once. Neither derives finiteness from a bound on the 
     tree's sum is finite (`MojoProof.Float.isFinite_eval`, since
     `(1 + u) ^ d ((1 + u) ^ L T + W C ((1 + u) ^ L - 1) / u) ≤ S +` the error); and it is within
     the error (`treeDot_error`: `MojoProof.Float.sum_error` for the tree, statement 15 for the
-    lanes, `sum_abs_mul_le_graded` and `sum_mul_sub_le` for the inputs, and
+    lanes, `sum_abs_mul_le_graded` and `GPUProof.sum_mul_sub_le` for the inputs, and
     `(1 + u) ^ (L + d) = (1 + u) ^ L (1 + u) ^ d`).
 
 Its cases (MojoProof/Tile/MatVec.lean): `MojoProof.Tile.stride_approx`, the lanes' lists

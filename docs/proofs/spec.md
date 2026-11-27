@@ -190,10 +190,15 @@ step 12. All names below are in the namespace `GPUProof`, apart from step 12's i
    grade's magnitude bound exceeds the largest finite value may be a NaN, which the loop carries
    to its result, so a smaller bound would claim a finite result that the loop does not give.
    **`laneGrade_mono`**, **`dotGrade_mono`**: they grow with the inputs' grades, for every
-   format, counts, length and exact entries. **`laneVecGrade W d L`** is `laneGrade` at row `i`,
-   length `n`, `L n` terms per lane, output `i`'s format, with **`laneVecGrade_mono`**, and
-   **`matVecGrade`** is its case `laneVecGrade 1 0 id` (`dotGrade` at row `i`), by definition,
-   with **`matVecGrade_mono`**; the
+   format, counts, length and exact entries. **`laneGradeIn fmt W d L n fa fx a x ga gx`** is
+   `laneGrade` where every input grade's magnitude is at most its input format's `safeMax` (`fa k`
+   for `a`, `fx k` for `x`), and elsewhere `Grade.onlyIf`'s grade that claims nothing in `fmt`,
+   with **`laneGradeIn_mono`**: an input grade of magnitude above its format's `safeMax` asks
+   nothing of that input's word, so the output's grade claims nothing there.
+   **`laneVecGrade W d L`** is `laneGradeIn` at row `i` and the vector, length `n`, `L n` terms per
+   lane, output `i`'s format, the input formats of row `i` and of the vector, with
+   **`laneVecGrade_mono`**, and **`matVecGrade`** is its case `laneVecGrade 1 0 id` (`dotGrade` at
+   row `i` where the inputs' grades claim), by definition, with **`matVecGrade_mono`**; the
    test `matVecDot` is `Spec.matVec matVecGrade matVecGrade_mono`, and `dotGrade_one_zero` checks
    that at `n = 1`, exact entries `0` and grades `0`, the error is `(2 + u) η > 0`.
    The sequential loop meets the grade: `MojoProof.Sem.dotLoop_approx` proves that the word of
@@ -375,8 +380,25 @@ step 12. All names below are in the namespace `GPUProof`, apart from step 12's i
      (MojoProofTest/TileLanes.lean): `rows_2x7`, 3 lanes along `(0 + 1) + 2` at size 2 × 7, and
      `rows_3x10`, `groupDot 2` per row at size 3 × 10.
    `Spec.vecMat vecMatGrade` is the case of one row of the first matrix, with the vector-matrix
-   product's matrix transposed into the second; it is not stated yet. No matrix-product spec
-   enters: a matrix product is met through these two as cases.
+   product's matrix transposed into the second; that case is not stated yet. The lanes' form at
+   `Spec.vecMat` is stated for words (MojoProof/Tile/MatVec.lean), at the uniform encoding
+   `MojoProof.Tile.vecMatEnc fmt bits` (inputs the vector, then the matrix):
+   * `MojoProof.Tile.vecMat_holds_of`, `holds_of` at the vector and column `j`: for every
+     format, width, `W`, `d`, `L` and size, output words that are `GPUProof.Approx` at
+     `laneGrade` of every exact vector and column at which the input words are `Approx` meet
+     the rule of `Spec.vecMat (vecMatLaneGrade W d L)`;
+   * `MojoProof.Tile.groupDot_cols_holds`: for every IEEE format, width, `k`, flag, size,
+     oracle sequences and input words, output words each `groupDot k` of the vector and column
+     `j` or both NaNs meet the rule of
+     `Spec.vecMat (vecMatLaneGrade (2 ^ k) k fun m => ⌈m / 2 ^ k⌉)`;
+   * `MojoProof.Tile.warpDot_vecMat_holds`: its case `k = 5` at inputs read from a vector `v`
+     and a matrix `A` and the words `warpDot c (o j) (vecMatPairs v A j)`, the words that
+     `MojoProof.Sem.warpDot_vecMat` bounds; that gevm_kernel stores them is not proved.
+   Tests (MojoProofTest/TileLanes.lean): `cols_3x5`, 4 lanes per column at size 3 × 5 in
+   binary32; `cols_40x2`, the warp at size 40 × 2 in binary64 on every vector and matrix; and
+   `col_mutant`, `vecMatGrade` with `2⁻¹⁴⁹` less error (`vtight`), not met at size 1 × 1 by one
+   lane's word on `mutant_one`'s pair. They are stated at `Spec.vecMat` itself, not through the
+   matrix-product case above.
    Without the underflow allowance no kernel that rounds meets the grade: at `n = 1` a product
    `a x` below the normal range is rounded with an absolute error of up to half the spacing of
    the subnormals, which `γ₁ |a x|` does not bound when `|a x|` is small. An instance is
@@ -387,8 +409,14 @@ step 12. All names below are in the namespace `GPUProof`, apart from step 12's i
    power of `1 + u` on the sum) have the allowance `(2 + u) η ((1 + u)^K − 1) / u` after `K`
    iterations.
 10. **`Spec.vecMat g mono`**: the same at `Matrix.vecMul`, outputs `Fin n` (test `vecMat_f`).
-    **`vecMatGrade`**: `dotGrade` again, at column `j`, length `m`, with **`vecMatGrade_mono`**
-    (test `vecMatDot`).
+    **`vecMatLaneGrade W d L`**: `laneGradeIn` at output `j`, of the vector and column `j`, of
+    length `m`, with `L m` pairs per lane, where the grades of the vector and of column `j` are
+    at most their formats' `safeMax`; **`vecMatLaneGrade_mono`**, from `laneGradeIn_mono` as
+    `laneVecGrade_mono` is; **`vecMatLaneGrade_holds`**: exact words meet it at every encoding,
+    with no premise on the formats, from `laneGradeIn_approx` as `laneVecGrade_holds` is (test
+    `wide_vecMat`).
+    **`vecMatGrade`** is `vecMatLaneGrade 1 0 id`, `dotGrade` again where the guard holds, with
+    **`vecMatGrade_mono`** (test `vecMatDot`).
 11. **The sums**, over `ℝ` (`Spec.sumReal g mono`, rule `graded g`) and over `ℤ` (`Spec.sumInt`,
     rule `exact`), at sizes `n : ℕ`, inputs `Fin n`, one output, `f n x () = ∑ i, x i` (test
     `sumReal_f`). Instance: `Spec.sumInt` at `int 32` entries, where the `exact` rule's
@@ -536,23 +564,83 @@ step 12. All names below are in the namespace `GPUProof`, apart from step 12's i
       then `W'` meets the composite's `exact` rule. `Wiring.holds_comp_exact` is its case with
       `hV` from `S₁`'s `exact` rule and the representability premise; the two pairs below with a
       `bitwise` rule and an `exact` one are the others.
-    * Not covered: a graded rule then an `exact` one. The composite's rule would be graded, and
+    * **A graded rule then an `exact` one, through a modulus** (GPUProof/Spec/CompGraded.lean).
       `S₁`'s graded outputs give `S₂` inputs `Y` within grades of the exact intermediate
       `Wiring.mid σ Z`, where `S₂`'s `exact` rule claims `S₂.f σ Y` and the composite's claim is
-      about `S₂.f σ (Wiring.mid σ Z)`. A rule for the pair would have to name, at every size,
-      composite encoding, input `Z` in the composite's domain and input grades:
-      * a modulus of continuity of `S₂.f`: a grade `ω` of each output, monotone in the input
-        grades, such that every `Y` within the grades `Wiring.grade` gives the wired inputs (each
-        `Y i` meeting `Approx` at its grade and the exact intermediate's entry) has `S₂.f σ Y`
-        within `ω` of `S₂.f σ (Wiring.mid σ Z)`;
-      * that such `Y` stay in `S₂.Dom` (its domain closed under the first rule's perturbation);
-      * that `S₂.f σ Y` has words at `Eo` at such `Y`, since the graded composite has no
-        representability premise and `S₂`'s `exact` rule needs one;
-      * that `ω`'s magnitude is above its format's `NumFormat.safeMax` wherever an input grade's
-        is (as `Grade.onlyIf` does), since there `S₁`'s output may be a word with no value and
-        `S₂`'s rule then claims nothing.
-      The composite would then meet the graded rule `ω` at `Wiring.encs`. No spec here has such a
-      modulus with a test, so the theorem is not stated.
+      about `S₂.f σ (Wiring.mid σ Z)`. The derivation is stated once, for `S₂` alone, and the
+      composition is its one-line corollary:
+      * **`Spec.Modulus Sp ω σ E`**, at one size and encoding: for every inputs `A` in the
+        domain, grades `G` and inputs `Y` within `G` of `A` at `E`'s inputs
+        (**`Encoding.Within`**: some input words decode to `Y`, and at every entry the grade's
+        magnitude is at most its format's `NumFormat.safeMax` and `Y`'s value is near `A`'s),
+        `Sp.f σ Y` is within `ω σ E A G` of `Sp.f σ A` (`near`), `Y` is in the domain (`dom`),
+        and some output words of `E` decode to `Sp.f σ Y` (`rep`: the graded composite has no
+        representability premise, and the `exact` rule needs one).
+      * **`Spec.modGrade ω`**: `ω`'s grade where every input grade's magnitude is at most its
+        format's `NumFormat.safeMax`, elsewhere `Grade.onlyIf`'s grade that claims nothing
+        (there `S₁`'s output may be a word with no value, and the `exact` rule then claims
+        nothing), monotone where `ω` is (`Spec.modGrade_mono`). The magnitude condition is in
+        the grade, not a premise.
+      * **`Spec.Modulus.holds`**: where `ω` is a modulus, output words that meet the `exact` rule
+        meet the graded rule `Spec.modGrade ω` (**`Spec.withRule`**: the spec with that rule in
+        place of its own); **`MeetsAt.graded_of_exact`** is the same at encodings `E` with a
+        modulus at every size.
+      * **`MeetsAt.comp_graded_exact`**: with a modulus of `S₂` at `Wiring.encs₂ E₁ Ex Eo` at
+        every size, `MeetsAt.comp` at the wiring into `S₂` with the derived rule
+        (**`Wiring.withRule`**: the same extra inputs, wire and types) gives the composite the
+        graded rule `Wiring.grade` at `S₁`'s grade and `Spec.modGrade ω` at `Wiring.encs`. There
+        is no second composition proof, and `Wiring.holds_exact_of_mid` is not used: once
+        derived, the second rule is graded.
+      * **`Meets.comp_graded_exact`**: the form at every encoding, as `Meets.comp`: behaviors
+        that meet `S₁` and `S₂` at every encoding, the intermediate's encoding `M` chosen at each
+        composite encoding (`Wiring.behavMid`), and the composite met with the graded rule
+        `Wiring.gradeBy` at `S₁`'s grade and `Spec.modGrade ω` at every composite encoding `E` at
+        which `ω` is a modulus of `S₂` at `M`, `E`'s extra inputs and `E`'s outputs. That
+        premise is the representability premise on the composite's encodings: the modulus gives
+        words of `S₂.f σ Y` at `E`'s outputs, and an output encoding with no word of that value
+        refutes it, so the composite is not claimed there (its grade has no such condition). The
+        proof is `Meets.comp`'s step (`Wiring.holds_comp`) at the wiring with the derived rule,
+        with `Spec.Modulus.holds` at the one encoding of `S₂` it reads.
+      * The test (MojoProofTest/GPUProof/SpecCompGraded.lean): `Spec.matVec` at `matVecGrade`
+        wired into the sum of `m` reals with the `exact` rule (`sumEx`), its modulus the sum of
+        the input grades' errors (`sumMod`, from `|∑ Y - ∑ A| ≤ ∑ |Y i - A i|`), with 8-bit
+        fixed-point words for the product and `8 + m`-bit words for the sum. Every premise but
+        the two behaviors' `MeetsAt` is proved at every size (`sumMod_modulus`, `mvSum_meets`),
+        and at every composite input encoding with the outputs `sumOut` and the intermediate at
+        `mvEnc`'s outputs every premise but the two behaviors' `Meets` (`mvSum_meetsAll`, by
+        `Meets.comp_graded_exact`, the modulus at every encoding of the extra inputs).
+        At the behaviors `ruleK` all are, and by the theorems at every `(m, n)` with `n ≤ 127`,
+        with input words `1`: the composite behavior has an output, the word `m n` of `8 + m`
+        bits after the intermediate words `n`, each in its `ruleK` (`mvSum_ones_mem`, from
+        `laneVecGrade_holds`, `FloatRule.Holds.exact_of` and `Wiring.mem_behav`), and at exact
+        input grades every output decodes to `m n` (`mvSum_ones`). The `example`s at `(2, 3)`
+        and `(5, 1)` are the two at those sizes, with `6` and `5`; only `n ≤ 127` and `m n`
+        are evaluated. The mutant: the grade of error `0` is not a modulus (`sumZero_refused`:
+        one input word `1` within error `1` of the exact input `0`).
+      * What `Meets` asks of `Spec.matVec` at `matVecGrade` (the same test file): at an encoding
+        whose inputs are narrower than an output, an input grade of magnitude above the input's
+        largest value gives no premise on that input, so the grade must claim nothing there.
+        `laneGradeIn`'s guard is on the magnitudes of the input grades each output reads, in
+        their input formats, so it does: at size `(1, 1)` with 8-bit inputs and a 16-bit output
+        (`wideEnc`) the exact words, inputs `100` and output `10000`, meet the rule
+        (`wide_holds`), as do inputs `50` and outputs `12500` at `(2, 5)` (`wide_holds_2x5`),
+        both by `laneVecGrade_holds`, and `ruleK` has an output there (the `example` after
+        them); for `Spec.vecMat` at `vecMatGrade`, inputs `50` and outputs `12500` at `(5, 2)`
+        meet the rule by `vecMatLaneGrade_holds` (`wide_vecMat`). `laneVecGrade_holds` and
+        `vecMatLaneGrade_holds` have no premise on the formats: where the guard holds each
+        input is within its grade's error of the exact one, whatever the output's format. The
+        mutant (`rawGrade`, `dotGrade` with the output's guard only): no words meet its rule at
+        `wideEnc` at `(1, 1)` (`wide_refused`), as input grades of error `0` and magnitude `200`
+        (above `127`) give no premise, and the output's grade, of error `0` and magnitude `200`
+        (at most `32767`), claims `0` at the exact inputs `0` and `1` at the inputs `1`.
+        The other choice, encodings whose formats make the outputs no wider than the inputs as
+        part of the domain, is not taken: `Spec.matVec`'s domain is every input, which the
+        kernel theorems' statements and TorchLean's importer read (`torchLean`'s `eq` at the
+        trivial domain proof), and a domain does not see the encoding. The guard changes the
+        grade's value only off the rule's premises, so at `MojoProof.Tile.matVecEnc` (one
+        format for every entry) the kernel theorems' statements are unchanged, and their proofs
+        reach the rule through `MojoProof.Tile.holds_of`, which adds the guard
+        (`Approx.onlyIf_of`).
     * **Pairs with a `bitwise` rule**, which claims only at its own encodings `E₀`, at encodings
       built from parts where `E₀` is the parts': `E₁` for a first `bitwise` rule, `Wiring.encs₂`
       for a second one. At every encoding none holds: at the other encodings its rule claims
@@ -568,8 +656,9 @@ step 12. All names below are in the namespace `GPUProof`, apart from step 12's i
         `S₂.rule = .bitwise (Wiring.encs₂ E₁ Ex Eo) w₂ hw₂`, `Wiring.MidRep` at `Wiring.encs` and
         `E₁`'s outputs): `S₂`'s outputs decode to `S₂.f` wherever its inputs decode into its
         domain, which is its `exact` claim, so the proof is `MeetsAt.comp_exact`'s. After a graded
-        rule no claim follows, as for a graded rule then an `exact` one: its word function's
-        `DecodesAs` speaks only of input words that decode into its domain.
+        rule no claim follows: its word function's `DecodesAs` speaks only of input words that
+        decode into its domain, and a rule names no modulus (as `Spec.Modulus` does for an
+        `exact` rule, above).
       * **`MeetsAt.comp_bitwise`** (both `bitwise`, the second at `Wiring.encs₂ E₁ Ex Eo`): the
         composite meets the `bitwise` rule at `Wiring.encs` whose word function
         **`Wiring.bitW`** is `w₂` after `w₁` beside the extra words, which decodes as the
@@ -589,46 +678,48 @@ step 12. All names below are in the namespace `GPUProof`, apart from step 12's i
     `GPUProof.Spec.sumInt`, where the intermediate is the input words themselves, so `Wiring.MidRep`
     holds at every size and storage of the integers (`copySum_rep`, `copySum_meets`), with the sums
     `6` of the words `1, 2, 3` at size 3 and `-7` of seven words `-1` at size 7 (the two examples of
-    `copySum_meets` after it); and the mutant `GPUProof.Spec.sumInt` into a negation (`negInt`, rule
-    `exact`) at size 2 and inputs `2 ^ 30`, where the sum `2 ^ 31` has no 32-bit word while its
-    negation `-2 ^ 31` has one: the behaviors that allow every output their rule allows (`ruleK`)
-    meet both parts, and their composition does not meet the composite (`sumNeg_refused`), so
-    `Wiring.MidRep` fails there (`sumNeg_norep`). At every encoding: `ruleK` after `ruleK` along
-    `chain` at every `M` (`chain_meetsAll`); along `copySum` with the intermediate encoded as the
-    composite's inputs (`Encoding.comap` at `Sum.inl`), where `Wiring.MidRep` holds at every
-    composite encoding (`copySum_repAll`, `copySum_meetsAll`); and along `sumNeg` with the
-    intermediate stored as a 32-bit integer, refused at the encodings of `sumNeg_refused`
-    (`sumNeg_refusedAll`; both mutants through `sumInt_none`, `negInt_zero`, `sumNeg_fails`). These
-    tests are stated for every binary interchange format, which integer entries do not read, with no
-    premise on the format's encoding. For `MeetsAt.comp_exact_graded`: `n` integers copied
-    (`copyInt`) into their negations with a graded rule (`negG Fin`, at the grade `sameGrade`)
-    along `copyNegG`, where `Wiring.FstRep` holds at every size and storage (`copyNegG_rep`,
-    `copyNegG_meets`) and at every encoding (`copyNegG_repAll`, `copyNegG_meetsAll`); at exact
-    input grades the composite's grade is `⟨0, 0⟩` (`copyNegG_grade`), and with 32-bit integers
-    at size 3 the words `1, 2, 3` give `-1, -2, -3` (the example after `copyNegG_grade`). The
-    mutant: `GPUProof.Spec.sumInt` into the graded negation (`sumNegG`) at size 2 and inputs
-    `2 ^ 30`, where `ruleK`'s composition does not meet the composite at its encodings or at
-    every encoding (`sumNegG_refused`, `sumNegG_refusedAll`, through `sumInt_none`, `negG_zero`
-    and `sumNegG_fails`), so `Wiring.FstRep` fails there (`sumNegG_norep`) and is needed. For the
-    pairs with a `bitwise` rule, at every size and storage of the integers: `n` integers copied
-    by `copyBit u` (`bitwise` at `copyInt`'s uniform encodings, the identity word function) into
+    `copySum_meets` after it, each an output of the composition, by `FloatRule.Holds.exact_of` and
+    `Wiring.mem_behav`, and every output's value); and the mutant `GPUProof.Spec.sumInt` into a
+    negation (`negInt`, rule `exact`) at size 2 and inputs `2 ^ 30`, where the sum `2 ^ 31` has no
+    32-bit word while its negation `-2 ^ 31` has one: the behaviors that allow every output their
+    rule allows (`ruleK`) meet both parts, and their composition does not meet the composite
+    (`sumNeg_refused`), so `Wiring.MidRep` fails there (`sumNeg_norep`). At every encoding: `ruleK`
+    after `ruleK` along `chain` at every `M` (`chain_meetsAll`); along `copySum` with the
+    intermediate encoded as the composite's inputs (`Encoding.comap` at `Sum.inl`), where
+    `Wiring.MidRep` holds at every composite encoding (`copySum_repAll`, `copySum_meetsAll`); and
+    along `sumNeg` with the intermediate stored as a 32-bit integer, refused at the encodings of
+    `sumNeg_refused` (`sumNeg_refusedAll`; both mutants through `sumInt_none`, `negInt_zero`,
+    `sumNeg_fails`). These tests are stated for every binary interchange format, which integer
+    entries do not read, with no premise on the format's encoding. For `MeetsAt.comp_exact_graded`:
+    `n` integers copied (`copyInt`) into their negations with a graded rule (`negG Fin`, at the
+    grade `sameGrade`) along `copyNegG`, where `Wiring.FstRep` holds at every size and storage
+    (`copyNegG_rep`, `copyNegG_meets`) and at every encoding (`copyNegG_repAll`,
+    `copyNegG_meetsAll`); at exact input grades the composite's grade is `⟨0, 0⟩`
+    (`copyNegG_grade`), and with 32-bit integers at size 3 the words `1, 2, 3` give the output words
+    `-1, -2, -3`, and every output decodes to `-1, -2, -3` (the example after `copyNegG_grade`). The
+    mutant: `GPUProof.Spec.sumInt` into the graded negation (`sumNegG`) at size 2 and inputs `2 ^
+    30`, where `ruleK`'s composition does not meet the composite at its encodings or at every
+    encoding (`sumNegG_refused`, `sumNegG_refusedAll`, through `sumInt_none`, `negG_zero` and
+    `sumNegG_fails`), so `Wiring.FstRep` fails there (`sumNegG_norep`) and is needed. For the pairs
+    with a `bitwise` rule, at every size and storage of the integers: `n` integers copied by
+    `copyBit u` (`bitwise` at `copyInt`'s uniform encodings, the identity word function) into
     `GPUProof.Spec.sumInt` (`bitSum_meets`) and `copyInt` into `copyW u` (`bitwise` at the wired
-    encodings `wiredEncs u`, the word function that reads the wired position), with
-    `Wiring.MidRep` by the input words themselves (`copyCp_rep`, `copyCp_meets`), and `copyBit u`
-    into `copyW u` (`bitCp_meets`, `copyW u`'s word function keeping NaN payloads' equality
-    since it reads one position), each with 32-bit integers at size 3 (words `1, 2, 3`) and size 7
-    (seven words `-1`) in the two examples after it. At one integer entry stored by `nanInt` (the
-    word `0` with the value `0`, the NaNs `1` and `2`), copied by `nanId` (`bitwise`, the
-    identity word function): into the graded negation (`nanIdNeg_meets`, at every size), into
-    `nanCp` (`bitwise`, the word function that reads the first position; `nanIdCp_meets`, at
-    every size) and into the copy `nanSq` with the word function `squash` (`squash_dec`,
-    `nanIdSqW`, `nanIdSqW_dec`, `nanIdSq_refused`, at size 0), so `MeetsAt.comp_bitwise`'s
-    premise fails for `squash` (`nanIdSq_noresp`) and is needed. The mutant for
-    `MeetsAt.comp_exact_bitwise`'s premise: `negInt` with its output stored by `nanInt` into
-    `zeroW` (`bitwise`, the constant word `0`, `zero_dec`) along `negZ`, at size 0 and the input
-    `5`: `-5` has no word of `nanInt`, so `negInt`'s rule allows the intermediate `0`, and the
-    composite asks for the 32-bit word of `-5` (`negZ_refused`), so `Wiring.MidRep` fails there
-    (`negZ_norep`).
+    encodings `wiredEncs u`, the word function that reads the wired position), with `Wiring.MidRep`
+    by the input words themselves (`copyCp_rep`, `copyCp_meets`), and `copyBit u` into `copyW u`
+    (`bitCp_meets`, `copyW u`'s word function keeping NaN payloads' equality since it reads one
+    position), each with 32-bit integers at size 3 (words `1, 2, 3`) and size 7 (seven words `-1`)
+    in the two examples after it, an output (at a `bitwise` stage the word function's own output
+    words, `ruleK_bitwise`) and every output's value. At one integer entry stored by `nanInt` (the
+    word `0` with the value `0`, the NaNs `1` and `2`), copied by `nanId` (`bitwise`, the identity
+    word function): into the graded negation (`nanIdNeg_meets`, at every size), into `nanCp`
+    (`bitwise`, the word function that reads the first position; `nanIdCp_meets`, at every size) and
+    into the copy `nanSq` with the word function `squash` (`squash_dec`, `nanIdSqW`, `nanIdSqW_dec`,
+    `nanIdSq_refused`, at size 0), so `MeetsAt.comp_bitwise`'s premise fails for `squash`
+    (`nanIdSq_noresp`) and is needed. The mutant for `MeetsAt.comp_exact_bitwise`'s premise:
+    `negInt` with its output stored by `nanInt` into `zeroW` (`bitwise`, the constant word `0`,
+    `zero_dec`) along `negZ`, at size 0 and the input `5`: `-5` has no word of `nanInt`, so
+    `negInt`'s rule allows the intermediate `0`, and the composite asks for the 32-bit word of `-5`
+    (`negZ_refused`), so `Wiring.MidRep` fails there (`negZ_norep`).
 
 The existing MojoProof statements against TorchLean (`MojoProof.Sem.groupDot_matVec`,
 `MojoProof.Sem.warpDot_matVec`, `MojoProof.Sem.warpDot_vecMat`, MojoProof/Sem/WarpDot.lean)
@@ -819,8 +910,11 @@ do (`sameK`).
     kernel that keeps NaNs: an input whose grade's magnitude is above `safeMax` may be a NaN, and
     the kernel's output is then a NaN, so the output grade's magnitude must be above `safeMax`
     too, or `Approx` asks for a value (test `nan_needs_mag`, at one input, and `forget_refused`).
-    `laneGrade` has that condition (`laneGrade_mag`, step 9), so `laneVecGrade`, `matVecGrade` and
-    `vecMatGrade` have it at every input that their output reads.
+    `laneVecGrade`, `matVecGrade` and `vecMatGrade` have it at every input that their output
+    reads, at every pair of formats: where such an input's grade has magnitude above its format's
+    `safeMax`, `Grade.onlyIf` gives the output a magnitude above the output format's
+    (`laneGradeIn`, step 9); `laneGrade` alone has it only when the input's format's `safeMax` is
+    at least the output's (`laneGrade_mag`).
 
 ## Not in this layer
 
@@ -831,6 +925,9 @@ rule then a graded one, with the first outputs' representability as a premise, a
 built from parts; `Meets.comp`, `Meets.comp_exact` and `Meets.comp_exact_graded` the same at
 every encoding with the intermediate's encoding as data of the behavior (step 13);
 `MeetsAt.comp_bitwise_exact`, `MeetsAt.comp_exact_bitwise`, `MeetsAt.comp_bitwise_graded` and
-`MeetsAt.comp_bitwise` the pairs with a `bitwise` rule, at encodings built from parts only. A
-graded rule then an `exact` one is not stated: step 13 lists what its rule would have to name.
+`MeetsAt.comp_bitwise` the pairs with a `bitwise` rule, at encodings built from parts only.
+`MeetsAt.comp_graded_exact` composes a graded rule then an `exact` one at encodings built from
+parts, given a modulus of continuity of the second spec's function (`Spec.Modulus`,
+GPUProof/Spec/CompGraded.lean, step 13), and `Meets.comp_graded_exact` at every composite
+encoding at which there is one.
 `MixedRadix` follows the spec layer.

@@ -11,7 +11,8 @@ The pages:
   table of its cards; one page per card, its front matter as a definition list and then its body;
   roadmap/README.md as roadmap/format.html. Levels, evidence and what the next level needs come
   only from roadmap/status.yaml and the card files, which scripts/roadmap_status.py computes from
-  the code (run it first).
+  the code (run it first). If status.yaml names an area's README.md or a card file that does not
+  exist, site.py prints each one and exits 1, writing nothing.
 * Guide (guide/): how to contribute, docs/new-kernel.md, CONTRIBUTING.md and AGENTS.md.
 * Docs (docs/): every other docs/*.md and every docs/proofs/*.md, and docs/graphs.html with
   docs/deps/{packages,modules,claims}.svg and roadmap/graph.svg as numbered figures.
@@ -401,7 +402,8 @@ class Site:
                 self.md_page[f'roadmap/{a["id"]}/cards/{c["id"]}.md'] = \
                     f'roadmap/{a["id"]}/{c["id"]}.html'
         outs = list(self.md_page.values()) + ['roadmap/index.html', 'guide/index.html',
-                                              'docs/index.html', 'docs/graphs.html']
+                                              'docs/index.html', 'docs/graphs.html',
+                                              'roadmap/kernels/coverage.html']
         dup = sorted({o for o in outs if outs.count(o) > 1})
         if dup:
             raise SystemExit(f'two sources for the pages {", ".join(dup)}')
@@ -474,6 +476,10 @@ class Site:
     def roadmap(self):
         page = 'roadmap/index.html'
         cards = {f'{a["id"]}/{c["id"]}': (a, c) for a in self.areas for c in a['cards']}
+        named = [f'roadmap/{a["id"]}/README.md' for a in self.areas] + \
+            [f'roadmap/{a["id"]}/cards/{c["id"]}.md' for a, c in cards.values()]
+        if missing := [f for f in named if not (ROOT / f).is_file()]:
+            raise Stale(missing)
         runs = set()
         fronts = {}
         for key, (a, c) in cards.items():
@@ -530,6 +536,9 @@ every level below it.</p>
             self.area(a, fronts)
             for c in a['cards']:
                 self.card(a, c, fronts[f'{a["id"]}/{c["id"]}'], cards)
+        import site_coverage
+        self.add('roadmap/kernels/coverage.html', "How much of Modular's GPU code is proved", 'roadmap',
+                 site_coverage.coverage_page(self), 'scripts/site_coverage.py')
 
     def area(self, a: dict, fronts: dict):
         src = f'roadmap/{a["id"]}/README.md'
@@ -549,6 +558,12 @@ every level below it.</p>
                  '<th class="num">Corpus kernels</th></tr></thead><tbody>' + ''.join(rows) +
                  '</tbody></table></div>' if rows else
                  '<p>No cards in this area yet.</p>')
+        if a['id'] == 'kernels':
+            import site_coverage
+            s = site_coverage.summary(self)
+            table = (f'<p>These cards are a start: Modular\'s open-source code launches {s["n"]} GPU kernel functions, '
+                     f'and {s["proved"]} of them have a proved specialization. <a href="coverage.html">How much of '
+                     'Modular\'s GPU code is proved</a> lists every one with its status.</p>\n') + table
         self.add_md(src, 'roadmap', before='<p class="crumbs"><a href="../index.html">Roadmap</a>'
                     '</p>', after=table)
 
@@ -887,7 +902,8 @@ def css() -> str:
     dark = '\n'.join('  ' + ln for ln in dark.split('\n'))
     return ('/* MojoProof site: written by scripts/site.py. Code colours from Pygments. */\n' +
             light + '\n@media (prefers-color-scheme: dark) {\n' + dark + '\n}\n' +
-            STYLE.lstrip('\n') + __import__('site_home').CSS.lstrip('\n'))
+            STYLE.lstrip('\n') + __import__('site_home').CSS.lstrip('\n') +
+            __import__('site_coverage').CSS.lstrip('\n'))
 
 
 # The check.
@@ -1001,6 +1017,10 @@ def check(out: pathlib.Path) -> int:
     return 1 if problems else 0
 
 
+class Stale(Exception):
+    """The files that roadmap/status.yaml names and the repository does not have."""
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description='Write or check the project website.')
     g = ap.add_mutually_exclusive_group(required=True)
@@ -1010,7 +1030,13 @@ def main(argv: list[str]) -> int:
     if args.check:
         return check(args.check)
     site = Site()
-    site.build()
+    try:
+        site.build()
+    except Stale as e:
+        for f in e.args[0]:
+            print(f'site: roadmap/status.yaml names {f}, which does not exist '
+                  '(run scripts/roadmap_status.py)')
+        return 1
     args.out.mkdir(parents=True, exist_ok=True)
     written = site.write(args.out)
     print(f'site: {len(site.pages)} pages, {len(written)} files written to {args.out}')

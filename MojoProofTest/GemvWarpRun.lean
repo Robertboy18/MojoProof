@@ -65,14 +65,14 @@ memory has the start's `next` and its blocks outside the lanes' `alloca` numbers
 reads of the matrix and the vector).
 `Out.Pre.of_start`: the premises from the grid's start.
 
-Instances: one block of 32 threads, `M = 1`, `K = 4`, row 0, on `GemvThread.run`'s instance
-memory `m3` (`w0`, `w0_pre`, and from the grid's start `w0_start` and `w0_done`);
-`fresh_mutant`, a buffer at lane 0's first `alloca` number, which lane 0's `alloca`s replace;
-`w0_not_free`, the block from `next` on that the warp leaves;
-and one block of 64 threads, `M = 2`, `K = 4`: the second warp's premises after the first
+Instances: one block of 32 threads, `M = 1`, `K = 4`, row 0, on `GemvThread.run`'s instance memory
+`m3` (`w0`, `w0_pre`, and from the grid's start `w0_start` and `w0_done`); `fresh_mutant`, a buffer
+at lane 0's first `alloca` number, which lane 0's `alloca`s replace; `w0_not_free`, the block from
+`next` on that the warp leaves; and one block of 64 threads, `M = 2`, `K = 4`, on
+`n3 = GemvThread.mem A24 v3` (`n3_caller`): the second warp's premises after the first
 (`w64_next_pre`), both rows after both warps, and from the grid's start to a done grid with both
-rows (`w64_done`); one block of 64 threads, `M = 1`, whose second warp has row 1 and takes
-`%42`'s branch to `ret`, from the grid's start to a done grid with row 0 (`w64_out_done`).
+rows (`w64_done`); one block of 64 threads, `M = 1`, whose second warp has row 1 and takes `%42`'s
+branch to `ret`, from the grid's start to a done grid with row 0 (`w64_out_done`).
 -/
 
 namespace MojoProofTest.GemvWarpRun
@@ -1589,25 +1589,6 @@ threads at `f3`'s start, the memory `m3` with `A3` at block 1, `v3` at block 2 a
 block 3, `M = 1`, `K = 4`, row 0 (MojoProofTest/GemvThread.lean). A test definition. -/
 def w0 : Lanes := ⟨⟨0, cl, fun _ => ⟨[f3], 0⟩, m3⟩, launch2 1 1 32 1, 1, 4, 3, A3, v3, 0⟩
 
-/-- Test: `m3` has no block from its `next`, 4, on. -/
-theorem m3_free : m3.FreeAbove := by
-  intro q hq
-  have h4 : m3.next = 4 := rfl
-  rw [h4] at hq
-  simp only [GemvThread.m3, Mem.alloc, Mem.set]
-  split_ifs with h
-  · have : GemvThread.m2.1.next = 3 := rfl
-    omega
-  simp only [GemvThread.m2, Mem.alloc, Mem.set]
-  split_ifs with h
-  · have : GemvThread.m1.1.next = 2 := rfl
-    omega
-  simp only [GemvThread.m1, Mem.alloc, Mem.set]
-  split_ifs with h
-  · have : ({} : Mem).next = 1 := rfl
-    omega
-  rfl
-
 /-- Test: the warp theorem's premises hold at `w0`, with the matrix and vector at blocks 1 and 2.
 -/
 theorem w0_pre : w0.Pre 1 2 where
@@ -1626,15 +1607,15 @@ theorem w0_pre : w0.Pre 1 2 where
   hMK := by decide
   hrow := by decide +kernel
   hnx := by decide
-  hfresh _ _ _ _ := m3_free _ (Nat.le_add_right _ _)
-  hb0 := ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
-  hf0 := ⟨_, rfl, by decide +kernel⟩
-  hbA := ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
-  hbV := ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
-  hfA := ⟨_, rfl, by decide +kernel⟩
-  hfV := ⟨_, rfl, by decide +kernel⟩
-  hA := m3_holds.1
-  hV := m3_holds.2
+  hfresh _ _ _ _ := (m3_caller.closed 0).above _ (Nat.le_add_right _ _)
+  hb0 := m3_caller.hb0
+  hf0 := m3_caller.hf0
+  hbA := m3_caller.hbA
+  hbV := m3_caller.hbV
+  hfA := m3_caller.hfA
+  hfV := m3_caller.hfV
+  hA := m3_caller.hA
+  hV := m3_caller.hV
 
 /-- Test: `Pre.of_start` at one block of 32 threads (`launch2 1 1 32 1`), `M = 1`, `K = 4`, the
 output at block 3, the matrix and vector at blocks 1 and 2 of `m3`, any `%4` and every address
@@ -1648,8 +1629,8 @@ theorem w0_start {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : Nat �
     (Lanes.ofStart (launch2 1 1 32 1) g c 0 1 4 3 A3 v3 ⟨row ((launch2 1 1 32 1).env 0),
       by decide +kernel⟩).Pre 1 2 :=
   Lanes.Pre.of_start hs rfl (launch2_valid (by decide)) (by decide) rfl (by decide) hch
-    (by decide) (by decide) (by decide) _ m3_free w0_pre.hb0 w0_pre.hf0 w0_pre.hbA w0_pre.hbV
-    w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
+    (by decide) (by decide) (by decide) _ (m3_caller.closed 0).above w0_pre.hb0 w0_pre.hf0
+    w0_pre.hbA w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
 
 /-- Test: `grid_done` at one block of 32 threads (`launch2 1 1 32 1`), `M = 1`, `K = 4`, the
 output at block 3, the matrix and vector at blocks 1 and 2 of `m3`, any `%4` and every address
@@ -1665,8 +1646,8 @@ theorem w0_done {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : Nat �
       z.mem.load gemv.prog.layout (c 0).who 0 (.fp .float) ⟨3, 0⟩ (some 4) =
         .ok (Val.ofFloat .float ((ofStart (launch2 1 1 32 1) g c 0 1 4 3 A3 v3 0).word 0)) := by
   obtain ⟨z, hp, hd, hl⟩ := grid_done hs rfl (launch2_valid (by decide)) (by decide) rfl rfl rfl
-    rfl hch (by decide) (by decide) (by decide) m3_free w0_pre.hb0 w0_pre.hf0 w0_pre.hbA
-    w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
+    rfl hch (by decide) (by decide) (by decide) (m3_caller.closed 0).above w0_pre.hb0 w0_pre.hf0
+    w0_pre.hbA w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
   exact ⟨z, hp, hd, hl 0 (by rw [Grid.start_size hs]; decide) 0
     (by simp only [row, Launch.env, coord, launch2, volume]; omega)⟩
 
@@ -1757,20 +1738,13 @@ example : ∃ Es, WarpRun (launch2 1 1 32 1) cl 0 (fun _ => ⟨[f3], 0⟩) m3 Es
 def A24 : TorchLean.Tensor (Model FloatTy.float.fmt) [2, 4] :=
   TorchLean.Tensor.Rep.ofFn fun _ => Model.ofNatBits 0x3f800000
 
-/-- Block 1 of the empty memory: `A24`'s bytes, global, read-only. A test definition. -/
-def n1 : Mem × Nat :=
-  ({} : Mem).alloc gemv.prog.layout 1
-    (TorchLean.Shape.size [2, 4] * gemv.prog.layout.size (.fp .float)) 16 true true .all 1 1
-    (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) A24)
+/-- The memory of the two warps' instance: `mem` at `A24` and `v3`, `M = 2`, `K = 4`, the output
+a block of 8 bytes. A test definition. -/
+def n3 : Mem := mem A24 v3
 
-/-- Block 2 after `n1`: `v3`'s bytes, global, read-only. A test definition. -/
-def n2 : Mem × Nat :=
-  n1.1.alloc gemv.prog.layout 1 (TorchLean.Shape.size [4] * gemv.prog.layout.size (.fp .float))
-    16 true true .all 2 2 (tensorBytes gemv.prog.layout (.fp .float) (Val.ofFloat .float) v3)
-
-/-- The memory: blocks 1 and 2 hold `A24` and `v3`, block 3 is a writable global output of 8
-bytes. A test definition. -/
-def n3 : Mem := (n2.1.alloc gemv.prog.layout 1 8 16 true false .all 3 3).1
+/-- Test: `mem_caller` at `n3`, `M = 2`, `K = 4`. -/
+theorem n3_caller : Caller n3 3 1 2 2 4 A24 v3 :=
+  mem_caller (by decide) (by decide) (by decide) A24 v3
 
 /-- Thread `i`'s context at one block of 64 threads: gemv's program, no globals, thread `i` of
 block 0, every skeleton and oracle choice 0. A test definition. -/
@@ -1791,38 +1765,6 @@ def w64 : Lanes := ⟨⟨0, c64, fun _ => ⟨[f64], 0⟩, n3⟩, launch2 1 1 64 
 /-- Row 1 of `w64`'s output. A test definition. -/
 def r64 : Fin w64.M := ⟨1, by decide⟩
 
-/-- `n3` has no block from number 4 on. A test. -/
-theorem n3_none {q : Nat} (hq : 4 ≤ q) : n3.blocks q = none := by
-  simp only [n3, Mem.alloc, Mem.set]
-  split_ifs with h
-  · have : n2.1.next = 3 := rfl
-    omega
-  simp only [n2, Mem.alloc, Mem.set]
-  split_ifs with h
-  · have : n1.1.next = 2 := rfl
-    omega
-  simp only [n1, Mem.alloc, Mem.set]
-  split_ifs with h
-  · have : ({} : Mem).next = 1 := rfl
-    omega
-  rfl
-
-/-- Test: `n3` has no block from its `next`, 4, on (`n3_none`). -/
-theorem n3_free : n3.FreeAbove := fun q hq => n3_none (by
-  have h4 : n3.next = 4 := rfl
-  omega)
-
-/-- `n3`'s blocks 1 and 2 hold `A24` and `v3` row-major (`Mem.holds_alloc`). A test. -/
-theorem n3_holds :
-    n3.Holds gemv.prog.layout 1 (.fp .float) (Val.ofFloat .float)
-      (rowMajor gemv.prog.layout (.fp .float) 0) A24 ∧
-    n3.Holds gemv.prog.layout 2 (.fp .float) (Val.ofFloat .float)
-      (rowMajor gemv.prog.layout (.fp .float) 0) v3 :=
-  ⟨.of_block (fun _ h => (show n3.blocks 1 = n1.1.blocks 1 from rfl).trans h)
-      (Mem.holds_alloc (Layout.Codec.float _ .float) A24 ({} : Mem) 1 16 true true .all 1 1),
-    .of_block (fun _ h => (show n3.blocks 2 = n2.1.blocks 2 from rfl).trans h)
-      (Mem.holds_alloc (Layout.Codec.float _ .float) v3 n1.1 1 16 true true .all 2 2)⟩
-
 /-- Test: the warp theorem's premises hold at `w64` (gemv_kernel at one block of 64 threads,
 `M = 2`, `K = 4`, threads 0 to 31, row 0), with the matrix and vector at blocks 1 and 2. -/
 theorem w64_pre : w64.Pre 1 2 where
@@ -1841,15 +1783,15 @@ theorem w64_pre : w64.Pre 1 2 where
   hMK := by decide
   hrow := by decide +kernel
   hnx := by decide
-  hfresh _ _ _ _ := n3_none (Nat.le_add_right _ _)
-  hb0 := ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
-  hf0 := ⟨_, rfl, by decide +kernel⟩
-  hbA := ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
-  hbV := ⟨_, rfl, rfl, rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
-  hfA := ⟨_, rfl, by decide +kernel⟩
-  hfV := ⟨_, rfl, by decide +kernel⟩
-  hA := n3_holds.1
-  hV := n3_holds.2
+  hfresh _ _ _ _ := (n3_caller.closed 0).above _ (Nat.le_add_right _ _)
+  hb0 := n3_caller.hb0
+  hf0 := n3_caller.hf0
+  hbA := n3_caller.hbA
+  hbV := n3_caller.hbV
+  hfA := n3_caller.hfA
+  hfV := n3_caller.hfV
+  hA := n3_caller.hA
+  hV := n3_caller.hV
 
 /-- Test: the second warp's premises on the start memory `n3` (gemv_kernel at one block of 64
 threads, `M = 2`, `K = 4`, threads 32 to 63, row 1). -/
@@ -1869,7 +1811,7 @@ theorem w64_later_pre : (w64.later 32 r64 w64.m).Pre 1 2 where
   hMK := by decide
   hrow := by decide +kernel
   hnx := by decide
-  hfresh _ _ _ _ := n3_none (Nat.le_add_right _ _)
+  hfresh _ _ _ _ := (n3_caller.closed 0).above _ (Nat.le_add_right _ _)
   hb0 := w64_pre.hb0
   hf0 := w64_pre.hf0
   hbA := w64_pre.hbA
@@ -1919,8 +1861,8 @@ theorem w64_done {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : Nat �
       z.mem.load gemv.prog.layout (c 32).who 0 (.fp .float) ⟨3, 4⟩ (some 4) =
         .ok (Val.ofFloat .float ((ofStart (launch2 1 1 64 1) g c 32 2 4 3 A24 v3 1).word 0)) := by
   obtain ⟨z, hp, hd, hl⟩ := grid_done hs rfl (launch2_valid (by decide)) (by decide) rfl rfl rfl
-    rfl hch (by decide) (by decide) (by decide) n3_free w64_pre.hb0 w64_pre.hf0 w64_pre.hbA
-    w64_pre.hbV w64_pre.hfA w64_pre.hfV w64_pre.hA w64_pre.hV
+    rfl hch (by decide) (by decide) (by decide) (n3_caller.closed 0).above w64_pre.hb0
+    w64_pre.hf0 w64_pre.hbA w64_pre.hbV w64_pre.hfA w64_pre.hfV w64_pre.hA w64_pre.hV
   exact ⟨z, hp, hd, hl 0 (by rw [Grid.start_size hs]; decide) 0
       (by simp only [row, Launch.env, coord, launch2, volume]; omega),
     hl 32 (by rw [Grid.start_size hs]; decide) 1
@@ -1942,8 +1884,8 @@ theorem w64_out_done {ch : Nat → Nat} (hch : ∀ q, ch q < 2 ^ 60) {oracle : N
       z.mem.load gemv.prog.layout (c 0).who 0 (.fp .float) ⟨3, 0⟩ (some 4) =
         .ok (Val.ofFloat .float ((ofStart (launch2 1 1 64 1) g c 0 1 4 3 A3 v3 0).word 0)) := by
   obtain ⟨z, hp, hd, hl⟩ := grid_done hs rfl (launch2_valid (by decide)) (by decide) rfl rfl rfl
-    rfl hch (by decide) (by decide) (by decide) m3_free w0_pre.hb0 w0_pre.hf0 w0_pre.hbA
-    w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
+    rfl hch (by decide) (by decide) (by decide) (m3_caller.closed 0).above w0_pre.hb0 w0_pre.hf0
+    w0_pre.hbA w0_pre.hbV w0_pre.hfA w0_pre.hfV w0_pre.hA w0_pre.hV
   exact ⟨by simp only [row, Launch.env, coord, launch2, volume],
     z, hp, hd, hl 0 (by rw [Grid.start_size hs]; decide) 0
       (by simp only [row, Launch.env, coord, launch2, volume]; omega)⟩

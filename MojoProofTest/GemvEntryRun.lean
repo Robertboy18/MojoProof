@@ -205,23 +205,6 @@ theorem life_hds {V : Valuation} {vs : List (Except Fault Val)} {x : SVal} {es :
   · exact h2
   exact h3 d hd
 
-/-- For every program, function, valuation and node list: the effect list of one `store`
-statement runs to the memory that `Mem.store` gives at its operands' values. -/
-theorem SEff.run_store_ok {V : Valuation} {vs : List (Except Fault Val)} {P : Program}
-    {F : Func} {lbl pc : Nat} {v p : SVal} {dst : Option Nat} {vol : Bool} {t : Ty} {pv : Value}
-    {a : Nat} {pv' : Value} {al : Option Nat} {md : List (String × Nat)} {x : Val} {q : Ptr}
-    {M : Mem} (hF : V.fn = F) (hP : V.ctx.prog = P)
-    (hs : (F.blocks.find? (·.label == lbl)).bind (·.stmts[pc]?) =
-      some ⟨dst, .store vol (.mk t pv) (.mk (.ptr a) pv') al, md⟩)
-    (hv : v.eval V vs = .ok x) (hp : p.eval V vs = .ok (.ptr q))
-    (h : V.mem.store P.layout V.ctx.who a t x q (some (al.getD (P.layout.align t))) = .ok M) :
-    SEff.run V vs [.store lbl pc v p] = .ok M := by
-  subst hP
-  refine Eq.trans ?_ h
-  simp only [SEff.run, List.foldlM_cons, List.foldlM_nil, bind_pure, SEff.apply,
-    Valuation.stmt_of_fn hF hs, hv, hp]
-  rfl
-
 /-- For every function, valuation, node list, memory `M`, layout `l` and numbers: an `alloca`
 statement's effect, whose count evaluates to `k`, at a program of layout `l`, whose fresh block
 `b` has no block in `M`, applies to `M` with block `b` allocated (`Mem.alloc`) in `l`'s `alloca`
@@ -408,17 +391,6 @@ theorem EntryInv.frame {who b7 b8 b9 : Nat} {S : Nat → Prop} {m₀ m m' : Mem}
 def SlotEv (who : Who) (b7 b8 b9 : Nat) (e : Event) : Prop :=
   ∃ a, e = .access a ∧ a.who = who ∧ a.atomic = none ∧ a.invariant = false ∧
     (a.ptr.block = b7 ∨ a.ptr.block = b8 ∨ a.ptr.block = b9)
-
-/-- For every property `P` of events and memory `m`: `m` extends its own trace (by no event). -/
-theorem ext_refl (P : Event → Prop) (m : Mem) : Ext P m m :=
-  ⟨[], rfl, fun _ h => by cases h⟩
-
-/-- For every property `P` of events and memories `m₀`, `m`, `m'`: an extension of `m₀`'s trace
-at `m` is one at a memory `m'` with `m`'s trace (as `Mem.setLive_trace` gives). -/
-theorem ext_keep {P : Event → Prop} {m₀ m m' : Mem} (h : Ext P m₀ m) (e : m'.trace = m.trace) :
-    Ext P m₀ m' :=
-  have ⟨E, h₁, h₂⟩ := h
-  ⟨E, by rw [e, h₁], h₂⟩
 
 /-- For every thread `who`, block numbers `b7`, `b8`, `b9`, memories, layout, space, type, value,
 pointer `p` into one of the three blocks and alignment: a store by `who` at `p` that succeeds
@@ -720,7 +692,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have I₃ : EntryInv c.who.thread b7 b8 b9 d₂.2 m₃ := by
     rw [← hm₃]; exact EntryInv.setLive false (Or.inr (Or.inr rfl)) hI
   have X₃ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₃ := by
-    rw [← hm₃]; exact ext_keep (ext_refl _ _) (Mem.setLive_trace _ _ _)
+    rw [← hm₃]; exact .of_trace (Mem.setLive_trace _ _ _)
   have R₃ : fr₃.regs = fr₂.regs := Frame.regs_none hV₃ rfl
   have g₃ : fr₃.fn = gemv.fn_0 := hf₃.trans g₂
   have r9₃ : fr₃.regs 9 = some (.ptr ⟨b9, 0⟩) := by rw [R₃]; exact r9₂
@@ -734,7 +706,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have I₄ : EntryInv c.who.thread b7 b8 b9 d₂.2 m₄ := by
     rw [← hm₄]; exact EntryInv.setLive true (Or.inr (Or.inr rfl)) I₃
   have X₄ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₄ := by
-    rw [← hm₄]; exact ext_keep X₃ (Mem.setLive_trace _ _ _)
+    rw [← hm₄]; exact X₃.trans (.of_trace (Mem.setLive_trace _ _ _))
   have lv9₄ : m₄.liveAt b9 = true := by rw [← hm₄]; exact Mem.liveAt_setLive_self I₃.2.2.1 true
   have R₄ : fr₄.regs = fr₃.regs := Frame.regs_none hV₄ rfl
   have g₄ : fr₄.fn = gemv.fn_0 := hf₄.trans g₃
@@ -753,7 +725,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have hr4 : SEff.run (Valuation.entry c t₄.k m₄ fr₄)
       (vals (Valuation.entry c t₄.k m₄ fr₄) (gp_4.toSummary 1).nodes)
       (gp_4.toSummary 1).effs = .ok S4 :=
-    SEff.run_store_ok (a := 0) (t := .int 32) (al := some 4) hF4 hcp (by rfl) (SVal.eval_reg r24₄) (SVal.eval_reg r9₄) hS4
+    (SEff.run_store_eq (a := 0) (t := .int 32) (al := some 4) hF4 hcp (by rfl)
+      (SVal.eval_reg r24₄) (SVal.eval_reg r9₄)).trans hS4
   refine RunsVia.of_life (b := b8) (o := 0) hT₄ rfl ?_ (SVal.eval_reg r8₄)
     fun me hme => ⟨?_, fun fr₅ t₅ ht₅ hf₅ hl₅ hp₅ a₅ hT₅ hV₅ => ?_⟩
   · entry_obls
@@ -765,7 +738,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
     rw [← hm₅]; exact EntryInv.setLive false (Or.inr (Or.inl rfl)) (EntryInv.store hS4
       (Or.inr (Or.inr rfl)) I₄)
   have X₅ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₅ := by
-    rw [← hm₅]; exact ext_keep (ext_store X₄ hS4 (Or.inr (Or.inr rfl))) (Mem.setLive_trace _ _ _)
+    rw [← hm₅]
+    exact (ext_store X₄ hS4 (Or.inr (Or.inr rfl))).trans (.of_trace (Mem.setLive_trace _ _ _))
   have R₅ : fr₅.regs = fr₄.regs := Frame.regs_none hV₅ rfl
   have g₅ : fr₅.fn = gemv.fn_0 := hf₅.trans g₄
   have r8₅ : fr₅.regs 8 = some (.ptr ⟨b8, 0⟩) := by rw [R₅]; exact r8₄
@@ -779,7 +753,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have I₆ : EntryInv c.who.thread b7 b8 b9 d₂.2 m₆ := by
     rw [← hm₆]; exact EntryInv.setLive true (Or.inr (Or.inl rfl)) I₅
   have X₆ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₆ := by
-    rw [← hm₆]; exact ext_keep X₅ (Mem.setLive_trace _ _ _)
+    rw [← hm₆]; exact X₅.trans (.of_trace (Mem.setLive_trace _ _ _))
   have lv8₆ : m₆.liveAt b8 = true := by rw [← hm₆]; exact Mem.liveAt_setLive_self I₅.2.1 true
   have R₆ : fr₆.regs = fr₅.regs := Frame.regs_none hV₆ rfl
   have g₆ : fr₆.fn = gemv.fn_0 := hf₆.trans g₅
@@ -798,7 +772,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have hr6 : SEff.run (Valuation.entry c t₆.k m₆ fr₆)
       (vals (Valuation.entry c t₆.k m₆ fr₆) (gp_6.toSummary 1).nodes)
       (gp_6.toSummary 1).effs = .ok S6 :=
-    SEff.run_store_ok (a := 0) (t := .int 32) (al := some 4) hF6 hcp (by rfl) (SVal.eval_reg r25₆) (SVal.eval_reg r8₆) hS6
+    (SEff.run_store_eq (a := 0) (t := .int 32) (al := some 4) hF6 hcp (by rfl)
+      (SVal.eval_reg r25₆) (SVal.eval_reg r8₆)).trans hS6
   refine RunsVia.of_life (b := b7) (o := 0) hT₆ rfl ?_ (SVal.eval_reg r7₆)
     fun me hme => ⟨?_, fun fr₇ t₇ ht₇ hf₇ hl₇ hp₇ a₇ hT₇ hV₇ => ?_⟩
   · entry_obls
@@ -810,7 +785,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
     rw [← hm₇]; exact EntryInv.setLive false (Or.inl rfl) (EntryInv.store hS6
       (Or.inr (Or.inl rfl)) I₆)
   have X₇ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₇ := by
-    rw [← hm₇]; exact ext_keep (ext_store X₆ hS6 (Or.inr (Or.inl rfl))) (Mem.setLive_trace _ _ _)
+    rw [← hm₇]
+    exact (ext_store X₆ hS6 (Or.inr (Or.inl rfl))).trans (.of_trace (Mem.setLive_trace _ _ _))
   have R₇ : fr₇.regs = fr₆.regs := Frame.regs_none hV₇ rfl
   have g₇ : fr₇.fn = gemv.fn_0 := hf₇.trans g₆
   have hF7 : (Valuation.entry c t₇.k m₇ fr₇).fn = gemv.fn_0 := g₇
@@ -838,7 +814,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have I₈ : EntryInv c.who.thread b7 b8 b9 d₂.2 m₈ := by
     rw [← hm₈]; exact EntryInv.setLive true (Or.inl rfl) I₇
   have X₈ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₈ := by
-    rw [← hm₈]; exact ext_keep X₇ (Mem.setLive_trace _ _ _)
+    rw [← hm₈]; exact X₇.trans (.of_trace (Mem.setLive_trace _ _ _))
   have lv7₈ : m₈.liveAt b7 = true := by rw [← hm₈]; exact Mem.liveAt_setLive_self I₇.1 true
   have g₈ : fr₈.fn = gemv.fn_0 := hf₈.trans g₇
   have hF8 : (Valuation.entry c t₈.k m₈ fr₈).fn = gemv.fn_0 := g₈
@@ -855,7 +831,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
     lv7₈ hw z7 (by decide) (by decide) (dvd_refl 8) (dvd_zero 8) rfl
   have hst : ∀ vs, SEff.run (Valuation.entry c t₈.k m₈ fr₈) vs
       [.store 6 29 (.reg 27) (.reg 7)] = .ok S8 := fun _ =>
-    SEff.run_store_ok (a := 0) (t := .arr 2 (.ptr 0)) (al := some 8) hF8 hcp (by rfl) (SVal.eval_reg r27₈) (SVal.eval_reg r7₈) hS8
+    (SEff.run_store_eq (a := 0) (t := .arr 2 (.ptr 0)) (al := some 8) hF8 hcp (by rfl)
+      (SVal.eval_reg r27₈) (SVal.eval_reg r7₈)).trans hS8
   obtain ⟨g7, hA7, hg7⟩ := Mem.slot_addr (l := gemv.prog.layout) I₈.1 lv7₈ hw (by decide)
   obtain ⟨B7, hB7, -, hf7⟩ := Mem.slot_fits I₈.1
   obtain ⟨_, -, -, hq0⟩ := Mem.slot_check (l := gemv.prog.layout) (w := c.who) (o := 0)
@@ -881,7 +858,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
       (gep_zeros hA7 (Nat.lt_of_lt_of_le (Nat.lt_add_of_pos_right (by decide : 0 < 16)) hg7)))
   have k1 : (vals (Valuation.entry c t₈.k m₈ fr₈) (gp_8.toSummary 9).nodes)[1]? =
       some (.ok (.ptr ⟨b9, 0⟩)) :=
-    vals_getElem?_eval rfl (SNode.eval_loadAfter_elem (es := []) (xs := [(⟨b9, 0⟩ : Ptr), ⟨b8, 0⟩]) (n := 2) (a := 0) (al := some 8)
+    vals_getElem?_eval rfl (SNode.eval_loadAfter_elem (es := [])
+      (xs := [(⟨b9, 0⟩ : Ptr), ⟨b8, 0⟩]) (n := 2) (a := 0) (al := some 8)
       (k := 0) hF8 hcp (Layout.Codec.ptr _ 0 (by decide)) rfl (by decide) (by rfl) (by rfl)
       ⟨S8, hst _⟩ (SVal.eval_reg r27₈) (SVal.eval_reg r7₈)
       (SVal.eval_node_take (by decide) k0) rfl (by rfl) rfl hq0)
@@ -892,8 +870,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
         (SEff.apply_load_at hF8 (by rfl) (SVal.eval_node_take (by decide) k0))⟩
       (SNode.eval_loadAfter_apart_at (es := []) hF8 hcp (by rfl) (by rfl) ⟨S8, hst _⟩
         (SVal.eval_node_take (by decide) k1) (SVal.eval_reg r7₈) (Or.inl n97)
-        (SNode.eval_loadAfter_nil.trans (SNode.eval_load_at (t := .int 32) (a := 0) (al := some 4) hF8 hcp (by rfl)
-          (SVal.eval_node_take (by decide) k1) L9 rfl))))
+        (SNode.eval_loadAfter_nil.trans (SNode.eval_load_at (t := .int 32) (a := 0)
+          (al := some 4) hF8 hcp (by rfl) (SVal.eval_node_take (by decide) k1) L9 rfl))))
   have k3 : (vals (Valuation.entry c t₈.k m₈ fr₈) (gp_8.toSummary 9).nodes)[3]? =
       some (.ok (fill .undef (.vec 2 (.int 32)))) :=
     vals_getElem?_eval rfl (SNode.eval_constAt_undef hF8 (by rfl) (by rfl))
@@ -904,7 +882,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have k5 : (vals (Valuation.entry c t₈.k m₈ fr₈) (gp_8.toSummary 9).nodes)[5]? =
       some (.ok (.ptr ⟨b7, 8⟩)) :=
     vals_getElem?_eval rfl (SNode.eval_gep_at hF8 hcp (by rfl) rfl
-      (SVal.eval_node_take (by decide) k0) (gep_buffer (K := 1) (w := 32) (src := .ptr 0) (a := 0) rfl
+      (SVal.eval_node_take (by decide) k0)
+      (gep_buffer (K := 1) (w := 32) (src := .ptr 0) (a := 0) rfl
         (Mem.slot_bufferIn I₈.1 lv7₈) (Or.inl rfl) ⟨B7, hB7, by rw [ite_eq_left rfl, hw]; exact hf7⟩
         (by rw [hw]; decide) (by decide) (by decide) (by decide)))
   have k6 : (vals (Valuation.entry c t₈.k m₈ fr₈) (gp_8.toSummary 9).nodes)[6]? =
@@ -918,8 +897,9 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
       (SNode.eval_loadAfter_log_ex (es := [.store 6 29 (.reg 27) (.reg 7)])
         ⟨_, SEff.run_append (es := [.store 6 29 (.reg 27) (.reg 7)]) (hst _)
           (SEff.apply_load_at hF8 (by rfl) (SVal.eval_node_take (by decide) k0))⟩
-        (SNode.eval_loadAfter_elem (es := []) (xs := [(⟨b9, 0⟩ : Ptr), ⟨b8, 0⟩]) (n := 2) (a := 0) (al := some 8)
-          (k := 1) hF8 hcp (Layout.Codec.ptr _ 0 (by decide)) rfl (by decide) (by rfl) (by rfl)
+        (SNode.eval_loadAfter_elem (es := []) (xs := [(⟨b9, 0⟩ : Ptr), ⟨b8, 0⟩]) (n := 2)
+          (a := 0) (al := some 8) (k := 1) hF8 hcp (Layout.Codec.ptr _ 0 (by decide)) rfl
+          (by decide) (by rfl) (by rfl)
           ⟨S8, hst _⟩ (SVal.eval_reg r27₈) (SVal.eval_reg r7₈)
           (SVal.eval_node_take (by decide) k5) rfl (by rfl) rfl hq8)))
   have k7 : (vals (Valuation.entry c t₈.k m₈ fr₈) (gp_8.toSummary 9).nodes)[7]? =
@@ -944,8 +924,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
             (SEff.apply_load_at hF8 (by rfl) (SVal.eval_node_take (by decide) k0))⟩
           (SNode.eval_loadAfter_apart_at (es := []) hF8 hcp (by rfl) (by rfl) ⟨S8, hst _⟩
             (SVal.eval_node_take (by decide) k6) (SVal.eval_reg r7₈) (Or.inl n87)
-            (SNode.eval_loadAfter_nil.trans (SNode.eval_load_at (t := .int 32) (a := 0) (al := some 4) hF8 hcp (by rfl)
-              (SVal.eval_node_take (by decide) k6) L8 rfl))))))
+            (SNode.eval_loadAfter_nil.trans (SNode.eval_load_at (t := .int 32) (a := 0)
+              (al := some 4) hF8 hcp (by rfl) (SVal.eval_node_take (by decide) k6) L8 rfl))))))
   have k8 : (vals (Valuation.entry c t₈.k m₈ fr₈) (gp_8.toSummary 9).nodes)[8]? =
       some (.ok (.vec [.bits 32 u₁, .bits 32 u₂])) :=
     vals_getElem?_eval rfl (SNode.eval_insEltAt_at hF8 (by rfl)
@@ -980,7 +960,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
     rw [← hm₉]; exact EntryInv.setLive false (Or.inl rfl) I₈'
   have X₉ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₉ := by
     rw [← hm₉]
-    exact ext_keep ((ext_store X₈ hS8 (Or.inl rfl)).trans hX8) (Mem.setLive_trace _ _ _)
+    exact ((ext_store X₈ hS8 (Or.inl rfl)).trans hX8).trans (.of_trace (Mem.setLive_trace _ _ _))
   have lv7₉ : m₉.liveAt b7 = false := by rw [← hm₉]; exact Mem.liveAt_setLive_self I₈'.1 false
   have g₉ : fr₉.fn = gemv.fn_0 := hf₉.trans g₈
   have r35₉ : fr₉.regs 35 = some (.vec [.bits 32 u₁, .bits 32 u₂]) :=
@@ -1006,7 +986,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have I₁₀ : EntryInv c.who.thread b7 b8 b9 d₂.2 m₁₀ := by
     rw [← hm₁₀]; exact EntryInv.setLive false (Or.inr (Or.inl rfl)) I₉
   have X₁₀ : Ext (SlotEv c.who b7 b8 b9) d₂.2 m₁₀ := by
-    rw [← hm₁₀]; exact ext_keep X₉ (Mem.setLive_trace _ _ _)
+    rw [← hm₁₀]; exact X₉.trans (.of_trace (Mem.setLive_trace _ _ _))
   have lv8₁₀ : m₁₀.liveAt b8 = false := by
     rw [← hm₁₀]; exact Mem.liveAt_setLive_self I₉.2.1 false
   have lv7₁₀ : m₁₀.liveAt b7 = false := by
@@ -1023,7 +1003,8 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
   have R₁₁ : fr₁₁.regs = fr₁₀.regs := Frame.regs_none hV₁₁ rfl
   have fin : ∀ s v, s ≠ 26 → s ≠ 27 → s < 28 → fr₂.regs s = some v → fr₁₁.regs s = some v :=
     fun s v x y z h => by rw [R₁₁, R₁₀]; exact up s v x y z h
-  refine hK _ _ _ ht₁₁ (hf₁₁.trans g₁₀) hl₁₁ ?_ ?_ ?_ (fin _ _ (by decide) (by decide) (by decide) r0₂)
+  refine hK _ _ _ ht₁₁ (hf₁₁.trans g₁₀) hl₁₁ ?_ ?_ ?_
+    (fin _ _ (by decide) (by decide) (by decide) r0₂)
     (fin _ _ (by decide) (by decide) (by decide) r1₂)
     (fin _ _ (by decide) (by decide) (by decide) r2₂)
     (fin _ _ (by decide) (by decide) (by decide) r3₂)
@@ -1034,7 +1015,7 @@ theorem entry (c : Ctx) (hcp : c.prog = gemv.prog) (L : Launch) (hL : L.Valid) (
     (EntryInv.setLive false (Or.inr (Or.inr rfl)) I₁₀)
     (by rw [Mem.liveAt_setLive_ne _ _ n79]; exact lv7₁₀)
     (by rw [Mem.liveAt_setLive_ne _ _ n89]; exact lv8₁₀)
-    (Mem.liveAt_setLive_self I₁₀.2.2.1 false) (ext_keep X₁₀ (Mem.setLive_trace _ _ _))
+    (Mem.liveAt_setLive_self I₁₀.2.2.1 false) (X₁₀.trans (.of_trace (Mem.setLive_trace _ _ _)))
   · rw [hp₁₁, hp₁₀, hp₉, hp₈, hp₇, hp₆, hp₅, hp₄, hp₃, hp₂]
     rfl
   · rw [a₁₁, a₁₀, a₉, a₈, a₇, a₆, a₅, a₄, a₃, a₂, a₁, ← hb7, ← hb8, ← hb9]

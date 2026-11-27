@@ -8,6 +8,7 @@ block's node values), `MojoProof/Sym/Ops.lean` (`mojo_ret`, an elementwise kerne
 invariant after a path or rounds), `MojoProof/Sym/Race.lean` (`mojo_race`, the disjointness premises
 of the race-freedom results), `MojoProof/Sym/Command.lean` (`sym_summary`),
 `MojoProof/Sym/OblSeg.lean` (`mojo_seg` and `sym_segs`, a thread through collective calls),
+`MojoProof/Sym/WarpRoute.lean` (`warp_route`, a warp's run from its lanes' facts),
 `MojoProof/Sym/KernelCmd.lean` (`mojo_kernel`), `MojoProof/Sym/Info.lean` (`#mojo_info`),
 `MojoProof/LLVM/Mutate.lean` (the mutation harness, `mojo_mutant`, `mojo_kills`),
 `MojoProof/LLVM/Quote.lean` (`mojo_import`), `MojoProof/LLVM/Family.lean` (`mojo_family`, a
@@ -19,7 +20,7 @@ tests in `MojoProofTest/SymBounds.lean`, `MojoProofTest/Obl.lean`, `MojoProofTes
 `MojoProofTest/Vmul.lean`, `MojoProofTest/NaiveOut.lean`, `MojoProofTest/Inv.lean`,
 `MojoProofTest/Race.lean`, `MojoProofTest/Sym.lean`, `MojoProofTest/KernelCmd.lean`,
 `MojoProofTest/SymInfo.lean`, `MojoProofTest/Mutate.lean`, `MojoProofTest/Import.lean`,
-`MojoProofTest/Family.lean`,
+`MojoProofTest/Family.lean`, `MojoProofTest/WarpRoute.lean`,
 `MojoProofTest/Corpus.lean` and `MojoProofTest/Rule.lean`. None of them sets `maxHeartbeats` (the
 library has 4 such overrides, all in `MojoProof/Sem`) or `maxRecDepth`, and their calls need
 neither: the tests call them under the default limits.
@@ -728,6 +729,58 @@ lanes storing nothing. The delivered values are premises, not the other lanes' s
 not joined to the kernel's entry and loop. The twin `tail_open` (the fifth shuffle's value
 behind an irreducible definition: the `bitcast` `%86`'s obligation open) and mojo_seg's refusal
 with no `Seg.Through` hypothesis are checked by `#guard_msgs`.
+
+## `warp_route` (`MojoProof/Sym/WarpRoute.lean`)
+
+A warp's run through `J` shuffles is `WarpRun.of_waits` (MojoProof/Sym/Canon.lean) from four
+premises over the lanes `j ∈ warpLanes L k` and, but for the first, the phases `i < J`: each lane's
+run through its waits (`hr`), the waits' shuffles (`hW`), the waits' memories (`hm`) and each
+phase's start on the memory the one before leaves (`h0`). A kernel's proof states its lanes' facts
+as `∀ j < N, …` with `N` the lane count and its lanes' runs as `RunsVia.of_fires` gives them, so
+the glue is the move from `j < N` to `j ∈ warpLanes L k`, the lanes' runs in of_waits's form and
+the premises lane by lane and phase by phase.
+
+`warp_route (J := …) (W := …) (M := …) … using e₁, …`, on a goal `∃ Es, WarpRun L c k t m Es m'`:
+
+1. every hypothesis `∀ j < b, P j` whose bound `b` is the lane count `(warpLanes L k).length`, or
+   is `N` with a hypothesis `(warpLanes L k).length = N`, becomes `∀ j ∈ warpLanes L k, P j` under
+   its name (`mem_warpLanes`); facts are found by their types, not by their names;
+2. `refine WarpRun.of_waits` with the named arguments (`J`, `fn`, `lbl`, `W`, `mo`, `X`, `M`);
+3. each premise: by a term `eᵢ` whole or by a hypothesis; or, its phase `i` and lane `j`
+   introduced under fresh names, by the lane's facts: every hypothesis and term that takes a lane
+   taken at `j` (and at `i` if it takes a phase), their conjuncts (through `∧`, equations of pairs
+   and Boolean `&&`, `decide` and `==`, a definition at the head unfolded once), and every term
+   whose premises those facts fill (two rounds); the premise whole or, when `J` is a numeral, one
+   case per phase (`interval_cases`), each case by one of those facts, a hypothesis, `rfl`, a
+   conjunction of their conjuncts, or a term or `Program.shfl_nil` applied backward;
+4. the lanes' runs (`hr`) at a lane from a fact that is a lane's run, by its form:
+   `RunsVia.of_runs` for `Runs c t m m'` (no wait), `RunsVia.of_block` for a run through
+   `ws.map (Piece.Wait.via fn l)`, `RunsVia.of_blocks` for one through
+   `a.map (Piece.Wait.via fn l₁) ++ b.map (Piece.Wait.via fn l₂)`; the lists' lengths by facts,
+   the labels by `decide`, the run's end by a fact after substituting its end memory;
+5. the shuffles (`hW`) by `WarpRun.shfl_of`: the lanes' one program `P` and each lane's
+   `Piece.Wait.shflOk` (a Boolean: each wait's shuffle mode, position, full mask, offer, lane
+   operand, clamp and `Grid.fire`'s delivery) by facts, the keeping premise (the shuffle
+   declarations' result attributes keep the deliveries) by a fact, a term or `Program.shfl_nil`
+   from `P.shflNil`.
+
+A premise it does not close stays a goal, as `WarpRun.of_waits` states it, its binders not
+introduced; the shuffles' premise stays `WarpRun.shfl_of`'s keeping premise when that lemma's
+other premises close. It fails, with a message, on a goal that is not a warp's run. For every
+program, launch, contexts, warp, threads, memories, waits and number of phases. Its uses, each one
+call with no other proof line: `warp78` and `warp43` (MojoProofTest/GemvWarp.lean, seven and two
+phases; `using` gemv's lane lemmas `lane` or `lane43`, `start_frame`, `out_covers`, `mems_of` and
+`gemv_nil`), `skipWarp` (MojoProofTest/SymCanon.lean, no phase; `using skipLane`) and `shflWarp`
+(one phase; `using lane, prog_eq, keep`). Tests (MojoProofTest/WarpRoute.lean), each at every
+launch, contexts, warp, threads and memory: at no phase the lanes' runs closed by `RunsVia.of_runs`
+and by a `using` term, and left open when no fact gives a run's end (`#guard_msgs`); at one phase
+everything closed through `RunsVia.of_block`, `WarpRun.shfl_of` and `Program.shfl_nil`, the lanes'
+runs left open without the waits' lengths and the keeping premise left open without `P.shflNil`
+(`#guard_msgs`); at two phases everything closed through `RunsVia.of_blocks`, the lanes' runs left
+open when the labels are not the blocks' (`#guard_msgs`); at two phases with a list literal of
+waits the lanes' runs by a lifted hypothesis, the waits' memories by the conjuncts of a lane's
+fact, the phases' starts by `rfl` and the shuffles left open (`#guard_msgs`); and the refusal of a
+goal that is not a warp's run. docs/automation.md has what is automated and what is not.
 
 ## `mojo_kernel` (`MojoProof/Sym/KernelCmd.lean`)
 

@@ -9,7 +9,8 @@ its type (`import_fact`), in a context with the hypothesis that the input readin
 spec's domain. Here one operation, the truncated difference `a - b` of two natural vectors, is
 proposed as `MojoProofTest.ImportFacts.diffInt`, the difference of two integer vectors, with the
 vectors read as integers. The two agree only on `diffInt`'s domain (`b i ≤ a i` at every `i`), and
-the bridge `sub_cast` of MojoProofTest/ImportFacts.lean has that domain as its premise.
+the bridge `sub_cast` of MojoProofTest/ImportFacts.lean has that domain as its premise; its output
+has type `Fin n`, the goal's `diffInt.Out n` once `diffInt` is unfolded.
 
 * `Bare`: the command without `using`. `sub_cast` is not a theorem of this file, so no theorem
   tried closes `eq`: the importer is not declared, and the command warns with the open goal
@@ -23,6 +24,9 @@ the bridge `sub_cast` of MojoProofTest/ImportFacts.lean has that domain as its p
   `a = 9 4 6 1 8`, `b = 0 5 2 1 3`, out of the domain.
 * `Strict`: the same command `using sub_strict`, whose premise `b i < a i` the domain hypothesis
   does not give: not declared, with the open goal (`#guard_msgs`).
+* `Far`: the same command `using sub_zero_add`, stated over `Fin (0 + n)`, which is `Fin n` only by
+  the equation `0 + n = n`: its arguments' types are not the goal's terms' types, so it is not
+  declared, with the open goal (`#guard_msgs`).
 
 Tests at sizes 3 and 5, at the spec `diffInt`.
 -/
@@ -152,5 +156,28 @@ import_spec subImp : SubOp (n : ℕ) using sub_strict where
 #check subImp
 
 end Strict
+
+namespace Far
+
+/--
+warning: import_spec: `subImp` is not declared, its `eq` has an open case:
+import_fact: neither `sub_zero_add` nor a theorem of this file closes the goal
+  ↑((a - b) o✝) = diffInt.f n (Sum.elim (fun i => ↑(a i)) fun i => ↑(b i)) o✝
+-/
+#guard_msgs in
+/-- The truncated difference proposed as `diffInt`, with `sub_zero_add` given by `using`: its
+vectors and output are over `Fin (0 + n)`, not `Fin n` by unfolding, so it is not declared. -/
+import_spec subImp : SubOp (n : ℕ) using sub_zero_add where
+  /-- The truncated difference of two natural vectors. -/
+  | sub (a : Fin n → ℕ) (b : Fin n → ℕ) → (y : Fin n → ℕ) := a - b
+    ↦ diffInt
+    from Sum.elim (fun i => (a i : ℤ)) fun i => (b i : ℤ)
+    at fun i => (y i : ℤ)
+
+/-- error: Unknown identifier `subImp` -/
+#guard_msgs in
+#check subImp
+
+end Far
 
 end MojoProofTest.ImportDom

@@ -15,6 +15,10 @@ at every size, the source's meaning read as entries is the spec's function at th
 entries. It cannot be closed by `rfl` in general: `denote` exists before the spec and does not
 mention it.
 
+`Importer.Graded` states an operation's output words graded against the source's meaning (not
+the spec's function), and `Importer.graded_of_holds` gives it from a graded rule that holds, by
+`eq`.
+
 The core names no front end. MojoProof/Import/ has the importers, each with its `eq`.
 docs/proofs/import.md gives the design's departures and what an importer command generates.
 -/
@@ -66,5 +70,36 @@ structure Importer where
   /-- The source's meaning agrees with the proposed spec on its domain at every size. -/
   eq : ∀ e Sp (h : translate e = some Sp) σ x, Sp.Dom σ (readIn e Sp h σ x) →
     readOut e Sp h σ (denote e σ x) = Sp.f σ (readIn e Sp h σ x)
+
+/-- **Output words graded against the source's meaning**, for every importer `Imp`, operation `e`,
+proposed spec `Sp` (`h : Imp.translate e = some Sp`), grade `g` of `Sp`'s graded shape, size `σ`,
+encodings `E`, input words `I` and output words `W`: at every input tensors `x` of the source and
+input grades `G` at which each input word is `Approx` at its grade of `x`'s reading, each output
+word is `Approx` at `g`'s grade of the reading of the source's own meaning `Imp.denote e σ x`. It
+names the source's meaning, not `Sp.f`; `Importer.graded_of_holds` gives it from `Sp`'s rule. -/
+def Importer.Graded (Imp : Importer) (e : Imp.Src) {Sp : Spec (Imp.Sz e)}
+    (h : Imp.translate e = some Sp)
+    (g : ∀ σ, Sp.Encs σ → Ents (Sp.In σ) (Sp.dIn σ) → (Sp.In σ → Grade) → Sp.Out σ → Grade)
+    (σ : Imp.Sz e) (E : Sp.Encs σ) (I : E.inp.Words) (W : E.out.Words) : Prop :=
+  ∀ x (G : Sp.In σ → Grade),
+    (∀ i, Approx (Sp.dIn σ i) (G i) (E.inp.fmt i) (E.inp.decode I i) (Imp.readIn e Sp h σ x i)) →
+    ∀ o, Approx (Sp.dOut σ o) (g σ E (Imp.readIn e Sp h σ x) G o) (E.out.fmt o) (E.out.decode W o)
+      (Imp.readOut e Sp h σ (Imp.denote e σ x) o)
+
+/-- **A graded rule's words are graded against the source's meaning**: for every importer `Imp`,
+operation `e`, proposed spec `Sp` whose rule is `.graded g mono` and whose domain is every input
+(`hD`), size `σ`, encodings `E`, input words `I` and output words `W` that meet `Sp`'s rule, `W`
+is `Importer.Graded` at `g`: the importer's `eq` turns `Sp.f` at the input tensors' reading into
+the reading of the source's meaning. -/
+theorem Importer.graded_of_holds (Imp : Importer) (e : Imp.Src) {Sp : Spec (Imp.Sz e)}
+    (h : Imp.translate e = some Sp)
+    {g : ∀ σ, Sp.Encs σ → Ents (Sp.In σ) (Sp.dIn σ) → (Sp.In σ → Grade) → Sp.Out σ → Grade}
+    {mono : ∀ σ E A, Monotone (g σ E A)} (hr : Sp.rule = .graded g mono)
+    (hD : ∀ σ A, Sp.Dom σ A) {σ : Imp.Sz e} {E : Sp.Encs σ} {I : E.inp.Words}
+    {W : E.out.Words} (hW : Sp.rule.Holds σ E I W) : Imp.Graded e h g σ E I W :=
+  fun x G hG o => by
+    rw [Imp.eq e Sp h σ x (hD σ _)]
+    rw [hr] at hW
+    exact hW _ G (hD σ _) hG o
 
 end GPUProof

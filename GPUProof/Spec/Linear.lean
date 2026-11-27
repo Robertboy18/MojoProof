@@ -1,4 +1,5 @@
 import GPUProof.Spec.Basic
+import GPUProof.Spec.Comp
 import Mathlib.Data.Matrix.Mul
 import FloatLib.Floats.Formats.BinaryInterchange.Analysis.StandardModel
 
@@ -31,10 +32,22 @@ the error and every input grade's magnitude, so that it bounds every intermediat
 computation that feeds the dot product (`laneGrade_mag`). `dotGrade fmt n` is its case of one lane
 of `n` terms and depth `0`, by definition: error `γₙ Σₖ (|aₖ| + eₐₖ)(|xₖ| + eₓₖ) + (2 + u) η γₙ / u`
 plus the propagated error, with `γₙ = (1 + u)ⁿ − 1`. Both grow with the inputs' grades
-(`laneGrade_mono`, `dotGrade_mono`, for every format, count and exact inputs), so they are grades
-of `Spec.matVec` (`laneVecGrade W d L`, `laneVecGrade_mono`, at `L n` terms per lane for length
-`n`; `matVecGrade`, `matVecGrade_mono`, its case `laneVecGrade 1 0 id`) and `dotGrade` of
-`Spec.vecMat` (`vecMatGrade`, `vecMatGrade_mono`). No kernel is proved to meet them here.
+(`laneGrade_mono`, `dotGrade_mono`, for every format, count and exact inputs).
+`laneGradeIn fmt W d L n fa fx` is `laneGrade` where every input grade's magnitude is at most its
+input format's `safeMax` (`fa k`, `fx k`), and elsewhere `Grade.onlyIf`'s grade that claims
+nothing (GPUProof/Spec/Comp.lean, imported here): an input grade above its format's `safeMax`
+gives no premise on that input (`Approx`), so a claim of the output there would ask for the exact
+product of words it does not constrain. It grows with the inputs' grades (`laneGradeIn_mono`), and
+reals within the input grades have a dot product `Approx` at it, at all formats
+(`laneGradeIn_approx`, by `sum_mul_sub_le` and `laneGrade_err_ge`). It gives the grades of
+`Spec.matVec` (`laneVecGrade W d L`, `laneVecGrade_mono`, over row `i` and the vector at `L n`
+terms per lane for length `n`; `matVecGrade`, `matVecGrade_mono`, its case `laneVecGrade 1 0 id`)
+and of `Spec.vecMat` (`vecMatLaneGrade W d L`, `vecMatLaneGrade_mono`, over the vector and column
+`j` at `L m` terms per lane for length `m`; `vecMatGrade`, `vecMatGrade_mono`, its case
+`vecMatLaneGrade 1 0 id`), each in its output's format and guarded by the formats of the inputs
+it reads. Words that decode to the exact product meet both at every encoding
+(`laneVecGrade_holds`, `vecMatLaneGrade_holds`, by `laneGradeIn_approx`); no kernel is proved
+here.
 
 docs/proofs/spec.md gives the plan and the order in which the importers follow.
 -/
@@ -227,22 +240,46 @@ theorem dotGrade_mono (fmt : NumFormat) (n : ℕ) (a x : Fin n → ℝ) {ga ga' 
     (ha : ga ≤ ga') (hx : gx ≤ gx') : dotGrade fmt n a x ga gx ≤ dotGrade fmt n a x ga' gx' :=
   laneGrade_mono fmt 1 0 n n a x ha hx
 
-/-- `laneGrade` at every output `i` of `Spec.matVec`, for every size `(m, n)`, encoding, counts
+/-- **`laneGrade` where the inputs' grades claim.** For every output format `fmt`, counts `W`,
+`d`, `L`, length `n`, input formats `fa`, `fx`, exact entries `a`, `x` and grades `ga`, `gx`:
+`laneGrade fmt W d L n a x ga gx` where every `(ga k).mag` is at most `(fa k).safeMax` and every
+`(gx k).mag` at most `(fx k).safeMax`, and elsewhere `Grade.onlyIf`'s grade that claims nothing in
+`fmt`. An input grade of magnitude above its format's `safeMax` asks nothing of that input's word
+(`Approx`), so no claim is made on the output there. -/
+noncomputable def laneGradeIn (fmt : NumFormat) (W d L n : ℕ) (fa fx : Fin n → NumFormat)
+    (a x : Fin n → ℝ) (ga gx : Fin n → Grade) : Grade :=
+  Grade.onlyIf (∀ k, (ga k).mag ≤ (fa k).safeMax ∧ (gx k).mag ≤ (fx k).safeMax) fmt
+    (laneGrade fmt W d L n a x ga gx)
+
+/-- `laneGradeIn` grows with the inputs' grades, for every format, counts, input formats and exact
+entries: larger grades make `laneGrade` larger (`laneGrade_mono`) and the condition stronger
+(`Grade.onlyIf_mono`). -/
+theorem laneGradeIn_mono (fmt : NumFormat) (W d L n : ℕ) (fa fx : Fin n → NumFormat)
+    (a x : Fin n → ℝ) {ga ga' gx gx' : Fin n → Grade} (ha : ga ≤ ga') (hx : gx ≤ gx') :
+    laneGradeIn fmt W d L n fa fx a x ga gx ≤ laneGradeIn fmt W d L n fa fx a x ga' gx' :=
+  Grade.onlyIf_mono (fun hc k => ⟨(ha k).2.trans (hc k).1, (hx k).2.trans (hc k).2⟩) fmt
+    (laneGrade_mono fmt W d L n a x ha hx)
+
+/-- `laneGradeIn` at every output `i` of `Spec.matVec`, for every size `(m, n)`, encoding, counts
 `W`, `d` and lane length `L n`: the dot product of row `i` with the vector, of length `n`, over
-`W` lanes of at most `L n` terms and a tree of depth `d`, in output `i`'s format. -/
+`W` lanes of at most `L n` terms and a tree of depth `d`, in output `i`'s format, where the grades
+of row `i` and of the vector have magnitudes at most their input formats' `safeMax`, and
+elsewhere a grade that claims nothing. -/
 noncomputable def laneVecGrade (W d : ℕ) (L : ℕ → ℕ) :
     RealGrades (fun σ : ℕ × ℕ => Fin σ.1 × Fin σ.2 ⊕ Fin σ.2) fun σ => Fin σ.1 :=
-  fun σ E A G i => laneGrade (E.out.fmt i) W d (L σ.2) σ.2 (fun k => A (.inl (i, k)))
-    (fun k => A (.inr k)) (fun k => G (.inl (i, k))) (fun k => G (.inr k))
+  fun σ E A G i => laneGradeIn (E.out.fmt i) W d (L σ.2) σ.2 (fun k => E.inp.fmt (.inl (i, k)))
+    (fun k => E.inp.fmt (.inr k)) (fun k => A (.inl (i, k))) (fun k => A (.inr k))
+    (fun k => G (.inl (i, k))) (fun k => G (.inr k))
 
 /-- `laneVecGrade` grows with the inputs' grades, for all counts, at every size, encoding and
-exact inputs. -/
+exact inputs (`laneGradeIn_mono`). -/
 theorem laneVecGrade_mono (W d : ℕ) (L : ℕ → ℕ) : ∀ σ E A, Monotone (laneVecGrade W d L σ E A) :=
-  fun _ _ _ _ _ h _ => laneGrade_mono _ _ _ _ _ _ _ (fun _ => h _) (fun _ => h _)
+  fun _ _ _ _ _ h _ => laneGradeIn_mono _ _ _ _ _ _ _ _ _ (fun _ => h _) (fun _ => h _)
 
-/-- `dotGrade` at every output `i` of `Spec.matVec`, for every size `(m, n)` and encoding: the dot
-product of row `i` with the vector, of length `n`, in output `i`'s format; `laneVecGrade` at one
-lane of `n` terms and depth `0`. -/
+/-- `laneVecGrade` at one lane of `n` terms and depth `0`: at every output `i` of `Spec.matVec`,
+for every size `(m, n)` and encoding, `dotGrade` of row `i` with the vector, of length `n`, in
+output `i`'s format, where the grades of row `i` and of the vector have magnitudes at most their
+input formats' `safeMax`, and elsewhere a grade that claims nothing. -/
 noncomputable def matVecGrade :
     RealGrades (fun σ : ℕ × ℕ => Fin σ.1 × Fin σ.2 ⊕ Fin σ.2) fun σ => Fin σ.1 :=
   laneVecGrade 1 0 id
@@ -251,15 +288,146 @@ noncomputable def matVecGrade :
 theorem matVecGrade_mono : ∀ σ E A, Monotone (matVecGrade σ E A) :=
   laneVecGrade_mono 1 0 id
 
-/-- `dotGrade` at every output `j` of `Spec.vecMat`, for every size `(m, n)` and encoding: the dot
-product of the vector with column `j`, of length `m`, in output `j`'s format. -/
+/-- `laneGradeIn` at every output `j` of `Spec.vecMat`, for every size `(m, n)`, encoding, counts
+`W`, `d` and lane length `L m`: the dot product of the vector with column `j`, of length `m`, over
+`W` lanes of at most `L m` terms and a tree of depth `d`, in output `j`'s format, where the grades
+of the vector and of column `j` have magnitudes at most their input formats' `safeMax`, and
+elsewhere a grade that claims nothing. -/
+noncomputable def vecMatLaneGrade (W d : ℕ) (L : ℕ → ℕ) :
+    RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2 :=
+  fun σ E A G j => laneGradeIn (E.out.fmt j) W d (L σ.1) σ.1 (fun i => E.inp.fmt (.inl i))
+    (fun i => E.inp.fmt (.inr (i, j))) (fun i => A (.inl i)) (fun i => A (.inr (i, j)))
+    (fun i => G (.inl i)) (fun i => G (.inr (i, j)))
+
+/-- `vecMatLaneGrade` grows with the inputs' grades, for all counts, at every size, encoding and
+exact inputs (`laneGradeIn_mono`). -/
+theorem vecMatLaneGrade_mono (W d : ℕ) (L : ℕ → ℕ) :
+    ∀ σ E A, Monotone (vecMatLaneGrade W d L σ E A) :=
+  fun _ _ _ _ _ h _ => laneGradeIn_mono _ _ _ _ _ _ _ _ _ (fun _ => h _) (fun _ => h _)
+
+/-- `vecMatLaneGrade` at one lane of `m` terms and depth `0`: at every output `j` of
+`Spec.vecMat`, for every size `(m, n)` and encoding, `dotGrade` of the vector with column `j`, of
+length `m`, in output `j`'s format, where the grades of the vector and of column `j` have
+magnitudes at most their input formats' `safeMax`, and elsewhere a grade that claims nothing. -/
 noncomputable def vecMatGrade :
     RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2 :=
-  fun σ E A G j => dotGrade (E.out.fmt j) σ.1 (fun i => A (.inl i)) (fun i => A (.inr (i, j)))
-    (fun i => G (.inl i)) (fun i => G (.inr (i, j)))
+  vecMatLaneGrade 1 0 id
 
 /-- `vecMatGrade` grows with the inputs' grades, at every size, encoding and exact inputs. -/
 theorem vecMatGrade_mono : ∀ σ E A, Monotone (vecMatGrade σ E A) :=
-  fun _ _ _ _ _ h _ => dotGrade_mono _ _ _ _ (fun _ => h _) (fun _ => h _)
+  vecMatLaneGrade_mono 1 0 id
+
+/-- The absolute error of rounding below the normal range is at least `0`, for every format. -/
+theorem NumFormat.underflow_nonneg : ∀ fmt : NumFormat, 0 ≤ fmt.underflow
+  | .ieee fmt => (Model.underflowErrorAt_pos fmt).le
+  | .int _ => le_rfl
+  | .bool => le_rfl
+
+/-- A dot product of reals near exact ones is within the cross sum of the exact dot product, for
+every length, reals `w`, `v`, exact `a`, `x` and grades `ga`, `gx`: when each `w k`, `v k` is
+within `(ga k).err`, `(gx k).err` of `a k`, `x k`,
+`|Σₖ wₖ vₖ - Σₖ aₖ xₖ| ≤ Σₖ (|aₖ| eₓₖ + |xₖ| eₐₖ + eₐₖ eₓₖ)`, with `e = Grade.pos`: `laneGrade`'s
+propagated error. -/
+theorem sum_mul_sub_le {n : ℕ} (w v a x : Fin n → ℝ) (ga gx : Fin n → Grade)
+    (hw : ∀ k, |w k - a k| ≤ (ga k).err) (hv : ∀ k, |v k - x k| ≤ (gx k).err) :
+    |∑ k, w k * v k - ∑ k, a k * x k| ≤
+      ∑ k, (|a k| * (gx k).pos + |x k| * (ga k).pos + (ga k).pos * (gx k).pos) := by
+  have ea : ∀ k, |w k - a k| ≤ (ga k).pos := fun k => (hw k).trans (le_max_left _ _)
+  have ex : ∀ k, |v k - x k| ≤ (gx k).pos := fun k => (hv k).trans (le_max_left _ _)
+  have pa : ∀ k, 0 ≤ (ga k).pos := fun k => le_max_right _ _
+  rw [← Finset.sum_sub_distrib]
+  refine (Finset.abs_sum_le_sum_abs _ _).trans (Finset.sum_le_sum fun k _ => ?_)
+  have hk : w k * v k - a k * x k = a k * (v k - x k) + x k * (w k - a k) +
+      (w k - a k) * (v k - x k) := by ring
+  rw [hk]
+  refine (abs_add_le _ _).trans (add_le_add ((abs_add_le _ _).trans (add_le_add ?_ ?_)) ?_)
+  · rw [abs_mul]; exact mul_le_mul_of_nonneg_left (ex k) (abs_nonneg _)
+  · rw [abs_mul]; exact mul_le_mul_of_nonneg_left (ea k) (abs_nonneg _)
+  · rw [abs_mul]; exact mul_le_mul (ea k) (ex k) (abs_nonneg _) (pa k)
+
+/-- `laneGrade`'s error is at least its propagated error, for every format, counts, exact entries
+and grades: the rounding and underflow terms are at least `0` (`NumFormat.roundoff_nonneg`,
+`NumFormat.underflow_nonneg`). -/
+theorem laneGrade_err_ge (fmt : NumFormat) (W d L n : ℕ) (a x : Fin n → ℝ)
+    (ga gx : Fin n → Grade) :
+    ∑ k, (|a k| * (gx k).pos + |x k| * (ga k).pos + (ga k).pos * (gx k).pos) ≤
+      (laneGrade fmt W d L n a x ga gx).err := by
+  have hu := fmt.roundoff_nonneg
+  have hη := fmt.underflow_nonneg
+  have pa : ∀ k, 0 ≤ (ga k).pos := fun k => le_max_right _ _
+  have px : ∀ k, 0 ≤ (gx k).pos := fun k => le_max_right _ _
+  have hS : 0 ≤ ∑ k, (|a k| + (ga k).pos) * (|x k| + (gx k).pos) :=
+    Finset.sum_nonneg fun k _ => mul_nonneg (add_nonneg (abs_nonneg _) (pa k))
+      (add_nonneg (abs_nonneg _) (px k))
+  have hγ : ∀ j, 0 ≤ (1 + fmt.roundoff) ^ j - 1 := fun j =>
+    sub_nonneg.2 (one_le_pow₀ (by linarith))
+  have hU : 0 ≤ W * (1 + fmt.roundoff) ^ d * ((2 + fmt.roundoff) * fmt.underflow *
+      ((1 + fmt.roundoff) ^ L - 1) / fmt.roundoff) :=
+    mul_nonneg (mul_nonneg (Nat.cast_nonneg _) (pow_nonneg (by linarith) _))
+      (div_nonneg (mul_nonneg (mul_nonneg (by linarith) hη) (hγ L)) hu)
+  simp only [laneGrade]
+  nlinarith [mul_nonneg (hγ (L + d)) hS]
+
+/-- **Reals within the input grades meet `laneGradeIn`.** For every output format `fmt`, counts
+`W`, `d`, `L`, length `n`, input formats `fa`, `fx`, reals `w`, `v`, exact entries `a`, `x` and
+grades `ga`, `gx`: when each `some (w k)` is `Approx` at `ga k` in `fa k` of `a k` and each
+`some (v k)` at `gx k` in `fx k` of `x k`, `some (Σₖ wₖ vₖ)` is `Approx` at
+`laneGradeIn fmt W d L n fa fx a x ga gx` in `fmt` of `Σₖ aₖ xₖ`. Where the condition holds, each
+input is within its grade's error of the exact one, and the dot product moves by at most the
+propagated error (`sum_mul_sub_le`), part of `laneGrade`'s error (`laneGrade_err_ge`); elsewhere
+the grade claims nothing (`Approx.onlyIf_neg`). No premise on the formats: `fmt`'s `safeMax` is
+not used. -/
+theorem laneGradeIn_approx (fmt : NumFormat) (W d L n : ℕ) (fa fx : Fin n → NumFormat)
+    {w v a x : Fin n → ℝ} {ga gx : Fin n → Grade}
+    (hw : ∀ k, Approx .real (ga k) (fa k) (some (w k)) (a k))
+    (hv : ∀ k, Approx .real (gx k) (fx k) (some (v k)) (x k)) :
+    Approx .real (laneGradeIn fmt W d L n fa fx a x ga gx) fmt (some (∑ k, w k * v k))
+      (∑ k, a k * x k) := by
+  by_cases hc : ∀ k, (ga k).mag ≤ (fa k).safeMax ∧ (gx k).mag ≤ (fx k).safeMax
+  · have e : ∀ {g : Grade} {f : NumFormat} {r b : ℝ}, Approx .real g f (some r) b →
+        g.mag ≤ f.safeMax → |r - b| ≤ g.err := fun h hm => by
+      obtain ⟨r', hr, hr'⟩ := h hm
+      cases hr
+      exact hr'
+    rw [laneGradeIn, Grade.onlyIf_pos hc]
+    exact fun _ => ⟨_, rfl, (sum_mul_sub_le w v a x ga gx (fun k => e (hw k) (hc k).1)
+      fun k => e (hv k) (hc k).2).trans (laneGrade_err_ge _ _ _ _ _ _ _ _ _)⟩
+  · exact Approx.onlyIf_neg hc _ _ _ _ _
+
+/-- **Exact words meet `laneVecGrade`**, for all counts `W`, `d`, `L`, every size `(m, n)` and
+every encoding `E` of `Spec.matVec` at `laneVecGrade W d L`: input words `X` that decode to reals
+`Y` and output words `X'` that decode to the product at `Y` meet the graded rule
+(`laneGradeIn_approx` at row `o` and the vector). No premise on the formats is left: the grade
+claims only where the grades of the inputs it reads are at most their formats' `safeMax`, and
+there each such input is within its grade's error of the exact one, whatever the output's
+format, so an output format whose `safeMax` is above an input's is allowed. -/
+theorem laneVecGrade_holds (W d : ℕ) (L : ℕ → ℕ) {σ : ℕ × ℕ}
+    {E : (Spec.matVec (laneVecGrade W d L) (laneVecGrade_mono W d L)).Encs σ}
+    {X : E.inp.Words} {Y : Fin σ.1 × Fin σ.2 ⊕ Fin σ.2 → ℝ}
+    (hX : ∀ i, E.inp.decode X i = some (Y i)) {X' : E.out.Words}
+    (hX' : ∀ o, E.out.decode X' o =
+      some ((Spec.matVec (laneVecGrade W d L) (laneVecGrade_mono W d L)).f σ Y o)) :
+    (Spec.matVec (laneVecGrade W d L) (laneVecGrade_mono W d L)).rule.Holds σ E X X' := by
+  intro _ _ _ hA o
+  rw [hX' o]
+  exact laneGradeIn_approx _ _ _ _ _ _ _ (fun k => hX (.inl (o, k)) ▸ hA (.inl (o, k)))
+    fun k => hX (.inr k) ▸ hA (.inr k)
+
+/-- **Exact words meet `vecMatLaneGrade`**, for all counts `W`, `d`, `L`, every size `(m, n)` and
+every encoding `E` of `Spec.vecMat` at `vecMatLaneGrade W d L`: input words `X` that decode to
+reals `Y` and output words `X'` that decode to the product at `Y` meet the graded rule
+(`laneGradeIn_approx` at the vector and column `o`). No premise on the formats, as for
+`laneVecGrade_holds`. -/
+theorem vecMatLaneGrade_holds (W d : ℕ) (L : ℕ → ℕ) {σ : ℕ × ℕ}
+    {E : (Spec.vecMat (vecMatLaneGrade W d L) (vecMatLaneGrade_mono W d L)).Encs σ}
+    {X : E.inp.Words} {Y : Fin σ.1 ⊕ Fin σ.1 × Fin σ.2 → ℝ}
+    (hX : ∀ i, E.inp.decode X i = some (Y i)) {X' : E.out.Words}
+    (hX' : ∀ o, E.out.decode X' o =
+      some ((Spec.vecMat (vecMatLaneGrade W d L) (vecMatLaneGrade_mono W d L)).f σ Y o)) :
+    (Spec.vecMat (vecMatLaneGrade W d L) (vecMatLaneGrade_mono W d L)).rule.Holds σ E X X' := by
+  intro _ _ _ hA o
+  rw [hX' o]
+  exact laneGradeIn_approx _ _ _ _ _ _ _ (fun k => hX (.inl k) ▸ hA (.inl k))
+    fun k => hX (.inr (k, o)) ▸ hA (.inr (k, o))
 
 end GPUProof

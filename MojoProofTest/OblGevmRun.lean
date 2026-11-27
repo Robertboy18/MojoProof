@@ -1,5 +1,6 @@
 import MojoProofTest.OblGevmThread
 import MojoProof.Sym.LoopFacts
+import MojoProof.Sym.SegTrace
 import MojoProof.Sem.WarpDot
 import MojoProofTest.KernelRfl
 
@@ -166,11 +167,12 @@ thread `t` whose top frame `f` is at the start of the entry block, `N < 2 ^ 31`,
 floats at `bA`) and `B` (`K × N` floats, row-major, at `bB`) in memory `m`, and thread `k`'s
 output row and column below `N`: the thread steps to a frame at position 1 of block `%59` (the
 warp reduction) with the same `alloca` blocks and destination, `36 + 17 * (K / 32)` steps later,
-on a memory with `m`'s blocks, where `%60` is the `dotLoop` (with contraction, oracle numbers
-`oG c t.k`) from `+0` of every 32nd factor pair of `A` and column `ctaid.x * 32 + laneid` of `B`,
-from pair `tid.x / 32` (`stride`, `vecMatPairs`), `%13` the lane, `%11` the warp number,
-`%10` the thread number and `%29` the pointer to element `ctaid.x * 32 + tid.x / 32` of the
-output. One program; the trip count `(K + 31) / 32` is symbolic. -/
+on a memory with `m`'s blocks whose trace extends `m`'s by reads of `bA` and `bB` only (`Ext`),
+where `%60` is the `dotLoop` (with contraction, oracle numbers `oG c t.k`) from `+0` of every
+32nd factor pair of `A` and column `ctaid.x * 32 + laneid` of `B`, from pair `tid.x / 32`
+(`stride`, `vecMatPairs`), `%13` the lane, `%11` the warp number, `%10` the thread number and
+`%29` the pointer to element `ctaid.x * 32 + tid.x / 32` of the output. One program; the trip
+count `(K + 31) / 32` is symbolic. -/
 theorem loop (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = gevm.prog)
     (hce : c.env = L.env k) (hn : (L.env k).sreg .ntid .x = 1024) (t : Thread) (m : Mem)
     (f : Frame) (rest : List Frame) (ht : t.frames = f :: rest) (hf : f.fn = gevm.fn_0)
@@ -194,6 +196,8 @@ theorem loop (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = gev
     ∃ t' m' f', Steps c t m t' m' ∧ t'.frames = f' :: rest ∧ f'.fn = gevm.fn_0 ∧
       f'.label = gevm.fn_0.b_5.label ∧ f'.pc = 1 ∧ f'.allocas = f.allocas ∧ f'.dest = f.dest ∧
       t'.k = t.k + 36 + 17 * (K / 32) ∧ m'.blocks = m.blocks ∧
+      Ext (fun e => ∃ a, e = .access a ∧ a.write = false ∧
+        (a.ptr.block = bA ∨ a.ptr.block = bB)) m m' ∧
       f'.regs 60 = some (.ofFloat .float (dotLoop true (oG c t.k) (Model.zero _ false)
         (stride 32 ((L.env k).sreg .tid .x / 32) (vecMatPairs A B ⟨_, hc⟩)))) ∧
       f'.regs 13 = some (.bits 64 (BitVec.ofNat 64 (L.env k).laneid)) ∧
@@ -312,6 +316,13 @@ theorem loop (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = gev
     rw [hW₁]
     exact (Valuation.iterate_blocks (c := true) (L := gevmL) (rs := [1, 2]) (by decide +kernel) hHf
       (by simp [g1, g2]) _).1.trans (congrArg Mem.blocks gm)
+  have hx₁ : Ext (fun e => ∃ a, e = .access a ∧ a.write = false ∧
+      (a.ptr.block = bA ∨ a.ptr.block = bB)) m (Valuation.entry c t₁.k m₁ f₁).mem := by
+    rw [hW₁]
+    refine Valuation.iterate_loads (c := true) (L := gevmL) (rs := [1, 2])
+      (Q := fun q => q = bA ∨ q = bB) (by decide +kernel) (fun _ a h hw _ hq => h.trans
+        ⟨[.access a], rfl, fun e he => by rw [List.mem_singleton.1 he]; exact ⟨a, rfl, hw, hq⟩⟩)
+      hHf (by simp [g1, g2, Val.NamesIn]) (by rw [gm]; exact .refl _ m) _
   have hk₂ : t₂.k = (Valuation.roundWith true gevmL.h gevmL.H gevmL.X
       (Valuation.entry c t₁.k m₁ f₁)).k := congrArg Valuation.k hV₂
   have hm₂ : m₂ = (Valuation.roundWith true gevmL.h gevmL.H gevmL.X
@@ -330,7 +341,7 @@ theorem loop (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = gev
     (Valuation.roundWith_k true gevmL.h gevmL.H gevmL.X 1 W₁).2.2
   have e3 : pathLen gevmL.H gevmL.X + 1 = 3 := by decide +kernel
   refine ⟨t₂, m₂, f₂, hS₁.trans hS₂, ht₂, hf₂, hl₂, hp₂.trans hp₃, ha₂.trans ha₁, hd₂.trans hd₁,
-    by omega, by rw [hm₂, em]; exact hm₁, ?_, ?_, ?_, ?_, ?_⟩
+    by omega, by rw [hm₂, em]; exact hm₁, by rw [hm₂, em]; exact hx₁, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hr₂]; exact e60
   · rw [hr₂]; exact e13
   · rw [hr₂]; exact e11

@@ -40,3 +40,4 @@ Each issue's GitHub page shows its current status.
 | [#7794](https://github.com/modular/modular/issues/7794) | 2026-11-26 | `std.utils.coord` | `crd2idx` doesn't compile for a one-element nested coordinate like `((0, 2))`, so `l(l.idx2crd(i))` fails on rank-1 nested layouts. |
 | [#7795](https://github.com/modular/modular/issues/7795) | 2026-11-26 | `idx2crd` | It fails to compile when a nested mode contains a static 1, and `Layout.idx2crd` fails on layouts nested two deep. |
 | [#7796](https://github.com/modular/modular/issues/7796) | 2026-11-26 | `std.math` | The zero-alignment assert in `align_up`/`align_down` fires only when every lane is zero, and their docstrings are wrong for negative alignments. |
+| [#7815](https://github.com/modular/modular/issues/7815) | 2026-11-27 | Float literals | Literals just above the largest finite value become NaN instead of inf, e.g. `Float16(70000.0)` and `Float32(4e38)`; formats without an infinity get a wrong finite value. |

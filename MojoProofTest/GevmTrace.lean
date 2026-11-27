@@ -33,6 +33,11 @@ Not proved here: that the loop's run adds only reads of blocks that are no block
 shared memory and not the output (a premise of `gevm_before`; `latch_reads` gives reads by the
 thread, not their blocks), that the start's threads reach `%59` with `to_barrier_events`'
 premises, and the owners of the blocks in the last memory (premises of `Before` and `After`).
+The run `GevmWarp1.grid` builds runs its blocks of threads one after another, not in these two
+rounds: its trace facts are carried in its invariants instead (`OblGevmRun.loop`'s reads of the
+inputs, `GevmWarp0.Ev0`, `GevmWarp1.Ev1` and `GevmWarp1.Acc` at each access's phase), and
+MojoProofTest/GevmSound.lean's `grid_bad` takes them to `racy_cells` at this file's `warpTiles`
+and `out_cell` directly, without `gevm_sound`.
 -/
 
 namespace MojoProofTest.GevmTrace
@@ -401,8 +406,9 @@ theorem gevm_before (L : Launch) (z : Mem) (bo : Nat) {R : Nat → Mem → Mem �
 length `N`, families of runs `R₁` and `R₂`, threads `ns` of the grid and memories: if every run
 of a thread `n` of `ns` by `R₁` puts a read by `n` of 4 bytes of a block of threads' shared
 memory in `z` in front of the trace (`to_shfl_events`), the shuffle rounds then leave the trace
-(`shfl_events`, `Fires.shfls`), and every run by `R₂` puts lane 0's write of 4 bytes at its
-output cell `32 ctaid.x + tid.x / 32 < N` of `bo` in front, and for another lane nothing
+(`shfl_events`; a shuffle's fire leaves the memory unchanged, `Grid.fire_shfl`), and every run
+by `R₂` puts lane 0's write of 4 bytes at its output cell `32 ctaid.x + tid.x / 32 < N` of `bo`
+in front, and for another lane nothing
 (`thread_trace`), threads `ns` in turn by `R₁`, the rounds, and threads `ns` in turn by `R₂`
 extend the trace by `After` events. `Ext.turns`, `Ext.trans` and `out_cell`. -/
 theorem gevm_after (L : Launch) (hL : L.Valid) (hx : L.block .x = 1024) (hgy : L.grid .y = 1)

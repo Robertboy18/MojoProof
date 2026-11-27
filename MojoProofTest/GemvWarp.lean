@@ -1,6 +1,7 @@
 import MojoProofTest.SymGemvTail
 import MojoProofTest.KernelRfl
-import MojoProof.Sym.Canon
+import MojoProof.Sym.CanonBar
+import MojoProof.Sym.WarpRoute
 import MojoProof.Sem.WarpDot
 
 /-!
@@ -423,33 +424,30 @@ def M43 (w : Warp) : Nat → Nat → Mem
   | 1, _ => A w
   | _, j => mE w j
 
-/-- Lane `j`'s waits `us` are the shuffles `WarpRun.of_waits` asks for, as a Boolean: for each
-`i < J`, the `i`-th (`List.getD`) at position `pos i`, of the shuffle of mode `mode i`, with the
-full mask, lane `j`'s offer `w.v i j`, lane operand `ofs i` and clamp 31, delivered `r w i j`. -/
-def shflOk (w : Warp) (J j : Nat) (us : List Piece.Wait) : Bool :=
-  (List.range J).all fun i => decide ((us.getD i w0).call = .shfl (mode i) ∧
-    (us.getD i w0).pos = pos i ∧
-    (us.getD i w0).args = [.bits 32 (-1), w.v i j, .bits 32 (.ofNat 32 (ofs i)), .bits 32 31] ∧
-    (us.getD i w0).dlv.1 = r w i j)
-
 /-- **Lane `j`'s premises through seven shuffles, as a Boolean**: thread `k + j` is one of the
 start's; `%6`'s segments pass with `chainP (arm w.x j) (rounds w.x) (out j)` at their end
 (`Piece.fires`): the loop's `⌈K / 32⌉` rounds through lane `j`'s arm; two waits in `%6` and
-seven in all, which pass `shflOk`. -/
+seven in all, which pass `Piece.Wait.shflOk` (at `pos i`, the shuffle of mode `mode i` with the
+full mask, lane `j`'s offer `w.v i j`, lane operand `ofs i` and clamp 31, delivered what
+`Grid.fire` delivers). -/
 def ok78 (w : Warp) (j : Nat) : Bool :=
   decide (w.k + j < (g0 w.x).threads.size) &&
     Piece.fires gemv.fn_0 6 (chainP (arm w.x j) (rounds w.x) (out j) (d78 w j (Bm w) (m7 w j)))
       gP.1 0 (d6 w j (m2 w j)) (V0 w.x (w.k + j) (m0 w j)) &&
-    (ws6 w j (m2 w j)).length == 2 && (ws w j).length == 7 && shflOk w 7 j (ws w j)
+    (ws6 w j (m2 w j)).length == 2 && (ws w j).length == 7 &&
+    Piece.Wait.shflOk (warpLanes (L w.x) w.k) mode pos (fun i => .ofNat 32 (ofs i)) (fun _ => 31)
+      w.v w0 7 j (ws w j)
 
 /-- **Lane `j`'s premises through two shuffles, as a Boolean**: thread `k + j` is one of the
 start's; `%6`'s segments pass with the return along `tailPs` at their end (`Piece.fires`); two
-waits, which pass `shflOk`. -/
+waits, which pass `Piece.Wait.shflOk` (as in `ok78`). -/
 def ok43 (w : Warp) (j : Nat) : Bool :=
   decide (w.k + j < (g0 w.x).threads.size) &&
     Piece.fires gemv.fn_0 6 (retB false tailPs) gP.1 0 (d6 w j (mE w j))
       (V0 w.x (w.k + j) (m0 w j)) &&
-    (ws6 w j (mE w j)).length == 2 && shflOk w 2 j (ws6 w j (mE w j))
+    (ws6 w j (mE w j)).length == 2 &&
+    Piece.Wait.shflOk (warpLanes (L w.x) w.k) mode pos (fun i => .ofNat 32 (ofs i)) (fun _ => 31)
+      w.v w0 2 j (ws6 w j (mE w j))
 
 /-- The memories and delivered memories of the waits `us`. -/
 def memsOf (us : List Piece.Wait) : List (Mem × Mem) := us.map fun u => (u.mem, u.dlv.2)
@@ -463,60 +461,10 @@ def mems78 (w : Warp) (j : Nat) : List (Mem × Mem) :=
 /-- What `WarpRun.of_waits` asks of lane `j`'s two waits' `memsOf` (`M43`). -/
 def mems43 (w : Warp) (j : Nat) : List (Mem × Mem) := [(m0 w (j + 1), A w), (A w, mE w j)]
 
-/-- Every declaration of gemv's program that is a shuffle puts no attribute on its result. -/
-def shflNil (e : Func) : Bool :=
-  match gemv.prog.intrinsics.lookup e.name with
-  | some (.shfl _) => e.retAttrs.isEmpty
-  | _ => true
-
-/-- No declaration of gemv's program that is a shuffle puts an attribute on its result, so
-`withAttrs` keeps the delivery. -/
-theorem shfl_retAttrs {g : String} {e : Func} {mo : Shfl}
-    (he : gemv.prog.module.funcs.find? (·.name == g) = some e)
-    (hg : gemv.prog.intrinsics.lookup g = some (.shfl mo)) : e.retAttrs = [] := by
-  have hall : ∀ e ∈ gemv.prog.module.funcs, shflNil e = true := by decide +kernel
-  have h := hall e (Array.mem_of_find?_eq_some he)
-  have hb : (e.name == g) = true := Array.find?_some (p := fun x : Func => x.name == g) he
-  rw [shflNil, beq_iff_eq.1 hb, hg] at h
-  exact List.isEmpty_iff.1 h
-
-/-- **`WarpRun.of_waits`'s shuffle premise from `shflOk`**: for every warp `w` whose lanes'
-contexts run gemv's program, number `J ≤ 7` of phases, lanes' waits `us` that pass `shflOk` and
-memories `M`, every lane's `i`-th wait, `i < J`, is the shuffle of mode `mode i` at lane 0's
-position, with the full mask, the lane's own offer `w.v i j` and word lane and clamp operands,
-delivered what `Grid.fire` computes from the lanes' offers. The shuffles' declarations put no
-attribute on their results (`shfl_retAttrs`), so `withAttrs` keeps the value
-(`withAttrs_mapM_nil`). -/
-theorem shfl_of {w : Warp} {J : Nat} (hJ : J ≤ 7) {us : Nat → List Piece.Wait}
-    {M : Nat → Nat → Mem}
-    (hP : ∀ j ∈ warpLanes (L w.x) w.k, (c w.x (w.k + j)).prog = gemv.prog)
-    (h : ∀ j ∈ warpLanes (L w.x) w.k, shflOk w J j (us j) = true) :
-    ∀ i < J, ∀ j ∈ warpLanes (L w.x) w.k, ((us j).getD i w0).call.intr = .shfl (mode i) ∧
-      ((us j).getD i w0).pos = ((us 0).getD i w0).pos ∧ ∃ Mk Bv Cv b cl,
-        ((us j).getD i w0).args = [Mk, w.v i j, Bv, Cv] ∧ Mk.word? = some (2 ^ 32 - 1) ∧
-        Bv.word? = some b ∧ Cv.word? = some cl ∧
-        ∀ g e, (c w.x (w.k + j)).prog.module.funcs.find? (·.name == g) = some e →
-          (c w.x (w.k + j)).prog.intrinsics.lookup g = some (.shfl (mode i)) →
-          (some (shflVal (warpLanes (L w.x) w.k) (w.v i) (shflSource (mode i) j b cl))).mapM
-            (withAttrs (c w.x w.k).prog.layout (M i (warpLanes (L w.x) w.k).length) e.ret
-              e.retAttrs) = .ok ((us j).getD i w0).dlv.1 := by
-  intro i hi j hj
-  have hW : ∀ j ∈ warpLanes (L w.x) w.k, ((us j).getD i w0).call = .shfl (mode i) ∧
-      ((us j).getD i w0).pos = pos i ∧
-      ((us j).getD i w0).args =
-        [.bits 32 (-1), w.v i j, .bits 32 (.ofNat 32 (ofs i)), .bits 32 31] ∧
-      ((us j).getD i w0).dlv.1 = r w i j := fun j hj => by
-    have h := h j hj
-    simp only [shflOk, List.all_eq_true, List.mem_range, decide_eq_true_eq] at h
-    exact h i hi
-  obtain ⟨hcall, hpos, hargs, hdlv⟩ := hW j hj
-  obtain ⟨-, hpos0, -⟩ := hW 0 (mem_warpLanes.2 (List.length_pos_of_mem hj))
-  refine ⟨congrArg Coll.intr hcall, hpos.trans hpos0.symm, _, _, _, ofs i, 31, hargs, rfl, ?_,
-    rfl, fun g e he hg => ?_⟩
-  · have hi7 : i < 7 := by omega
-    interval_cases i <;> rfl
-  · rw [shfl_retAttrs (hP j hj ▸ he) (hP j hj ▸ hg), hdlv]
-    exact withAttrs_mapM_nil _ _ _ _
+/-- **Gemv's shuffles put no attribute on their results**: every declaration of gemv's program
+whose name its intrinsic table maps to a shuffle has no result attribute (`Program.shflNil`,
+decided by the kernel). -/
+theorem gemv_nil : gemv.prog.shflNil = true := by decide +kernel
 
 /-- **`WarpRun.of_waits`'s memory premise from one list equation**: for every list of waits `us`
 whose memories and delivered memories are `ms`, the `i`-th wait's are `ms`'s `i`-th pair. -/
@@ -529,97 +477,36 @@ theorem mems_of {us : List Piece.Wait} {ms : List (Mem × Mem)} (h : memsOf us =
 /-- **A warp whose row (its lane 0's) is below `M`, through seven shuffles**: for every warp `w` of
 a launch whose start succeeds, with `N` lanes, each with `ok78` and with its waits' memories
 `mems78`, the warp runs from `w.ms` to `m7 w N` (`WarpRun`): `WarpRun.of_waits` with seven phases,
-`%6`'s two `shfl.sync.idx` and `%78`'s five `shfl.sync.bfly`, each lane's run by `lane` and its
-waits by `Piece.Wait.map_via_append`. The deliveries are `Grid.fire`'s (`WarpShfl`) from the lanes'
-offers `w.v`. Lane `j` runs `rounds w.x = (K + 31) / 32` rounds of the loop at `%54`, every one
-through the one arm `arm w.x j` fixes (`%70` for the lanes `j < K`, `%75` for the others), the chain
-`chainP` checks with the loop `lp` of that arm. The kernel's lane `j` takes `%70` at round `i`
-exactly when `%65 = 32 i + j < K` (`%69`, lines 89-95 of the IR), so its rounds take one arm, the
-one `arm` gives, at every launch with `K ≤ 32` or `32 ∣ K`; at a launch with `K > 32` and `32 ∤ K`
-the lanes `j ≥ K % 32` take `%70` and then `%75` at their last round, their `ok78` fails, and the
-theorem states no run of their warp. -/
+`%6`'s two `shfl.sync.idx` and `%78`'s five `shfl.sync.bfly`, by `warp_route`: each lane's run by
+`lane` (through `RunsVia.of_blocks`, `start_frame` and `out_covers` for its premises), the
+shuffles by `WarpRun.shfl_of` and `gemv_nil`, the waits' memories by `mems_of`. The deliveries
+are `Grid.fire`'s (`WarpShfl`) from the lanes' offers `w.v`. Lane `j` runs
+`rounds w.x = (K + 31) / 32` rounds of the loop at `%54`, every one through the one arm
+`arm w.x j` fixes (`%70` for the lanes `j < K`, `%75` for the others), the chain `chainP` checks
+with the loop `lp` of that arm. The kernel's lane `j` takes `%70` at round `i` exactly when
+`%65 = 32 i + j < K` (`%69`, lines 89-95 of the IR), so its rounds take one arm, the one `arm`
+gives, at every launch with `K ≤ 32` or `32 ∣ K`; at a launch with `K > 32` and `32 ∤ K` the lanes
+`j ≥ K % 32` take `%70` and then `%75` at their last round, their `ok78` fails, and the theorem
+states no run of their warp. -/
 theorem warp78 {w : Warp} {N : Nat} (hs : (start w.x).toBool = true) (hN : w.N = N)
     (hc : ∀ j < N, ok78 w j = true) (hm : ∀ j < N, memsOf (ws w j) = mems78 w j) :
     ∃ Es, WarpRun (L w.x) (c w.x) w.k (Grid.thread (g0 w.x)) w.ms Es (m7 w w.N) := by
-  have hc' : ∀ j ∈ warpLanes (L w.x) w.k, _ := fun j hj =>
-    hc j (hN ▸ (mem_warpLanes.1 hj : j < w.N))
-  have hm' : ∀ j ∈ warpLanes (L w.x) w.k, _ := fun j hj =>
-    hm j (hN ▸ (mem_warpLanes.1 hj : j < w.N))
-  have hok : ∀ j ∈ warpLanes (L w.x) w.k, w.k + j < (g0 w.x).threads.size ∧
-      Piece.fires gemv.fn_0 6 (chainP (arm w.x j) (rounds w.x) (out j) (d78 w j (Bm w) (m7 w j)))
-        gP.1 0 (d6 w j (m2 w j)) (V0 w.x (w.k + j) (m0 w j)) = true ∧
-      (ws6 w j (m2 w j)).length = 2 ∧ (ws w j).length = 7 ∧ shflOk w 7 j (ws w j) = true :=
-    fun j hj => by
-      have h := hc' j hj
-      simp only [ok78, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
-      exact ⟨h.1.1.1.1, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩
-  have hP : ∀ j ∈ warpLanes (L w.x) w.k, (c w.x (w.k + j)).prog = gemv.prog := fun j hj =>
-    (start_frame hs (hok j hj).1).2.2.2.2.2
-  refine WarpRun.of_waits (L := L w.x) (c := c w.x) (k := w.k) (J := 7)
-    (fn := gemv.fn_0) (lbl := fun i => if i < 2 then 6 else 65)
+  warp_route (J := 7) (fn := gemv.fn_0) (lbl := fun i => if i < 2 then 6 else 65)
     (W := fun i j => (ws w j).getD i w0) (mo := mode) (X := w.v) (M := M w)
-    (t := Grid.thread (g0 w.x)) (fun j hj => ?_)
-    (shfl_of (us := ws w) le_rfl hP fun j hj => (hok j hj).2.2.2.2)
-    (fun i hi j hj => ?_) (fun i hi => ?_)
-  · obtain ⟨hn, hF, h6, h7, -⟩ := hok j hj
-    have h78 : (w78 (arm w.x j) (rounds w.x) (d78 w j (Bm w) (m7 w j)) (V6 w j (m2 w j))).length =
-        5 := by
-      have e : (ws w j).length = (ws6 w j (m2 w j)).length +
-          (w78 (arm w.x j) (rounds w.x) (d78 w j (Bm w) (m7 w j)) (V6 w j (m2 w j))).length := by
-        rw [ws, List.length_append]
-      omega
-    have hl : RunsVia (c w.x (w.k + j)) (· = m7 w (j + 1))
-        ((ws6 w j (m2 w j)).map (Piece.Wait.via gemv.fn_0 6) ++
-          (w78 (arm w.x j) (rounds w.x) (d78 w j (Bm w) (m7 w j)) (V6 w j (m2 w j))).map
-            (Piece.Wait.via gemv.fn_0 65))
-        (Grid.thread (g0 w.x) (w.k + j)) (m0 w j) := lane hs hn (out_covers j) hF
-    rw [Piece.Wait.map_via_append (d := w0) h6 h78] at hl
-    exact hl
-  · have h := mems_of (hm' j hj) i
-    interval_cases i <;> exact h
-  · interval_cases i <;> rfl
+    using lane, start_frame, out_covers, mems_of, gemv_nil
 
 /-- **A warp whose row (its lane 0's) is at least `M`, through two shuffles**: for every warp `w`
 of a launch whose start succeeds, with `N` lanes, each with `ok43` and with its waits' memories
 `mems43`, the warp runs from `w.ms` to `mE w N` (`WarpRun`): `WarpRun.of_waits` with `%6`'s two
-`shfl.sync.idx` as its phases, each lane's run by `lane43`. The deliveries are `Grid.fire`'s
-(`WarpShfl`) from the lanes' offers `w.v`. -/
+`shfl.sync.idx` as its phases, by `warp_route` as in `warp78`, each lane's run by `lane43`
+(through `RunsVia.of_block`). The deliveries are `Grid.fire`'s (`WarpShfl`) from the lanes'
+offers `w.v`. -/
 theorem warp43 {w : Warp} {N : Nat} (hs : (start w.x).toBool = true) (hN : w.N = N)
     (hc : ∀ j < N, ok43 w j = true) (hm : ∀ j < N, memsOf (ws6 w j (mE w j)) = mems43 w j) :
     ∃ Es, WarpRun (L w.x) (c w.x) w.k (Grid.thread (g0 w.x)) w.ms Es (mE w w.N) := by
-  have hc' : ∀ j ∈ warpLanes (L w.x) w.k, _ := fun j hj =>
-    hc j (hN ▸ (mem_warpLanes.1 hj : j < w.N))
-  have hm' : ∀ j ∈ warpLanes (L w.x) w.k, _ := fun j hj =>
-    hm j (hN ▸ (mem_warpLanes.1 hj : j < w.N))
-  have hok : ∀ j ∈ warpLanes (L w.x) w.k, w.k + j < (g0 w.x).threads.size ∧
-      Piece.fires gemv.fn_0 6 (retB false tailPs) gP.1 0 (d6 w j (mE w j))
-        (V0 w.x (w.k + j) (m0 w j)) = true ∧
-      (ws6 w j (mE w j)).length = 2 ∧ shflOk w 2 j (ws6 w j (mE w j)) = true := fun j hj => by
-    have h := hc' j hj
-    simp only [ok43, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
-    exact ⟨h.1.1.1, h.1.1.2, h.1.2, h.2⟩
-  have hP : ∀ j ∈ warpLanes (L w.x) w.k, (c w.x (w.k + j)).prog = gemv.prog := fun j hj =>
-    (start_frame hs (hok j hj).1).2.2.2.2.2
-  refine WarpRun.of_waits (L := L w.x) (c := c w.x) (k := w.k) (J := 2)
-    (fn := gemv.fn_0) (lbl := fun i => if i < 2 then 6 else 65)
-    (W := fun i j => (ws6 w j (mE w j) ++ []).getD i w0) (mo := mode) (X := w.v)
-    (M := M43 w) (t := Grid.thread (g0 w.x)) (fun j hj => ?_)
-    (shfl_of (us := fun j => ws6 w j (mE w j) ++ []) (by omega) hP fun j hj => by
-      rw [List.append_nil]; exact (hok j hj).2.2.2)
-    (fun i hi j hj => ?_) (fun i hi => ?_)
-  · obtain ⟨hn, hF, h6, -⟩ := hok j hj
-    have hl : RunsVia (c w.x (w.k + j)) (· = mE w (j + 1))
-        ((ws6 w j (mE w j)).map (Piece.Wait.via gemv.fn_0 6) ++
-          ([] : List Piece.Wait).map (Piece.Wait.via gemv.fn_0 65))
-        (Grid.thread (g0 w.x) (w.k + j)) (m0 w j) := by
-      rw [List.map_nil, List.append_nil]
-      exact lane43 hs hn hF
-    rw [Piece.Wait.map_via_append (d := w0) h6 rfl] at hl
-    exact hl
-  · have h := mems_of (hm' j hj) i
-    rw [List.append_nil]
-    interval_cases i <;> exact h
-  · interval_cases i <;> rfl
+  warp_route (J := 2) (fn := gemv.fn_0) (lbl := fun _ => 6)
+    (W := fun i j => (ws6 w j (mE w j)).getD i w0) (mo := mode) (X := w.v) (M := M43 w)
+    using lane43, start_frame, mems_of, gemv_nil
 
 /-- **A launch of one warp from the start to a done grid**: for every warp `w` from thread 0 on the
 start's memory of a launch `x` whose start succeeds, whose blocks have threads and whose one warp

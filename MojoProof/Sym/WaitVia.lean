@@ -142,7 +142,10 @@ theorem RunsVia.pin {c : Ctx} {X : Sort _} {H : X → Prop} {Q : X → Mem → P
       exact ⟨M, hF, fun x hx => ⟨u₀, i₀, xs₀, e₀, m₀, hT₀, hP₀, hM x hx⟩⟩
     · exact ⟨m, fun x hx' => absurd ⟨x, hx'⟩ hx, fun x hx' => absurd ⟨x, hx'⟩ hx⟩
 
-/-- `obl_exact` closes a goal `e = x` whose left side `obl_have` evaluates. -/
+/-- `obl_exact` closes a goal `e = x` whose left side `obl_have` evaluates, when the equation
+`obl_have` gives, `e` equal to the summary's value, is the goal up to definitional unfolding
+(`isDefEq`). `x` is to be stated in the summary's form: against a summary's `l * 32 + w`, a goal
+stated as `32 * l + w` fails, with "obl_exact: the value is" and the equation `obl_have` gives. -/
 syntax (name := oblExact) "obl_exact" : tactic
 
 open Lean Elab Tactic Meta in

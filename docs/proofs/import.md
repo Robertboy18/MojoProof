@@ -10,9 +10,11 @@ command, `MojoProofTest/ImportSpec.lean` and `MojoProofTest/ImportDom.lean` (wit
 `MojoProofTest/ImportFacts.lean`). This is step 12 of `spec.md`.
 
 **Scope.** `GPUProof.Importer` is stated for every front end: every type of operations, sizes per
-operation, input and output tensors at every size, meaning and proposed specs.
-`MojoProof.Import.matVec_eq` and `MojoProof.Import.vecMat_eq` hold for every shape `m`, `n`, real
-matrix, real vector and output index. `MojoProof.Import.torchLean` is one importer, for every
+operation, input and output tensors at every size, meaning and proposed specs;
+`GPUProof.Importer.Graded` and `GPUProof.Importer.graded_of_holds` for every importer,
+operation, graded spec, size and words. `MojoProof.Import.matVec_eq` and
+`MojoProof.Import.vecMat_eq` hold for every shape `m`, `n`, real matrix, real vector and output
+index. `MojoProof.Import.torchLean` is one importer, for every
 grade of `GPUProof.Spec.matVec` and every grade of `GPUProof.Spec.vecMat`, at two operations
 (TorchLean's `.matVec` and `.vecMat` contractions) and every size; it proposes a spec for both,
 and its `eq` holds at both and every size. The agreement lemmas (`readIn_map`, `readOut_map`)
@@ -27,15 +29,22 @@ another module and a refused one.
 
 ## Definitions
 
-* `GPUProof.Importer` (GPUProof/Spec/Import.lean:47), nine fields:
+* `GPUProof.Importer` (GPUProof/Spec/Import.lean:51), nine fields:
   * `Src`, the source's operations, and `Sz e`, the sizes of operation `e`;
   * `SIn e σ` and `SOut e σ`, its input and output tensors at size `σ`;
   * `denote e σ : SIn e σ → SOut e σ`, the source's own meaning at the reals;
   * `translate e : Option (Spec (Sz e))`, the proposed spec, `none` outside the fragment;
-  * `readIn` and `readOut`, of types `Importer.ReadIn` (:28) and `Importer.ReadOut` (:36): for each
+  * `readIn` and `readOut`, of types `Importer.ReadIn` (:32) and `Importer.ReadOut` (:40): for each
     operation `e`, spec `Sp` with `translate e = some Sp` and size `σ`, a map from the tensors to
     `Sp`'s input or output entries;
   * `eq`: on `Sp`'s domain, `readOut e Sp h σ (denote e σ x) = Sp.f σ (readIn e Sp h σ x)`.
+* `GPUProof.Importer.Graded Imp e h g σ E I W` (GPUProof/Spec/Import.lean:80), for every
+  importer, operation `e`, proposed spec `Sp` (`h : translate e = some Sp`), grade `g` of the
+  graded shape, size, encodings `E`, input words `I` and output words `W`: at every input tensors
+  `x` of the source and input grades `G` within which each input word approximates entry `i` of
+  `readIn e Sp h σ x`, each output word is `Approx` at `g`'s grade of entry `o` of
+  `readOut e Sp h σ (denote e σ x)`. It names the source's meaning, not `Sp.f`: it is the form of
+  a kernel's words against the source.
 * `entry t c` (MojoProof/Import/TorchLean.lean:59): `TorchLean.Tensor.toVecₗᵢ s t` at
   `TorchLean.Shape.Coord.equivFin s c`, the tensor's flattening at the row-major index of
   coordinate `c`.
@@ -102,6 +111,11 @@ another module and a refused one.
 
 * `MojoProof.Import.torchLean g mono gv monov` (the command at :138), a `GPUProof.Importer` whose
   `eq` is `matVec_eq` at `.matVec` and `vecMat_eq` at `.vecMat`.
+* `GPUProof.Importer.graded_of_holds` (GPUProof/Spec/Import.lean:94), for every importer,
+  operation, proposed spec whose rule is `.graded g mono` (`hr`) and whose domain is everything
+  (`hD`), size, encodings and words: `Sp.rule.Holds σ E I W` gives `Graded Imp e h g σ E I W`.
+  `eq` at `x` rewrites the reading of the source's meaning to `Sp.f` at `readIn`'s entries, where
+  the rule's grade holds.
 
 ## Proof
 
@@ -158,6 +172,25 @@ The tensors are built with TorchLean's `Tensor.Rep.ofFn`. Both sides are rewritt
   of the words' real values read by `get2` and `getScalar`. It is `eq` at the maps of `A` and `v`
   by `Model.toReal`, read through `readOut_map` and `readIn_map`: the form a statement relating
   the gemv kernel's words to the imported spec takes.
+
+## The kernels' words through the importer
+
+A kernel whose output words meet a spec's graded rule meets `Graded` at the operation the
+importer translates to that spec, at the same words, by `graded_of_holds`. Two kernels' words are
+stated so, each as `MojoProof.Tile.Loads` (MojoProof/Tile/Words.lean: the outputs load as
+binary32 words that meet a property) at `Graded` of `torchLean`:
+
+* `MojoProofTest.GemvTorch.TorchRows`, gemv_kernel's rows at `.matVec` and the grade
+  `GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉`, with `torchRows_of_rule` (the rows of
+  `MojoProofTest.GemvSound.RowsRule` meet it) and `gemv_torchLean` (gemv_kernel's
+  `GPUProof.Kernel.Sound` for it). Before `Graded`, `TorchRows` quantified over the real matrix
+  `A'` and vector `x'` one after the other; `Graded` quantifies over the pair `(A', x')`, the
+  source's input. The two are equivalent by `Prod.forall`, not by definition, and no statement
+  takes the old form.
+* `MojoProofTest.GevmSpec.TorchCols`, gevm_kernel's columns at `.vecMat` and the grade
+  `GPUProof.vecMatLaneGrade 32 5 fun m => ⌈m / 32⌉`, with `torchCols_of_rule` (the columns of
+  `MojoProofTest.GevmSpec.ColsRule` meet it) and the test `torch_3x2` (binary32, width 32, at
+  3 × 2). gevm_kernel's run is not proved, so it has no `Kernel.Sound` for `TorchCols`.
 
 ## Where the Lean form departs from the design
 
@@ -232,14 +265,14 @@ declares, each with a docstring quoting the given terms:
   each operation and the proof `rfl`, with the unfoldings `readIn_op` and `readOut_op` by `rfl`;
 * the importer, whose `eq` is a generated script: at each operation it introduces the spec, the
   proof `h`, the size, the inputs as the tuple and the hypothesis that their reading is in the
-  spec's domain (MojoProof/Import/Command.lean:309), fixes the spec by `cases h`, takes `funext` at
+  spec's domain (MojoProof/Import/Command.lean:315), fixes the spec by `cases h`, takes `funext` at
   an output, unfolds `readIn_op`, `readOut_op` and `denote` by `dsimp only` in the goal, and calls
   `import_fact`, with the command's `using` list if it has one.
 
-**`import_fact`** (MojoProof/Import/Command.lean:137) closes an equation with a theorem found by
+**`import_fact`** (MojoProof/Import/Command.lean:143) closes an equation with a theorem found by
 its type: first the theorems named after `using`, in their order, then the current file's
-theorems not named there, in declaration order (`localFacts`, :64). Each is tried at fresh
-metavariables for its arguments (`closesBy`, :107). Its conclusion must be definitionally the
+theorems not named there, in declaration order (`localFacts`, :66). Each is tried at fresh
+metavariables for its arguments (`closesBy`, :112). Its conclusion must be definitionally the
 goal; then each argument still open whose type is a proposition, a premise the conclusion does
 not determine, is given a hypothesis of the goal's context of that type, up to definitional
 unfolding (`MVarId.assumptionCore`, the last such hypothesis declared). The first theorem whose
@@ -248,10 +281,15 @@ the generated `eq` case the context holds the domain hypothesis, so a bridge who
 spec's domain, as stated by the spec, closes it. Two cheap tests come first, so that a theorem
 about the same terms with another right side is not unfolded far: its left side is the goal's up
 to reducible unfolding, and the head of its right side is among the heads of the goal's right
-side and of its successive unfoldings, or the other way round (`unfoldHeads`, :74). The left
-side's match at reducible unfolding includes its arguments' types: a bridge stated at `Fin n`
-where the goal's output has type `diffInt.Out n` is refused, since `Fin n` is that type only once
-`diffInt` is unfolded, so a bridge is stated at the spec's own types.
+side and of its successive unfoldings, or the other way round (`unfoldHeads`, :76). In the left
+side's match only the terms are compared at reducible unfolding: when an argument is assigned a
+term of the goal, its type and the term's are compared at default transparency (the match runs
+with `backward.isDefEq.respectTransparency.types` off; Lean has it on by default, and then
+compares them at `.implicit` transparency, which does not unfold `diffInt`). So a bridge stated
+at `Fin n` closes a goal whose output has type `diffInt.Out n`, since `Fin n` is that type once
+`diffInt` is unfolded, and a bridge need not be stated at the spec's own types; one stated at
+`Fin (0 + n)`, which is `Fin n` only by `Nat.zero_add`, is refused. The types are small terms, and
+the terms, where a bridge about other terms differs, are still compared at reducible unfolding.
 At `torchLean` the `.matVec` goal is `matVec_eq`'s conclusion with the spec's function on the
 right; `entry_eq` has the same left side, and its right side, the tensor at the coordinate, has a
 head no unfolding of the spec's function reaches, so it is refused before the unifier unfolds
@@ -309,8 +347,10 @@ grade `g`.
 difference `a - b` of two integer vectors of length `n` (inputs `inl i` and `inr i`), meant where
 `b i ≤ a i` at every `i`. Its bridges, `sub_cast` (premise: that domain) and `sub_strict` (premise:
 `b i < a i`), say that the truncated difference of two natural vectors, read as integers, is
-`diffInt`'s function. `MojoProofTest/ImportDom.lean` imports it and proposes the truncated
-difference as `diffInt`, with no hand-written clause and no local restatement of the bridges.
+`diffInt`'s function, with the output at type `Fin n`, not the goal's `diffInt.Out n`;
+`sub_zero_add` says it at size `0 + n`, over `Fin (0 + n)`. `MojoProofTest/ImportDom.lean`
+imports it and proposes the truncated difference as `diffInt`, with no hand-written clause and no
+local restatement of the bridges.
 
 * `Bare`: the command without `using`. No theorem of its file closes `eq`, so it warns with the
   open goal `↑((a - b) o) = diffInt.f n (Sum.elim (fun i => ↑(a i)) fun i => ↑(b i)) o` and
@@ -323,6 +363,8 @@ difference as `diffInt`, with no hand-written clause and no local restatement of
   function `-1 0 4`, so the equation holds only on the domain.
 * `Strict`: the command `using sub_strict` is refused with the open goal (pinned): the context
   gives `b i ≤ a i`, not `b i < a i`.
+* `Far`: the command `using sub_zero_add` is refused with the open goal (pinned): its vectors'
+  type `Fin (0 + n) → ℕ` is not the goal's `Fin n → ℕ` up to unfolding.
 
 ## Cost
 
@@ -343,7 +385,10 @@ in 2.7 s. With the premises from the context and `using`, rebuilding the command
 that imports it took 26 s of wall time and 3.99 GB at most, with the modules built side by side:
 the command 9.5 s, `MojoProof.Import.TorchLean` 6.7 s, the tests 2.9 s (`ImportSpec`), 4.4 s
 (`ImportTorchLean`), 6.5 s (`ImportFacts`) and 2.9 s (`ImportDom`). `torchLean`'s bridges have
-no premises, so its `eq` cases search no hypothesis.
+no premises, so its `eq` cases search no hypothesis. With the arguments' types compared at default
+transparency, the same rebuild with `MojoProofTest.GemvTorch` took 23.5 s and 4.03 GB at most: the
+command 5.2 s, `MojoProof.Import.TorchLean` 7.1 s, the tests 2.9 s (`ImportSpec`), 6.0 s
+(`ImportTorchLean`), 2.8 s (`ImportFacts`) and 2.9 s (`ImportDom`), and `GemvTorch` 4.7 s.
 
 ## Trust
 

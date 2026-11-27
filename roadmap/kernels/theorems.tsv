@@ -1,0 +1,16 @@
+# Theorems at the last commit of each day (scripts/kernel_universe.py history): the `theorem` and `lemma`
+# declarations in the source of GPUProof/ and MojoProof/ (the library) and of MojoProofTest/ (kernels and test
+# programs), outside comments, strings and quoted templates (`count_theorems`); the theorems commands generate
+# are not counted.
+date	library	tests
+2026-11-17	9	0
+2026-11-18	337	74
+2026-11-19	552	204
+2026-11-20	707	282
+2026-11-21	1040	571
+2026-11-22	1337	859
+2026-11-23	1863	1277
+2026-11-24	1969	1362
+2026-11-25	2111	1581
+2026-11-26	2367	1943
+2026-11-27	2401	2060

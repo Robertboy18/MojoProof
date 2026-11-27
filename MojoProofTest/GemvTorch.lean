@@ -13,10 +13,12 @@ contraction of every real matrix and vector that the input words approximate.
 
 * `TorchRows`: the rows load as binary32 words, each within the spec's grade of the importer's
   reading of TorchLean's contraction `.matVec` of every real matrix and vector that the input
-  words approximate within grades;
-* `torchRows_of_rule`: words that meet the spec's rule meet `TorchRows` (`torchLean`'s `eq`);
+  words approximate within grades (`MojoProof.Tile.Loads` at `GPUProof.Importer.Graded`, the form
+  MojoProofTest/GevmSpec.lean's `TorchCols` has at `.vecMat`);
+* `torchRows_of_rule`: words that meet the spec's rule meet `TorchRows`
+  (`GPUProof.Importer.graded_of_holds`, by `torchLean`'s `eq`);
 * `gemv_torchLean`: gemv_kernel's `GPUProof.Kernel.Sound` for `TorchRows`, from `kernel_sound`,
-  with the same premises.
+  with the same premises; `torch64`: it with every premise proved, at two warps.
 
 Tests of one program, gemv_kernel float32 `b79a852b`.
 -/
@@ -29,47 +31,33 @@ open FloatLib.Floats.Formats.BinaryInterchange
 
 /-- The rows against TorchLean's contraction, for every sizes `M`, `K`, width `bits`, grade `gv`
 of `GPUProof.Spec.vecMat` (the importer's other operation) and input words `I`: the rows load as
-binary32 words `W i` (`Val.ofFloat`) such that, for every real matrix `A'` (`M × K`) and vector
-`x'` (length `K`) and grades `G` within which each input word approximates the importer's
+binary32 words `W i` (`Val.ofFloat`) such that, for every real matrix and vector `(A', x')`
+(`M × K` and length `K`) and grades `G` within which each input word approximates the importer's
 reading of `(A', x')` (`readIn` at `.matVec`), each `W i` is within the grade of
 `GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉` of entry `i` of TorchLean's contraction `.matVec`
-of `A'` and `x'` (`denote`), read by the importer (`readOut`). -/
+of `A'` and `x'` (`denote`), read by the importer (`readOut`): `MojoProof.Tile.Loads` at
+`GPUProof.Importer.Graded` of `torchLean` at `.matVec`. -/
 def TorchRows {M : Nat} (K bits : Nat)
     (gv : GPUProof.RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2)
     (monov : ∀ σ E A, Monotone (gv σ E A))
     (I : (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)).inp.Words)
     (f : Fin M → Except Fault Val) : Prop :=
-  ∃ W : Fin M → Model FloatTy.float.fmt, (∀ i, f i = .ok (Val.ofFloat .float (W i))) ∧
-    ∀ (A' : TorchLean.Tensor ℝ [M, K]) (x' : TorchLean.Tensor ℝ [K])
-      (G : Fin M × Fin K ⊕ Fin K → GPUProof.Grade),
-      (∀ j, GPUProof.Approx .real (G j) (.ieee FloatTy.float.fmt) (Model.toReal? (I j))
-        ((torchLean (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
-          (GPUProof.laneVecGrade_mono _ _ _) gv monov).readIn .matVec _ rfl (M, K) (A', x') j)) →
-      ∀ i, GPUProof.Approx .real
-        (GPUProof.laneVecGrade (2 ^ 5) 5 (fun n => (n + 2 ^ 5 - 1) / 2 ^ 5) (M, K)
-          (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K))
-          ((torchLean (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
-            (GPUProof.laneVecGrade_mono _ _ _) gv monov).readIn .matVec _ rfl (M, K) (A', x'))
-          G i)
-        (.ieee FloatTy.float.fmt) (Model.toReal? (W i))
-        ((torchLean (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
-          (GPUProof.laneVecGrade_mono _ _ _) gv monov).readOut .matVec _ rfl (M, K)
-          ((torchLean (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
-            (GPUProof.laneVecGrade_mono _ _ _) gv monov).denote .matVec (M, K) (A', x')) i)
+  MojoProof.Tile.Loads .float
+    ((torchLean (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5)
+      (GPUProof.laneVecGrade_mono _ _ _) gv monov).Graded .matVec rfl
+      (GPUProof.laneVecGrade (2 ^ 5) 5 fun n => (n + 2 ^ 5 - 1) / 2 ^ 5) (M, K)
+      (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)) I) f
 
 /-- **Rows that meet the spec's rule meet `TorchRows`** (test of gemv_kernel's relation, for
 every sizes, width `bits`, grade `gv`, input words `I` and rows `f`): `RowsRule`'s graded rule
-at the importer's reading of `(A', x')`, whose image under the spec's function is the reading
-of TorchLean's contraction by `torchLean`'s `eq` (the spec's domain is everything). -/
+gives `GPUProof.Importer.Graded` at `torchLean`'s `.matVec` (`GPUProof.Importer.graded_of_holds`,
+by `torchLean`'s `eq`; the spec's domain is everything), at the same words. -/
 theorem torchRows_of_rule {M K bits : Nat}
     (gv : GPUProof.RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2)
     (monov : ∀ σ E A, Monotone (gv σ E A))
     {I : (MojoProof.Tile.matVecEnc FloatTy.float.fmt bits (M, K)).inp.Words}
-    {f : Fin M → Except Fault Val} (h : RowsRule K bits I f) : TorchRows K bits gv monov I f := by
-  obtain ⟨W, hW, hH⟩ := h
-  refine ⟨W, hW, fun A' x' G hG i => ?_⟩
-  rw [(torchLean _ _ gv monov).eq .matVec _ rfl (M, K) (A', x') trivial]
-  exact hH _ G trivial hG i
+    {f : Fin M → Except Fault Val} (h : RowsRule K bits I f) : TorchRows K bits gv monov I f :=
+  h.imp fun _ => And.imp_right (GPUProof.Importer.graded_of_holds _ _ rfl rfl fun _ _ => trivial)
 
 /-- **gemv_kernel is sound against TorchLean's matrix-vector contraction**: gemv_kernel, for every
 valid launch `L` whose blocks and grid are one-dimensional, whose block's `x` size 32 divides and
@@ -109,5 +97,24 @@ theorem gemv_torchLean {L : Launch} {m : Mem} {M K p0 bA bV : Nat} {x4 : BitVec 
   refine ⟨s₀, h, { hS with post := fun s hr hd => ?_ }⟩
   obtain ⟨y, hy, hR⟩ := hS.post s hr hd
   exact ⟨y, hy, torchRows_of_rule gv monov hR⟩
+
+/-- **Test: `gemv_torchLean` with every premise proved, at two output warps**: gemv_kernel at one
+block of 64 threads (`launch2 1 1 64 1`), `M = 2`, `K = 4`, the memory `GemvWarpRun.n3`,
+`%4 = 0`, width 32, the input words `GemvSound.words 32 A24 v3` (as `GemvSound.sound64`) and the
+grade `GPUProof.vecMatGrade` of the importer's `.vecMat`, the library's grade of
+`GPUProof.Spec.vecMat`, monotone by `GPUProof.vecMatGrade_mono`: gemv_kernel is sound at `sig`
+for the admission "address choice below `2 ^ 60`", the output rows and `TorchRows`. No run is
+evaluated. -/
+theorem torch64 :
+    GPUProof.Kernel.Sound sig (gemv.prog, gemv.fn_0) (launch2 1 1 64 1) [.ptr ⟨3, 0⟩,
+      .ptr ⟨1, 0⟩, .ptr ⟨2, 0⟩, .bits 32 (BitVec.ofNat 32 2), .bits 32 0,
+      .bits 32 (BitVec.ofNat 32 4)] n3 (fun ω => ∀ q, ω.1 q < 2 ^ 60)
+      (fun b => rowsObs (launch2 1 1 64 1) 2 3 { blocks := b })
+      (TorchRows 4 32 GPUProof.vecMatGrade GPUProof.vecMatGrade_mono
+        (words 32 A24 GemvThread.v3)) :=
+  gemv_torchLean (n3_caller.closed 0) (launch2_valid (by decide)) (by decide) rfl rfl rfl rfl
+    (by decide) (by decide) (by decide) (by decide) n3_caller.hb0 n3_caller.hf0 n3_caller.hbA
+    n3_caller.hbV n3_caller.hfA n3_caller.hfV n3_caller.hA n3_caller.hV 32 _ (fun _ _ => rfl)
+    (fun _ => rfl) GPUProof.vecMatGrade GPUProof.vecMatGrade_mono
 
 end MojoProofTest.GemvTorch

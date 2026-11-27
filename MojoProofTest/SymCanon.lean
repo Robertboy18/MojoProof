@@ -1,15 +1,17 @@
 import MojoProofTest.SymColl
 import MojoProofTest.SymChain
 import MojoProofTest.Atomics
-import MojoProof.Sym.Canon
+import MojoProof.Sym.CanonBar
+import MojoProof.Sym.WarpRoute
 import MojoProof.LLVM.Import
 
 /-!
 # The canonical run of a kernel whose warps branch around a shuffle
 
 Instances of `CanonRun`, `WarpRun`, `WarpShfl` and `CanonRun.start_sound`
-(MojoProof/Sym/Canon.lean) for a hand-built kernel at block sizes 40 and 70. The kernel `kern`
-is the parser's term for `text` (checked by `#guard`):
+(MojoProof/Sym/Canon.lean), and of `PhaseRun.of_canon` (MojoProof/Sym/CanonBar.lean), for a
+hand-built kernel at block sizes 40 and 70. The kernel `kern` is the parser's term for `text`
+(checked by `#guard`):
 
     %0 = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
     %1 = and i32 %0, 32
@@ -42,8 +44,10 @@ decided at `[]` and `noundef` by `covers`).
   under the declaration's attributes (`withAttrs`; `noundef` keeps warp 0's words).
   `deliver40`: lane `j` of warp 0 is delivered thread `j ^^^ 16`'s `%0`.
 * `sound70`: at block size 70 (warps 0, 32 and 64), with no attribute, warps 0 and 64 shuffle and
-  warp 32 skips; the launch is sound. `poison70`: every lane of the last warp, 64 (6 lanes), is
-  delivered `poison`, as lane `j ^^^ 16` is not one of its lanes.
+  warp 32 skips; the launch is sound, the canonical run (`CanonRun.of_inv`) as a run at the phase
+  level of one block of one phase (`PhaseRun.of_canon`, then `PhaseRun.start_sound`).
+  `poison70`: every lane of the last warp, 64 (6 lanes), is delivered `poison`, as lane
+  `j ^^^ 16` is not one of its lanes.
 * `attrs`: with `noundef`, each of warp 64's deliveries at block size 70 faults, so that warp has
   no `WarpShfl`; `range(i32 0, 16)` keeps lane 16's word and turns lane 0's into `poison`.
 * The refused fires (`early`, `mixed`): at block size 40, with lanes 0 to 30 of warp 0 at the
@@ -281,26 +285,17 @@ theorem skipLane {ra : List Attr} {B n : Nat} (hC : Checks ra) (hs : (start ra B
 /-- **A warp that skips the shuffle**: for every `ra` at which the checkers accept the kernel,
 block size whose start succeeds and warp `k` of `N` lanes whose lanes are threads of the start,
 return along `skipPs ra` (`retB`) and end on the start's memory, the lanes run in turn to their
-returns (`WarpRun.of_inv` with no shuffle), each by `skipLane`. -/
+returns (`warp_route` at no phase, `WarpRun.of_waits` with no shuffle), each by `skipLane`
+(through `RunsVia.of_runs`). -/
 theorem skipWarp {ra : List Attr} {B k N : Nat} (hC : Checks ra)
     (hs : (start ra B).toBool = true) (hN : (warpLanes (L B) k).length = N)
     (hc : ∀ j < N, k + j < (g0 ra B).threads.size ∧
       retB false (skipPs ra) (V0 ra B (k + j)) = true)
     (he : ∀ j < N, (V0 ra B (k + j)).retMem false [] (skipPs ra) = (g0 ra B).mem) :
     ∃ Es, WarpRun (L B) (c ra B) k (Grid.thread (g0 ra B)) (g0 ra B).mem Es (g0 ra B).mem := by
-  subst hN
-  obtain ⟨Es, _, h, rfl⟩ := WarpRun.of_inv (L := L B) (c := c ra B) (k := k)
-    (t := Grid.thread (g0 ra B)) (J := 0)
-    (T := fun _ j t => t = Grid.thread (g0 ra B) (k + j)) (W := fun _ _ _ => True)
-    (P := fun _ _ m => m = (g0 ra B).mem) (fun _ hi => absurd hi (Nat.not_lt_zero _))
-    (fun _ hi => absurd hi (Nat.not_lt_zero _))
-    (fun j hj t m ht hm => by
-      obtain rfl := ht
-      obtain rfl := hm
-      have hj' := mem_warpLanes.1 hj
-      exact ⟨_, skipLane hC hs (hc j hj').1 (hc j hj').2, he j hj'⟩)
-    (fun _ _ => rfl) rfl
-  exact ⟨Es, h⟩
+  warp_route (J := 0) (fn := kern) (lbl := fun _ => 4)
+    (W := fun _ _ => ⟨0, .barrier, [], {}, (none, {})⟩) (mo := fun _ => .bfly)
+    (X := fun _ j => b (k + j)) (M := fun _ _ => (g0 ra B).mem) using skipLane
 
 /-- Lane `j` of warp `k`'s delivery: `r B k j` on the start's memory. -/
 def dl (ra : List Attr) (B k j : Nat) : Option Val × Mem := (r B k j, (g0 ra B).mem)
@@ -334,55 +329,50 @@ theorem shfl_decl {ra : List Attr} {g : String} {e : Func} {mo : Shfl}
     rw [hI] at hl
     cases hl
 
+/-- **Every thread's context runs the kernel's program**: for every `ra`, block size whose start
+succeeds and thread `n`, `c ra B n` runs `prog ra` (`Grid.start_ctx`). -/
+theorem prog_eq {ra : List Attr} {B : Nat} (hs : (start ra B).toBool = true) (n : Nat) :
+    (c ra B n).prog = prog ra :=
+  (Grid.start_ctx (start_eq hs) n).1
+
+/-- **The shuffle's declaration keeps a delivery the attributes keep**: for every `ra`, block size,
+warp `k` and lane `j` whose delivery `r B k j` the attributes `ra` keep at `i32` on the start's
+memory (`withAttrs`), every declaration `prog ra` finds by a name whose intrinsic is the shuffle
+`bfly` keeps it under its result attributes (`shfl_decl`). -/
+theorem keep {ra : List Attr} {B k j : Nat}
+    (hA : (r B k j).mapM (withAttrs (prog ra).layout (g0 ra B).mem (.int 32) ra) = .ok (r B k j)) :
+    ∀ g e, (prog ra).module.funcs.find? (·.name == g) = some e →
+      (prog ra).intrinsics.lookup g = some (.shfl .bfly) →
+      (r B k j).mapM (withAttrs (prog ra).layout (g0 ra B).mem e.ret e.retAttrs) =
+        .ok (r B k j) := by
+  intro g e h hl
+  rw [shfl_decl h hl]
+  exact hA
+
 /-- **A warp that shuffles**: for every `ra` at which the checkers accept the kernel, block size
 whose start succeeds and warp `k` of `N` lanes whose lanes are threads of the start with `Edge`,
-pass `sh`'s segments delivered `dl ra B k j`, wait once at position 0 at the shuffle `bfly` with
-mask `0xffffffff`, value `%0`, offset 16 and clamp 31, are delivered `r B k j`, which the
-attributes `ra` keep (`withAttrs`), and keep the start's memory, the warp's run is
-`WarpRun.of_waits` on the lanes' runs by `lane` (one wait each), so the shuffle's deliveries are
-`Grid.fire`'s (`WarpShfl`), `r`. -/
+pass `sh`'s segments delivered `dl ra B k j`, have one wait, which passes `Piece.Wait.shflOk`
+(at position 0, the shuffle `bfly` with mask `0xffffffff`, value `%0`, offset 16 and clamp 31,
+delivered what `Grid.fire` delivers), whose delivery `r B k j` the attributes `ra` keep
+(`withAttrs`), and keep the start's memory, the warp's run is `WarpRun.of_waits` found by
+`warp_route`: the lanes' runs by `lane` (one wait each), the shuffles by `WarpRun.shfl_of`,
+`prog_eq` and `keep`, so the shuffle's deliveries are `Grid.fire`'s (`WarpShfl`), `r`. -/
 theorem shflWarp {ra : List Attr} {B k N : Nat} (hC : Checks ra)
     (hs : (start ra B).toBool = true) (hN : (warpLanes (L B) k).length = N)
     (hc : ∀ j < N, k + j < (g0 ra B).threads.size ∧ Edge ra B (k + j) ∧
       Piece.fires kern 4 (retB false (endPs ra)) (shP ra).1 0 [dl ra B k j] (V1 ra B (k + j)) =
         true ∧
-      (ws ra B k j).length = 1 ∧ (wt ra B k 0 j).call = .shfl .bfly ∧ (wt ra B k 0 j).pos = 0 ∧
-      (wt ra B k 0 j).args = [.bits 32 (-1), b (k + j), .bits 32 16, .bits 32 31] ∧
-      (wt ra B k 0 j).dlv.1 = r B k j)
+      (ws ra B k j).length = 1 ∧
+      Piece.Wait.shflOk (warpLanes (L B) k) (fun _ => .bfly) (fun _ => 0) (fun _ => 16)
+        (fun _ => 31) (fun _ j => b (k + j)) ⟨0, .barrier, [], {}, (none, {})⟩ 1 j (ws ra B k j) =
+        true)
     (hA : ∀ j < N, (r B k j).mapM (withAttrs (prog ra).layout (g0 ra B).mem (.int 32) ra) =
       .ok (r B k j))
     (hm : ∀ j < N, ((wt ra B k 0 j).mem, (wt ra B k 0 j).dlv.2, endMem ra B (k + j) [dl ra B k j]) =
       ((g0 ra B).mem, (g0 ra B).mem, (g0 ra B).mem)) :
     ∃ Es, WarpRun (L B) (c ra B) k (Grid.thread (g0 ra B)) (g0 ra B).mem Es (g0 ra B).mem := by
-  subst hN
-  refine WarpRun.of_waits (fn := kern) (lbl := fun _ => 4) (W := wt ra B k)
-    (mo := fun _ => .bfly) (X := fun _ j => b (k + j)) (M := fun _ _ => (g0 ra B).mem) (J := 1)
-    (fun j hj => ?_) (fun i hi j hj => ?_) (fun i hi j hj => ?_) (fun _ _ => rfl)
-  · have hj' := mem_warpLanes.1 hj
-    obtain ⟨hn, hE, hF, h1, -⟩ := hc j hj'
-    obtain ⟨-, he⟩ := Prod.mk.inj (Prod.mk.inj (hm j hj')).2
-    have h := lane hC hs hn hE hF
-    rw [he, Piece.Wait.map_via (n := 0) (W := fun i => wt ra B k i j) (lbl := fun _ => 4)
-      (fun i hi => by
-        simp only [Nat.zero_add, wt, ws, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi,
-          Option.getD_some])
-      (fun _ _ => rfl)] at h
-    rw [show (Piece.waits kern 4 (shP ra).1 0 [dl ra B k j] (V1 ra B (k + j))).length = 1 from h1,
-      ← List.range_eq_range'] at h
-    exact h
-  · obtain rfl : i = 0 := by omega
-    have h0 := (hc 0 (List.length_pos_of_mem hj)).2.2.2.2.2.1
-    have hj' := mem_warpLanes.1 hj
-    obtain ⟨-, -, -, -, hcall, hpos, hargs, hdlv⟩ := hc j hj'
-    refine ⟨congrArg Coll.intr hcall, hpos.trans h0.symm, _, _, _, _, _, hargs, rfl, rfl, rfl,
-      fun g e h hl => ?_⟩
-    have hP := (Grid.start_ctx (start_eq hs) (k + j)).1
-    rw [hP] at h hl
-    rw [shfl_decl h hl, hdlv, (Grid.start_ctx (start_eq hs) k).1]
-    exact hA j hj'
-  · obtain rfl : i = 0 := by omega
-    obtain ⟨hw, hd⟩ := Prod.mk.inj (hm j (mem_warpLanes.1 hj))
-    exact ⟨hw, (Prod.mk.inj hd).1⟩
+  warp_route (J := 1) (fn := kern) (lbl := fun _ => 4) (W := wt ra B k) (mo := fun _ => .bfly)
+    (X := fun _ j => b (k + j)) (M := fun _ _ => (g0 ra B).mem) using lane, prog_eq, keep
 
 /-- **The canonical run at block size 40 is sound** (`Grid.Sound`, with the observation that is
 always `()`), with the shuffle declared without result attributes and with `noundef`: warp 0
@@ -415,7 +405,8 @@ theorem deliver40 : ∀ j < 32, r 40 0 j = some (b (j ^^^ 16)) := by
   interval_cases j <;> kernel_rfl
 
 /-- **The canonical run at block size 70 is sound**: warps 0 and 64 shuffle and warp 32 skips the
-shuffle; the run of the three warps by `CanonRun.of_inv`. -/
+shuffle; the run of the three warps by `CanonRun.of_inv`, as a run at the phase level of one
+block of one phase (`PhaseRun.of_canon`), sound by `PhaseRun.start_sound`. -/
 theorem sound70 : Grid.Sound (L 70) (c [] 70) (g0 [] 70) (fun _ => some ()) fun _ => True := by
   obtain ⟨_, w0⟩ := shflWarp (B := 70) (k := 0) (N := 32) covers.1 (by decide +kernel)
     (by decide +kernel) (by decide +kernel) (fun _ _ => withAttrs_mapM_nil _ _ _ _)
@@ -434,10 +425,12 @@ theorem sound70 : Grid.Sound (L 70) (c [] 70) (g0 [] 70) (fun _ => some ()) fun 
       | 1, _ => exact ⟨_, _, w32, rfl⟩
       | 2, _ => exact ⟨_, _, w64, rfl⟩
       | n + 3, h => simp only [List.length_cons, List.length_nil] at h; omega) rfl
-  rw [show [0, 32, 64] = warps (L 70) (g0 [] 70).threads.size by decide +kernel] at hc
-  exact CanonRun.start_sound (start_eq (by decide +kernel)) (fun _ _ _ _ _ hc => by cases hc)
-    (fun _ _ _ => rfl) (by decide) hc (fun _ _ => by decide +kernel) (by decide +kernel) rfl
-    trivial
+  rw [show [0, 32, 64] = warps (L 70) (1 * volume (L 70).block) by decide +kernel] at hc
+  have hp := PhaseRun.of_canon hc
+  rw [show List.range 1 = List.range (volume (L 70).grid) by decide +kernel] at hp
+  exact PhaseRun.start_sound (start_eq (by decide +kernel)) (fun _ _ _ _ _ hc => by cases hc)
+    (fun _ _ _ => rfl) (by decide) hp ⟨fun _ _ => by decide +kernel, by decide +kernel, _, rfl,
+      trivial⟩
 
 /-- **A partial last warp delivers poison**: at block size 70, every lane of warp 64 (6 lanes) is
 delivered `poison`, lane `j ^^^ 16` not being one of its lanes. -/

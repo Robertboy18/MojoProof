@@ -30,7 +30,15 @@ a butterfly (`MojoProof.Tile.stride_approx`, `MojoProof.Tile.bfly_approx`,
   `1 / 2 + 2 ^ -25`, a tie that rounds to the even `1 / 2`, and the exact `2 ^ -26 + 2 ^ -26`,
   then `1 / 2 + 2 ^ -25` again. Its error `2 ^ -24` is within `GPUProof.laneGrade` at depth 2
   (`groupDot_approx`) and above the error `u S + 4 (2 + u) η` of the grade at depth 0, with
-  `S = 1 / 2 + 2 ^ -24`, so the word is not `GPUProof.Approx` at that grade.
+  `S = 1 / 2 + 2 ^ -24`, so the word is not `GPUProof.Approx` at that grade;
+* `cols_3x5`, `cols_40x2`: `MojoProof.Tile.groupDot_cols_holds` at 4 lanes per column at size
+  3 × 5 in binary32, and `MojoProof.Tile.warpDot_vecMat_holds` at size 40 × 2 in binary64 on
+  every vector and matrix: for every flag and oracle sequences, the words meet the rule of
+  `GPUProof.Spec.vecMat` at `GPUProof.vecMatLaneGrade` at `MojoProof.Tile.vecMatEnc`;
+* `col_mutant`: the grade `vtight`, `GPUProof.vecMatGrade` with `1 / 2 ^ 149` (binary32's
+  subnormal spacing) less error, is not met at size 1 × 1 by one lane's word on the pair
+  `(subW, halfW)`, whose product `3 / 2 ^ 150`, a tie between subnormals, rounds to
+  `2 / 2 ^ 149` (`MojoProofTest.DotGrade.mutant_one`).
 -/
 
 namespace MojoProofTest.TileLanes
@@ -238,5 +246,100 @@ theorem depth_mutant :
     hu, hη, max_self, ciSup_const, mul_zero, add_zero] at h
   have h2 := (h (max_le (by norm_num [abs_of_pos]; linarith) (by linarith))).2
   norm_num [abs_of_pos] at h2
+
+/-! ## Columns: the vector-matrix rule -/
+
+/-- The binary32 input words of `GPUProof.Spec.vecMat` at size 3 × 5: the vector `row 3 2` and
+the matrix whose row `i` is `row 5 i`. -/
+def vin3x5 : Fin 3 ⊕ Fin 3 × Fin 5 → Model .binary32 :=
+  Sum.elim (row 3 2) fun ij => row 5 ij.1 ij.2
+
+/-- **A lane group per column, size 3 × 5, binary32** (a test of
+`MojoProof.Tile.groupDot_cols_holds`, not a kernel theorem): for every flag and oracle sequences,
+`groupDot 2` (4 strided lanes and two butterfly rounds) of the vector and each column of
+`vin3x5` meets the rule of `GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade 4 2 fun m => ⌈m / 4⌉)`
+at `vecMatEnc .binary32 32`; the words are the group's own, so `NaNEq` holds by reflexivity. -/
+theorem cols_3x5 (c : Bool) (o : Fin 5 → Nat → Nat → Nat × Nat) :
+    (GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade 4 2 fun m => (m + 4 - 1) / 4)
+        (GPUProof.vecMatLaneGrade_mono _ _ _)).rule.Holds (3, 5) (vecMatEnc .binary32 32 (3, 5))
+      vin3x5 fun j =>
+        groupDot 2 c (o j) (List.ofFn fun i => (vin3x5 (.inl i), vin3x5 (.inr (i, j)))) :=
+  groupDot_cols_holds (σ := (3, 5)) rfl 32 2 c o vin3x5 fun _ => .inl rfl
+
+/-- **The warp per column, size 40 × 2, binary64** (a test of
+`MojoProof.Tile.warpDot_vecMat_holds`, not a kernel theorem): for every flag, oracle sequences,
+vector `v` of 40 and matrix `A` of 40 × 2 binary64 floats, the words
+`warpDot c (o j) (vecMatPairs v A j)` meet the rule of
+`GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade 32 5 fun m => ⌈m / 32⌉)` at
+`vecMatEnc .binary64 64` and the input words read from `v` and `A`; at length 40 the lane length
+is `2`. -/
+theorem cols_40x2 (c : Bool) (o : Fin 2 → Nat → Nat → Nat × Nat)
+    (v : TorchLean.Tensor (Model .binary64) [40]) (A : TorchLean.Tensor (Model .binary64) [40, 2]) :
+    (GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade (2 ^ 5) 5 fun m => (m + 2 ^ 5 - 1) / 2 ^ 5)
+        (GPUProof.vecMatLaneGrade_mono _ _ _)).rule.Holds (40, 2) (vecMatEnc .binary64 64 (40, 2))
+      (Sum.elim (fun i => v.getScalar i) fun ij => TorchLean.Tensor.get2 A ij.1 ij.2)
+      fun j => warpDot c (o j) (vecMatPairs v A j) :=
+  warpDot_vecMat_holds (σ := (40, 2)) rfl 64 c o v A (fun _ => rfl) (fun _ _ => rfl)
+    fun _ => .inl rfl
+
+/-- One test mutant of `GPUProof.vecMatGrade` one subnormal spacing tighter (`vtight`), at every
+size, encoding, exact inputs, grades and output `j`: `vecMatGrade`'s error less `1 / 2 ^ 149`,
+binary32's subnormal spacing, and its magnitude. -/
+noncomputable def vtight :
+    GPUProof.RealGrades (fun σ : ℕ × ℕ => Fin σ.1 ⊕ Fin σ.1 × Fin σ.2) fun σ => Fin σ.2 :=
+  fun σ E A G j => ⟨(GPUProof.vecMatGrade σ E A G j).err - 1 / 2 ^ 149,
+    (GPUProof.vecMatGrade σ E A G j).mag⟩
+
+/-- `vtight` grows with the inputs' grades, at every size, encoding and exact inputs
+(`GPUProof.vecMatGrade_mono`; the two grades are generalized, so the guard is not unfolded). -/
+theorem vtight_mono : ∀ σ E A, Monotone (vtight σ E A) := fun σ E A G G' h j => by
+  have hm := GPUProof.vecMatGrade_mono σ E A h j
+  change (⟨_ - _, _⟩ : GPUProof.Grade) ≤ ⟨_ - _, _⟩
+  generalize GPUProof.vecMatGrade σ E A G j = g at hm ⊢
+  generalize GPUProof.vecMatGrade σ E A G' j = g' at hm ⊢
+  exact ⟨sub_le_sub_right hm.1 _, hm.2⟩
+
+/-- The binary32 input words of `GPUProof.Spec.vecMat` at size 1 × 1: the vector `subW`
+(`3 / 2 ^ 149`) and the matrix `halfW` (`1 / 2`). -/
+def vin1 : Fin 1 ⊕ Fin 1 × Fin 1 → Model .binary32 := Sum.elim (fun _ => subW) fun _ => halfW
+
+/-- The real values of `vin1`: `3 / 2 ^ 149` and `1 / 2` (`sub_vals`). -/
+noncomputable def vvals : Fin 1 ⊕ Fin 1 × Fin 1 → ℝ :=
+  Sum.elim (fun _ => 3 / 2 ^ 149) fun _ => 1 / 2
+
+/-- **The mutant: one subnormal spacing tighter fails.** At size 1 × 1 and
+`vecMatEnc .binary32 32`, the word of `groupDot 0` (one lane, an unfused loop at the oracle 0) of
+the pair `(subW, halfW)` of `vin1` does not meet the rule of `GPUProof.Spec.vecMat vtight`: at
+the exact values `vvals` and the grades `g0`, which the input words meet, the guard holds
+(`GPUProof.Grade.onlyIf_pos`, magnitude `0`), so `GPUProof.vecMatGrade` is `GPUProof.dotGrade`
+there, and the word, `3 / 2 ^ 149 · 1 / 2` rounded to `2 / 2 ^ 149`, is not within the error less
+`1 / 2 ^ 149` (`MojoProofTest.DotGrade.mutant_one`). -/
+theorem col_mutant :
+    ¬ (GPUProof.Spec.vecMat vtight vtight_mono).rule.Holds (1, 1) (vecMatEnc .binary32 32 (1, 1))
+      vin1 fun j => groupDot 0 false (fun _ _ => (0, 0))
+        (List.ofFn fun i => (vin1 (.inl i), vin1 (.inr (i, j)))) := by
+  intro h
+  have h2 := h vvals (fun _ => g0) trivial (by
+    rintro (_ | _)
+    · exact (GPUProof.Approx.model _ _ _).2 fun _ =>
+        ⟨sub_vals.1, by simp [vvals, vin1, sub_vals.2.2.1, g0]⟩
+    · exact (GPUProof.Approx.model _ _ _).2 fun _ =>
+        ⟨sub_vals.2.1, by simp [vvals, vin1, sub_vals.2.2.2, g0]⟩) (0 : Fin 1)
+  have h0 : g0.mag ≤ (GPUProof.NumFormat.ieee .binary32).safeMax :=
+    show (0 : ℝ) ≤ (Model.posMaxFinite .binary32).toReal from
+      zero_le_one.trans (Model.one_le_toReal_posMaxFinite .binary32)
+  have e : GPUProof.vecMatGrade (1, 1) (vecMatEnc .binary32 32 (1, 1)) vvals (fun _ => g0)
+      (0 : Fin 1) = GPUProof.dotGrade (.ieee .binary32) 1 (fun _ => 3 / 2 ^ 149) (fun _ => 1 / 2)
+        (fun _ => g0) (fun _ => g0) :=
+    GPUProof.Grade.onlyIf_pos (fun _ => ⟨h0, h0⟩) _ _
+  have hf : (GPUProof.Spec.vecMat vtight vtight_mono).f (1, 1) vvals (0 : Fin 1) =
+      ∑ _ : Fin 1, (3 / 2 ^ 149 * (1 / 2) : ℝ) := by
+    simp only [GPUProof.Spec.vecMat, GPUProof.Spec.ofReal, Matrix.vecMul, dotProduct,
+      Matrix.of_apply, vvals, Sum.elim_inl, Sum.elim_inr]
+  change GPUProof.Approx .real ⟨(GPUProof.vecMatGrade (1, 1) (vecMatEnc .binary32 32 (1, 1)) vvals
+      (fun _ => g0) (0 : Fin 1)).err - 1 / 2 ^ 149, (GPUProof.vecMatGrade (1, 1)
+      (vecMatEnc .binary32 32 (1, 1)) vvals (fun _ => g0) (0 : Fin 1)).mag⟩ _ _ _ at h2
+  rw [hf, e] at h2
+  exact mutant_one h2
 
 end MojoProofTest.TileLanes

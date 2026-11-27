@@ -50,7 +50,9 @@ open whose type is a proposition (a premise that the conclusion does not determi
 spec's domain), by a hypothesis of that type up to definitional unfolding
 (`MVarId.assumptionCore`). Two cheap tests come first, so that a theorem about the same terms but
 a different right side is not unfolded far (`closesBy`): its left side has a constant at its head
-and is the goal's up to reducible unfolding, and its right side's head is a constant that the
+and is the goal's up to reducible unfolding, where the type of each argument is compared with the
+type of the goal's term it is matched with at default transparency (a bridge at `Fin n` where the
+goal has `Sp.Out n`, with `Sp.Out := Fin`), and its right side's head is a constant that the
 goal's right side has at its head or after unfolding its head some times, or the other way round
 (`unfoldHeads`).
 -/
@@ -97,7 +99,10 @@ partial def unfoldHeads (e : Expr) : MetaM (Array Name) := do
 /-- Whether the theorem `n` closes the goal `g`, an equation with sides `gl` and `gr`, given the
 heads `hs` of `gr` and of its unfoldings (`unfoldHeads`), for every goal and theorem: at fresh
 metavariables for its arguments, the theorem's conclusion is an equation whose left side has a
-constant at its head and is `gl` up to reducible unfolding, whose right side `r` has a constant
+constant at its head and is `gl` up to reducible unfolding, where each argument's type is compared
+at default transparency with the type of the term of `gl` it is assigned
+(`backward.isDefEq.respectTransparency.types` off: a bridge at `Fin n` matches a goal at `Sp.Out n`
+with `Sp.Out := Fin`, and one at `Fin (0 + n)` does not), whose right side `r` has a constant
 `c` at its head with `c` among `hs` or the head of `gr` among the heads of `r` and its unfoldings,
 and which is definitionally the goal; then each argument left unassigned whose type, instantiated,
 is a proposition is assigned a hypothesis of `g`'s context of that type, the last one declared,
@@ -112,7 +117,8 @@ def closesBy (g : MVarId) (gl gr : Expr) (hs : Array Name) (n : Name) : MetaM Bo
       let some (_, l, r) := ty.eq? | return false
       let .const rh _ := r.getAppFn | return false
       unless l.getAppFn.isConst do return false
-      unless ← withReducible (isDefEq l gl) do return false
+      unless ← withOptions (·.setBool `backward.isDefEq.respectTransparency.types false)
+          (withReducible (isDefEq l gl)) do return false
       unless hs.contains rh ||
           (gr.getAppFn.constName?.any (← unfoldHeads (← instantiateMVars r)).contains) do
         return false

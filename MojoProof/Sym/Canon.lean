@@ -13,20 +13,17 @@ to their next collective call (`Seq.ToWait`); once the last one waits, the warp'
 (`WarpShfl`, `Grid.fire_shfl` at the warp's first thread), resuming each lane with the value
 `Grid.fire` delivers (`shflVal` at `shflSource`'s lane, `poison` for a lane not of the warp);
 this repeats until every lane has run to its end (`Seq`). Each warp has its own number of
-shuffles, so a warp that branches around a shuffle is a run with one phase less. `Sched`
-(MojoProof/Sym/SchedWait.lean) runs the whole grid through each phase, so it cannot state that.
+shuffles, so a warp that branches around a shuffle is a run with one phase less. The blocks
+in turn, with their barriers, are the next level up (`PhaseRun`, MojoProof/Sym/CanonBar.lean).
 
 * `warpLanes_eq`: a warp's lanes are `List.range` of their number, `min 32` and what is left of
   the block. `warpThreads_iff`: thread `n` is one of the warp of first thread `k` exactly when
   `n - n % volume L.block % 32 = k`, so distinct warps have disjoint threads.
 * `WarpRun.grid`, `CanonRun.grid`: the runs are runs of grid steps, from every grid whose warps'
-  threads run the run's threads, to the grid with those threads done. `CanonRun.done`: from a
-  grid whose number of threads is a multiple of the block, the run over every warp (`warps`)
-  reaches a done grid (the core's `Done` at `sig`), with the trace the run's events put in front
-  of the first memory's (`CanonRun.trace`).
-* `CanonRun.start_sound`: a start whose threads have a canonical run is sound (`Grid.Sound`)
-  when the last memory's trace has no race, keeps the promise of `!invariant.load` and has an
-  observation meeting `R` (Theorem 0 at `sig`, through `Grid.start_sound`).
+  threads run the run's threads, to the grid with those threads done; `CanonRun.trace`: the run
+  puts its events in front of the first memory's trace. The run over every warp to a done grid
+  and to a sound start (`CanonRun.done`, `CanonRun.start_done`, `CanonRun.start_sound`) are
+  corollaries of the phase level's, in MojoProof/Sym/CanonBar.lean.
 * `WarpRun.of_inv`, `CanonRun.of_inv`: the runs from predicates on each lane's runs to its next
   collective and to its end, each phase's shuffle firing from every statuses they allow, and on
   each warp's runs (`Seq.ToWait.of_inv`, `Seq.of_inv` on the lanes, moved to the warp's threads
@@ -286,12 +283,48 @@ theorem WarpRun.grid {L : Launch} {c : Nat → Ctx} {k : Nat} {t : Nat → Threa
     exact Path.exists_iff.2 ((Path.exists_iff.1 ⟨_, hp₁⟩).trans
       (.head ⟨k, .inr hF⟩ (Path.exists_iff.1 ⟨_, hp₃⟩)))
 
+/-- **One more warp in turn, in a grid.** For every launch `L` with blocks of
+`volume L.block > 0` threads, contexts `c`, threads `t`, statuses `s`, warp's first thread `k`,
+warps' first threads `ks` and memories `m`, `m₁`, `m'`: if warp `k` (a warp's first thread) goes
+by grid steps from every grid in which each of its threads `n` runs `t n` and whose memory is `m`
+to that grid with each of them at `s n` and memory `m₁`, and the distinct warps `ks` go likewise
+from `m₁` to `m'`, then the distinct warps `k :: ks` go likewise from `m` to `m'` (distinct warps
+have disjoint threads, `warpThreads_iff`). `CanonRun.grid` and `CanonWait.grid`
+(MojoProof/Sym/CanonBar.lean) take each warp in turn by it. -/
+theorem warps_grid_cons {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {s : Nat → Status}
+    {k : Nat} {ks : List Nat} {m m₁ m' : Mem} (hs : 0 < volume L.block)
+    (hw : k % volume L.block % 32 = 0 → ∀ {g : Grid},
+      (∀ n ∈ warpThreads L k, g.threads[n]? = some (.run (t n))) → g.mem = m →
+      ∃ i, Path (Grid.Step L c) i g
+        ⟨(warpThreads L k).foldl (fun ts n => ts.set! n (s n)) g.threads, m₁⟩)
+    (ih : ∀ {g : Grid}, ks.Nodup → (∀ k ∈ ks, k % volume L.block % 32 = 0) →
+      (∀ k ∈ ks, ∀ n ∈ warpThreads L k, g.threads[n]? = some (.run (t n))) → g.mem = m₁ →
+      ∃ i, Path (Grid.Step L c) i g
+        ⟨(ks.flatMap (warpThreads L)).foldl (fun ts n => ts.set! n (s n)) g.threads, m'⟩)
+    {g : Grid} (hd : (k :: ks).Nodup) (hk : ∀ k' ∈ k :: ks, k' % volume L.block % 32 = 0)
+    (hg : ∀ k' ∈ k :: ks, ∀ n ∈ warpThreads L k', g.threads[n]? = some (.run (t n)))
+    (hm : g.mem = m) : ∃ i, Path (Grid.Step L c) i g
+      ⟨((k :: ks).flatMap (warpThreads L)).foldl (fun ts n => ts.set! n (s n)) g.threads, m'⟩ := by
+  have hk0 := hk k List.mem_cons_self
+  obtain ⟨_, hp₁⟩ := hw hk0 (g := g) (fun n hn => hg k List.mem_cons_self n hn) hm
+  obtain ⟨_, hp₂⟩ := ih (g := ⟨(warpThreads L k).foldl (fun ts n => ts.set! n (s n))
+      g.threads, m₁⟩) (List.nodup_cons.1 hd).2
+    (fun k' hk' => hk k' (List.mem_cons_of_mem _ hk')) (fun k' hk' n hn => by
+      have hn' : n ∉ warpThreads L k := fun hn' => (List.nodup_cons.1 hd).1 (by
+        rw [← (warpThreads_iff hs hk0).1 hn',
+          (warpThreads_iff hs (hk k' (List.mem_cons_of_mem _ hk'))).1 hn]
+        exact hk')
+      simp only [foldl_set_getElem?, hn', ↓reduceIte]
+      exact hg k' (List.mem_cons_of_mem _ hk') n hn) rfl
+  rw [List.flatMap_cons, List.foldl_append]
+  exact Path.exists_iff.2 ((Path.exists_iff.1 ⟨_, hp₁⟩).trans (Path.exists_iff.1 ⟨_, hp₂⟩))
+
 /-- **The canonical run, in a grid.** For every launch `L` with blocks of `volume L.block > 0`
 threads, contexts `c`, threads `t`, distinct warps' first threads `ks`, memories and grid `g` in
 which each thread `n` of each warp of `ks` runs `t n` and whose memory is `m`: the canonical run
 (`CanonRun`) from `t` on `m` to `m'` is a run of grid steps from `g` to the grid with the warps'
 threads done, every other thread unchanged, and memory `m'` (`WarpRun.grid` for each warp in
-turn; distinct warps have disjoint threads, `warpThreads_iff`). -/
+turn, `warps_grid_cons`). -/
 theorem CanonRun.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ks : List Nat}
     {m m' : Mem} {Es : List (List Event)} (hs : 0 < volume L.block)
     (h : CanonRun L c t ks m Es m') :
@@ -300,105 +333,60 @@ theorem CanonRun.grid {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {ks : 
       ∃ i, Path (Grid.Step L c) i g
         ⟨(ks.flatMap (warpThreads L)).foldl (fun ts n => ts.set! n .done) g.threads, m'⟩ := by
   induction h with
-  | nil m =>
-    intro g _ _ _ hm
-    subst hm
-    exact ⟨0, .nil _⟩
-  | @cons k ks m m₁ m' Es Es' hw _ ih =>
-    intro g hd hk hg hm
-    have hk0 := hk k List.mem_cons_self
-    obtain ⟨_, hp₁⟩ := hw.grid hs hk0 (g := g) (fun n hn => hg k List.mem_cons_self n hn) hm
-    obtain ⟨_, hp₂⟩ := ih (g := ⟨(warpThreads L k).foldl (fun ts n => ts.set! n .done)
-        g.threads, m₁⟩) (List.nodup_cons.1 hd).2
-      (fun k' hk' => hk k' (List.mem_cons_of_mem _ hk')) (fun k' hk' n hn => by
-        have hn' : n ∉ warpThreads L k := fun hn' => (List.nodup_cons.1 hd).1 (by
-          rw [← (warpThreads_iff hs hk0).1 hn',
-            (warpThreads_iff hs (hk k' (List.mem_cons_of_mem _ hk'))).1 hn]
-          exact hk')
-        simp only [foldl_done_getElem?, hn', ↓reduceIte]
-        exact hg k' (List.mem_cons_of_mem _ hk') n hn) rfl
-    rw [List.flatMap_cons, List.foldl_append]
-    exact Path.exists_iff.2 ((Path.exists_iff.1 ⟨_, hp₁⟩).trans (Path.exists_iff.1 ⟨_, hp₂⟩))
+  | nil m => exact fun _ _ _ hm => by subst hm; exact ⟨0, .nil _⟩
+  | cons hw _ ih => exact warps_grid_cons (s := fun _ => .done) hs (fun hk {_} => hw.grid hs hk) ih
 
-/-- **The canonical run to a done grid.** For every launch `L` with blocks of
-`volume L.block > 0` threads, contexts `c`, threads `t`, memory `m'` and grid `g` whose number
-of threads is a multiple of the block's and in which each thread `n` runs `t n`: the canonical
-run (`CanonRun`) of every warp (`warps`) from `t` on `g`'s memory to `m'` is a run of grid steps
-from `g` to a done grid (the core's `Done` at `sig`) with memory `m'`, whose trace is the run's
-events, the last lane's run's in front, in front of `g`'s memory's (`CanonRun.grid`,
-`Grid.done_foldl`: every thread `j` is one of the warp of first thread
-`j - j % volume L.block % 32`; `CanonRun.trace`). -/
-theorem CanonRun.done {L : Launch} {c : Nat → Ctx} {t : Nat → Thread} {g : Grid} {m' : Mem}
-    {Es : List (List Event)} (hs : 0 < volume L.block)
-    (hN : g.threads.size % volume L.block = 0)
-    (h : CanonRun L c t (warps L g.threads.size) g.mem Es m')
-    (hg : ∀ n < g.threads.size, g.threads[n]? = some (.run (t n))) :
-    ∃ z, (∃ i, Path (Grid.Step L c) i g z) ∧ GPUProof.Done sig (z, L, c) ∧ z.mem = m' ∧
-      z.mem.trace = Es.reverse.flatten ++ g.mem.trace := by
-  have hw : ∀ k ∈ warps L g.threads.size,
-      k < g.threads.size ∧ k % volume L.block % 32 = 0 := fun k hk => by
-    simpa [warps] using hk
-  refine ⟨_, h.grid hs (List.nodup_range.filter _) (fun k hk => (hw k hk).2)
-    (fun k hk n hn => hg n ?_) rfl, Grid.done_foldl _ fun j hj => ?_, rfl, h.trace⟩
-  · obtain ⟨hk1, hk2⟩ := hw k hk
-    obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hn
-    simp only [warpLanes, List.mem_filter, List.mem_range, decide_eq_true_eq] at hj
-    have hd := Nat.dvd_of_mod_eq_zero hN
-    generalize volume L.block = s at hs hk2 hj hd
-    generalize g.threads.size = N at hk1 hd
-    have h1 := Nat.mod_add_div k s
-    have h2 : k / s < N / s := (Nat.div_lt_iff_lt_mul hs).2 (by
-      rw [Nat.div_mul_cancel hd]
-      exact hk1)
-    have h3 : s * (k / s + 1) ≤ s * (N / s) := Nat.mul_le_mul_left _ h2
-    have h4 := Nat.mul_div_cancel' hd
-    rw [Nat.mul_succ] at h3
-    omega
-  · have hb : (j - j % volume L.block % 32) % volume L.block % 32 = 0 := by
-      rw [warp_base_mod hs]
-      omega
-    exact List.mem_flatMap.2 ⟨_, List.mem_filter.2 ⟨List.mem_range.2 (by omega),
-      decide_eq_true hb⟩, (warpThreads_iff hs hb).2 rfl⟩
-
-/-- **A start with a canonical run reaches a done grid.** For every program, kernel `fn`, launch
-`L` with blocks of `volume L.block > 0` threads, arguments, memory, address choice and oracle whose
-start (`Grid.start`) gives grid `g₀` and contexts `c`: if the threads of `g₀` (`Grid.thread`) on
-`g₀`'s memory have a canonical run (`CanonRun`) over every warp (`warps`) to `m'`, then `g₀` steps
-(`Grid.Step`) to a done grid (`GPUProof.Done` at `sig`) with memory `m'`: `CanonRun.done` with
-`Grid.start_threads` and `Grid.start_size`. -/
-theorem CanonRun.start_done {prog : Program} {fn : Func} {L : Launch} {args : List Val}
-    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
-    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hs : 0 < volume L.block)
-    {Es : List (List Event)} {m' : Mem}
-    (hc : CanonRun L c (Grid.thread g₀) (warps L g₀.threads.size) g₀.mem Es m') :
-    ∃ z, (∃ i, Path (Grid.Step L c) i g₀ z) ∧ GPUProof.Done sig (z, L, c) ∧ z.mem = m' :=
-  let ⟨z, hp, hd, hm, _⟩ := CanonRun.done hs
-    (by rw [Grid.start_size h]; exact Nat.mul_mod_left _ _) hc (Grid.start_threads h)
-  ⟨z, hp, hd, hm⟩
-
-/-- **A start with a canonical run, sound.** For every program, kernel `fn`, launch `L` with
-blocks of `volume L.block > 0` threads, arguments, address choice and oracle whose start
-(`Grid.start`) gives grid `g₀` and contexts `c`, on a caller's memory `m` meeting `Mem.BytesIn`,
-and every observation `obs` that reads only the blocks: if the threads of `g₀` (`Grid.thread`)
-on `g₀`'s memory have a canonical run (`CanonRun`) over every warp (`warps`) to `m'`, and `m'`'s
-trace keeps the promise of `!invariant.load` (the core's `GPUProof.kept` at `sig`), has no data
-race (the core's `racy` at `sig`) when it has the premises of `racy_iff`, and has
-`obs m' = some y` with `R y`, then `g₀` is sound (`Grid.Sound`): `CanonRun.start_done`, then
-`Grid.start_done_sound`. -/
-theorem CanonRun.start_sound {prog : Program} {fn : Func} {L : Launch} {args : List Val}
-    {m : Mem} {ch : Nat → Nat} {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
-    (h : Grid.start prog fn L args m ch oracle = .ok (g₀, c)) (hm : m.BytesIn m.Known)
-    {β : Type} {obs : Mem → Option β} {R : β → Prop}
-    (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m') (hs : 0 < volume L.block)
-    {Es : List (List Event)} {m' : Mem}
-    (hc : CanonRun L c (Grid.thread g₀) (warps L g₀.threads.size) g₀.mem Es m')
-    (hr : ((∀ a, Sem.Event.access a ∈ m'.trace → a.who.thread < volume L.grid * volume L.block ∧
-        a.who.cta = a.who.thread / volume L.block) → Trace.Shaped m'.trace.reverse →
-      GPUProof.racy sig (m'.trace.map (Event.toCore L)).reverse = false))
-    (hk : GPUProof.kept sig (m'.trace.map (Event.toCore L)).reverse = true)
-    {y : β} (hy : obs m' = some y) (hR : R y) : Grid.Sound L c g₀ obs R := by
-  obtain ⟨z, ⟨_, hp⟩, hd, rfl⟩ := CanonRun.start_done h hs hc
-  exact Grid.start_done_sound h hm hO hp hd hr hk hy hR
+/-- **A warp's shuffles by invariants**, for every launch `L`, contexts `c`, warp's first thread
+`k`, number `J` of the warp's shuffles, families `T i j` of thread predicates, `W i j` of status
+predicates and `P i j` of memory predicates (phase `i`, lane `j`, `j` lanes done in the phase),
+and relation `Q t m Es m'` of the warp's runs from threads `t` on `m` to `m'` with events `Es`
+that a shuffle may start (the lanes in turn to their waits, the warp's shuffle, then a run of `Q`
+from the resumed lanes, is a run of `Q`): if in each phase `i < J` each lane `j` of `T i j`, from
+every memory of `P i j`, runs to a collective call (`ToWait`, in the context of thread `k + j`)
+at a status of `W i j` leaving a memory of `P i (j + 1)`; from every lane-indexed statuses `s`
+with `W i j (s j)` and memory of `P i` after all the lanes, the warp's shuffle fires (`WarpShfl`)
+to threads and deliveries whose resumed lanes are of `T (i + 1)`, on a memory of `P (i + 1) 0`;
+and threads whose lane `j` is of `T J j`, on every memory of `P J 0`, have a run of `Q` to a
+memory of `P J` after all the lanes: then threads `t` whose lane `j`, thread `k + j`, is of
+`T 0 j`, on a memory of `P 0 0`, have a run of `Q` to a memory of `P J` after all the lanes
+(`Seq.ToWait.of_inv`, `Seq.ToWait.warp`, by induction on the phases left). `WarpRun.of_inv` and
+`WarpWait.of_inv` (MojoProof/Sym/CanonBar.lean) are its cases. -/
+theorem warp_of_inv {L : Launch} {c : Nat → Ctx} {k J : Nat} {T : Nat → Nat → Thread → Prop}
+    {W : Nat → Nat → Status → Prop} {P : Nat → Nat → Mem → Prop}
+    {Q : (Nat → Thread) → Mem → List (List Event) → Mem → Prop}
+    (hQ : ∀ {t : Nat → Thread} {s : Nat → Status} {m m₁ m' : Mem} {Es Es' : List (List Event)}
+      {u : Nat → Thread} {r : Nat → Option Val},
+      Seq.ToWait c t (fun n => s (n - k)) (warpThreads L k) m Es m₁ → WarpShfl L c k s m₁ u r →
+      Q (fun n => (u (n - k)).resume (r (n - k))) m₁ Es' m' → Q t m (Es ++ Es') m')
+    (hw : ∀ i < J, ∀ j ∈ warpLanes L k, ∀ t m, T i j t → P i j m →
+      ∃ s m', ToWait (c (k + j)) t m s m' ∧ W i j s ∧ P i (j + 1) m')
+    (hf : ∀ i < J, ∀ s : Nat → Status, (∀ j ∈ warpLanes L k, W i j (s j)) →
+      ∀ m, P i (warpLanes L k).length m → ∃ u r, WarpShfl L c k s m u r ∧
+        (∀ j ∈ warpLanes L k, T (i + 1) j ((u j).resume (r j))) ∧ P (i + 1) 0 m)
+    (he : ∀ (t : Nat → Thread) m, (∀ j ∈ warpLanes L k, T J j (t (k + j))) → P J 0 m →
+      ∃ Es m', Q t m Es m' ∧ P J (warpLanes L k).length m')
+    {t : Nat → Thread} (ht : ∀ j ∈ warpLanes L k, T 0 j (t (k + j))) {m : Mem}
+    (hm : P 0 0 m) : ∃ Es m', Q t m Es m' ∧ P J (warpLanes L k).length m' := by
+  have go : ∀ n i (t : Nat → Thread) m, i + n = J → (∀ j ∈ warpLanes L k, T i j (t (k + j))) →
+      P i 0 m → ∃ Es m', Q t m Es m' ∧ P J (warpLanes L k).length m' := by
+    intro n
+    induction n with
+    | zero =>
+      intro i t m hi ht hm
+      obtain rfl : i = J := by omega
+      exact he t m ht hm
+    | succ n ih =>
+      intro i t m hi ht hm
+      obtain ⟨s, Es, m₁, hs, hW, hm₁⟩ := Seq.ToWait.of_inv (c := fun j => c (k + j))
+        (t := fun j => t (k + j)) (W := W i) (P := P i) (N := (warpLanes L k).length)
+        (fun j hj m hm => hw i (by omega) j (mem_warpLanes.2 hj) _ m
+          (ht j (mem_warpLanes.2 hj)) hm) hm
+      obtain ⟨u, r, hF, ht', hm₂⟩ := hf i (by omega) s (fun j hj => hW j (mem_warpLanes.1 hj))
+        m₁ hm₁
+      obtain ⟨Es', m', hS, hP⟩ := ih (i + 1) (fun n => (u (n - k)).resume (r (n - k))) m₁
+        (by omega) (fun j hj => by simpa only [Nat.add_sub_cancel_left] using ht' j hj) hm₂
+      exact ⟨Es ++ Es', m', hQ (Seq.ToWait.warp hs) hF hS, hP⟩
+  exact go J 0 t m (Nat.zero_add J) ht hm
 
 /-- **A warp's run by invariants.** For every launch `L`, contexts `c`, warp's first thread `k`,
 number `J` of the warp's shuffles, and families `T i j` of thread predicates, `W i j` of status
@@ -411,8 +399,7 @@ whose resumed lanes are of `T (i + 1)`, on a memory of `P (i + 1) 0`; and in pha
 of `T J j` from every memory of `P J j` runs to its end (`Runs`) leaving a memory of
 `P J (j + 1)`: then threads `t` whose lane `j`, thread `k + j`, is of `T 0 j`, on a memory of
 `P 0 0`, have a warp's run (`WarpRun`) to a memory of `P J` after all the lanes
-(`Seq.ToWait.of_inv`, `Seq.of_inv`, `Seq.ToWait.warp`, `Seq.warp`, by induction on the phases
-left). -/
+(`warp_of_inv`, the last phase by `Seq.of_inv` and `Seq.warp`). -/
 theorem WarpRun.of_inv {L : Launch} {c : Nat → Ctx} {k J : Nat} {T : Nat → Nat → Thread → Prop}
     {W : Nat → Nat → Status → Prop} {P : Nat → Nat → Mem → Prop}
     (hw : ∀ i < J, ∀ j ∈ warpLanes L k, ∀ t m, T i j t → P i j m →
@@ -424,29 +411,11 @@ theorem WarpRun.of_inv {L : Launch} {c : Nat → Ctx} {k J : Nat} {T : Nat → N
       ∃ m', Runs (c (k + j)) t m m' ∧ P J (j + 1) m')
     {t : Nat → Thread} (ht : ∀ j ∈ warpLanes L k, T 0 j (t (k + j))) {m : Mem}
     (hm : P 0 0 m) : ∃ Es m', WarpRun L c k t m Es m' ∧ P J (warpLanes L k).length m' := by
-  have go : ∀ n i (t : Nat → Thread) m, i + n = J → (∀ j ∈ warpLanes L k, T i j (t (k + j))) →
-      P i 0 m → ∃ Es m', WarpRun L c k t m Es m' ∧ P J (warpLanes L k).length m' := by
-    intro n
-    induction n with
-    | zero =>
-      intro i t m hi ht hm
-      obtain rfl : i = J := by omega
-      obtain ⟨Es, m', hs, hP⟩ := Seq.of_inv (c := fun j => c (k + j)) (t := fun j => t (k + j))
-        (P := P i) (N := (warpLanes L k).length)
-        (fun j hj m hm => he j (mem_warpLanes.2 hj) _ m (ht j (mem_warpLanes.2 hj)) hm) hm
-      exact ⟨Es, m', .ends (Seq.warp hs), hP⟩
-    | succ n ih =>
-      intro i t m hi ht hm
-      obtain ⟨s, Es, m₁, hs, hW, hm₁⟩ := Seq.ToWait.of_inv (c := fun j => c (k + j))
-        (t := fun j => t (k + j)) (W := W i) (P := P i) (N := (warpLanes L k).length)
-        (fun j hj m hm => hw i (by omega) j (mem_warpLanes.2 hj) _ m
-          (ht j (mem_warpLanes.2 hj)) hm) hm
-      obtain ⟨u, r, hF, ht', hm₂⟩ := hf i (by omega) s (fun j hj => hW j (mem_warpLanes.1 hj))
-        m₁ hm₁
-      obtain ⟨Es', m', hS, hP⟩ := ih (i + 1) (fun n => (u (n - k)).resume (r (n - k))) m₁
-        (by omega) (fun j hj => by simpa only [Nat.add_sub_cancel_left] using ht' j hj) hm₂
-      exact ⟨Es ++ Es', m', .shfl (Seq.ToWait.warp hs) hF hS, hP⟩
-  exact go J 0 t m (Nat.zero_add J) ht hm
+  refine warp_of_inv (Q := WarpRun L c k) WarpRun.shfl hw hf (fun t m ht hm => ?_) ht hm
+  obtain ⟨Es, m', hs, hP⟩ := Seq.of_inv (c := fun j => c (k + j)) (t := fun j => t (k + j))
+    (P := P J) (N := (warpLanes L k).length)
+    (fun j hj m hm => he j (mem_warpLanes.2 hj) _ m (ht j (mem_warpLanes.2 hj)) hm) hm
+  exact ⟨Es, m', .ends (Seq.warp hs), hP⟩
 
 /-- **A list of waits as an indexed family**, for every function `fn`, block `l`, start `n`,
 blocks `lbl`, waits `W` and list `ws` of waits: if `W (n + i)` is `ws`'s `i`-th wait and

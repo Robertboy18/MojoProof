@@ -298,10 +298,9 @@ the core other than `GPUProof/Sound.lean`, which gained `Sound.of_lift` and then
      `Kernel.sound_entryWith` and `Kernel.sound_entry` through `hend`, `Sym/Kernel.lean`, and the
      theorems `KernelCmd.lean` generates) take it under the two premises, as
      `(hU → Trace.Shaped m'.trace.reverse → racy … = false) ∧ kept … = true`; so do
-     `Seq.start_sound_inv`'s `hb` (`Sched.lean`), `Grid.start_done_sound`'s, `Sched.start_sound`'s
-     and `Seq.start_sound_bar`'s `hr` (`SchedWait.lean`) and `Sched.start_sound_inv`'s `hb`
-     (`SchedChain.lean`). Their proofs discharge the premises at the reachable grids
-     (`Grid.start_reach_fits` on the run's path).
+     `Seq.start_sound_inv`'s `hb` (`Sched.lean`) and `Grid.start_done_sound`'s and
+     `Seq.start_sound_bar`'s `hr` (`SchedWait.lean`). Their proofs discharge the premises at the
+     reachable grids (`Grid.start_reach_fits` on the run's path).
    - The three changes a first attempt found:
      - `Grid.RaceEnabled` (`Bad.lean`) gains `(L : Launch)`.
      - `Grid.Same.raceEnabled` and `Grid.Same.bad` take both grids' `Grid.Fits`: `Trace.Same`
@@ -393,7 +392,7 @@ the clean state back to `Grid.Sound`. Since `Clean.of_lift` observes states, not
 - `Grid.start_sound` (`Determinism.lean`) is below `Sig.lean`. `OneRun sig`'s proof uses
   `Grid.start_trace` (`ScheduleOwned.lean`) and `Grid.start_size` (`Determinism.lean`). Three
   theorems below `SigOneRun.lean` use `Grid.start_sound`: `Grid.owned_sound`
-  (`ScheduleOwned.lean`), `Seq.start_sound` (`Sym/Sched.lean`) and `Sched.start_sound`
+  (`ScheduleOwned.lean`), `Seq.start_sound` (`Sym/Sched.lean`) and `Grid.start_done_sound`
   (`Sym/SchedWait.lean`). `Grid.start_sound` can move above `SigOneRun.lean`, with
   `MojoProofTest/Theorem0.lean`'s example as its proof, in either of two ways:
   - those three theorems move above it with it;

@@ -201,15 +201,9 @@ MojoProof.Sym.Grid.fire_barrier
 MojoProof.Sym.Grid.fire_barriers
 MojoProof.Sym.Grid.fire_shfl
 MojoProof.Sym.Seq.start_sound_bar
-MojoProof.Sym.Sched.grid
-MojoProof.Sym.Fires.shfls
 MojoProof.Sym.Seq.ToWait.of_runTo
 MojoProof.Sym.Seq.of_runTo
 MojoProof.Sym.Seq.ToWait.of_inv
-MojoProof.Sym.Sched.of_inv
-MojoProof.Sym.Sched.start_sound_inv
-MojoProof.Sym.Fires.barriers_at
-MojoProof.Sym.Fires.bfly
 MojoProof.Sym.Seg.Through.wait
 MojoProof.Sym.bflyRoundsAt_of_shfl
 GPUProof.Sound.of_one_run
@@ -279,6 +273,30 @@ MojoProof.Sym.RunsVia.final
 MojoProof.Sym.RunsVia.waitAt_next
 MojoProof.Sym.Grid.start_free
 MojoProof.Sym.Grid.start_addr
+MojoProof.Sym.PhaseRun.start_sound
+MojoProof.Sym.PhaseRun.of_inv
+MojoProof.Sym.PhaseRun.of_canon
+MojoProof.Sym.CanonWait.of_inv
+MojoProof.Sym.BlockRun.of_turns
+MojoProof.Sym.Ext.of_trace
+MojoProof.Sym.Ext.refl
+MojoProof.Sym.Ext.mono
+MojoProof.Sym.Ext.chain
+MojoProof.Sym.CanonRun.done
+MojoProof.Sym.RunsVia.of_runs
+MojoProof.Sym.RunsVia.of_block
+MojoProof.Sym.RunsVia.of_blocks
+MojoProof.Sym.WarpRun.shfl_of
+MojoProof.LLVM.Program.shfl_nil
+MojoProof.Sym.Turns.append
+MojoProof.Sym.BlockBar.of_waits
+MojoProof.Sym.CanonWait.of_merge
+MojoProof.Sym.Grid.start_shared
+MojoProof.Sym.PhaseInv
+MojoProof.Sym.PhaseInv.nil
+MojoProof.Sym.PhaseInv.ext
+MojoProof.Sym.PhaseInv.bar
+MojoProof.Sym.PhaseInv.phases
 # block checker (Sym/Block, Sym/Term, Sym/Loop, Sym/PtrMem)
 MojoProof.Sym.Block.sound
 MojoProof.Sym.Block.sound_pathWith_ptrs
@@ -380,6 +398,8 @@ MojoProof.LLVM.Inst.setBinConst
 MojoProof.Sym.symSummaryFamily
 MojoProof.Sym.elabSymSummaryFamily
 MojoProofTest.kernelRflLate
+MojoProof.Sym.warpRoute
+MojoProof.Sym.evalWarpRoute
 # layout laws (GPUProof/Layout/)
 GPUProof.Layout.Lay.compose
 GPUProof.Layout.Lay.call_add
@@ -492,6 +512,11 @@ MojoProof.Float.perm_canon
 MojoProof.Float.depth_canon
 MojoProof.Float.canon_node_eq_iff
 MojoProof.Float.eval_nanEq_of_canon
+MojoProof.Float.canon_bflyTree_perm
+MojoProof.Tile.warpDot_vecMat_holds
+MojoProof.Tile.warpDot_matVec_holds
+MojoProof.Tile.WarpWords.loads
+MojoProof.Tile.warpObs
 # core (GPUProof/)
 GPUProof.racy_iff
 GPUProof.hb_iff
@@ -558,3 +583,14 @@ MojoProof.Float.canon_bflyTree_lane
 MojoProof.Float.canon_bflyOffsets
 MojoProof.Float.bfly_nanEq_lane
 MojoProof.Float.bfly_nanEq_halve
+GPUProof.MeetsAt.comp_graded_exact
+GPUProof.laneVecGrade_holds
+GPUProof.FloatRule.Holds.exact_of
+GPUProof.Wiring.mem_behav
+GPUProof.View.separated_of_disjoint
+GPUProof.Meets.comp_graded_exact
+GPUProof.vecMatLaneGrade_holds
+GPUProof.Importer.graded_of_holds
+GPUProof.Tiling.mono
+GPUProof.View.tile_subset_guardAt
+GPUProof.View.cover_guardAt

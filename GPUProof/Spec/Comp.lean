@@ -71,8 +71,13 @@ The theorems with an `exact` second rule follow from one step at exact decoding
 the composite's premise allows, and the second rule holds there), and the graded ones from one
 composition at one size and encoding (`Wiring.holds_comp`, `Wiring.holds_comp_gradeEx`); each
 carries its entrywise premise along the wiring by one lemma (`Wiring.along`, at exact decoding
-`Wiring.decode_mid`). A graded rule then an `exact` one is not covered: the composite's claim
-would need `S₂`'s function to move little when its inputs do, which a rule does not name.
+`Wiring.decode_mid`). A graded rule then an `exact` one needs `S₂`'s function to move little when
+its inputs do, which a rule does not name: GPUProof/Spec/CompGraded.lean derives a graded rule
+from the `exact` one through a modulus of continuity and composes it as two graded rules.
+
+An output of the composite behavior is an output of `k₁` and one of `k₂` at it
+(`Wiring.mem_behav`), and words that decode to the function meet the `exact` rule
+(`FloatRule.Holds.exact_of`); tests build outputs from the two.
 
 docs/proofs/spec.md gives the plan and what the composition does not cover.
 -/
@@ -134,6 +139,16 @@ theorem Approx.onlyIf_neg {c : Prop} (h : ¬ c) (d : DType) (fmt : NumFormat) (g
   intro hm
   simp only [Grade.onlyIf, ite_eq_right h] at hm
   exact absurd ((lt_add_one _).trans_le (le_max_right _ _)) (not_lt.2 hm)
+
+/-- `Grade.onlyIf` claims at most what its grade claims, for every condition `c`, entry type,
+grade, format, decoded and exact value: a value `GPUProof.Approx` at `g` in `fmt` is `Approx` at
+`Grade.onlyIf c fmt g`, by `Grade.onlyIf_pos` where `c` holds and `Approx.onlyIf_neg` where it
+fails. -/
+theorem Approx.onlyIf_of {d : DType} {g : Grade} {fmt : NumFormat} {v : Option d.Val} {a : d.Val}
+    (c : Prop) (h : Approx d g fmt v a) : Approx d (Grade.onlyIf c fmt g) fmt v a := by
+  by_cases hc : c
+  · rwa [Grade.onlyIf_pos hc]
+  · exact Approx.onlyIf_neg hc _ _ _ _ _
 
 /-- `Grade.onlyIf` grows with its grade and as its condition weakens, for every two conditions
 `c`, `c'` with `c'` implying `c`, format and grades `g ≤ g'`. -/
@@ -933,5 +948,33 @@ theorem MeetsAt.comp_bitwise {S₁ S₂ : Spec Sz} (w : Wiring S₁ S₂) (E₁ 
     | .inl p => H₁ rfl p
     | .inr _ => (UpToNaN.equivalence _).refl _
   exact (Eo σ).nanEq_equiv.trans (H₂ rfl) (hn σ _ _ hm)
+
+/-- Words that decode to the function meet the `exact` rule, for every size type, entry types,
+domain, function, size and encodings: input words `W` that decode to `Y` and output words `W'`
+that decode to `f σ Y` meet it, since the rule's premise fixes its exact inputs to `Y`. -/
+theorem FloatRule.Holds.exact_of {In Out : Sz → Type} {dIn : ∀ σ, In σ → DType}
+    {dOut : ∀ σ, Out σ → DType} {Dom : ∀ σ, Ents (In σ) (dIn σ) → Prop}
+    {f : ∀ σ, Ents (In σ) (dIn σ) → Ents (Out σ) (dOut σ)} {σ : Sz}
+    {E : Encodings In Out dIn dOut σ} {W : E.inp.Words} {W' : E.out.Words}
+    {Y : Ents (In σ) (dIn σ)} (hW : ∀ i, E.inp.decode W i = some (Y i))
+    (hW' : ∀ o, E.out.decode W' o = some (f σ Y o)) :
+    (FloatRule.exact : FloatRule In Out dIn dOut Dom f).Holds σ E W W' := by
+  intro A hA _ _ o
+  obtain rfl : A = Y := funext fun i => Option.some.inj ((hA i).symm.trans (hW i))
+  exact hW' o
+
+/-- An output of the composite behavior, for every wiring, behaviors `k₁` and `k₂`, encodings
+`E₁`, `Ex`, `Eo`, size and input words `W` of `Wiring.encs`: an output `V` of `k₁` at `W`'s first
+inputs, and an output `W'` of `k₂` at `V` beside `W`'s extra words, make `W'` an output of
+`Wiring.behav` at `W`. -/
+theorem Wiring.mem_behav {S₁ S₂ : Spec Sz} (w : Wiring S₁ S₂)
+    {k₁ : ∀ σ (E : S₁.Encs σ), E.inp.Words → Set E.out.Words}
+    {k₂ : ∀ σ (E : S₂.Encs σ), E.inp.Words → Set E.out.Words} {E₁ : ∀ σ, S₁.Encs σ}
+    {Ex : ∀ σ, Encoding (w.Extra σ) (w.dEx σ)} {Eo : ∀ σ, Encoding (S₂.Out σ) (S₂.dOut σ)}
+    {σ : Sz} {W : (w.encs E₁ Ex Eo σ).inp.Words} {V : (E₁ σ).out.Words}
+    {W' : (w.encs E₁ Ex Eo σ).out.Words} (hV : V ∈ k₁ σ (E₁ σ) fun p => W (.inl p))
+    (hW' : W' ∈ k₂ σ (w.encs₂ E₁ Ex Eo σ) (Encoding.sumWords V fun p => W (.inr p))) :
+    W' ∈ w.behav k₁ k₂ E₁ Ex Eo σ (w.encs E₁ Ex Eo σ) W :=
+  fun _ => ⟨V, hV, hW'⟩
 
 end GPUProof

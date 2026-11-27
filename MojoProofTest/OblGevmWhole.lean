@@ -94,7 +94,7 @@ theorem whole (L : Launch) (hL : L.Valid) (k : Nat) (c : Ctx) (hcp : c.prog = ge
           i = .shfl .bfly, d₄),
         (fun u i _ _ => u.at = some (gevm.fn_0.name, gevm.fn_0.b_5.label, 27) ∧
           i = .shfl .bfly, d₅)] t m := by
-  obtain ⟨t', m', f', hS', ht', hf', hlb', hpc', ha', -, hk', hmb, h60, h13, h11, h10, h29⟩ :=
+  obtain ⟨t', m', f', hS', ht', hf', hlb', hpc', ha', -, hk', hmb, -, h60, h13, h11, h10, h29⟩ :=
     loop L hL k c hcp hce hn t m f [] ht hf hlb hpc N K p0 bA bB hN hK hK32 hKN hr0 hr1 hr2 hr4
       hr5 hb0 hf0 hbA hbB hfA hfB A B hA hB hy hc
   have hx : (L.env k).sreg .tid .x < 1024 := (Launch.sreg_lt hL k .x).1

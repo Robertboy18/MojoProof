@@ -130,10 +130,11 @@ already checks the compiled code (`MojoProof/Sym/`), and there is to be one sema
   (`Kernel.Sound.exists_obs`). The design is in docs/proofs/spec.md, step 9. Its instance is
   `naive_meetsAt` (`MojoProofTest/TileNaive.lean`): the naive family's setups `naiveSetups` at
   every row stride fit (`naive_fits`).
-* `stride_approx`, `bfly_approx`, `groupDot_approx`, `groupDot_holds`
+* `stride_approx`, `bfly_approx`, `groupDot_nanEq_approx`, `groupDot_approx`, `groupDot_holds`
   (`MojoProof/Tile/MatVec.lean`): for every IEEE format, flag and oracle sequences, loops over
   the pairs strided by the lane count and added along any tree over the lanes, every lane of a
-  butterfly over `2 ^ k` such loops, and so `MojoProof.Sem.groupDot k`, are `GPUProof.Approx` at
+  butterfly over `2 ^ k` such loops, and so `MojoProof.Sem.groupDot k` and every word NaN-equal
+  to it (`groupDot_nanEq_approx`, through the encoding's `decode_eq`), are `GPUProof.Approx` at
   `GPUProof.laneGrade` at the tree's depth (`k` for the butterfly) and `⌈n / W⌉` pairs per lane;
   `groupDot k` per row meets the rule of
   `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)`, the case of
@@ -158,6 +159,74 @@ already checks the compiled code (`MojoProof/Sym/`), and there is to be one sema
   `chain8` over `bflyOffsets 3` and over `1, 4, 2`, with their round premises by `decide`; and
   `mutant4`, `mutant8`, the offsets reversed, where the round premise and the rounds' value both
   fail. They are about words; the gemv_kernel tests that use them are in docs/proofs/spec.md.
+* `vecMatEnc`, `vecMat_holds_of`, `groupDot_cols_holds`, `warpDot_vecMat_holds`
+  (`MojoProof/Tile/MatVec.lean`): the same for the vector-matrix product, by column. For every
+  binary interchange format and width, `vecMatEnc fmt bits` is the uniform encoding of
+  `GPUProof.Spec.vecMat`, inputs the vector then the matrix; output words that are
+  `GPUProof.Approx` at `GPUProof.laneGrade` of every exact vector and column `j` at which the
+  input words are `Approx` meet the rule of
+  `GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade W d L)` (`vecMat_holds_of`, through
+  `GPUProof.Approx.onlyIf_of`); for every IEEE format, `k`, flag, size, oracle sequences and
+  input words, output words each `groupDot k` of the vector and column `j` or both NaNs meet the
+  rule at `2 ^ k` lanes, depth `k` and lane length `⌈m / 2 ^ k⌉` (`groupDot_cols_holds`, by
+  `groupDot_approx`); and at `k = 5`, on inputs read from a vector `v` and a matrix `A`, so do
+  the words `warpDot c (o j) (vecMatPairs v A j)` that `MojoProof.Sem.warpDot_vecMat` bounds
+  (`warpDot_vecMat_holds`). Tests (MojoProofTest/TileLanes.lean): `cols_3x5` (binary32, 4 lanes,
+  size 3 × 5), `cols_40x2` (binary64, the warp, size 40 × 2, every vector and matrix) and the
+  mutant `col_mutant` (`GPUProof.vecMatGrade` with `2⁻¹⁴⁹` less error, not met at size 1 × 1).
+  They are about words; that gevm_kernel stores them is not proved.
+* `groupDot_rows_holds`, `warpDot_matVec_holds` (`MojoProof/Tile/MatVec.lean`): the row forms of
+  `groupDot_cols_holds` and `warpDot_vecMat_holds`. For every IEEE format, width, `k`, flag,
+  size, oracle sequences, input words and output words, output words each `groupDot k` of its
+  row and the vector or both NaNs meet the rule of
+  `GPUProof.Spec.matVec (GPUProof.laneVecGrade (2 ^ k) k fun n => ⌈n / 2 ^ k⌉)` at `matVecEnc`
+  (by `holds_of` and `groupDot_nanEq_approx`); `groupDot_holds` (the words themselves) and
+  `bflyDeliver_holds` (the semantics' rounds) are its cases, and so is `warpDot_matVec_holds`: at
+  `k = 5`, on inputs read from a matrix `A` and a vector `v`, words NaN-equal to
+  `warpDot c (o i) (matVecPairs A v i)`, the words `MojoProof.Sem.warpDot_eq` relates to
+  gemv_kernel's rows.
+* The stored words of a warp per output (`MojoProof/Tile/Words.lean`), one form for rows and
+  columns, shared by gemv_kernel (rows) and gevm_kernel (columns):
+  * `warpObs l L M p0 m`: for every layout, launch, count, output block and memory, the binary32
+    loads that thread `32 i` makes at offset `4 i` of `p0`, `i < M`. Thread `32 i` has the lane
+    `32 i % volume L.block % 32` (`Launch.env`), which is 0, with threads `32 i` to `32 i + 31`
+    one warp of one block, when 32 divides the block's volume, as at gemv_kernel's and
+    gevm_kernel's launches; at a block of 33 threads, thread 64 has lane 31;
+  * `WarpWords t c o P f`: for every float type, count, flag, oracle sequences and pairs, each
+    output `j` loads as a word of the type NaN-equal to `warpDot c (o j) (P j)`;
+  * `Loads t Q f`: the outputs load as words of the type that meet `Q`; at `Q` a spec's rule at
+    its encoding and input words, the stored words meet the rule;
+  * `WarpWords.loads`: `WarpWords` gives `Loads` at every property that NaN-equal words meet.
+
+  Which kernel uses each:
+  * gemv_kernel's rows: the observation `rowsObs` is `warpObs` at gemv's layout, the relation
+    `RowsDot` is `WarpWords` at `matVecPairs A v`, the rule `RowsRule` is `Loads` at
+    `GPUProof.Spec.matVec`'s rule, met by `rows_holds` through `warpDot_matVec_holds`;
+  * gevm_kernel's columns: the observation `colsObs` is `warpObs` at gevm's layout, the relation
+    is `WarpWords` at `vecMatPairs A B`, the rule `ColsRule` is `Loads` at
+    `GPUProof.Spec.vecMat`'s rule, met by `cols_holds` through `warpDot_vecMat_holds`.
+
+  gemv's are in `MojoProofTest/GemvSound.lean` (`rowsObs`, `RowsDot`, `RowsRule`, `rows_holds`)
+  and `MojoProofTest/GemvTorch.lean` (`TorchRows`, `torchRows_of_rule`); gevm's in
+  `MojoProofTest/GevmSpec.lean` (`colsObs`, `ColsRule`, `cols_holds`, `TorchCols`,
+  `torchCols_of_rule`). The two programs' layouts are the same (`layout_eq`, by `rfl`), so
+  `colsObs` and `rowsObs` are one function. gemv's relation is stated by its run
+  (`kernel_sound` takes `RowsDot` from the run's theorem); for gevm, that a run stores words in
+  the relation is the premise of `cols_holds`, and gevm's run is not proved.
+* Why the column rule is proved by its own `vecMat_holds_of` and not from the row rule at the
+  transposed matrix. `GPUProof.Spec.vecMat` at size `(K, N)` is not `GPUProof.Spec.matVec` at
+  `(N, K)` with the matrix transposed, by unfolding: the input positions differ
+  (`Fin K ⊕ Fin K × Fin N` against `Fin N × Fin K ⊕ Fin K`, the vector first), each output's
+  exact value is `vecMul` (`∑ i, x i * A i j`) against `mulVec` (`∑ j, A i j * x j`), equal only
+  by commutativity of each product, and the grades take their arguments in the other order
+  (`vecMatLaneGrade` against `laneVecGrade`). The words differ too: `groupDot` over the pairs
+  (vector entry, column entry) of `vecMatPairs` and over the pairs (row entry, vector entry) of
+  `matVecPairs` of the transpose are different float computations: each pair has its factors in
+  the other order, so the words agree only through commutativity of the model's product and
+  fused multiply-add at every pair, NaN payloads included, which nothing here proves. Relating the
+  two rules would be an equivalence of two specs, one more audited equivalence, for a proof that
+  is already one line from `groupDot_nanEq_approx` in each form; so each form has its own
+  `holds_of` and the shared part is `groupDot_nanEq_approx` and the forms of `Words.lean`.
 * `rowTrees`, `rowTrees_meetsAt`, `rowLoops`, `rowLoops_meetsAt` (`MojoProof/Tile/MatVec.lean`):
   strided lanes added along a tree per row. For every IEEE format, width, lane count `W`, tree
   `t` whose leaves are the lanes, each once, and flag, the behaviors whose output `i` is
@@ -219,7 +288,12 @@ at 3 lanes and length 7 along a tree of depth 2, the butterfly at 4 lanes and le
 and lane 3, whose trees are evaluated), their words computed by the kernel, and the grade at
 depth 0 refused on four binary32 pairs (`depth_mutant`); `rowTrees_meetsAt` at 3 lanes along the
 tree of depth 2 at size 2 × 7 (`rows_2x7`) and at lane 0's butterfly tree, whose behaviors are
-`groupDot 2` per row, at size 3 × 10 (`rows_3x10`).
+`groupDot 2` per row, at size 3 × 10 (`rows_3x10`). `MojoProofTest/GevmSpec.lean`: gevm_kernel's
+columns at concrete binary32 words, the relation `WarpWords` at `vecMatPairs` by evaluation and
+then `ColsRule` by `cols_holds` at sizes 3 × 2 (`words_3x2`, `cols_3x2`; the words `6` and `-1`)
+and 40 × 3 (`words_40x3`, `cols_40x3`; 32 lanes of length 2, the words `79`, `-11` and `-14`),
+`TorchCols` at 3 × 2 (`torch_3x2`), and two mutants: a word one ulp above `6` is not in the
+relation (`off_ulp`), and loads of a 64-bit word are refused by the rule (`refused`).
 
 ## 6. Scope and what is not done
 
@@ -231,3 +305,6 @@ tree of depth 2 at size 2 × 7 (`rows_2x7`) and at lane 0's butterfly tree, whos
   kernel, the naive matmul, is an instance.
 * Cells are numbered within a buffer; coordinates through a layout of the layout model are not
   used yet.
+* The vector-matrix kernel gevm_kernel has its spec side (`cols_holds`, `TorchCols`) in the
+  forms gemv_kernel's rows use; its run, that it stores words in the relation `WarpWords` at
+  `vecMatPairs`, and so its `GPUProof.Kernel.Sound`, are not proved here.

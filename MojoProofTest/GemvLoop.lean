@@ -26,8 +26,8 @@ runs them, through `loopA` alone when every round goes through `%70` and through
 * `steps`: their contexts, functions and step counts (`LoopSeg.steps_k`).
 * `keep`, `Facts`, `at_two`: the registers both arms keep, and the facts the rounds read, from the
   header after the entry to every `two n j` whose rounds through `%70` keep the blocks.
-* `ReadEv`, `ext_mono`, `ext_reads`, `two_ext`: the trace's reads of the matrix and the vector
-  (`Ext`, MojoProof/Sym/SegTrace.lean); the rounds through `%75` add none.
+* `ReadEv`, `ext_reads`, `two_ext`: the trace's reads of the matrix and the vector (`Ext`,
+  MojoProof/Sym/SegTrace.lean); the rounds through `%75` add none.
 * `oG`, `Inv`, `len`: the oracle numbers of round `i`'s `fmul` and `fadd`, the loop invariant
   (`%55` is `i`, `%56` the `dotLoop` of the first `i` of the lane's strided pairs), and the
   number of those pairs.
@@ -128,14 +128,6 @@ def Facts (K M r l bA bV : Nat) (A : TorchLean.Tensor (Model FloatTy.float.fmt) 
 `atomicrmw`'s, of block `bA` or `bV`. -/
 def ReadEv (bA bV : Nat) (e : Event) : Prop :=
   ∃ a, e = .access a ∧ a.write = false ∧ a.atomic = none ∧ (a.ptr.block = bA ∨ a.ptr.block = bV)
-
-/-- **A weaker property of the events** (test): for every properties `P`, `Q` of events and
-memories `m`, `m'`: if `m'` extends `m`'s trace by events of `P` (`Ext`), and every event of `P`
-is one of `Q`, it extends it by events of `Q`. -/
-theorem ext_mono {P Q : Event → Prop} {m m' : Mem} (h : Ext P m m') (hPQ : ∀ e, P e → Q e) :
-    Ext Q m m' :=
-  let ⟨E, hE, hP⟩ := h
-  ⟨E, hE, fun e he => hPQ e (hP e he)⟩
 
 /-- **Two reads** (test): for every blocks `bA`, `bV`, memory `m` and accesses `a₁`, `a₂` that
 are reads of `bA` or `bV` (`ReadEv`): logging `a₁` then `a₂` extends `m`'s trace by reads of

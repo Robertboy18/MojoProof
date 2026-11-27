@@ -1,25 +1,29 @@
 import MojoProofTest.SymColl
-import MojoProof.Sym.SchedChain
+import MojoProof.Sym.CanonBar
 
 /-!
-# Schedules by invariants: a barrier and two shuffles on blocks of 4 and of 8 threads
+# Canonical runs by invariants: a barrier and two shuffles on blocks of 4 and of 8 threads
 
-Tests of `Sched.start_sound_inv`, `Fires.barriers_at` and `Fires.bfly`
-(MojoProof/Sym/SchedChain.lean) at two sizes: the kernel `kern` of MojoProofTest/SymColl.lean
-(`tid.x`, a barrier, a butterfly shuffle at offset 1 and an `add`, one at offset 2 and an `add`,
-`ret`) launched on one block of `k` threads (`launch2 1 1 k 1`), for `k = 4` and `k = 8`, on the
-empty memory with address choice and oracle 0. One proof covers both sizes; the runs are
-evaluated at each.
+Tests of `BlockRun.of_inv`, `WarpWait.of_inv` and `WarpRun.of_inv` with `PhaseRun.start_sound`
+(MojoProof/Sym/CanonBar.lean, MojoProof/Sym/Canon.lean) at two sizes: the kernel `kern` of
+MojoProofTest/SymColl.lean (`tid.x`, a barrier, a butterfly shuffle at offset 1 and an `add`, one
+at offset 2 and an `add`, `ret`) launched on one block of `k` threads (`launch2 1 1 k 1`, one
+warp), for `k = 4` and `k = 8`, on the empty memory with address choice and oracle 0. One proof
+covers both sizes; the runs are evaluated at each.
 
 * `ph k j`: the threads and memory phase `j` starts on (the start's; then past the barrier, past
   the first shuffle and past the second); `stat k j n`: the status thread `n` waits at in phase
   `j`; `memAt k t m i`: the memory after threads `0` to `i - 1` run in turn.
-* `waits`, `ends`: each phase's runs, as `runTo` computes them; `fire0`: the barrier, by
-  `Fires.barriers_at`; `fire1`, `fire2`: the shuffles, by `Fires.bfly`, lane `n` resumed with lane
-  `n ^^^ o`'s value; `checks`: the final trace's race and `!invariant.load` checks.
-* `sound_inv`: the launch is sound (`Grid.Sound`), by `Sched.start_sound_inv` at three phases.
-* The open-goal twin (an `example` with `#guard_msgs`): `Sched.start_sound_inv` with the second
-  shuffle's fire left out leaves that phase's fire as the goal.
+* `waits`, `ends`: each phase's runs, as `runTo` computes them; `bar0`: the barrier (`BlockBar`);
+  `fires`: the shuffles (`WarpShfl`), lane `n` resumed with lane `n ^^^ o`'s value; `warp`: the
+  warp's run through the shuffles (`WarpRun.of_inv`); `checks`: the final trace's race and
+  `!invariant.load` checks.
+* `shfl_wait`: past the barrier, the warp to the second shuffle's waits by `WarpWait.of_inv` at
+  `J = 1`, its shuffle premise `hf` by `fires` (the first shuffle, before the waits).
+* `sound_inv`: the launch is sound (`Grid.Sound`), by `PhaseRun.start_sound` at the block's run
+  of `BlockRun.of_inv`: the warp to the barrier (`WarpWait.of_inv`), the barrier, then `warp`.
+* The open-goal twin (an `example` with `#guard_msgs`): `warp` with the second shuffle's fire
+  left out leaves that phase's shuffle as the goal.
 
 Statements about this kernel at these two sizes, not about every launch.
 -/
@@ -119,76 +123,6 @@ theorem waits (k : Nat) (hk : k = 4 ∨ k = 8) :
   rcases hk with rfl | rfl <;> interval_cases j <;> interval_cases n <;>
     exact ToWait.of_runTo (fuel := 4) (by kernel_rfl)
 
-/-- The barrier (phase 0), by `Fires.barriers_at`: the threads at `stat k 0` resumed to
-`(ph k 1).1`, the memory with the block's `.barrier` logged. -/
-theorem fire0 (k : Nat) (hk : k = 4 ∨ k = 8) :
-    ∀ s : Nat → Status, (∀ n < volume (L k).grid * volume (L k).block, s n = stat k 0 n) →
-      ∀ m, m = memAt k (ph k 0).1 (ph k 0).2 (volume (L k).grid * volume (L k).block) →
-      ∃ t' m', Fires (L k) (c k) (volume (L k).grid * volume (L k).block) s m t' m' ∧
-        (∀ n < volume (L k).grid * volume (L k).block, t' n = (ph k 1).1 n) ∧
-        m' = memAt k (ph k 1).1 (ph k 1).2 0 := by
-  rw [size k hk]
-  intro s hs m hm
-  subst hm
-  obtain ⟨t', hF, ht'⟩ := Fires.barriers_at (L := L k) (c := c k) (N := k) (B := 1) (s := s)
-    (bar := fun _ => 0) (a := fun _ => (stop k (ph k 0).1 (ph k 0).2 0).at)
-    (m := memAt k (ph k 0).1 (ph k 0).2 k) (by rw [block k hk]; rcases hk with rfl | rfl <;> decide)
-    (by rw [block k hk, Nat.one_mul])
-    fun n hn => ⟨_, .bits 32 0, Launch.barrierDecl, hs n hn, rfl, show 0 < 16 by decide,
-      by rcases hk with rfl | rfl <;> interval_cases n <;> kernel_rfl⟩
-  refine ⟨t', _, hF, fun n hn => ?_, (memAt.eq_1 _ _ _).symm⟩
-  obtain ⟨u, i, as, d, e, e'⟩ := ht' n hn
-  obtain ⟨rfl, -⟩ := Status.wait.inj ((hs n hn).symm.trans e)
-  exact e'
-
-/-- The first shuffle (phase 1), by `Fires.bfly` at offset 1: lane `n` resumed with lane
-`n ^^^ 1`'s thread number, to `(ph k 2).1`. -/
-theorem fire1 (k : Nat) (hk : k = 4 ∨ k = 8) :
-    ∀ s : Nat → Status, (∀ n < volume (L k).grid * volume (L k).block, s n = stat k 1 n) →
-      ∀ m, m = memAt k (ph k 1).1 (ph k 1).2 (volume (L k).grid * volume (L k).block) →
-      ∃ t' m', Fires (L k) (c k) (volume (L k).grid * volume (L k).block) s m t' m' ∧
-        (∀ n < volume (L k).grid * volume (L k).block, t' n = (ph k 2).1 n) ∧
-        m' = memAt k (ph k 2).1 (ph k 2).2 0 := by
-  rw [size k hk]
-  intro s hs m hm
-  subst hm
-  obtain ⟨t', hF, ht'⟩ := Fires.bfly (L := L k) (c := c k) (N := k) (B := 1) (o := 1) (s := s)
-    (A := fun n => .bits 32 (.ofNat 32 n)) (a := fun _ => (stop k (ph k 1).1 (ph k 1).2 0).at)
-    (m := memAt k (ph k 1).1 (ph k 1).2 k) (by rw [block k hk]; rcases hk with rfl | rfl <;> decide)
-    (by rw [block k hk, Nat.one_mul]) (by decide)
-    fun n hn => ⟨_, .bits 32 (-1), .bits 32 1, .bits 32 31, SymColl.shflDecl, hs n hn, rfl, rfl,
-      rfl, by rcases hk with rfl | rfl <;> interval_cases n <;> kernel_rfl, rfl, rfl,
-      by rw [block k hk]; rcases hk with rfl | rfl <;> interval_cases n <;> decide⟩
-  refine ⟨t', _, hF, fun n hn => ?_, (memAt.eq_1 _ _ _).symm⟩
-  obtain ⟨u, i, as, d, e, e'⟩ := ht' n hn
-  obtain ⟨rfl, -⟩ := Status.wait.inj ((hs n hn).symm.trans e)
-  rw [e']
-  rcases hk with rfl | rfl <;> interval_cases n <;> kernel_rfl
-
-/-- The second shuffle (phase 2), by `Fires.bfly` at offset 2: lane `n` resumed with lane
-`n ^^^ 2`'s `SymColl.a3`, to `(ph k 3).1`. -/
-theorem fire2 (k : Nat) (hk : k = 4 ∨ k = 8) :
-    ∀ s : Nat → Status, (∀ n < volume (L k).grid * volume (L k).block, s n = stat k 2 n) →
-      ∀ m, m = memAt k (ph k 2).1 (ph k 2).2 (volume (L k).grid * volume (L k).block) →
-      ∃ t' m', Fires (L k) (c k) (volume (L k).grid * volume (L k).block) s m t' m' ∧
-        (∀ n < volume (L k).grid * volume (L k).block, t' n = (ph k 3).1 n) ∧
-        m' = memAt k (ph k 3).1 (ph k 3).2 0 := by
-  rw [size k hk]
-  intro s hs m hm
-  subst hm
-  obtain ⟨t', hF, ht'⟩ := Fires.bfly (L := L k) (c := c k) (N := k) (B := 1) (o := 2) (s := s)
-    (A := SymColl.a3) (a := fun _ => (stop k (ph k 2).1 (ph k 2).2 0).at)
-    (m := memAt k (ph k 2).1 (ph k 2).2 k) (by rw [block k hk]; rcases hk with rfl | rfl <;> decide)
-    (by rw [block k hk, Nat.one_mul]) (by decide)
-    fun n hn => ⟨_, .bits 32 (-1), .bits 32 2, .bits 32 31, SymColl.shflDecl, hs n hn, rfl, rfl,
-      rfl, by rcases hk with rfl | rfl <;> interval_cases n <;> kernel_rfl, rfl, rfl,
-      by rw [block k hk]; rcases hk with rfl | rfl <;> interval_cases n <;> decide⟩
-  refine ⟨t', _, hF, fun n hn => ?_, (memAt.eq_1 _ _ _).symm⟩
-  obtain ⟨u, i, as, d, e, e'⟩ := ht' n hn
-  obtain ⟨rfl, -⟩ := Status.wait.inj ((hs n hn).symm.trans e)
-  rw [e']
-  rcases hk with rfl | rfl <;> interval_cases n <;> kernel_rfl
-
 /-- The runs to the returns, as `runTo` computes them: thread `n` from `(ph k 3).1 n` on the
 memory after the threads before it returns. -/
 theorem ends (k : Nat) (hk : k = 4 ∨ k = 8) :
@@ -216,46 +150,173 @@ theorem checks (k : Nat) (hk : k = 4 ∨ k = 8) :
   subst hm
   rcases hk with rfl | rfl <;> exact ⟨fun _ _ => by decide +kernel, by decide +kernel⟩
 
-/-- **The launch on 4 and on 8 threads is sound, by invariants**: `Sched.start_sound_inv` at
-three phases with thread `n` of phase `j` at `(ph k j).1 n`, its status `stat k j n` and the
-memory after `i` threads `memAt k (ph k j).1 (ph k j).2 i`: the runs `waits` and `ends`, the fires
-`fire0` (`Fires.barriers_at`), `fire1` and `fire2` (`Fires.bfly`), the final trace's `checks`. A
-test of `Sched.start_sound_inv` at two sizes. -/
+/-- The warp of first thread 0 is the block's `k` threads, at 4 and at 8 threads. -/
+theorem lanes (k : Nat) (hk : k = 4 ∨ k = 8) : warpLanes (L k) 0 = List.range k := by
+  rcases hk with rfl | rfl <;> decide
+
+/-- The barrier (phase 0, `BlockBar`): every thread of block 0 waits at `stat k 0`, from the
+thread it stops at, at the barrier of number 0 and at the instruction of thread 0. -/
+theorem bar0 (k : Nat) (hk : k = 4 ∨ k = 8) :
+    BlockBar (L k) 0 (stat k 0) (stop k (ph k 0).1 (ph k 0).2) := by
+  refine ⟨fun _ => .bits 32 0, fun _ => Launch.barrierDecl, 0, by decide, fun n hn => ?_⟩
+  rw [block k hk] at hn
+  have hn : n < k := by rcases hk with rfl | rfl <;> omega
+  refine ⟨rfl, rfl, ?_⟩
+  rw [Nat.zero_mul]
+  rcases hk with rfl | rfl <;> interval_cases n <;> kernel_rfl
+
+/-- The shuffles (phases 1 and 2, `WarpShfl`), in the form `WarpRun.of_inv` takes: from every
+statuses at `stat k (i + 1)` on the memory the phase's runs leave, the warp's butterfly shuffle at
+offset `i + 1` fires, lane `j` resumed from the thread it stops at with `res (i + 1) j` (lane
+`j ^^^ (i + 1)`'s value), to `(ph k (i + 2)).1`; a shuffle leaves the memory unchanged. -/
+theorem fires (k : Nat) (hk : k = 4 ∨ k = 8) :
+    ∀ i < 2, ∀ s : Nat → Status, (∀ j ∈ warpLanes (L k) 0, s j = stat k (i + 1) j) →
+      ∀ m, m = memAt k (ph k (i + 1)).1 (ph k (i + 1)).2 (warpLanes (L k) 0).length →
+      ∃ u r, WarpShfl (L k) (c k) 0 s m u r ∧
+        (∀ j ∈ warpLanes (L k) 0, (u j).resume (r j) = (ph k (i + 1 + 1)).1 j) ∧
+        m = memAt k (ph k (i + 1 + 1)).1 (ph k (i + 1 + 1)).2 0 := by
+  intro i hi s hs m hm
+  refine ⟨stop k (ph k (i + 1)).1 (ph k (i + 1)).2, res (i + 1), ⟨.bfly, fun _ => .bits 32 (-1),
+    fun n => if i = 0 then .bits 32 (.ofNat 32 n) else SymColl.a3 n,
+    fun _ => .bits 32 (if i = 0 then 1 else 2), fun _ => .bits 32 31,
+    fun _ => if i = 0 then 1 else 2, fun _ => 31, fun _ => SymColl.shflDecl, fun j hj => ?_⟩,
+    fun j _ => rfl, ?_⟩
+  · rw [hs j hj]
+    have hj := List.mem_range.1 (lanes k hk ▸ hj)
+    interval_cases i
+    · refine ⟨rfl, rfl, rfl, rfl, ?_, ?_⟩
+      · rcases hk with rfl | rfl <;> interval_cases j <;> kernel_rfl
+      · rcases hk with rfl | rfl <;> interval_cases j <;> kernel_rfl
+    · refine ⟨rfl, rfl, rfl, rfl, ?_, ?_⟩
+      · rcases hk with rfl | rfl <;> interval_cases j <;> kernel_rfl
+      · rcases hk with rfl | rfl <;> interval_cases j <;> kernel_rfl
+  · rw [memAt.eq_1, hm, lanes k hk, List.length_range]
+    interval_cases i <;> rfl
+
+/-- The warp's run past the barrier (`WarpRun.of_inv`, two shuffles), from every shuffles of the
+form `fires` gives: thread `n` from `(ph k 1).1 n` on the memory past the barrier runs through the
+shuffles to its return, by the runs `waits` and `ends`, at 4 and at 8 threads. -/
+theorem warp (k : Nat) (hk : k = 4 ∨ k = 8) {t : Nat → Thread}
+    (hf : ∀ i < 2, ∀ s : Nat → Status, (∀ j ∈ warpLanes (L k) 0, s j = stat k (i + 1) j) →
+      ∀ m, m = memAt k (ph k (i + 1)).1 (ph k (i + 1)).2 (warpLanes (L k) 0).length →
+      ∃ u r, WarpShfl (L k) (c k) 0 s m u r ∧
+        (∀ j ∈ warpLanes (L k) 0, (u j).resume (r j) = (ph k (i + 1 + 1)).1 j) ∧
+        m = memAt k (ph k (i + 1 + 1)).1 (ph k (i + 1 + 1)).2 0)
+    (ht : ∀ n < k, t n = (ph k 1).1 n) :
+    ∃ Es, WarpRun (L k) (c k) 0 t (ph k 1).2 Es (memAt k (ph k 3).1 (ph k 3).2 k) := by
+  obtain ⟨Es, m', hw, hm'⟩ := WarpRun.of_inv (L := L k) (c := c k) (k := 0) (J := 2)
+    (T := fun i j t => t = (ph k (i + 1)).1 j) (W := fun i j s => s = stat k (i + 1) j)
+    (P := fun i j m => m = memAt k (ph k (i + 1)).1 (ph k (i + 1)).2 j)
+    (fun i hi j hj t m ht hm => by
+      rw [Nat.zero_add]
+      exact waits k hk (i + 1) (by omega) j (by
+        rw [size k hk]; exact List.mem_range.1 (lanes k hk ▸ hj)) t m ht hm)
+    hf
+    (fun j hj t m ht hm => by
+      rw [Nat.zero_add]
+      exact ends k hk j (by rw [size k hk]; exact List.mem_range.1 (lanes k hk ▸ hj)) t m ht hm)
+    (t := t) (fun j hj => by
+      rw [Nat.zero_add]
+      exact ht j (List.mem_range.1 (lanes k hk ▸ hj))) (m := (ph k 1).2) (memAt.eq_1 _ _ _).symm
+  rw [lanes k hk, List.length_range] at hm'
+  exact ⟨Es, hm' ▸ hw⟩
+
+/-- **The warp past the barrier to the second shuffle's waits, by `WarpWait.of_inv` at
+`J = 1`**: from the threads `(ph k 1).1` on the memory past the barrier, the lanes run in turn to
+the first shuffle's waits (`waits` at phase 1), the shuffle fires (`fires` at `i = 0`: the
+premise `hf`, the shuffle before the waits), and the resumed lanes run in turn to the second
+shuffle's waits at `stat k 2` (`waits` at phase 2), on the memory that phase's runs leave, at 4
+and at 8 threads. -/
+theorem shfl_wait (k : Nat) (hk : k = 4 ∨ k = 8) :
+    ∃ s Es, WarpWait (L k) (c k) 0 (ph k 1).1 (ph k 1).2 Es s
+      (memAt k (ph k 2).1 (ph k 2).2 k) ∧ ∀ n < k, s n = stat k 2 n := by
+  obtain ⟨s, Es, m', hw, hs, hm'⟩ := WarpWait.of_inv (L := L k) (c := c k) (k := 0) (J := 1)
+    (T := fun i j t => t = (ph k (i + 1)).1 j) (W := fun i j s => s = stat k (i + 1) j)
+    (P := fun i j m => m = memAt k (ph k (i + 1)).1 (ph k (i + 1)).2 j)
+    (fun i hi j hj t m ht hm => by
+      rw [Nat.zero_add]
+      exact waits k hk (i + 1) (by omega) j (by
+        rw [size k hk]; exact List.mem_range.1 (lanes k hk ▸ hj)) t m ht hm)
+    (fun i hi => fires k hk i (by omega))
+    (fun j hj t m ht hm => by
+      rw [Nat.zero_add]
+      exact waits k hk 2 (by omega) j (by
+        rw [size k hk]; exact List.mem_range.1 (lanes k hk ▸ hj)) t m ht hm)
+    (t := (ph k 1).1) (fun j _ => by simp only [Nat.zero_add]) (m := (ph k 1).2)
+    (memAt.eq_1 _ _ _).symm
+  rw [lanes k hk, List.length_range] at hm'
+  refine ⟨s, Es, hm' ▸ hw, fun n hn => ?_⟩
+  simpa only [Nat.zero_add] using hs n (lanes k hk ▸ List.mem_range.2 hn)
+
+/-- **The launch on 4 and on 8 threads is sound, by invariants**: `PhaseRun.start_sound` at the
+run of the one block, by `BlockRun.of_inv` at one barrier: phase 0 the warp's run to the barrier
+(`WarpWait.of_inv` with the runs `waits`) and the barrier `bar0`, the last phase the warp's run
+through the shuffles (`warp` with `fires`); thread `n` of phase `j` at `(ph k j).1 n`, its status
+`stat k j n` and the memory after `i` threads `memAt k (ph k j).1 (ph k j).2 i`; the final trace's
+`checks`. A test of `BlockRun.of_inv` and `WarpRun.of_inv` at two sizes. -/
 theorem sound_inv (k : Nat) (hk : k = 4 ∨ k = 8) :
-    Grid.Sound (L k) (c k) (g0 k) (fun _ => some ()) fun _ => True :=
-  Sched.start_sound_inv (J := 3) (T := fun j n t => t = (ph k j).1 n)
-    (W := fun j n s => s = stat k j n) (P := fun j i m => m = memAt k (ph k j).1 (ph k j).2 i)
-    (start_eq k hk) (fun _ _ _ _ _ hc => by cases hc) (fun _ _ _ => rfl) (fun _ _ => rfl)
-    (memAt.eq_1 _ _ _).symm (waits k hk)
-    (fun j hj => by interval_cases j; exacts [fire0 k hk, fire1 k hk, fire2 k hk]) (ends k hk)
-    (checks k hk) fun _ _ => ⟨(), rfl, trivial⟩
+    Grid.Sound (L k) (c k) (g0 k) (fun _ => some ()) fun _ => True := by
+  have hb : blockWarps (L k) 0 = [0] := by rcases hk with rfl | rfl <;> decide
+  obtain ⟨Es, m', hr, rfl⟩ := BlockRun.of_inv (L := L k) (c := c k) (b := 0) (J := 1)
+    (T := fun i t => ∀ n < k, t n = (ph k i).1 n)
+    (P := fun i m => m = match i with
+      | 0 => (ph k 0).2 | 1 => (ph k 1).2 | _ => memAt k (ph k 3).1 (ph k 3).2 k)
+    (fun i hi t m ht hm => by
+      obtain rfl : i = 0 := by omega
+      obtain ⟨s, Es, m₁, hw, hs, hm₁⟩ := WarpWait.of_inv (L := L k) (c := c k) (k := 0) (J := 0)
+        (T := fun _ j t => t = (ph k 0).1 j) (W := fun _ j s => s = stat k 0 j)
+        (P := fun _ j m => m = memAt k (ph k 0).1 (ph k 0).2 j) (fun i hi => absurd hi (by omega))
+        (fun i hi => absurd hi (by omega))
+        (fun j hj t m ht hm => by
+          rw [Nat.zero_add]
+          exact waits k hk 0 (by omega) j (by
+            rw [size k hk]; exact List.mem_range.1 (lanes k hk ▸ hj)) t m ht hm)
+        (t := t) (fun j hj => by
+          rw [Nat.zero_add]
+          exact ht j (List.mem_range.1 (lanes k hk ▸ hj))) (m := m) (by
+          rw [memAt.eq_1]; exact hm)
+      rw [lanes k hk, List.length_range] at hm₁
+      refine ⟨stat k 0, stop k (ph k 0).1 (ph k 0).2, Es ++ [], m₁, ?_, bar0 k hk,
+        fun n _ => rfl, by rw [hm₁]; rfl⟩
+      rw [hb]
+      exact .cons (hw.congr fun n hn => by
+        obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hn
+        simpa only [Nat.zero_add] using hs j hj) (.nil _))
+    (fun t m ht hm => by
+      obtain ⟨Es, hw⟩ := warp k hk (fires k hk) ht
+      subst hm
+      refine ⟨Es ++ [], _, ?_, rfl⟩
+      rw [hb]
+      exact .cons hw (.nil _))
+    (t := Grid.thread (g0 k)) (fun _ _ => rfl) (m := (g0 k).mem) rfl
+  have hc : PhaseRun (L k) (c k) (Grid.thread (g0 k)) [0] (g0 k).mem _ _ := .cons hr (.nil _)
+  rw [show [0] = List.range (volume (L k).grid) by rcases hk with rfl | rfl <;> rfl] at hc
+  have hC := checks k hk _ (by rw [size k hk])
+  exact PhaseRun.start_sound (start_eq k hk) (fun _ _ _ _ _ hc => by cases hc) (fun _ _ _ => rfl)
+    (by rw [block k hk]; rcases hk with rfl | rfl <;> decide) hc ⟨hC.1, hC.2, (), rfl, trivial⟩
 
 /--
 error: unsolved goals
-case «2»
+case «1»
 ⊢ ∀ (s : ℕ → Status),
-    (∀ n < volume (L 4).grid * volume (L 4).block, s n = stat 4 2 n) →
+    (∀ j ∈ warpLanes (L 4) 0, s j = stat 4 (1 + 1) j) →
       ∀ (m : Mem),
-        m = memAt 4 (ph 4 2).1 (ph 4 2).2 (volume (L 4).grid * volume (L 4).block) →
-          ∃ t' m',
-            Fires (L 4) (c 4) (volume (L 4).grid * volume (L 4).block) s m t' m' ∧
-              (∀ n < volume (L 4).grid * volume (L 4).block, t' n = (ph 4 (2 + 1)).1 n) ∧
-                m' = memAt 4 (ph 4 (2 + 1)).1 (ph 4 (2 + 1)).2 0
+        m = memAt 4 (ph 4 (1 + 1)).1 (ph 4 (1 + 1)).2 (warpLanes (L 4) 0).length →
+          ∃ u r,
+            WarpShfl (L 4) (c 4) 0 s m u r ∧
+              (∀ j ∈ warpLanes (L 4) 0, (u j).resume (r j) = (ph 4 (1 + 1 + 1)).1 j) ∧
+                m = memAt 4 (ph 4 (1 + 1 + 1)).1 (ph 4 (1 + 1 + 1)).2 0
 -/
 #guard_msgs in
-/-- **The open-goal twin**: `Sched.start_sound_inv` on 4 threads with the second shuffle's fire
-(phase 2) left out leaves that phase's fire as the goal: from the statuses `stat 4 2` on the
-memory the phase's runs leave, a `Fires` to the threads `(ph 4 3).1` on the memory phase 3 starts
-on. -/
-example : Grid.Sound (L 4) (c 4) (g0 4) (fun _ => some ()) fun _ => True := by
-  refine Sched.start_sound_inv (J := 3) (T := fun j n t => t = (ph 4 j).1 n)
-    (W := fun j n s => s = stat 4 j n) (P := fun j i m => m = memAt 4 (ph 4 j).1 (ph 4 j).2 i)
-    (start_eq 4 (.inl rfl)) (fun _ _ _ _ _ hc => by cases hc) (fun _ _ _ => rfl)
-    (fun _ _ => rfl) (memAt.eq_1 _ _ _).symm (waits 4 (.inl rfl)) (fun j hj => ?_)
-    (ends 4 (.inl rfl)) (checks 4 (.inl rfl)) fun _ _ => ⟨(), rfl, trivial⟩
-  interval_cases j
-  · exact fire0 4 (.inl rfl)
-  · exact fire1 4 (.inl rfl)
+/-- **The open-goal twin**: the warp's run past the barrier on 4 threads with the second
+shuffle's fire (phase 2) left out leaves that phase's shuffle as the goal: from the statuses
+`stat 4 2` on the memory the phase's runs leave, a `WarpShfl` to the threads `(ph 4 3).1` on the
+memory phase 3 starts on. -/
+example : ∃ Es, WarpRun (L 4) (c 4) 0 (ph 4 1).1 (ph 4 1).2 Es
+    (memAt 4 (ph 4 3).1 (ph 4 3).2 4) := by
+  refine warp 4 (.inl rfl) (fun i hi => ?_) fun _ _ => rfl
+  interval_cases i
+  · exact fires 4 (.inl rfl) 0 (by decide)
   beta_reduce
   clear * -
 
