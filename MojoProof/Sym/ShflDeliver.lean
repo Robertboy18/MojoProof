@@ -11,7 +11,8 @@ program, launch, warp, offered values, lane, layout and memory.
 * `shflVal_mapM`: when the source lane is one of the warp's lanes and the attributes keep its
   offered value, the delivery equation holds exactly at `some` of that value.
 * `keepsBits`, `withAttrs_keepsBits`: the return attributes that keep every word (all but `range`,
-  `nonnull` and `align`), and `withAttrs` keeping a word under them; `Program.shflKeeps`: every
+  `nonnull` and `align`), and `withAttrs` keeping every defined value that is not a vector, a
+  word among them, under them; `Program.shflKeeps`: every
   shuffle declaration of a program has such return attributes, a check the kernel evaluates;
   `Program.shfl_deliver`: `WarpRun.of_waits`'s delivery equation for a program that passes it.
 * `shflSource_idx`: an `idx` shuffle with clamp 31 reads lane `b % 32`, every lane alike.
@@ -51,31 +52,22 @@ def keepsBits : Attr → Bool
   | .int n _ => n != "align"
   | _ => true
 
-/-- **Return attributes that keep every word.** For every layout, memory, type, attributes that
-each pass `keepsBits`, width `w` and word `x : BitVec w`: `withAttrs` gives `.bits w x`. -/
+/-- **Return attributes that keep every word keep every defined value that is not a vector.** For
+every layout, memory, type, attributes that each pass `keepsBits` and value `v` that is not a
+vector and is defined (`Val.defined`), such as a word `.bits w x`: `withAttrs` gives `v`. -/
 theorem withAttrs_keepsBits (l : Layout) (m : Mem) (t : Ty) {ats : List Attr}
-    (ha : ats.all keepsBits = true) (w : Nat) (x : BitVec w) :
-    withAttrs l m t ats (.bits w x) = .ok (.bits w x) := by
-  have hd : (Val.bits w x).defined = true := rfl
+    (ha : ats.all keepsBits = true) {v : Val} (hv : (v matches .vec _) = false)
+    (hd : v.defined = true) : withAttrs l m t ats v = .ok v := by
   unfold withAttrs
   dsimp only
   split
-  · rename_i h
-    cases h
-  · rw [foldlM_fix]
-    · simp only [hd, Bool.not_true, Bool.and_false, Bool.false_eq_true, ↓reduceIte, bind,
-        Except.bind, pure, Except.pure]
-    · intro a hm
-      have h := List.all_eq_true.1 ha a hm
-      cases a with
-      | range => cases h
-      | flag n =>
-        have hn : n ≠ "nonnull" := by simpa [keepsBits] using h
-        split <;> first | rfl | (exfalso; simp_all)
-      | int n k =>
-        have hn : n ≠ "align" := by simpa [keepsBits] using h
-        split <;> first | rfl | (exfalso; simp_all)
-      | _ => split <;> first | rfl | contradiction
+  · simp at hv
+  · rw [foldlM_fix fun a h => ?_]
+    · simp only [bind, Except.bind, hd, Bool.not_true, Bool.and_false, Bool.false_eq_true,
+        ↓reduceIte]
+      rfl
+    · have hp := List.all_eq_true.1 ha a h
+      split <;> first | rfl | simp [keepsBits] at hp
 
 /-- Whether every shuffle declaration of program `P` (one whose name its intrinsic table maps to
 a shuffle) has return attributes that each pass `keepsBits`. -/
@@ -93,7 +85,7 @@ theorem _root_.MojoProof.LLVM.Program.withAttrs_shfl {P : Program} (hP : P.shflK
   have h := (Array.all_eq_true_iff_forall_mem.1 hP) e (Array.mem_of_find?_eq_some he)
   have hb : (e.name == g) = true := Array.find?_some (p := fun x : Func => x.name == g) he
   rw [beq_iff_eq.1 hb, hg] at h
-  exact withAttrs_keepsBits l m e.ret h w x
+  exact withAttrs_keepsBits l m e.ret h rfl rfl
 
 /-- **`WarpRun.of_waits`'s delivery equation for a program that passes `shflKeeps`.** For every
 program `P` with `P.shflKeeps`, lanes `ls`, offered values `a`, mode, lane `j`, operands `b`,

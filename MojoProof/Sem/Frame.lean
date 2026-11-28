@@ -528,7 +528,8 @@ theorem exec_agree {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {e : 
        | (have hq := Val.addr?_namesIn ‹Val.addr? _ = .ok _› (e2 _ _ _ ‹_›)
           simp only [LLVM.Stmt.pending, bind, Except.bind, *] at h
           first
-            | (have hl := Mem.load_agree h hq List.mem_cons_self ‹Mem.load _ _ _ _ _ _ _ = .ok _›
+            | (have hl := Mem.load_agree h hq List.mem_cons_self
+                 ‹Mem.load _ _ _ _ _ _ _ = .ok _›
                refine ⟨[.log _], fun o ho => by
                  rw [List.mem_singleton] at ho
                  subst ho

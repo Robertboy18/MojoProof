@@ -801,7 +801,9 @@ theorem start_ret (L : Launch) {m : Mem} (hm : m.Closed []) (ch : Nat → Nat)
       g.mem.trace = [] ∧ g.threads.size = volume L.grid * volume L.block ∧
       ∀ n, n < volume L.grid * volume L.block → g.threads[n]? = some (.run retThread) := by
   unfold Grid.start
-  rw [Mem.checkClosed_of_closed hm]
+  have hkl : Func.checkLaunch (Program.ofFunc retFn).module retFn L.block ([] : List Val).length =
+      .ok () := rfl
+  rw [Mem.checkClosed_of_closed hm, hkl]
   simp only [bind, Except.bind]
   have hck : Func.check (Program.ofFunc retFn).module retFn = Except.ok () := rfl
   have hg : (Program.ofFunc retFn).module.globals.toList = [] := rfl

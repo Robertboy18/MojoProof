@@ -5,9 +5,14 @@ import MojoProof.LLVM.Syntax
 
 Splits textual LLVM IR (as bytes) into tokens, following the lexical rules of LLVM's `LLLexer`:
 local `%name`, global `@name`, metadata `!name`, `!n`, `!"s"`, attribute-group references `#n`,
-integers, decimal and hexadecimal (`0x`, `0xH`, `0xR`, `0xK`, `0xL`, `0xM`) float literals, strings
-with `\XX` escapes, keywords and punctuation. Comments (`;` to the end of the line) are dropped. A
-label `21:` is the integer `21` followed by the punctuation `:`; the parser recognizes it. A name
+integers, decimal and hexadecimal (`0x`, `0xH`, `0xR`, `0xK`, `0xL`, `0xM`) float literals, the
+special and bit-pattern float literals `+inf`, `-inf`, `+qnan`, `-qnan` and `f0x…` (`lexSpecial`,
+`lexBits`), strings with `\XX` escapes, keywords and punctuation. Comments are dropped: LangRef
+("Identifiers", its lexical example): "Comments are delimited with a ';' and go until the end of
+line. Alternatively, comments can start with /* and terminate with */." So `;` to the end of the
+line, and `/*` to the next `*/` (anywhere between tokens, such as `/* (inf) */` among a call's
+arguments; an unterminated one is refused). A label `21:` is the integer `21` followed by the
+punctuation `:`; the parser recognizes it. A name
 token keeps the name as a string, which is all digits exactly for LLVM's numbered values (`%0`,
 `@1`): a quoted name that is all digits (`%"0"`, a named value) is refused.
 
@@ -118,6 +123,43 @@ private def lexName (s : ByteArray) (i : Nat) : Except String (String × Nat) :=
     if j == i then .error "empty name after sigil" else do
       return (← slice s i j, j)
 
+/-- A special float literal at `i` (a `+` or `-`, then a word), as LangRef ("Simple Constants")
+lists them: "`+inf`, `-inf`: Positive or negative infinity. The sign is required." and
+"`+qnan`, `-qnan`: Positive or negative preferred quiet NaN, i.e., the quiet bit is set, and all
+other payload bits are 0. The sign is required." Each is lexed to the `double` bits of that value
+(`0x7FF0000000000000` and `0x7FF8000000000000`, with the sign bit for `-`), the legacy
+hexadecimal form, which `MojoProof.Sem.floatLit` reads at every float type exactly: infinity is
+infinity and the preferred quiet NaN is the preferred quiet NaN in each (`0x7F800000`,
+`0x7FC00000` at `float`). The forms with a payload, "`+nan(0x1)`: qNaN value with a particular
+payload" and "`+snan(0x1)`: sNaN value with a particular payload", whose payload depends on the
+type, are refused, as is any other word after the sign. -/
+private def lexSpecial (s : ByteArray) (i : Nat) : Except String (Tok × Nat) := do
+  let sign := if s[i]! == 45 then 2 ^ 63 else 0
+  let j := scan s isAlpha (i + 1)
+  match ← slice s (i + 1) j with
+  | "inf" => return (.float (.hex "" (sign + 0x7FF0000000000000)), j)
+  | "qnan" => return (.float (.hex "" (sign + 0x7FF8000000000000)), j)
+  | "nan" | "snan" => throw "a NaN literal with a payload (its bits depend on the type)"
+  | w => throw s!"unexpected '{Char.ofNat s[i]!.toNat}{w}'"
+
+/-- A bit-pattern float literal `f0x<digits>` from `i` to `j` (the word's end), as LangRef
+("Simple Constants") defines it: "`f0x3c00`: Value of the floating-point number if bitcast to an
+integer. The number must have exactly as many hexadecimal digits as is necessary for the size of
+the floating-point number." The type is not known when lexing, so the token keeps the number of
+digits with the bits (`FloatLit.bits`), and the parser refuses a count other than the size of the
+type the literal is used at (`Parser.litFits`): 4 digits for `half` and `bfloat`, 8 for `float`, 16
+for `double`. The lexer calls it on a word of at least one digit; `f0x` alone is a keyword. -/
+private def lexBits (s : ByteArray) (i j : Nat) : Tok × Nat :=
+  (.float (.bits (j - (i + 3)) (hexOf s (i + 3) j)), j)
+
+/-- The end of the comment `/* … */` whose `/*` is at `i`, just after its `*/`, and the number of
+line breaks in it; `none` when no `*/` follows. -/
+private partial def commentEnd (s : ByteArray) (i : Nat) (lines : Nat := 0) : Option (Nat × Nat) :=
+  if i + 1 < s.size then
+    if s[i]! == 42 && s[i+1]! == 47 then some (i + 2, lines)
+    else commentEnd s (i + 1) (if s[i]! == 10 then lines + 1 else lines)
+  else none
+
 /-- Lex a number starting at `i` (an optional `-` then digits, or `0x` hex). -/
 private def lexNumber (s : ByteArray) (i : Nat) : Except String (Tok × Nat) := do
   let neg := s[i]! == 45
@@ -160,6 +202,10 @@ private partial def go (s : ByteArray) (i line : Nat) (acc : Array Token) :
     if b == 10 then go s (i + 1) (line + 1) acc
     else if b == 32 || b == 9 || b == 13 then go s (i + 1) line acc
     else if b == 59 then go s (scan s (· != 10) i) line acc
+    else if b == 47 && i + 1 < s.size && s[i+1]! == 42 then
+      match commentEnd s (i + 2) with
+      | some (j, n) => go s j (line + n) acc
+      | none => err "unterminated /* comment"
     else if b == 37 || b == 64 then
       match lexName s (i + 1) with
       | .ok (n, j) => push (if b == 37 then .loc n else .glob n) j
@@ -189,8 +235,17 @@ private partial def go (s : ByteArray) (i line : Nat) (acc : Array Token) :
       match lexNumber s i with
       | .ok (t, j) => push t j
       | .error m => err m
+    else if (b == 43 || b == 45) && i + 1 < s.size && isAlpha s[i+1]! then
+      match lexSpecial s i with
+      | .ok (t, j) => push t j
+      | .error m => err m
     else if isAlpha b || b == 95 || b == 46 || b == 36 then
       let j := scan s isKwChar i
+      if b == 102 && i + 3 < j && s[i+1]! == 48 && s[i+2]! == 120 &&
+          (List.range (j - (i + 3))).all (fun k => isHex s[i + 3 + k]!) then
+        let (t, j) := lexBits s i j
+        push t j
+      else
       match slice s i j with
       | .ok k => push (.kw k) j
       | .error m => err m

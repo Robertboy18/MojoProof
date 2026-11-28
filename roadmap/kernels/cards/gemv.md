@@ -6,7 +6,7 @@ ref: modular/modular@bbc13a71:max/kernels/src/linalg/gemv.mojo:178
 quote: "def gemv_kernel["
 lean: TorchLean.Tensor.matVecLoop, MojoProof.Sem.matVec_cell_real, MojoProof.Sem.warpDot_matVec, MojoProof.Sem.warpDot_vecMat, MojoProof.Sem.warpDot_eq, MojoProof.Sem.racy_tpose, MojoProof.Sem.warpDot_tpose, MojoProof.Sem.castV_split, MojoProof.Sym.exec_laneid, MojoProof.Sym.SNode.eval_bitcast, MojoProof.Sym.SNode.eval_laneid, MojoProof.Sym.Seg.sound, MojoProof.Sym.Seg.through, MojoProof.Sym.SNode.eval_globalAt, MojoProof.Tile.bflyRoundsAt_chain
 corpus: tests/corpus/gemv
-tests: MojoProofTest.Matmul, MojoProofTest.SymLane, MojoProofTest.SymCast, MojoProofTest.SymSeg, MojoProofTest.OblGevm, MojoProofTest.WarpDot, MojoProofTest.Bitcast, MojoProofTest.Transpose, MojoProofTest.GemvEntry, MojoProofTest.GemvEntryRun, MojoProofTest.OblGemv, MojoProofTest.GemvLoop, MojoProofTest.GemvLoopTail, MojoProofTest.GemvLoopBfly, MojoProofTest.TileBfly, MojoProofTest.GemvShfl, MojoProofTest.GemvThread, MojoProofTest.GemvWarpRun, MojoProofTest.GemvWarpWord, MojoProofTest.GemvSound, MojoProofTest.GemvTorch
+tests: MojoProofTest.Matmul, MojoProofTest.SymLane, MojoProofTest.SymCast, MojoProofTest.SymSeg, MojoProofTest.OblGevm, MojoProofTest.WarpDot, MojoProofTest.Bitcast, MojoProofTest.Transpose, MojoProofTest.GemvEntry, MojoProofTest.GemvEntryRun, MojoProofTest.OblGemv, MojoProofTest.GemvLoop, MojoProofTest.GemvLoopTail, MojoProofTest.GemvLoopBfly, MojoProofTest.TileBfly, MojoProofTest.GemvShfl, MojoProofTest.GemvThread, MojoProofTest.GemvWarpRun, MojoProofTest.GemvWarpWord, MojoProofTest.GemvSound, MojoProofTest.GemvTorch, MojoProofTest.GevmWarp1, MojoProofTest.GevmSound
 upstream:
 depends: launch, binary-op-rounding
 level: L0
@@ -61,7 +61,9 @@ then reduces column `32 β + w`'s strided sums
 in `warpDot`'s order (`MojoProof.Sem.warpDot_tpose`), for every launch with `ntid.x = 1024`. gemv_kernel's
 done grid holds each row's `warpDot` up to NaNs at one-dimensional launches whose block's `x`
 size 32 divides and whose row count is at least `M` (MojoProofTest/GemvWarpWord.lean:
-`grid_rows`); that a grid run of gevm_kernel computes `warpDot` is not proved.
+`grid_rows`). gevm_kernel's done grid holds each column's `warpDot` up to NaNs at
+one-dimensional launches with 1024 threads per block in `x`, `N = 32 · L.grid .x` columns and
+`32 ∣ K` (MojoProofTest/GevmWarp1.lean: `grid`).
 
 **Open.** L1: no tracked record of a GPU run of either specialization. Above it, the block
 checker takes `gemv_kernel`'s entry block whole with its `alloca` flag (MojoProofTest/SymSeg.lean:
@@ -77,7 +79,9 @@ against `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)
 `gemv_torchLean`), for this one program, hand-proved in tests, not by `mojo_kernel`. Launches
 with a `y` or `z` size above 1 are not proved: two warps can share a row there, and two stores
 of their lanes 0 at it race (`row_race`, the two stores' events, not a run) (docs/proofs/gemv.md
-items 6 and 7);
-`gevm_kernel`'s reduction needs
-a schedule through its collective calls and the race freedom across its barrier in a grid run
-before a kernel theorem can (docs/proofs/gemv.md).
+items 6 and 7). At gevm's launches above, gevm_kernel's `GPUProof.Kernel.Sound` holds against
+`GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade 32 5 fun m => ⌈m / 32⌉)`, for the admission that
+each block of threads' shared array lies below `2 ^ 32` (MojoProofTest/GevmSound.lean:
+`kernel_sound`), and against TorchLean's real vector-matrix product (`gevm_torchLean`), for this
+one program, hand-proved in tests, not by `mojo_kernel`; its premises hold at one block of 1024
+threads (`sound1024`, `torch1024`).

@@ -410,8 +410,19 @@ Left to the user:
   states (gemv's `mems_of`);
 - a lane's run in another form (waits that are not a `List.map` of `Piece.Wait.via`, or more than
   two blocks) and shuffles that `Piece.Wait.shflOk` does not state: they stay goals, as
-  `WarpRun.of_waits` states them. SymColl's and SymChain's butterflies prove `WarpShfl` on the
-  lanes' statuses, not through `WarpRun.of_waits`, so `WarpRun.shfl_of` does not apply there.
+  `WarpRun.of_waits` states them. SymColl's and SymChain's `warp` (MojoProofTest/SymColl.lean,
+  MojoProofTest/SymChain.lean, two butterfly shuffles, the second at 4 and 8 threads) are one
+  `warp_route` call each, from a lane lemma (`lane`), the lanes' lengths and program (`waits`,
+  `progs`), the lanes' `Piece.Wait.shflOk` (`shfls`), `SymColl.mems` and `Program.shfl_nil`:
+  85 to 62 and 133 to 119 proof lines. SymChain's `shfl_wait`, the warp to the second shuffle's
+  waits, is `WarpWait.of_waits` (MojoProof/Sym/WarpWaits.lean), the waiting warp's
+  `WarpRun.of_waits`: from the same lane lemma, `shfls` and `Program.shfl_nil`, the first
+  shuffle's premise in `WarpRun.of_waits`' form by `WarpRun.shfl_of`, not a `WarpShfl` on the
+  lanes' statuses. `fires` is `WarpShfl.of_waits` from the same premises. The waits pin a lane's
+  position, call and arguments, not its thread or callee, so `WarpWait.of_waits` also concludes
+  each lane's status as `statusAt` (MojoProof/Sym/WarpWaits.lean), the status the lane's thread
+  reaches after its first `J` deliveries; the statement on the statuses `stat k 2` is an `example`
+  from `shfl_wait`, `statusAt` being `stat k 2` by the runs to the waits (`stops`, `nextWait_eq`).
 
 ## Running the checker on a new kernel
 
@@ -460,6 +471,472 @@ Left to the user:
    `loop` clause per loop gives the thread's run and the kernel theorem through the loops; see
    the previous section.
 
+## `mojo_kernel` on gemv_kernel and gevm_kernel
+
+`mojo_kernel` proves neither kernel today. On each it stops at the first block outside the
+checker's fragment, before it enumerates a path. This was measured on 2026-11-27 with a scratch
+module that imports both programs (`MojoProofTest/SymLane.lean`) and states
+`mojo_kernel … := gevm.prog gevm.fn_0 scalars x := a3, n := a4, k := a5 pointers out := a0,
+a := a1, b := a2` (gemv's the same with `m`, `x`, `k`, `out`, `a`, `v`), with and without
+`contract`. `#mojo_info` gave each block's verdict.
+
+- **gevm_kernel** (the corpus file `gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae`).
+  - Without flags, it stops with `mojo_kernel: block %45 (block 4 of gevm.fn_0) is outside the
+    checker's fragment`. The block is the latch, and statement 11 is
+    `%57 = fmul contract float %52, %56`.
+  - With `contract`, it stops with `mojo_kernel: block %59 (block 5 of gevm.fn_0) is outside the
+    checker's fragment with fmul contract`. Statement 6 is
+    `call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)`.
+  - The first missing capability is the barrier: a collective inside a block. The checker cuts
+    such a block into segments that end at a collective (`summarizeTo`, `summarizeSegs`; the
+    section on segments above), but `mojo_kernel` summarizes whole blocks only.
+  - Next in line:
+    - the five `shfl.sync.bfly` calls of the same block;
+    - the shared array, a global in address space 3, which `mojo_kernel` refuses under `map2`
+      and `mat`;
+    - the loop `%39`-`%45`, one round `%39 → %43 → %45` of trip count `(K + 31) / 32`: the
+      `loop` clause takes a trip count that is a function of the entry valuation, but its
+      invariant and the tactic that proves a round at every round number are the user's (by
+      hand today, `OblGevmRun.loop`), and its path out runs through `%59`; not measured, since
+      the command stops at `%59` first;
+    - the spec: the spec clauses of `mojo_kernel` are `map2` (elementwise) and `mat` (a matmul
+      whose arguments are `byval` structs). Neither is `Spec.vecMat` on pointer arguments.
+- **gemv_kernel** (the corpus file `gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b`).
+  - Without the flag `alloca`, with or without `contract`, it stops with `mojo_kernel: block %6
+    (block 0 of gemv.fn_0) is outside the checker's fragment`. Statement 0 is
+    `%7 = alloca [2 x ptr], i64 1, align 8`.
+  - With `alloca` (`… pointers y := a0, a := a1, x := a2 alloca`) it stops with
+    `mojo_kernel: block %6 (block 0 of gemv.fn_0) is outside the checker's fragment with alloca
+    at statement 17: %24 = call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 %22, i32 0, i32
+    31)`, and with `contract alloca` with `… with alloca and fmul contract at statement 17: …`.
+    `%6` runs its three `alloca`s and the 14 statements after them; statement 17 is the first
+    `shfl.sync.idx`, a collective. Under the flag the message names the first statement the
+    checker refuses (`refusalAt`, MojoProof/Sym/Info.lean), as LLVM text; without it the
+    message is as before. `gemvA`, `gemvAC` and `gemvA_twin` (MojoProofTest/SymAlloca.lean) pin
+    the three messages under `#guard_msgs`; `gemv_allocas` and `gemv_allocas_twin` pin the
+    checker's own stop (`summarizeAt`).
+  - What the flag proves, for every program: `mojo_kernel n := P fn … alloca` summarizes every
+    block with `summarizeAt true`, checks the paths from the entry by `coversEntryAt true
+    contract` (`n.covers`) and adds `n.sound_of`, `Kernel.sound_of_chainsAt (alloca := true)` at
+    them (MojoProof/Sym/Kernel.lean): the kernel theorem for that one program, for every
+    launch, arguments, memory, admission, observation and rule, whose per-thread premise is each
+    thread's predicate on the memory its run leaves with its `alloca` blocks dead (`Mem.Dead
+    true`; a thread's run leaves them dead, `Runs.of_retAt` and `Runs.of_chainsAt`,
+    MojoProof/Sym/Loop.lean). `Kernel.sound_of_chainsAt` is for both values of the flag; at
+    `alloca := false` each thread's predicate is the invariant itself (`Mem.Dead false m Q` is
+    `Q`). The `loop` clause, `map2` and `mat`
+    refuse the flag, each with one message (their theorems are with the flag off). The test is
+    `pathA` (MojoProofTest/SymAlloca.lean), on the two-block alloca path of `pathText`: its
+    `covers`, its `sound_of`, and `pathA_sound`, the theorem's premises met at a launch of one
+    thread from the empty memory, the two `alloca` blocks dead at the end.
+  - Next in line:
+    - `%6` statements 17 and 18, its two `shfl.sync.idx` calls. Then come the calls of
+      `llvm.lifetime.start` and `llvm.lifetime.end` in statements 19 to 28. `summarizeAt`
+      refuses these too. The checker's segments end at them (`summarizeLife`), but
+      `mojo_kernel` summarizes whole blocks (the plan below);
+    - `%78` stops at its first `shfl.sync.bfly` (statement 2), with or without the flag;
+    - `%70` needs `contract`: statement 2 is `%73 = fmul contract float %71, %72`;
+    - the loop `%54`-`%76`, of trip count `⌈K / 32⌉`, has two rounds (`%54 → %58 → %60`, then
+      `%70` or `%75`, then `%76`), and the `loop` clause takes one round per loop (an error
+      otherwise, MojoProof/Sym/KernelCmd.lean), and is not combined with `alloca`; not
+      measured, since the command stops at `%6` first;
+    - the spec, `Spec.matVec`, which has no clause either.
+
+**The gaps that remain.** Of the four gaps between `mojo_kernel` and these two kernels, the flag
+closes the first: the command now passes the checker's `alloca` flag, with its kernel theorem.
+Three remain: segments split at collectives (barriers and shuffles inside a block; gevm's `%59`,
+gemv's `%6` and `%78`; the plan below), a spec clause for `Spec.vecMat` and `Spec.matVec` on
+pointer arguments, and a `loop` clause with more than one round per loop or a symbolic trip
+count with the user's invariant (gemv's `%54`-`%76`, gevm's `%39`-`%45`).
+
+**What a generator would have to produce.** Both kernel theorems are assembled by hand from the
+library. Four steps are now one library theorem each, for every program
+(`MojoProof/Sym/SigKernel.lean`):
+
+| Step | Library theorem | What each kernel writes |
+|---|---|---|
+| The start | `Grid.start_of_check` | `starts`, 1 line by `kernel_rfl` for gemv and 3 for gevm, whose launch check is `Func.checkLaunch_maxntid` (were 8 and 14) |
+| The assembly | `kernel_sound_sig`, through Theorem 0 at `sig` (`sound_sig`) | `kernel_sound`, 10 lines for gemv and 8 for gevm (were 17 and 11) |
+| Not bad | `Grid.not_bad` and `Grid.not_bad_cells` | gevm's `grid_bad`, 71 lines (was 106); gemv's `racy_ev` and `kept_ev` are its own argument by owners, 40 lines |
+| A store's write in the trace | `Ext.store` | gemv's `ext_out`, 7 lines (was 12); gevm's `Warp.mout_ext`, 4 lines (was 15) |
+
+The rest is per kernel. Hand-written proof lines (prooflines.py):
+
+- gemv_kernel: 2352 lines in 12 files (was 2378);
+- gevm_kernel: 1148 lines in 9 files (1145 before `GevmSound.starts`' launch check; 1301 in 10, with
+  OblGevmWhole.lean, before that).
+
+A generator would have to produce the following:
+- each block's or segment's summary and its `covers` check (by `decide +kernel` today);
+- the thread's run through its loop: the loop's invariant and its rounds (`GemvLoop`,
+  `OblGevmRun`);
+- the warp's run through its shuffles (`GemvWarpRun`, 770 lines; `GevmWarp1.warp` and `resume`,
+  85 lines);
+- for gevm, the block's run to the barrier and after it (`GevmWarp0.block`, `GevmWarp1.block`,
+  130 lines);
+- the grid's run (`GemvSound.grid_end`, 44 lines; `GevmWarp1.blocks` and `grid`, 110 lines);
+- the cells and owners of each access (gevm's `grid_bad`);
+- the spec's relation (`rows_holds` and `cols_holds`).
+
+### The plan: blocks cut at their collectives
+
+`mojo_kernel` summarizes whole blocks, so it stops at the first collective inside a block:
+gevm's barrier in `%59`, gemv's `shfl.sync.idx` in `%6` (with `alloca`) and its first
+`shfl.sync.bfly` in `%78`. This is the plan for a clause that cuts blocks at their collectives,
+and for the kernel theorem it needs. Step 1 is built (below).
+
+**What the checker already has.** Each of these is for every program, function, block and
+thread its statement names:
+
+| Declaration | Where | What it gives |
+|---|---|---|
+| `summarizeTo` | MojoProof/Sym/Segment.lean:158 | the summary (`SegSummary`, :131) of positions `p0` to `p1 - 1`, ending at the collective call at `p1` with its argument terms |
+| `Seg.sound` | Segment.lean:333 | from a frame at `p0` that meets the obligations, the steps reach `p1` and the step there is the collective's `.wait` |
+| `summarizeLife` | Segment.lean:668 | a segment that ends at a lifetime marker; `Seg.lifetime` (:805) runs it past the marker |
+| `summarizePieces` | Segment.lean:883 | a block's segments at the positions `ps` (`Piece`, :862, a collective's or a marker's, by `summarizePiece`, :872), and the summary of the rest |
+| `Piece.through` | Segment.lean:1042 | one thread runs the segments and the rest of the block (`Piece.Through`, :952), the deliveries a parameter |
+| `RunsVia` | MojoProof/Sym/OblSeg.lean:78 | a thread's run through a list of waits to its end; a block's waits are `Piece.Wait` (:246) at `Piece.Wait.via` (:265) |
+| `RunsVia.of_fires` | OblSeg.lean:358 | `RunsVia` through `Piece.waits` (:317) from `Piece.Through` and the Boolean `Piece.fires` (:340) at the entry valuation |
+| `RunsVia.of_ends`, `RunsVia.of_chain` | OblSeg.lean:221, :474 | after the last collective, a path to the `ret`; a chain of loops into a block |
+| `RunsVia.of_runs`, `.of_block`, `.of_blocks` | MojoProof/Sym/WarpRoute.lean:56, :65, :84 | `RunsVia` for a run with no wait, and restated at one block or two |
+| `Piece.Wait.shflOk` | WarpRoute.lean:101 | the Boolean check of one lane's waits against the shuffles (mode, position, full mask, offer, lane operand, clamp, `Grid.fire`'s delivery) |
+| `WarpRun.shfl_of` | WarpRoute.lean:139 | `WarpRun.of_waits`' shuffle premise from every lane's `Piece.Wait.shflOk` and the declarations' keeping (`Program.shfl_nil`, :120) |
+| `warp_route` | WarpRoute.lean:751 | the tactic: one warp's `WarpRun` from a lane lemma and these checks |
+| `WarpRun.of_waits`, `WarpWait.of_waits` | MojoProof/Sym/Canon.lean:531, MojoProof/Sym/WarpWaits.lean:270 | one warp's run through its shuffles to its end (`WarpRun`), or to its `J`-th waits (`WarpWait`), from its lanes' `RunsVia` |
+| `WarpWait.of_upto`, `RunsVia.cut` | WarpWaits.lean:155, :113 | one warp's run to its `J`-th waits from its lanes' runs to them and no further (`RunsUpto`, :58), and a lane's `RunsVia` cut at its `J`-th wait (`RunsVia.upto`, :68; `RunsVia.drop_statusAt`, :87) |
+| `CanonRun.of_inv` | Canon.lean:598 | the warps in turn (`CanonRun`) by a memory invariant |
+| `BlockBar.of_waits`, `CanonWait.of_merge`, `BlockRun.of_inv`, `PhaseRun.of_inv` | MojoProof/Sym/CanonBar.lean:142, :626, :665, :696 | a block's barrier from its threads' waits, the warps to their waits, a block's phases, the blocks in turn |
+| `CanonRun.start_sound`, `PhaseRun.start_sound` | CanonBar.lean:808, :546 | Theorem 0 at a canonical run, or at a run at the phase level, with `EndChecks` (:532) |
+| `WarpSegs.run`, `WarpSegsTo.wait`, `WarpSegsBar.wait` | MojoProof/Sym/KernelWarps.lean:103, :225, :272 | one warp's run to its end (`WarpRun`), or to a barrier (`WarpWait`), from its premises in the checker's form (`WarpSegs`, :79; `WarpSegsTo`, :189, its lanes' runs stopping at the barrier; `WarpSegsBar`, :138, its lanes' runs to their ends, cut by `WarpSegsBar.to`, :251) |
+| `Kernel.run_of_prefixes`, `Kernel.run_of_phases` | KernelWarps.lean:328, :410 | a start's run through each block's phases (`Kernel.Prefixes`, :297; or each phase to a barrier a `WarpSegsBar`) to a done grid whose memory is of the last memory predicate, with no end checks: the run and done conjuncts of `kernel_sound_sig`'s run premise (MojoProof/Sym/SigKernel.lean:156) |
+| `Kernel.sound_of_prefixes`, `Kernel.sound_of_phases`, `Kernel.sound_of_warps` | KernelWarps.lean:446, :485, :532 | the kernel theorem from each block's phases between its barriers (`Kernel.Prefixes`, or `WarpSegsBar`), or with no barrier |
+
+The command uses none of these: it calls `summarizeAt` (MojoProof/Sym/Checker.lean:526)
+on whole blocks, `coversEntryAt` (MojoProof/Sym/Kernel.lean:280) on paths of whole blocks, and
+`Kernel.sound_of_chainsAt` (Kernel.lean:332), whose threads run in turn, one after another
+(`Seq.start_sound_inv`, MojoProof/Sym/Sched.lean:374), with no collective between them.
+
+**The kernel theorem.** It is in two parts, warps first and then blocks with barriers.
+
+1. Built: `Kernel.sound_of_warps` (MojoProof/Sym/KernelWarps.lean:532), for kernels whose
+   collectives are shuffles. `WarpSegs` is one warp's premises in the checker's form: its lanes'
+   `RunsVia` through their waits (`RunsVia.of_fires`), each lane's `Piece.Wait.shflOk`, the
+   declarations' keeping, the waits' memories and each phase's start, that is,
+   `WarpRun.of_waits`' premises with `WarpRun.shfl_of`'s in place of its shuffle premise:
+
+   ```lean
+   theorem Kernel.sound_of_warps {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+       {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type}
+       {obs : Mem → Option β} {R : β → Prop} (hm : m.BytesIn m.Known)
+       (hb : 0 < volume L.block)
+       (hs : ∀ ch oracle, adm ch oracle →
+         ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+       (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m')
+       (H : ∀ ch oracle g c, adm ch oracle →
+         Grid.start prog fn L args m ch oracle = .ok (g, c) →
+         ∃ P : Nat → Mem → Prop, P 0 g.mem ∧
+           (∀ i (hi : i < (warps L g.threads.size).length), ∀ m₀, P i m₀ →
+             WarpSegs prog fn L c (warps L g.threads.size)[i] (Grid.thread g) m₀
+               (P (i + 1))) ∧
+           ∀ m', P (warps L g.threads.size).length m' → EndChecks L obs R m') :
+       Kernel.Sound prog fn L args m adm obs R
+   ```
+
+   Its proof was `WarpSegs.run` (`WarpRun.of_waits` with `WarpRun.shfl_of`) at each warp, the
+   warps in turn by `CanonRun.of_inv`, then `CanonRun.start_sound`: 8 proof lines, and 7 for
+   `WarpSegs.run`. It is now the case `J b = 0` of `Kernel.sound_of_phases` (below), its
+   statement unchanged: 45 proof lines, of which 20 are the index arithmetic that makes block
+   `b`'s `w`-th warp the grid's `b * nw + w`-th (`nw` the number of a block's warps; the grid's
+   warps are the blocks' in turn, `warps_blocks`, and `Grid.start_size`), and 7 the warp's
+   `WarpSegs` at the grid's index with its lanes' threads the start's. Its memory invariant is
+   indexed by warps where `Kernel.sound_of_chainsAt`'s is indexed by threads.
+2. Built: `Kernel.sound_of_phases` (KernelWarps.lean:485), with barriers. `WarpSegsBar … bar l p
+   V Q` (:126) is one warp's phase that ends at a barrier: `WarpSegs`' premises for the phase's
+   `J` shuffles out of `N > J` waits, each lane's `J`-th wait the barrier call on the word `bar`
+   at block `l`, position `p`, delivering no value, `Q` of the memory after the last lane, and
+   each lane resumed there of `V` (from its run through the waits after the `J`-th, as
+   `WarpWait.of_waits` concludes it). The theorem's statement is this one:
+
+   ```lean
+   theorem Kernel.sound_of_phases {prog : Program} {fn : Func} {L : Launch} {args : List Val}
+       {m : Mem} {adm : (Nat → Nat) → (Nat → Nat → Nat) → Prop} {β : Type}
+       {obs : Mem → Option β} {R : β → Prop} (hm : m.BytesIn m.Known)
+       (hb : 0 < volume L.block)
+       (hs : ∀ ch oracle, adm ch oracle →
+         ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c))
+       (hO : ∀ m m' : Mem, m.blocks = m'.blocks → obs m = obs m')
+       (H : ∀ ch oracle g c, adm ch oracle →
+         Grid.start prog fn L args m ch oracle = .ok (g, c) →
+         -- block `b` has `J b` barriers; `T b i n`: thread `n` in phase `i`;
+         -- `P b i w`: the memory after the first `w` warps of phase `i`
+         ∃ (J : Nat → Nat) (T : Nat → Nat → Nat → Thread → Prop)
+           (P : Nat → Nat → Nat → Mem → Prop),
+           (∀ n, T (n / volume L.block) 0 n (Grid.thread g n)) ∧ P 0 0 0 g.mem ∧
+           (∀ b < volume L.grid, ∀ i < J b, ∃ bar < 16, ∃ l p,
+             ∀ w (hw : w < (blockWarps L b).length), ∀ t m₀,
+               (∀ j ∈ warpLanes L (blockWarps L b)[w],
+                 T b i ((blockWarps L b)[w] + j) (t ((blockWarps L b)[w] + j))) →
+               P b i w m₀ →
+               WarpSegsBar prog fn L c (blockWarps L b)[w] t m₀ bar l p (T b (i + 1))
+                 (P b i (w + 1))) ∧
+           (∀ b < volume L.grid, ∀ i < J b, ∀ m₁, P b i (blockWarps L b).length m₁ →
+             P b (i + 1) 0 (m₁.log (.barrier b))) ∧
+           (∀ b < volume L.grid, ∀ w (hw : w < (blockWarps L b).length), ∀ t m₀,
+             (∀ j ∈ warpLanes L (blockWarps L b)[w],
+               T b (J b) ((blockWarps L b)[w] + j) (t ((blockWarps L b)[w] + j))) →
+             P b (J b) w m₀ →
+             WarpSegs prog fn L c (blockWarps L b)[w] t m₀ (P b (J b) (w + 1))) ∧
+           (∀ b < volume L.grid, ∀ m₁, P b (J b) (blockWarps L b).length m₁ →
+             P (b + 1) 0 0 m₁) ∧
+           ∀ m', P (volume L.grid) 0 0 m' → EndChecks L obs R m') :
+       Kernel.Sound prog fn L args m adm obs R
+   ```
+
+   Its proof, as planned: in phase `i < J b`, each warp to its barrier waits by
+   `WarpSegsBar.wait` (:272; then `WarpWait.of_waits`, its shuffles by `WarpRun.shfl_of`, now
+   `WarpSegsTo.wait`, :225, at `WarpSegsBar.to`, below), the
+   block's warps by `CanonWait.of_merge` with each thread's status the barrier wait
+   (`blockWarps_nodup`, CanonBar.lean:113), the barrier by `BlockBar.of_waits` (the waits'
+   threads are the resumed ones, `Status.wait.inj`); in phase `J b`, `WarpSegs.run` and
+   `CanonRun.of_inv`; the phases by `BlockRun.of_inv` (its thread predicate: every thread of
+   the block of `T b i`; its memory predicate `P b i 0` up to `J b`, then `P (b + 1) 0 0`), the
+   blocks by `PhaseRun.of_inv`, then `PhaseRun.start_sound`: 57 proof lines, and 15 for
+   `WarpSegsBar.wait`. No lemma was missing. Since then the run part is its own theorem,
+   `Kernel.run_of_phases` (KernelWarps.lean:410): the same proof up to the blocks, then
+   `PhaseRun.start_done` in place of `PhaseRun.start_sound`, concluding the run to a done grid
+   whose memory is of `P (volume L.grid) 0 0`, with no `EndChecks`; `Kernel.sound_of_phases` is
+   that theorem, then `Grid.start_done_sound` with `EndChecks` at the end memory.
+
+   What the definition of `WarpSegsBar` adds to the plan's words, and why: the number `N` of each
+   lane's waits and the lanes' final predicates `F` are its witnesses (`WarpWait.of_waits` takes
+   them); the barrier wait's facts are fields (its call `.barrier`, its position `p`, its one
+   argument whose word is `bar`, no value delivered, its memory `M J (j + 1)`), since
+   `BlockBar.of_waits` needs the word and the position and `WarpWait.of_waits` the memory; and the
+   clause for `V` is an implication from what `WarpWait.of_waits` concludes about the lane (its
+   status there, `statusAt` of its first `J` deliveries, is the wait by thread `u`; `u` is at
+   `(fn.name, l, p)`; the lane runs from `u.resume none` through the waits after the `J`-th),
+   so that a test proves `V` from the thread `statusAt` computes.
+
+   It generalizes `Kernel.sound_of_warps`, the case `J b = 0` for every block (proved, above),
+   and through it `Kernel.sound_of_chainsAt`, the case with no collective, where each warp's
+   `WarpSegs` at no shuffle is its lanes' runs (`RunsVia.of_runs`). The second reduction is not
+   proved: Kernel.lean is not changed here. Its statement is `Kernel.sound_of_chainsAt`'s
+   (Kernel.lean:332) unchanged, and its proof plan:
+
+   1. Kernel.lean cannot import KernelWarps.lean: KernelWarps reaches Kernel.lean through
+      WarpWaits, WaitAt, WaitVia, SegTrace and OblLemmas. So `Kernel.sound_of_chainsAt` (name
+      and statement unchanged) moves from Kernel.lean to KernelWarps.lean, or to a module that
+      imports it, and KernelCmd.lean, its one user in the library, imports that module (it is
+      not in KernelWarps' imports, so there is no cycle); the tests that name it import it too.
+   2. The per-thread part of the present proof (from `Grid.start_thread` to `Runs.of_chainsAt`,
+      Kernel.lean:359-382) becomes a lemma: for every thread `k < g.threads.size` and memory `m'`
+      of `P k`, `∃ me, Runs (c k) (Grid.thread g k) m' me ∧ P (k + 1) me`.
+   3. The statement has no premise `0 < volume L.block`, which `Kernel.sound_of_warps` takes: at
+      `volume L.block = 0` the grid has no thread (`Grid.start_size`) and the present proof
+      (`Seq.start_sound_inv` with no thread to run) stays; otherwise `Kernel.sound_of_warps`.
+   4. Its memory predicate after `i` warps is `P` at the warp's first thread,
+      `P (if h : i < ws.length then ws[i] else g.threads.size)`, `ws` the grid's warps
+      (`warps L g.threads.size`).
+   5. Each warp `k`'s `WarpSegs` is at `J = 0`: no shuffle, so `Piece.Wait.shflOk` at `J = 0` is
+      `rfl` and the keeping, the waits' memories and the phases' starts are about no `i < 0`;
+      the lanes' memories `M 0 j` are chosen in turn from the lemma of step 2 (by
+      `Classical.choose`, `M 0 (j + 1)` from `M 0 j` with `P (k + j)`), and each lane's run is
+      `RunsVia.of_runs` of its `Runs`.
+   6. `Q (M 0 len)` is `P` at the next warp's first thread: a warp's lanes are its threads
+      `k + j`, `j < (warpLanes L k).length`, and the next warp starts at
+      `k + (warpLanes L k).length`, or that is `g.threads.size` after the last warp. A lemma
+      about `warps` is missing for this: `warpsCover L (warps L N) 0 N = true`
+      (`warpsCover`, CanonBar.lean:827, the property `CanonRun.of_turns` takes), with the
+      index form `(warps L N)[i + 1]? = some (ws[i] + (warpLanes L ws[i]).length)` derived from
+      it.
+   7. The end: `P ws.length` is `P g.threads.size`, the `else` branch, and the checks are the
+      present premise's.
+
+   The cost: steps 2, 5 and 6 are new proof lines (about 25 moved, 30 new); the move changes
+   Kernel.lean and KernelCmd.lean, so every module that imports them is rebuilt (about 10
+   minutes, the full build).
+
+What they would replace in the two kernels' proofs (proof lines, prooflines.py; the families of
+the table in "What a generator would have to produce" are the start, the assembly, not bad and
+the trace's extension, which are library theorems already):
+
+| Kernel | Lemma (file:line) | Proof lines | By |
+|---|---|---|---|
+| gemv_kernel | `GemvSound.grid_end` (MojoProofTest/GemvSound.lean:283), the end of the run | 44 | `Kernel.sound_of_warps` |
+| | `GemvWarpRun.Lanes.grid_run_inv` (MojoProofTest/GemvWarpRun.lean:1367), the warps in turn | 117 | the same |
+| | `GemvWarpRun.Lanes.warp` (GemvWarpRun.lean:791) and `GemvWarpRun.Out.warp` (:1229), their `WarpRun.of_waits` calls | 18 and 14 | `WarpSegs.run` |
+| gevm_kernel | `GevmWarp1.grid` (MojoProofTest/GevmWarp1.lean:795) and `GevmWarp1.blocks` (:697), the grid's run | 43 and 67 | `Kernel.sound_of_phases` |
+| | `GevmWarp0.block` (MojoProofTest/GevmWarp0.lean:279) and `GevmWarp1.block` (GevmWarp1.lean:558), the block to its barrier and after it | 42 and 88 | the same |
+| | `GevmWarp0.warp` (GevmWarp0.lean:227) and `GevmWarp1.Warp.warp` (GevmWarp1.lean:375), each warp's run to the barrier and after it | 26 and 59 | `WarpSegsBar`, `WarpSegs` |
+
+What stays per kernel is what the premises ask: the memory invariant and its frame lemmas
+(gemv's `Pre.frame`, `warp_frame`, `row_eq`), the lane lemmas (gevm's `GevmWarp1.resume`, 26
+proof lines) and their symbolic premises, and the end's
+checks (`racy_ev`, `kept_ev`, `rows_of_loads`; gevm's `grid_bad`). Both kernels' theorems are
+at `sig` (`GPUProof.Kernel.Sound`, by `kernel_sound_sig`); for them the run part applies,
+`Kernel.run_of_phases` (KernelWarps.lean:410, by `PhaseRun.start_done`, CanonBar.lean:518, in
+place of `PhaseRun.start_sound`): it gives `kernel_sound_sig`'s run and done conjuncts, and the
+kernel gives not bad and the observation from the end memory's predicate.
+
+**gevm's phase to the barrier as a `WarpSegsBar`: what does not match yet.** `WarpSegsBar`'s
+lanes' runs (`RunsVia`, MojoProof/Sym/OblSeg.lean:78) go through all of each lane's waits to its
+end, the barrier's and the ones after it, from the memory the barrier's wait names (`dlv.2`);
+only the clause for `V` uses the part after the barrier, and the next phase's `WarpSegs` asks for
+it again. At a gevm warp the part after the barrier is `GevmWarp1.resume`'s run
+(MojoProofTest/GevmWarp1.lean:84) through the five shuffles, which needs a memory whose shared
+array holds binary32 values (its premise `hv`, :93). A lane's phase to the barrier has only
+`GevmWarp0.Bufs` (MojoProofTest/GevmWarp0.lean:46), which says nothing of the shared array's
+bytes, and the memory past the barrier is the block's, after all its warps. So at gevm the
+`WarpSegsBar` premise would need a memory built for that purpose (the shared array filled with
+binary32 bytes), besides each lane's memories `M 0 j` chosen in turn from `GevmWarp0.lane`'s
+runs (`GevmWarp0.lane`, :172, concludes an existential memory). A form whose lanes' runs stop at
+the barrier's wait (a `RunsVia` with no run to the end, and `WarpWait.of_waits` for it) removes
+the first; the reduction of gevm's `grid` and `blocks` waits for it. The prefix form below is
+that form. The second point needs no choice: `WarpSegsTo.of_inv` (KernelWarps.lean) takes the
+lanes' memories from `nextWait`, one function, from an invariant on each lane's run to the
+barrier's wait. The plan for gevm and its remaining obligations are in docs/proofs/gemv.md,
+item (e).
+
+**The prefix form: a phase's runs stop at its barrier (steps 1 to 5 built).** A phase to a
+barrier asks
+of each lane only its run to the barrier's wait; the run after the barrier is the next phase's
+premise, which `Kernel.sound_of_phases` already asks (`WarpSegs` or `WarpSegsBar` from the threads
+`T b (i + 1)` on the memory `P b (i + 1) 0`). The steps, as planned and then as built:
+
+1. `RunsUpto c ws t m` (MojoProof/Sym/WarpWaits.lean, by recursion on `ws` as `RunsVia`): for
+   each pair `(P, d)` of `ws` in turn, a run to a collective call (`ToWait`) whose wait meets
+   `P`, then the thread resumed with `d`'s value on `d`'s memory; after the last pair, nothing
+   (no run to the end and no final predicate). `RunsVia.upto`: a `RunsVia` through `ws` gives
+   `RunsUpto` through `ws.take n`, for every `n`.
+2. `WarpWait.of_upto`: `WarpWait.of_waits` with each lane's `RunsUpto` through its first `J + 1`
+   waits in place of its `RunsVia` through `N > J` waits to its end, and without the conclusion
+   about the run after the `J`-th wait. Its proof is `WarpWait.of_waits`' with `RunsUpto` in the
+   lanes' invariant. `WarpWait.of_waits` keeps its statement and becomes its corollary: the
+   prefix by `RunsVia.upto`, the run after the `J`-th wait by `RunsVia.drop_statusAt` (from a
+   `RunsVia` through `ws` and `statusAt` of its first `n` deliveries being the wait by `u`, the
+   `RunsVia` through `ws.drop (n + 1)` from `u` resumed with the `n`-th delivery; by induction on
+   `n`, `nextWait_eq` at each wait).
+3. `WarpSegsTo … bar l p V Q` (MojoProof/Sym/KernelWarps.lean): `WarpSegsBar`'s fields with no
+   `N` and no final predicates `F`, each lane's `RunsUpto` through its first `J + 1` waits, and
+   the clause for `V` without the run after the barrier: each lane's thread `u` waiting there
+   (`statusAt` of its first `J` deliveries), at `(fn.name, l, p)`, resumed with no value, is of
+   `V`. `WarpSegsTo.wait` is `WarpSegsBar.wait`'s conclusion from it (by `WarpWait.of_upto`);
+   `WarpSegsBar.to`: `WarpSegsBar … V Q` gives `WarpSegsTo … V Q` (`RunsVia.upto` and
+   `RunsVia.drop_statusAt` for `V`'s premise), so `WarpSegsBar.wait` (statement unchanged) is
+   `WarpSegsTo.wait` at it.
+4. `Kernel.run_of_prefixes` and `Kernel.sound_of_prefixes`: `Kernel.run_of_phases`' and
+   `Kernel.sound_of_phases`' statements with `WarpSegsTo` in place of `WarpSegsBar`, their proofs
+   the present ones. `Kernel.run_of_phases` and `Kernel.sound_of_phases` keep their statements
+   and become their corollaries (each phase's `WarpSegsBar` by `WarpSegsBar.to`);
+   `Kernel.sound_of_warps` (no barrier) is unchanged, a corollary of `Kernel.sound_of_phases`.
+   A premise is dropped, none added: the new theorems generalize the old ones (the old are their
+   instances at the `WarpSegsTo` that `WarpSegsBar.to` gives).
+   As built, the start's premises on the phases are one definition, `Kernel.Prefixes prog fn L c
+   g J T P` (KernelWarps.lean:297: the start's threads and memory, each phase to a barrier a
+   `WarpSegsTo`, the barrier's log, the last phase's `WarpSegs`, each block's end), which
+   `Kernel.run_of_prefixes` (:328) takes and `Kernel.sound_of_prefixes` (:446) asks for each
+   admitted start with the end checks: restating `Kernel.sound_of_phases`' 33 lines with one word
+   changed made the two a near-duplicate cluster (scripts/near_dups.py). `Kernel.run_of_phases`
+   (:410) and `Kernel.sound_of_phases` (:485) keep their statements and are corollaries
+   (`WarpSegsBar.to` at each phase); `WarpWait.of_waits` (WarpWaits.lean:270) and
+   `WarpSegsBar.wait` (:272) keep theirs and are corollaries of `WarpWait.of_upto` (:155) and
+   `WarpSegsTo.wait` (:225). The cut is `RunsVia.cut` (WarpWaits.lean:113).
+5. Tests. In MojoProofTest/KernelPhases.lean, `seg_to`: SymColl's warp's phase to the barrier as
+   a `WarpSegsTo` from SymChain's `waits` alone (`seg_bar` needs `lane` past the barrier too),
+   and the kernel sound by `Kernel.sound_of_prefixes` from it. The instance the review asks for
+   is a kernel of two warps parsed from text, one block of 33 threads (`launch2 1 1 33 1`, warp 0
+   of 32 lanes and warp 32 of one), a shared array `@sh` of two `i32`s: thread 32 stores 7 to
+   word 0 of `@sh` before the barrier, thread 0 loads word 0 after it and stores it to word 1,
+   every thread waits at the barrier. Its statement: `Kernel.Sound` at that launch, no
+   arguments, on the empty memory, admission 0, observation word 1 of the block's `@sh`, `R`
+   that it is 7, by `Kernel.sound_of_prefixes` with `J = 1`: phase 0's memory predicates name
+   word 0's bytes (undefined before warp 32 runs, 7 after), phase 1's word 1's. The phase-0
+   premise of warp 0 is a `WarpSegsTo` with no run past the barrier; warp 0's phase-1
+   `WarpSegs` is the one proof that reads `@sh`, from the memory after the barrier. The twin:
+   the same kernel with the store after the barrier, where thread 32's store and thread 0's load
+   of word 0 are in one phase, a data race, so the kernel is sound for no observation and `R`.
+   Built: `seg_to`, `prefixes` (`Kernel.Prefixes` at SymColl's one barrier), `sound` by
+   `Kernel.sound_of_prefixes` (statement unchanged), and the twin `bar_other_to` (no `WarpSegsTo`
+   at a barrier word other than 0; `bar_other` is now its corollary). The two-warp instance is
+   MojoProofTest/KernelTwoWarp.lean: `sound` (`Kernel.Sound prog kern L33 [] {} adm0 (obs shB)
+   (· = leBytes 4 7)`) by `Kernel.sound_of_prefixes` at `prefixes` (`J = 1`), each warp's phase
+   0 a `WarpSegsTo` (`seg_to`, by `WarpSegsTo.of_inv`) and its phase 1 a `WarpSegs` (`seg_end`);
+   the memory predicates are equalities with the memories each lane's run leaves in turn (`pm`),
+   not statements about word 0's and word 1's bytes as planned above. Its twin `race`
+   (`¬ Kernel.Sound progLate kernLate L33 [] {} adm0 o R` for every type `β`, observation `o` and
+   relation `R`) is `Kernel.replay_unsafe` at the race the checker reports.
+
+   **What is still done by hand there**, each a step the command does not take:
+   - the program: `kern` and `kernLate` are written in the parser's form and checked against
+     `importBytes text` by `#guard`, as MojoProofTest/SymCanonBar.lean does; no command imports
+     a text written in a test (`mojo_import` reads corpus files);
+   - the lanes' runs: `lanes` states each thread's run to the barrier and past it as `runTo`
+     equations on the memories the threads before it leave (`chain`, from `next`), decided by
+     the kernel one thread at a time (33 `interval_cases` goals, `kernel_rfl_late`);
+   - the phase premises: the thread predicates `T`, the memories `pm` and their seven
+     equations, the per-warp `WarpSegsTo` and `WarpSegs` witnesses (`J = 0`, the barrier wait
+     `bw`, the lanes' memories), and the case split over the block's two warps (`phase0`,
+     `phase1`); `mojo_kernel`'s `barrier` clause (below) would derive them from the summaries;
+   - the end checks: `racy`, `kept` and the observation decided on the last memory by
+     `decide +kernel` and `kernel_rfl`, as in the other tests.
+   Elaboration needs care: `subst` on an equation whose right side is one of these memories
+   evaluates it in the elaborator and runs out of heartbeats, so the proofs rewrite with
+   `P_iff` and the `pm_*` equations instead.
+
+**The command's clauses, in order.** After the ones it has (`reads`, `writes`, `scalars`,
+`pointers`, `map2`, `contract`, `alloca`), and before `loop` and `mat`:
+
+1. `segments`: a flag. The command cuts each block at the positions where `summarizeTo` or
+   `summarizeLife` gives a summary (its collectives and lifetime markers) and summarizes it by
+   `summarizePieces`, with the `alloca` flag; a block with no such position is summarized as
+   now. It adds `n.pieces_<l>` (the segments of block `l`, by `decide +kernel`), and for each
+   path the lane lemma in `RunsVia.of_fires`' form (`Piece.through`, then `RunsVia.of_fires`,
+   then `RunsVia.of_ends` to the `ret`), its `Piece.fires` premise left as the thread's
+   premise, as `RetWith` is now.
+2. `shfl i := mo, ofs, cl` (one per shuffle, in order): the mode, lane operand and clamp of the
+   `i`-th shuffle, which `Piece.Wait.shflOk` checks against the waits. Without a `barrier`
+   clause the command adds `n.sound_of` by `Kernel.sound_of_warps`, the shuffles' premises left
+   as premises; when `prog.shflNil` holds (`decide +kernel`), the keeping premise is closed by
+   `Program.shfl_nil`.
+3. `barrier i := bar` (one per barrier, in order): its number, a numeral below 16. The command
+   then adds `n.sound_of` by `Kernel.sound_of_phases`.
+
+The refusals, each with one message:
+
+- a collective call that the clauses do not list, or a listed one at no collective: the message
+  names the block, the position and the call, as LLVM text (`refusedText`,
+  MojoProof/Sym/Info.lean:58);
+- a segment that `summarizePieces` refuses: the message names the first statement it refuses,
+  as `refusalAt` (Info.lean:40) does for a whole block;
+- `segments` with `map2` or `mat` (their theorems are about whole blocks), or with a `loop`
+  clause whose loop has a collective in it (a loop's round is one path of whole blocks);
+- `shfl` or `barrier` without `segments`;
+- a global in address space 3 (a shared array): `map2` and `mat` refuse it today, and the
+  start's shared arrays need their own premises in `WarpSegsBar`, which this plan does not
+  give.
+
+**The first two steps, with their cost.**
+
+1. `Kernel.sound_of_warps`, `WarpSegs` and `WarpSegs.run` (MojoProof/Sym/KernelWarps.lean, a new
+   module that imports WarpRoute and CanonBar and is imported by nothing in the library), and
+   the test MojoProofTest/KernelWarps.lean: `sound40`, the kernel `kern` of
+   MojoProofTest/SymCanon.lean sound at one block of 40 threads (a warp of 32 lanes that shuffles
+   and one of 8 that skips the shuffle) on the empty memory, from `seg0` and `seg32`, each
+   warp's `WarpSegs` by SymCanon's lane lemmas, and a twin whose wait fails
+   `Piece.Wait.shflOk`. Two new modules, nothing else rebuilt: 13.4 s, 3.3 GB. Built.
+2. `Kernel.sound_of_phases`, `WarpSegsBar` and `WarpSegsBar.wait`, in KernelWarps.lean (it
+   imports WarpWaits), with the test MojoProofTest/KernelPhases.lean: SymColl's kernel
+   (MojoProofTest/SymColl.lean: a barrier, then two butterfly shuffles) sound at one block of 4
+   and of 8 threads on the empty memory, from SymChain's lemmas (`waits` for the runs to the
+   barrier, `lane` and `shfls` past it, `checks` for the trace), its blocks at the end the
+   start's; the twin, a wait at another barrier word, refused (`bar_other`). SymChain's `bar0`
+   is not used: the theorem builds the block's `BlockBar` itself, by `BlockBar.of_waits`. Three
+   modules built (KernelWarps and its two tests): 17.6 s, 3.3 GB. Built.
+
+The clauses come after these two: they change MojoProof/Sym/KernelCmd.lean, so every module
+that imports it is rebuilt, about 10 minutes (the full build of the `alloca` clause's change
+took 10.5 minutes).
+
 ## Tests
 
 - `MojoProofTest/Sym.lean`: `vector_addition`'s blocks `%4`, `%21`, `%30` and `%31` accepted, and
@@ -484,6 +961,17 @@ Left to the user:
   for every bound up to `2 ^ 60` (`cnt_run`). `cnt2` is two loops in sequence and `nest` two nested
   loops, each run on one bound and one memory (`cnt2_run`, `nest_run`). Twins break a bound, an
   invariant and a header's position, and `naive_latch_refusal` shows a refused latch.
+- `MojoProofTest/KernelWarps.lean`: `Kernel.sound_of_warps` on SymCanon's kernel at one block of
+  40 threads, on the empty memory, at address choice and oracle 0 (`sound40`): warp 0's 32 lanes
+  shuffle (`seg0`) and warp 32's 8 lanes skip the shuffle (`seg32`). The twin is a lane operand
+  of 8 in place of 16, which fails `Piece.Wait.shflOk`.
+- `MojoProofTest/KernelPhases.lean`: `Kernel.sound_of_phases` on SymColl's kernel (a barrier,
+  then two butterfly shuffles) at one block of 4 and of 8 threads, on the empty memory, at
+  address choice and oracle 0 (`sound`; `run`, the run to a done grid by
+  `Kernel.run_of_phases`): the phase to the barrier by `WarpSegsBar` (`seg_bar`),
+  the phase past it by `WarpSegs` (`seg_end`), the trace's checks by SymChain's `checks` and the
+  blocks at the end the start's (`blocks_end`). The twin: no `WarpSegsBar` at a barrier word
+  other than 0 (`bar_other`).
 
 Each test covers the program, contexts, memories and frames it names. The theorems it
 instantiates hold for every program, block and path the checkers accept.

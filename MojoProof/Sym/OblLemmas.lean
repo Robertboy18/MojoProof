@@ -717,12 +717,14 @@ theorem gep_buffer {l : Layout} {M m : Mem} {fl : GepFlags} {src : Ty} {s a c si
     pure, Except.pure, hKW]
   have e : ((K : Int) * (l.size src : Int)) = ((K * l.size src : Nat) : Int) := by push_cast; rfl
   rw [e, hbm]
+  have hKm : (K : Int) % ((2 ^ (l.ptr a).1 : Nat) : Int) = K :=
+    Int.emod_eq_of_lt (by omega) (by exact_mod_cast hKW)
   split
   · next hc =>
     exfalso
     rw [hpow] at hc
     rcases hc with (⟨-, h | h | h⟩ | ⟨-, h | h⟩) | ⟨-, h | h | h⟩
-    all_goals first | omega | (rw [hout] at h; cases h)
+    all_goals first | omega | (rw [hout] at h; cases h) | (rw [hKm, e] at h; omega)
   · rfl
 
 /-- Cell `(r, k)` of a row-major `R × S` matrix of cells of `z > 0` bytes starts below `size`

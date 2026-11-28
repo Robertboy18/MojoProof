@@ -5,7 +5,7 @@ kind: construct
 ref: LLVM LangRef 24.0.0git #llvm-smax-intrinsic
 quote: "Return the larger of %a and %b comparing the values as signed integers."
 lean: MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.intMinMax, MojoProof.Sym.exec_minmax
-corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll
+corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gemv_dev2026112705/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv_dev2026112705/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll
 tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L3
@@ -19,7 +19,7 @@ LangRef's section on the intrinsic (the quote is the section's first sentence). 
 
 ## Corpus
 
-84 of the 116 corpus files use it (464 uses); `corpus` lists the first 5 in path order. The members called: `llvm.smax.i64`, `llvm.smin.i64`.
+90 of the 127 corpus files use it (476 uses); `corpus` lists the first 5 in path order. The members called: `llvm.smax.i64`, `llvm.smin.i64`.
 
 ## GPU runs
 

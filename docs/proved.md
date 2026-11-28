@@ -4,13 +4,54 @@ MojoProof reads the LLVM IR file that `mojo build --emit llvm` writes for each G
 it a semantics in Lean (integers, byte memory, threads, barriers, warp shuffles, and IEEE floats
 through [FloatLib](https://github.com/lean-dojo/FloatLib)), and proves theorems about it. The
 semantics leaves two things to choices: an address choice (where the blocks a launch allocates
-are placed) and a NaN choice (the payload of each NaN result, and whether and how a `contract`
-operation is fused). A kernel theorem (`Kernel.Sound`) says that, at every address choice and NaN
+are placed) and a float choice (the payload of each NaN result, whether and how a `contract`
+operation is fused, and the other float freedoms of [TRUST.md](TRUST.md) T7). A kernel theorem (`Kernel.Sound`) says that, at every address choice and float
 choice it admits, the launch starts and has no undefined behavior, no unsupported operation, no
 data race and no deadlock, that no write touches bytes that a load marked `!invariant.load` reads,
 that every run terminates, that every schedule gives the same result, and that the result meets
 the spec. Each line below gives its scope (every program, a family of kernels, one named kernel,
 one intrinsic, every formula or every float format) and the Lean declaration.
+
+A spec-free kernel theorem (`Kernel.Safe`, MojoProof/Kernels/Safe.lean) is `Kernel.Sound` at the
+relation that holds of every result: all of the above but the spec. Every kernel theorem gives it
+(`Kernel.Safe.of_sound`, for every program, kernel, launch, arguments, memory, admission,
+observation and relation); its instance is a test at `vector_addition`
+(MojoProofTest/SafeVadd.lean `vadd_safe`). The spec-free mode proves it from the function alone,
+with no specification: `Kernel.safe_of_admits` (MojoProof/Kernels/SafeCmd.lean), for every
+program, kernel and list of paths that `coversEntry` accepts and every launch, arguments and
+memory whose pointer bytes are known, gives `Kernel.Safe` for the observation of the blocks at the
+admission `Kernel.Admits`: the start succeeds, the block checker accepts each thread's path, and
+the trace has no data race and keeps `!invariant.load`'s promise, decided by evaluation at each
+choice (not a formula of the sizes). The command `mojo_safe` applies it to one kernel; it proves
+the two `bitonic_global_step` kernels of Modular's tests (MojoProofTest/SweepSafe.lean
+`bitonicT.safe`, `bitonicF.safe`, one kernel each, every launch of the admission, each with a
+witness at one valid launch), the sweep's second round ([proofs/safe.md](proofs/safe.md),
+roadmap/kernels/sweep.tsv: 2 of 820 attempts proved; a loop, a warp shuffle or a CTA barrier stops
+the rest). roadmap/llvm-ir/kinds.tsv gives each soundness term of each listed theorem its kind,
+`correct` or `safe`, and the coverage history counts only the `correct` ones.
+
+The semantics follows LLVM's LangRef where the corpus reaches it. A `byval` copy lies where
+LangRef's allocated objects may (`place`, `launchArgs_placed`): at a nonzero aligned address `x`
+with `x + size < 2 ^ w` and `size < 2 ^ (w - 1)` for `w`-bit pointers; an address choice outside
+these rules is moved to the lowest placed address, and every placed aligned address is some choice's
+(`place_onto`). A copy with no placed address, or whose type has padding (LangRef copies the bytes,
+the semantics re-encodes the typed value), is unsupported (`Func.byvalPlaced`). A store to a stack
+object outside its lifetime, and every access to a returned frame's object, is undefined behavior
+(`Mem.check`); a load from the function's own `alloca` outside its lifetime, poison in LangRef, is
+unsupported (`deadLoad`); a callee's load from its caller's `alloca` outside its lifetime is still
+undefined behavior, stricter than LangRef ([TRUST.md](TRUST.md) T7). A lifetime marker takes poison
+or a value an `alloca` of the function defines (`Func.lifetimeOk`); a struct index is an `i32`
+constant (the importer and the evaluator refuse any other) and selects its field by its value; an
+`f0x` literal has exactly its type's number of digits. `getelementptr nuw` reads its indices
+unsigned. `volatile` accesses, string attributes other than those of `strAttrs`, and a launch with
+another number of arguments than the kernel's parameters or a block beyond its `nvvm.maxntid` (the
+product of its sides) or `nvvm.reqntid` (each side), given as string attributes or as `i32`
+`!nvvm.annotations` entries, are unsupported, and so is any other annotation key than `kernel`
+(`Func.checkLaunch`). `griddepcontrol.wait` and `griddepcontrol.launch_dependents` do nothing: a
+launch is one grid with no prerequisite or dependent grid in flight, and a module in which a
+function calls either while its target (its own `"target-cpu"`, else the module's: the one value its
+functions agree on) is missing, ambiguous or below `"sm_90"` is unsupported (`Func.check`,
+`Func.griddepBad`; [TRUST.md](TRUST.md) T19).
 
 - **The core** (`GPUProof/`), for every machine: a signature `Sig`, trace events, a race check
   `racy`, one pass that gives each position the set of the positions that happen before it and
@@ -186,11 +227,18 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   `N = 32 · L.grid .x`, every `K` with `32 ∣ K` and every `N`, `K < 2 ^ 31` with `K N < 2 ^ 29`,
   and every closed caller memory with a writable output of `N` words and read-only buffers
   holding the vector and the matrix row-major (`MojoProofTest.GevmSound.kernel_sound`, by
-  `MojoProofTest.Theorem0.sound_sig` from `GevmWarp1.grid`, `GevmSound.grid_bad` and
-  `GevmSpec.cols_holds`). The admission is that the address choice puts each block's 4096-byte
-  shared array below `2 ^ 32`; the rule is `GevmSpec.ColsRule`, which is
-  `Spec.vecMat (vecMatLaneGrade 32 5 ⌈m / 32⌉)`; against TorchLean's `.vecMat` at every
-  monotone grade it is `gevm_torchLean`, and with every premise proved at one block,
+  `MojoProof.Sem.kernel_sound_sig`, through `MojoProof.Sem.sound_sig`, from `GevmWarp1.grid`,
+  `GevmSound.grid_bad` and `GevmSpec.cols_holds`). The steps both kernels' theorems share are
+  library theorems for every program (MojoProof/Sym/SigKernel.lean): the starts are by
+  `Grid.start_of_check`, which also asks the launch check `Func.checkLaunch` (gevm's start asks
+  `volume L.block ≤ 1024`, `GevmSound.starts`, which `kernel_sound`'s launch gives), gevm's
+  `grid_bad` by `Grid.not_bad_cells` and the store extensions of the trace by `Ext.store`, and
+  both `kernel_sound`s are uses of `kernel_sound_sig`; the hand-written proof lines left are 2352
+  in gemv's per-kernel files and 1148 in gevm's. The admission is that the address choice puts
+  each block's 4096-byte shared array below `2 ^ 32`; the rule is `GevmSpec.ColsRule`, which is
+  `Spec.vecMat (vecMatLaneGrade 32 5 ⌈m / 32⌉)`; against TorchLean's `.vecMat` at that grade,
+  `vecMatLaneGrade 32 5 ⌈m / 32⌉` (the importer's grade at `.matVec` is any monotone one), it is
+  `gevm_torchLean`, and with every premise proved at one block,
   `N = K = 32`, it is `sound1024` and `torch1024`. Still assumed: the launch premises, among them
   `N = 32 · L.grid .x` (the IR has no guard against `N`, and at `N < 32 · L.grid .x` the last
   block reads and writes past its buffers). The kernel theorem is hand-proved, not generated by
@@ -272,21 +320,44 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   and step tests, second bound test and `getelementptr` are the view's offsets and the guarded
   tile's bound at every block size, row length, thread and step, under 64-bit word premises, by
   the semantics' word operations (`ln_words`, `ln_offAt`, `ln_gep`, `ln_second`; the premise's
-  mutant `ln_wrap` at `n = 2^63`); this is not a run theorem. The loop's run is proved at the
-  corpus file's block size 128 (MojoProofTest/LnRun.lean). For one thread, every launch, thread
-  index `tid < 1024`, row length `n < 2 ^ 32` and memory with the four row buffers of `4 n`
-  bytes, the run from the loop's entry to its exit stores 4 bytes at each float of
-  `lnStores 128 n tid` of the output and changes no other byte (`MojoProofTest.LnRun.run`,
-  `run_entry`; the hand-proved lemma `run_from`; one round per value of the guard,
-  `MojoProofTest.LnRound.round_true`, `round_false`). The floats stored are not named, and the
-  mean and inverse deviation are given registers. At a buffer of exactly `4 n` bytes the
+  mutant `ln_wrap` at `n = 2^63`); this is not a run theorem. The loop's run is proved at
+  every block size `B` of the corpus family (the files
+  ln_rowwise_block_t0_r1_ax0_w1_bs{64,128,256,1024}, which differ only in `B`) with `0 < B`,
+  `B ≤ 2 ^ 32` and the path checker's covers `LnCovers B`, for the family's function `lnFam.fn B`
+  in a context of the bs128 file's program `ln.prog` (`runB`, `run_entryB`, the hand-proved
+  `run_fromB`; MojoProofTest/LnRun.lean, [docs/proofs/layernorm.md](proofs/layernorm.md)). For
+  one thread, every launch, thread index `tid < 1024`, row length `n < 2 ^ 32` and memory with the
+  four row buffers of `4 n` bytes, the run from the loop's entry to its exit logs, per float of
+  `lnStores B n tid` in order, three 4-byte reads of `x`, `g`, `b` and one 4-byte write of the
+  output, and no other event
+  (`MojoProofTest.LnRun.LnTrace`). It changes no other byte, and the 4 bytes at each such float
+  encode `%503` by the semantics' float rules (`LnOut` at `LnBytes`, `lnVal`): FloatLib's fused
+  `fma` or the separately rounded `add`, as the context's oracle chooses, each with a free NaN
+  payload (`lnVal_cases`). A finite one is the float library's layer norm output
+  (`lnVal_finite`) and, given bounds on the errors of the mean and the inverse deviation, has its
+  mixed error bound (`lnVal_error`, `LnBytes.error`) (`run`, `run_entry` and `run_from` at the
+  bs128 file, their statements unchanged; one round per value of the guard,
+  `MojoProofTest.LnRound.round_trueB`, `round_falseB`). At 64, 256 and 1024 the files' loop
+  blocks summarize to the family's at `B` and the covers hold, and the run is `run_entryB` at
+  that `B` (MojoProofTest/LnFamily.lean, `run_entry_64`, `run_entry_256`, `run_entry_1024`, with
+  `lnStores B n tid` evaluated at one row and thread). MojoProofTest/LnRunTest.lean builds the memory from three tensors and proves
+  every premise (`run_mem`, `run_floats`; `run_300` and `float_43` at `n = 300`; the mutant
+  `short`). With the float library's Welford words as the mean and inverse deviation, each
+  finite float stored is `lnorm`'s (`run_lnorm`) and, for `n ≤ 2 ^ 24`, within FloatLib's mixed
+  error of TorchLean's `layerNorm` (`run_torch`, every premise at one row in `torch_iota`). Not
+  proved: the code that computes the mean and inverse deviation (they are given registers), the
+  run of each of the files at 64, 256 and 1024 for its own function in its own program (it
+  differs from the family's in 5 of 60 blocks, none in the loop, and in names), and the whole
+  launch. At a buffer of exactly `4 n` bytes the
   `getelementptr inbounds` past the row is poison, not a fault, and the guard skips its store
   (`MojoProofTest.LnGep.ln_gep_past`, `ln_gep_row`).
 - **Schedule independence**, every program: from a memory whose stored pointers name only blocks
   it has allocated, the steps of a launch are confluent up to faults and races (`Grid.confluent`),
   so one run to the end with no fault, no race and no broken `!invariant.load` promise shows that
-  every schedule of that launch is safe, race free, makes progress, terminates and gives the same
-  result, for every observation that reads only the memory's blocks (`Grid.start_sound`); the
+  every schedule of that launch, at the run's address choice and float choice, is safe, race free,
+  makes progress, terminates and gives the same result for every observation that reads only the
+  memory's blocks (`Grid.start_sound`; a run at another address or float choice is not covered and
+  may differ); the
   same statement, at the same premise, follows from Theorem 0 at `sig`
   (MojoProofTest/Theorem0.lean).
 - **The block checker is sound**, every program: a block, a path of blocks or a path to `ret` that
@@ -321,7 +392,8 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   corollary by `Valuation.allocsWith_nil`). A two-block path with an `alloca` in each block,
   parsed from LLVM text, meets these premises at one launch of one thread and runs to its end with
   both blocks dead, which the interpreter's steps confirm (MojoProofTest/SymAlloca.lean
-  `path_walk`, `path_retWith`, `path_dead`, `path_steps`). Loops through blocks with `alloca`
+  `path_walk`, `path_retWith`, `path_dead`, `path_steps`), and as a kernel theorem through the
+  command (`pathA`, `pathA_sound`). Loops through blocks with `alloca`
   (`coversChainsAt`) are sound for every program too, and the blocks the cleanup sets dead are
   exactly those the run adds to the start memory (`Runs.of_chainsAt`, `Mem.Adds`). So a
   postcondition that reads only the start memory's blocks holds after the cleanup, with the run's
@@ -414,13 +486,16 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   Tests: `Launch.k` on
   one block of two threads (MojoProofTest/SymWait.lean); a kernel with a barrier and two butterfly
   shuffles on one block of four threads, sound by `PhaseRun.start_sound` at the block's run (the
-  barrier a `BlockBar`, the shuffles `WarpShfl`s), each lane holding the sum of the four thread
+  barrier a `BlockBar`, the warp past it by `warp_route`: `WarpRun.of_waits` with each shuffle by
+  `WarpRun.shfl_of`), each lane holding the sum of the four thread
   numbers, with an open-goal twin for a missing fire (MojoProofTest/SymColl.lean). A thread's
   first wait, at its named instruction, comes from its segments (`Seg.Through.wait`). Test: a
   barrier and two butterfly shuffles on one block of 4 and of 8 threads, sound by
   `PhaseRun.start_sound` with the phases' runs from invariants on each phase's threads and
-  memories (`BlockRun.of_inv`, `WarpWait.of_inv`, `WarpRun.of_inv`; `WarpWait.of_inv` at `J = 1`
-  from a shuffle before the waits, `shfl_wait`), with an open-goal twin
+  memories (`BlockRun.of_inv`, `WarpWait.of_inv`; the warp past the barrier by `warp_route`;
+  `WarpWait.of_waits` (MojoProof/Sym/WarpWaits.lean) at `J = 1` from the lanes' runs through
+  their waits and the first shuffle's premise from the waits, with each lane's status at its wait,
+  `statusAt`, `shfl_wait`; its earlier statements are `example`s from it), with an open-goal twin
   (MojoProofTest/SymChain.lean).
 - **A start through warps in turn**, every program and launch: the canonical run at one level
   takes the warps in turn; a warp's lanes run in turn to their next shuffle, the shuffle fires
@@ -452,7 +527,31 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   gets `poison` (`poison70`); the shuffle does not fire while a lane still runs (`early`) or with
   a lane at another mode (`mixed`), and a mask that is not full gives no `WarpShfl` (`halfMask`); with `noundef`, warp 64's deliveries
   at block size 70 fault, and `range(i32 0, 16)` turns an out-of-range delivery into `poison`
-  (`attrs`) (MojoProofTest/SymCanon.lean).
+  (`attrs`) (MojoProofTest/SymCanon.lean). From each warp's lanes' runs through their waits in
+  the segment checker's form (`WarpSegs`: `RunsVia`, `Piece.Wait.shflOk`, the declarations'
+  keeping), the kernel theorem for kernels whose collectives are shuffles, for every program,
+  launch, arguments, memory, admission, observation and rule (`Kernel.sound_of_warps`,
+  MojoProof/Sym/KernelWarps.lean); tested on SymCanon's kernel at one block of 40 threads
+  (MojoProofTest/KernelWarps.lean `sound40`); no corpus kernel uses it yet. From each block's
+  phases between its barriers, each warp's phase to a barrier in the segment checker's form
+  (`WarpSegsBar`: the lanes' `RunsVia` through their waits, the barrier call on a word below 16
+  at one block and position, the lanes resumed there of the next phase's predicate) and its last
+  phase as `WarpSegs`, the kernel theorem for every program, kernel, launch, arguments, memory,
+  admission, observation, relation, barrier count and phases (`Kernel.sound_of_phases`,
+  MojoProof/Sym/KernelWarps.lean); `Kernel.sound_of_warps` is its case with no barrier. Its run
+  part is its own theorem, `Kernel.run_of_phases`: from the same premises without the end
+  checks, each start runs to a done grid whose memory is of the last memory predicate, the run
+  and done parts of the premise of `kernel_sound_sig`. Tested on SymColl's hand-written kernel (a
+  barrier, two butterfly shuffles) at one block of 4 and of 8 threads on the empty memory, the
+  blocks at the end the start's and the trace race-free (MojoProofTest/KernelPhases.lean `sound`,
+  `run`), with a twin at another barrier word; the premises are supplied, not generated; no
+  corpus kernel uses it yet. Both theorems are corollaries of `Kernel.sound_of_prefixes` and
+  `Kernel.run_of_prefixes`, where each warp's phase to a barrier is a `WarpSegsTo`: the lanes'
+  runs stop at the barrier's wait (`RunsUpto`), and the run after it is asked once, by the next
+  phase's premise (`Kernel.Prefixes`); `WarpSegsBar.to` gives a `WarpSegsTo` from a
+  `WarpSegsBar`. Tested on SymColl's kernel at 4 and 8 threads (KernelPhases.lean `seg_to`,
+  `prefixes`, `sound`, with the twin `bar_other_to`); a kernel of two warps parsed from text uses
+  them (MojoProofTest/KernelTwoWarp.lean `sound`, with the twin `race`).
 - **A start through blocks, barriers and warps in turn**, every program, launch, contexts, threads
   and memory (MojoProof/Sym/CanonBar.lean): the canonical run at the phase level takes the blocks in
   turn (`PhaseRun`) and a block's phases in turn (`BlockRun`); in a phase the block's warps run in
@@ -493,7 +592,13 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   command applies it to one named kernel at a time. It takes plain pointer parameters (a
   `pointers` clause) and loops in sequence, one `loop` clause per loop, keyed by the loop header's
   position, with the user's precondition, invariant, trip count and postcondition. It refuses a
-  nested loop, and a loop that has no clause.
+  nested loop, and a loop that has no clause. With `alloca` in the checker's fragment, the same
+  holds with each thread's predicate on the memory its path leaves with the blocks it adds, its
+  `alloca` blocks, dead (`Kernel.sound_of_chainsAt`, for both values of the flags `alloca` and
+  `contract`; `Mem.Dead`); `mojo_kernel`'s `alloca` clause applies it (tested on the two-block
+  alloca path of one thread, MojoProofTest/SymAlloca.lean `pathA_sound`), and refuses it with
+  `loop`, `map2` and `mat`. With the flag, gemv_kernel stops at statement 17 of `%6`, its first
+  `shfl.sync.idx` (`gemvA`); without it, at statement 0, an `alloca`.
 - **Loops**, every program: a loop the checker accepts runs its rounds back to its header for every
   trip count whose rounds meet their conditions (`Block.sound_loop`), and a thread runs through a
   sequence of loops, nested ones included, to its end, with or without `alloca`s in the loops'
@@ -501,7 +606,7 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   run adds (`Mem.Adds`, `Runs.of_chainsDead`). This is only partly
   automated: the invariant and the trip count are the user's, and the rounds' conditions are
   closed by `decide +kernel` at a concrete launch. The kernel theorems that the `loop` clause gives
-  are for test programs, each at one memory, address choice and NaN choice (the naive matrix
+  are for test programs, each at one memory, address choice and float choice (the naive matrix
   product's theorem below is not: it holds for every memory, input and launch of its shape): the
   counting loop "for i in [0, n): p[i] = i" run by one thread with `n = 3`
   (`MojoProofTest.KernelLoop.kernelK`, the generated `loopK.sound_loop` with no evaluation of the
@@ -511,16 +616,16 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   sequence the command gives the thread's run (`MojoProofTest.KernelLoop.cnt2k_retLs`).
 - **Binary elementwise kernels**, a family: every kernel whose parameters are three `byval` structs
   that each hold a buffer pointer (two inputs and an output, as Mojo passes tensors) and an `i32`
-  count, at one NaN choice and every address choice, meets the kernel theorem for memories and
+  count, at one float choice and every address choice, meets the kernel theorem for memories and
   inputs that meet `Map2.Pre`, given that the launch starts and that each thread takes a checked
   path to `ret` storing the spec's bytes (`Kernel.sound_map2`). For every kernel with this theorem,
   at each output cell `k` below `n`, below the inputs' length and below the number of threads `T`, a
   finite output float is the operation applied to the inputs' cells `k` (`Kernel.map2_real`); when
-  the theorem holds at every NaN choice, two runs give at that cell equal floats or two floats that
+  the theorem holds at every float choice, two runs give at that cell equal floats or two floats that
   are each NaN or infinite (`Kernel.map2_finEq`), so a finite output is the same at every address
-  choice and NaN choice (`FinEq.eq_of_isFinite`). With `T` threads the theorem covers the first
+  choice and float choice (`FinEq.eq_of_isFinite`). With `T` threads the theorem covers the first
   `min n T` cells, so all `n` cells when `T ≥ n` (`Kernel.map2_min`). The kernel theorem itself
-  holds for any number of `byval` buffer structs and a count of any type, at one NaN choice and
+  holds for any number of `byval` buffer structs and a count of any type, at one float choice and
   every address choice (`Kernel.sound_mapN`, of which `Kernel.sound_map2` is the three-struct
   case); `mojo_kernel` still generates only the three-struct `i32` shape. The theorem holds with
   the checker's flag `contract` too (`Kernel.sound_map2With`); `mojo_kernel`'s `map2` clause takes
@@ -531,16 +636,35 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   (the arguments and the pointers stored in memory name only its blocks; the inputs and the output
   are distinct live global buffers of at least `n` floats, 4-byte aligned, whose addresses do not
   wrap; the inputs are read-only and hold `x` and `y`, the output is writable; `n ≤ N` for inputs
-  of length `N`, and `n < 2^31`), every address choice and every NaN choice, the kernel theorem
+  of length `N`, and `n < 2^31`), every address choice and every float choice, the kernel theorem
   holds: each output cell `k` below both `n` and the launch's number of threads holds `x k + y k`
   rounded to binary32, and the rest of the output and every other block of that memory are
-  unchanged (`MojoProof.Kernels.vadd.correct`). At those cells, where an output float is finite it
-  is TorchLean's `x + y` at that cell, and its real value is the real sum rounded to binary32
+  unchanged (`MojoProof.Kernels.vadd.correct`; at every float format: `vadd.family`). At those
+  cells, where an output float is finite it is TorchLean's `x + y` at that cell, and its real
+  value is the real sum rounded to binary32
   (`MojoProofTest.Kernel.vadd_real`, in the tests).
 - **A vector multiply kernel**, one kernel written for this repository: the same theorem
   (`MojoProof.Kernels.vmul.correct`). Where an output float is finite it is TorchLean's `x * y`
   at that cell, and its real value is the real product rounded to binary32
   (`MojoProofTest.Kernel.vmul_real`, in the tests).
+- **The three elementwise kernels at every float format** (`vector_addition`, vector_multiply,
+  vector_subtraction): for every format `t` (half, bfloat, float, double), the kernel's Float32
+  program with its float accesses and operation retyped at `t` (`Program.retype`) is sound under
+  the same premises at `t` (alignment that `t`'s divides, `Map2.Pre` at `t`), each output cell
+  `k < min n (volume L.grid * volume L.block)` holding `x k + y k` (`*`, `-`) rounded at `t` and
+  the rest of the output unchanged (`Map2.Pre` does not ask the launch to cover the `n` cells;
+  `MojoProof.Kernels.vadd.family`, `vmul.family`, `vsub.family`; each is `vadd.sound_retype`, for
+  every kernel with `vector_addition`'s layout and parameters and every launch that the retyped
+  function's launch check `Func.checkLaunch` passes, at its kernel; the three kernels have no
+  launch limit, so the families do not ask it). At float it is the
+  Float32 theorem's statement, for all three kernels. At half and bfloat, for vector_addition
+  only, the retyped function is the f16 and bf16 compile's up to its name (MojoProofTest/Formats.lean,
+  where the two programs also agree on the intrinsics, globals, attribute groups and the
+  declarations the kernel calls, and both kernels check, by `rfl`; vector_multiply and
+  vector_subtraction have no f16 or bf16 corpus file), and the kernel theorems at those two files
+  are generated there (`MojoProofTest.v16.correct`, `MojoProofTest.vb16.correct`, in the tests),
+  not derived from the family: the theorem that would carry the family to the files' programs is
+  planned in [docs/proofs/elementwise.md](proofs/elementwise.md), not built.
 - **Modular's naive matrix product** (`matmul_kernel_naive`), float32 compiled with
   `fmul contract`, at every row stride of `A`, `B` and `C` (a family with the three stride
   constants as parameters; the multistage GEMM test's specialization and tests/corpus/naive_k512
@@ -585,7 +709,7 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   promise, from a memory whose stored pointers name only blocks it has allocated and a start whose
   reachable grids all meet the labelling's memory condition (`Labels.MemOk`), gives safety, race
   freedom, progress, termination and determinacy for every memory that differs from the first only
-  in the data bytes of the payload blocks, at every NaN choice (`Grid.skel_run`, `Grid.skel_six`).
+  in the data bytes of the payload blocks, at every float choice (`Grid.skel_run`, `Grid.skel_six`).
   At the kernel level, for every program, a set of address choices with one such run each gives the
   kernel theorem for the blocks and the trivial relation (`Kernel.skel_sound`), and one final grid
   per admitted choice whose observation meets the spec gives it for that spec
@@ -596,7 +720,7 @@ one intrinsic, every formula or every float format) and the Lean declaration.
   (`MojoProofTest.SkelVadd23.skel_vadd23`), with `Labels.MemOk` from each thread's run alone
   (`Labels.MemOk.of_threads`, `memOk23`). `MojoProof.Kernels.vadd.correct` does not use this route.
 - **The dot-product loop's floats**, every IEEE format and every length: the loop
-  `acc := fadd acc (fmul a b)` from `+0`, with each `contract` step fused or not as the NaN choice
+  `acc := fadd acc (fmul a b)` from `+0`, with each `contract` step fused or not as the float choice
   says (`dotLoop`), is FloatLib's in-order dot product `Model.dotInOrder` when contraction is off,
   the same word or both NaNs (`dotLoop_nanEq`, `dotLoop_eq_dotInOrder`); with contraction on, at
   every fusion choice, a finite result is within `dotBound fmt K T` of the exact sum Σ aₖbₖ, where
@@ -880,6 +1004,11 @@ Not proved yet:
 - that a grid run reaching `ldmatrix` or `cp.async` computes the models above: the grid does
   not dispatch them yet; and a grid `mma` other than bf16 or f16 inputs with an f32 accumulator
   on finite words;
+- the naive matrix product's, gemv_kernel's and gevm_kernel's theorems at their Mojo
+  1.3.0.dev2026112705 compiles (tests/corpus/mgemm_dev2026112705/, gemv_dev2026112705/): that
+  compiler folds blocks of their control flow, and gevm's shared tile has another type, so the
+  hand-written chains and runs do not apply; the vector kernels' compiles there are the pinned
+  files' bytes, so their theorems hold at them (MojoProofTest/Nightly.lean);
 - anything after the LLVM IR: LLVM's optimizer, the NVPTX backend, `ptxas`, the driver and the GPU;
 - the lexer, parser and printer, which are checked on every corpus file and at every import
   (printing gives back the file's tokens) but not proved.

@@ -332,6 +332,10 @@ theorem shared_above {l : Layout} {gs : List Global} {dyn c : Nat} {ch : Nat →
 theorem launchArgs_above {l : Layout} {m m' : Mem} {n : Nat} {fn : Func} {args vs : List Val}
     {ch : Nat → Nat} (h : launchArgs l m n fn args ch = .ok (m', vs)) (hm : m.FreeAbove) :
     m'.FreeAbove := by
+  unfold launchArgs at h
+  split at h
+  swap
+  · cases h
   refine foldlM_inv (P := fun r => r.1.FreeAbove) (fun r pv r' hs hr => ?_) _ _ h hm
   obtain ⟨m1, acc⟩ := r
   obtain ⟨⟨p, v⟩, i⟩ := pv
@@ -358,6 +362,8 @@ theorem start_above {prog : Program} {fn : Func} {L : Launch} {args : List Val} 
     g.mem.FreeAbove := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h

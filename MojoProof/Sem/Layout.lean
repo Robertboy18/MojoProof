@@ -149,6 +149,25 @@ mutual
     | t :: ts => l.fieldsEnd (roundUp off (l.align t) + l.size t) ts
 end
 
+mutual
+  /-- Type `t` has no padding in layout `l`: every byte of its allocation size holds bits of its
+  values. A scalar or vector whose store size is its allocation size, an array of such elements,
+  and a struct whose fields have none and lie back to back up to its allocation size; the types
+  of no value (`void`, `label`, `metadata`) have no byte. A `byval` copy of a value of a type
+  with padding would lose the padding bytes the caller's copy holds (`launchArgs`). -/
+  def dense (l : Layout) : Ty → Bool
+    | .arr _ t => l.dense t
+    | .struct fs => l.denseFrom 0 fs && l.fieldsEnd 0 fs == l.size (.struct fs)
+    | .void | .label | .metadata => true
+    | t => l.storeSize t == l.size t
+
+  /-- Fields `fs` laid out from offset `off` have no padding: each starts where the one before
+  ends (its alignment adds nothing) and has none. -/
+  def denseFrom (l : Layout) (off : Nat) : List Ty → Bool
+    | [] => true
+    | t :: ts => roundUp off (l.align t) == off && l.dense t && l.denseFrom (off + l.size t) ts
+end
+
 /-- The offset of field `i` of fields `fs` laid out from offset `off`. -/
 def fieldOffset (l : Layout) (off : Nat) : List Ty → Nat → Nat
   | [], _ => off

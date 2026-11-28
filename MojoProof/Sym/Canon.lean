@@ -28,9 +28,12 @@ in turn, with their barriers, are the next level up (`PhaseRun`, MojoProof/Sym/C
   collective and to its end, each phase's shuffle firing from every statuses they allow, and on
   each warp's runs (`Seq.ToWait.of_inv`, `Seq.of_inv` on the lanes, moved to the warp's threads
   by `Seq.ToWait.warp` and `Seq.warp`).
-* `WarpRun.of_waits`: the run from each lane's run through its waits (`RunsVia` with
-  `Piece.Wait.via`'s predicates, as `RunsVia.of_fires` concludes) when the waits' calls,
-  arguments and memories are a shuffle's and the deliveries `Grid.fire`'s (`WarpRun.of_inv`).
+* `WarpShfl.of_waits`: one shuffle (`WarpShfl`) from the lanes' statuses at one wait each and
+  the shuffle premise of those waits; `WarpRun.of_waits`: the run from each lane's run through
+  its waits (`RunsVia` with `Piece.Wait.via`'s predicates, as `RunsVia.of_fires` concludes) when
+  the waits' calls, arguments and memories are a shuffle's and the deliveries `Grid.fire`'s
+  (`WarpRun.of_inv`, each shuffle by `WarpShfl.of_waits`). `WarpWait.of_waits`
+  (MojoProof/Sym/WarpWaits.lean) is its counterpart for a warp that stops at waits.
 -/
 
 namespace MojoProof.Sym
@@ -469,6 +472,42 @@ theorem withAttrs_mapM_nil (l : Layout) (m : Mem) (t : Ty) (v : Option Val) :
   | none => rfl
   | some v => simp only [Option.mapM, withAttrs_nil]; rfl
 
+/-- **A warp's shuffle from its lanes' waits**, for every launch `L`, contexts `c`, warp `k`,
+function `fn`, block `l`, waits `W` (lane `j`'s is `W j`), mode `mo`, offers `X`, memory `m`,
+statuses `s` and threads `u`: if every lane `j` of the warp waits at `s j` from `u j`, at `fn`'s
+block `l` and `W j`'s position, with `W j`'s call and arguments and a callee that its call finds
+by a name the intrinsic table maps to the shuffle of mode `mo`; and its wait is that shuffle at
+lane 0's position, with the full mask, offer `X j` and word lane and clamp operands, delivered
+`(W j).dlv.1` under the result attributes of every such callee on `m` (`WarpRun.of_waits`'
+premise `hW` at one phase); then the warp's shuffle fires from `s` on `m` to the threads `u` and
+the deliveries `(W j).dlv.1` (`WarpShfl`). -/
+theorem WarpShfl.of_waits {L : Launch} {c : Nat → Ctx} {k : Nat} {fn : Func} {l : Nat}
+    {W : Nat → Piece.Wait} {mo : Shfl} {X : Nat → Val} {m : Mem} {s : Nat → Status}
+    {u : Nat → Thread}
+    (hs : ∀ j ∈ warpLanes L k, ∃ e, s j = .wait (u j) (W j).call.intr (W j).args e ∧
+      (u j).at = some (fn.name, l, (W j).pos) ∧
+      ∃ g, (c (k + j)).prog.module.funcs.find? (·.name == g) = some e ∧
+        (c (k + j)).prog.intrinsics.lookup g = some (.shfl mo))
+    (hW : ∀ j ∈ warpLanes L k, (W j).call.intr = .shfl mo ∧ (W j).pos = (W 0).pos ∧
+      ∃ Mk Bv Cv b cl, (W j).args = [Mk, X j, Bv, Cv] ∧ Mk.word? = some (2 ^ 32 - 1) ∧
+        Bv.word? = some b ∧ Cv.word? = some cl ∧
+        ∀ g e, (c (k + j)).prog.module.funcs.find? (·.name == g) = some e →
+          (c (k + j)).prog.intrinsics.lookup g = some (.shfl mo) →
+          (some (shflVal (warpLanes L k) X (shflSource mo j b cl))).mapM
+            (withAttrs (c k).prog.layout m e.ret e.retAttrs) = .ok (W j).dlv.1) :
+    WarpShfl L c k s m u fun j => (W j).dlv.1 := by
+  refine ⟨mo, fun j => ((W j).args[0]?).getD Val.poison, X,
+    fun j => ((W j).args[2]?).getD Val.poison, fun j => ((W j).args[3]?).getD Val.poison,
+    fun j => ((((W j).args[2]?).getD Val.poison).word?).getD 0,
+    fun j => ((((W j).args[3]?).getD Val.poison).word?).getD 0,
+    fun j => match s j with | .wait _ _ _ e => e | _ => fn, fun j hj => ?_⟩
+  obtain ⟨e, hsj, hat, g, hfind, hlk⟩ := hs j hj
+  obtain ⟨-, -, hat0, -⟩ := hs 0 (mem_warpLanes.2 (List.length_pos_of_mem hj))
+  obtain ⟨hc, hp, Mk, Bv, Cv, b, cl, ha, hMk, hB, hC, hdl⟩ := hW j hj
+  simp only [hsj, hc, ha, List.getElem?_cons_zero, List.getElem?_cons_succ, Option.getD_some,
+    hB, hC]
+  exact ⟨trivial, hMk, trivial, trivial, by rw [hat, hat0, hp], hdl g e hfind hlk⟩
+
 /-- **A warp's run from its lanes' runs through their waits**, for every launch `L`, contexts
 `c`, warp `k`, function `fn`, blocks `lbl`, waits `W` (lane `j`'s `i`-th is `W i j`, in block
 `lbl i`, for `i < J`), modes `mo`, offered values `X`, memories `M` and threads `t`. The
@@ -486,10 +525,9 @@ premises:
 
 Then the warp runs from `t` on `M 0 0` (`WarpRun`) to `M J` after all its lanes, and each of its
 shuffles' deliveries is `Grid.fire`'s (`WarpShfl`). Proof: `WarpRun.of_inv` with lane `j` in phase
-`i` running through its waits from the `i`-th. The waits' calls, arguments and positions give
-`WarpShfl`'s premises, and the callee of a wait is the declaration its call finds (`step_wait`),
-so the delivery under its attributes is the one `hW` gives. With no result attribute, `withAttrs`
-keeps the value (`withAttrs_mapM_nil`). -/
+`i` running through its waits from the `i`-th, the callee of a wait the declaration its call
+finds (`step_wait`), and each phase's shuffle by `WarpShfl.of_waits` from the waits' statuses and
+`hW`. With no result attribute, `withAttrs` keeps the value (`withAttrs_mapM_nil`). -/
 theorem WarpRun.of_waits {L : Launch} {c : Nat → Ctx} {k J : Nat} {fn : Func} {lbl : Nat → Nat}
     {W : Nat → Nat → Piece.Wait} {mo : Nat → Shfl} {X : Nat → Nat → Val}
     {M : Nat → Nat → Mem} {t : Nat → Thread}
@@ -537,20 +575,11 @@ theorem WarpRun.of_waits {L : Launch} {c : Nat → Ctx} {k J : Nat} {fn : Func} 
     (fun i hi s hs m hm => by
       subst hm
       refine ⟨fun j => match s j with | .wait u _ _ _ => u | _ => t 0, fun j => (W i j).dlv.1,
-        ⟨mo i, fun j => ((W i j).args[0]?).getD Val.poison, X i,
-          fun j => ((W i j).args[2]?).getD Val.poison, fun j => ((W i j).args[3]?).getD Val.poison,
-          fun j => ((((W i j).args[2]?).getD Val.poison).word?).getD 0,
-          fun j => ((((W i j).args[3]?).getD Val.poison).word?).getD 0,
-          fun j => match s j with | .wait _ _ _ e => e | _ => fn, fun j hj => ?_⟩,
-        fun j hj => ?_, (h0 i hi).symm⟩
-      · have h0' : 0 ∈ warpLanes L k := mem_warpLanes.2 (Nat.lt_of_le_of_lt (Nat.zero_le _)
-          (mem_warpLanes.1 hj))
-        obtain ⟨u, e, hsj, hat, ⟨g, hfind, hlk⟩, -⟩ := hs j hj
-        obtain ⟨u₀, e₀, hs0, hat0, -, -⟩ := hs 0 h0'
-        obtain ⟨hc, hp, Mk, Bv, Cv, b, cl, ha, hMk, hB, hC, hdl⟩ := hW i hi j hj
-        simp only [hsj, hs0, hc, ha, List.getElem?_cons_zero, List.getElem?_cons_succ,
-          Option.getD_some, hB, hC]
-        exact ⟨trivial, hMk, trivial, trivial, by rw [hat, hat0, hp], hdl g e hfind hlk⟩
+        WarpShfl.of_waits (fn := fn) (l := lbl i) (fun j hj => ?_) (hW i hi), fun j hj => ?_,
+        (h0 i hi).symm⟩
+      · obtain ⟨u, e, hsj, hat, hg, -⟩ := hs j hj
+        simp only [hsj]
+        exact ⟨e, rfl, hat, hg⟩
       · obtain ⟨u, e, hsj, -, -, hrest⟩ := hs j hj
         simp only [hsj]
         exact hrest)

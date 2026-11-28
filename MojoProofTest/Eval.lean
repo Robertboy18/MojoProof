@@ -85,7 +85,8 @@ programs the terms `mojo_import` added (`MojoProof.Kernels`).
   fault with a control that
   differs only in the construct and runs: `range` on a `<2 x i32>` parameter applies to each
   element; `nonnull` at address 0 and `align 64` at address 16 make a `noundef` parameter
-  poison, as does an intrinsic declaration's `align 64`; a declaration's `dereferenceable` and
+  poison, as does an intrinsic declaration's `align 64` (on an `alloca` at address 16); a
+  declaration's `dereferenceable` and
   `noreturn` are unsupported; a non-constant `immarg` operand is unsupported; a store to a
   `constant` shared global is undefined behavior; an `external constant` shared global and a
   phi's `!noundef` are unsupported.
@@ -124,9 +125,43 @@ programs the terms `mojo_import` added (`MojoProof.Kernels`).
   thread's pending accesses (`Thread.pending`) in front of the trace, 10 in all
   (`pendingTests`). Twin: a load through null has its access pending, but the step faults and
   logs nothing.
+* 19 small kernels and 2 corpus files for the launch (`launchTests`): a `byval` copy declared
+  `noundef nonnull` has a nonzero address at four address choices (`place`), and a plain
+  `noundef nonnull` parameter given null is undefined behavior; gevm_t512's kernel
+  (`"nvvm.maxntid"="512"`) starts on 512 threads and not 513, gemv's gevm_kernel (`"1024"`) on
+  1024 and not 1025, a kernel with `"nvvm.reqntid"` at its shape and not another
+  (`Func.checkLaunch`); a kernel with the `!nvvm.annotations` entry `reqntidx 32` starts on 32
+  threads and not 64, one with `maxntidx 64` on 64 and not 65, one with `kernel` alone starts,
+  `maxnreg` is unsupported, and so is a `"nvvm.maxntid"` the annotations disagree with; a `byval`
+  copy aligned to 256 bytes with 8-bit pointers is unsupported (TRUST T11: no nonzero aligned
+  address exists), and one aligned to 128 bytes is at address 128; with 8-bit pointers a 2-byte
+  copy at the choice 255 (whose end would wrap) is at address 1 and at the choice 7 at 7, a
+  128-byte copy (above the index width's largest signed value) is unsupported and a 127-byte one
+  is at its choice 3; a `byval` copy of `{i8, i32}` (with padding) is unsupported, one of
+  `{i32, i32}` gives its byte 1; an annotation value of type `i64` is unsupported;
+  `"target-cpu"` is admitted and `"denormal-fp-math"` unsupported; a kernel runs on as many
+  arguments as parameters, and one fewer or one more is unsupported.
+* 38 small kernels and 2 index steps for accesses (`accessTests`): `griddepcontrol` does nothing
+  (TRUST T19) and an unknown name of it is unsupported, and `griddepcontrol.wait` in a kernel whose
+  `"target-cpu"` is "sm_80" is unsupported while at "sm_90a" it runs; in a helper with no
+  `"target-cpu"` it is unsupported from an "sm_80" entry, from one with none and from an "sm_90"
+  entry beside an "sm_80" function, and runs from an "sm_90" entry; a `volatile` load, store and
+  `atomicrmw` are unsupported, and their plain twins run; a load from an `alloca` after
+  `lifetime.end` or before `lifetime.start` is unsupported (poison in LLVM)
+  and a store after `lifetime.end` undefined behavior, and both run in the lifetime; a lifetime
+  marker on a `getelementptr` of an `alloca` or on a pointer a callee returned is unsupported, one
+  on poison runs; a load through a pointer to a callee's returned `alloca` is undefined behavior,
+  and the same load before the return gives the stored word; `getelementptr nuw` of index -1 into a
+  zero-size type is the base pointer, of `i8` at -1 and of `i32` at `2 ^ 62` poison, and of `i8` at
+  4 the pointer to byte 4; struct field 128 at an 8-bit index width is selected, and an index beyond
+  the struct unsupported; an `f0x` literal with `float`'s 8 digits at `double` is unsupported, and
+  with `double`'s 16 digits it stores its bits, as `float`'s 8 digits do at `float` (a quiet NaN
+  with payload 1 among them); a struct index `i64 1` or `i32 %f` is unsupported, and `i32 1` stores
+  to field 1; in the semantics (`gepSteps`) a struct index not of type `i32` is unsupported and
+  `i32 1` is field 1 at offset 4.
 
-These run the evaluator on two corpus kernels and 93 small ones, check a third corpus file, and
-the contract on fixed operands; they prove nothing.
+These run the evaluator on two corpus kernels and 146 small ones, start two more corpus files,
+check a third, and the contract on fixed operands; they prove nothing.
 -/
 
 namespace MojoProofTest
@@ -713,14 +748,15 @@ def paramAttrTests : Array String :=
     runText ("define ptx_kernel void @k(ptr addrspace(1) " ++ attrs ++ " %0) {\n\
       ret void\n\
     }") 1 buf (addr := a)
-  -- the buffer, cast to the generic space, to `lifetime.start` declared with attributes `attrs`
+  -- an `alloca`'s pointer, at address `4 * a`, to `lifetime.start` declared with attributes
+  -- `attrs`
   let marker (attrs : String) (a : Nat) :=
     runText ("define ptx_kernel void @k(ptr addrspace(1) %0) {\n\
-      %2 = addrspacecast ptr addrspace(1) %0 to ptr\n\
+      %2 = alloca i32, align 4\n\
       call void @llvm.lifetime.start.p0(ptr %2)\n\
       ret void\n\
     }\n\
-    declare void @llvm.lifetime.start.p0(ptr " ++ attrs ++ ")") 1 buf (addr := a)
+    declare void @llvm.lifetime.start.p0(ptr " ++ attrs ++ ")") 1 buf (ch := fun _ => a)
   let shared (g : String) := runText ("@g = " ++ g ++ ", align 4\n\
     define ptx_kernel void @k() {\n\
       store i32 1, ptr addrspace(3) @g, align 4\n\
@@ -748,11 +784,10 @@ def paramAttrTests : Array String :=
   checkWords "nonnull (control)" [] (ptrAttr "noundef nonnull" 1) ++
   checkFault "align 64 at address 16" "noundef value not defined" (ptrAttr "noundef align 64" 1) ++
   checkWords "align 64 at address 4096" [] (ptrAttr "noundef align 64" 0x100) ++
-  checkFault "intrinsic align" "noundef value not defined" (marker "noundef align 64" 1) ++
-  checkFault "intrinsic align (control)" "lifetime marker on memory the thread does not own"
-    (marker "noundef align 64" 0x100) ++
+  checkFault "intrinsic align" "noundef value not defined" (marker "noundef align 64" 4) ++
+  checkWords "intrinsic align (control)" [] (marker "noundef align 64" 16) ++
   checkFault "intrinsic dereferenceable" "parameter attribute dereferenceable"
-    (marker "dereferenceable(4)" 0x100) ++
+    (marker "dereferenceable(4)" 16) ++
   checkFault "intrinsic function attribute" "function attribute noreturn"
     (runText "define ptx_kernel void @k() {\n\
       call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)\n\
@@ -982,6 +1017,337 @@ def callAttrTests : Array String :=
   checkWords "memory item at an unqueried location (control)" [0x7f800000]
     (maxnum "" (lead ++ " memory(argmem: none, inaccessiblemem: none)"))
 
+/-- Small kernels and two corpus files for the launch (`Grid.start`). A `byval` copy declared
+`noundef nonnull` (as Mojo's are) has a nonzero address (`place`) at the address choices
+0, 1, 7 and `2 ^ 62`: 4, 4, 28 and 4; a plain `noundef nonnull` parameter given null is undefined
+behavior. The launch limits (`Func.checkLaunch`): gevm_t512's kernel (`"nvvm.maxntid"="512"`)
+starts on a block of 512 threads and not of 513, gemv's gevm_kernel (`"1024"`) on 1024 (the launch
+of its theorem, MojoProofTest/GevmSound.lean) and not on 1025, and a kernel with
+`"nvvm.reqntid"="2,1,1"` on 2 threads and not on 1. Their legacy form, `!nvvm.annotations`
+(`Func.annots`): `reqntidx 32` starts on 32 threads and not on 64, `maxntidx 64` on 64 and not on
+65, `kernel` alone starts, `maxnreg` is unsupported, and so is `"nvvm.maxntid"="64"` with
+`maxntidx 32`. A `byval` copy of `[0 x i64]` aligned to 256 bytes (`e-p:8:8-i64:2048`) is
+unsupported: no aligned address below `2 ^ 8` is nonzero (`Func.byvalPlaced`, TRUST T11); aligned
+to 128 bytes (`i64:1024`) it is at address 128 at the choice 3. With 8-bit pointers
+(`e-p:8:8`): a copy of `[2 x i8]` at the choice 255, whose end 257 would wrap, is at address 1
+(the lowest placed one), and at the choice 7 at 7; a copy of `[128 x i8]` is unsupported (its size
+is above 127, the largest signed 8-bit index: LangRef, "Allocated Objects"), and one of
+`[127 x i8]` is at its choice 3. A `byval` copy of `{i8, i32}` (three padding bytes, which
+LangRef's byte copy would keep) is unsupported (`Layout.dense`, TRUST T11), and its twin
+`{i32, i32}` gives its byte 1. An `!nvvm.annotations` value of type `i64` is unsupported
+(`Func.annots`: only `i32` values). `"target-cpu"` is admitted
+and `"denormal-fp-math"` is unsupported. A kernel with an unused second parameter runs on two
+arguments and is unsupported on one and on three. -/
+def launchTests : IO (Array String) := do
+  let t512 ← IO.FS.readFile "tests/corpus/gevm_t512/\
+    gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll"
+  let g1024 ← IO.FS.readFile "tests/corpus/gemv/\
+    gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll"
+  let six (b : Val) : List Val := [b, b, b, .bits 32 0, .bits 32 0, .bits 32 0]
+  let started (r : Except String (Layout × Launch × Nat × Grid × (Nat → Ctx))) :
+      Except String (List Val) := r.map fun _ => []
+  let byval := "define ptx_kernel void @k(ptr addrspace(1) %0, \
+      ptr noundef nonnull readonly byval(i32) %1) {\n\
+      %3 = ptrtoint ptr %1 to i64\n\
+      store i64 %3, ptr addrspace(1) %0, align 8\n\
+      ret void\n\
+    }\n"
+  let attrs (a : String) := "define ptx_kernel void @k(ptr addrspace(1) %0) #0 {\n\
+      ret void\n\
+    }\n\
+    attributes #0 = { " ++ a ++ " }\n"
+  let reqntid := attrs "\"nvvm.reqntid\"=\"2,1,1\""
+  let unused := "define ptx_kernel void @k(ptr addrspace(1) %0, i32 %1) {\n\
+      store i32 4, ptr addrspace(1) %0, align 4\n\
+      ret void\n\
+    }\n"
+  -- a kernel with the `!nvvm.annotations` entry `!{ptr @k, !"k", i32 v}` and attributes `a`
+  let ann (a k : String) (v : Nat) := (if a.isEmpty then "define ptx_kernel void \
+      @k(ptr addrspace(1) %0) {\n\
+      ret void\n\
+    }\n" else attrs a) ++ "!nvvm.annotations = !{!0}\n\
+    !0 = !{ptr @k, !\"" ++ k ++ "\", i32 " ++ toString v ++ "}\n"
+  -- a `byval` copy of type `t` with 8-bit pointers, storing its address
+  let byval8 (t : String) := "target datalayout = \"e-p:8:8\"\n\
+    define ptx_kernel void @k(ptr addrspace(1) %0, ptr noundef nonnull byval(" ++ t ++ ") %1) {\n\
+      %3 = ptrtoint ptr %1 to i8\n\
+      store i8 %3, ptr addrspace(1) %0, align 1\n\
+      ret void\n\
+    }\n"
+  -- a `byval` copy of type `t` whose byte 1 the kernel copies out
+  let byte1 (t : String) := "define ptx_kernel void @k(ptr addrspace(1) %0, \
+      ptr noundef nonnull byval(" ++ t ++ ") %1) {\n\
+      %3 = getelementptr i8, ptr %1, i64 1\n\
+      %4 = load i8, ptr %3, align 1\n\
+      store i8 %4, ptr addrspace(1) %0, align 1\n\
+      ret void\n\
+    }\n"
+  let zeros (n : Nat) : Val := .agg (List.replicate n (.bits 8 0))
+  -- a `byval` copy of no bytes aligned to `al` bits with 8-bit pointers, its element a vector of
+  -- `al` bits (no padding): at 2048 every aligned address is 0
+  let byval0 (al : String) := "target datalayout = \"e-p:8:8-v" ++ al ++ ":" ++ al ++ "\"\n\
+    define ptx_kernel void @k(ptr addrspace(1) %0, ptr noundef nonnull byval([0 x <" ++
+      toString (al.toNat! / 8) ++ " x i8>]) %1) {\n\
+      %3 = ptrtoint ptr %1 to i8\n\
+      store i8 %3, ptr addrspace(1) %0, align 1\n\
+      ret void\n\
+    }\n"
+  return [(0, 4), (1, 4), (7, 28), (2 ^ 62, 4)].foldl (fun acc (c, w) => acc ++
+      checkWords s!"byval noundef nonnull at choice {c}" [w]
+        (runText byval 1 (fun b => [b, .bits 32 5]) 1 (ty := .int 64) (ch := fun _ => c)))
+      #[] ++
+    checkFault "noundef nonnull null parameter" "noundef value not defined"
+      (runText "define ptx_kernel void @k(ptr addrspace(1) %0, ptr noundef nonnull %1) {\n\
+          ret void\n\
+        }\n" 1 (fun b => [b, .ptr ⟨0, 0⟩])) ++
+    checkWords "gevm_t512 at 512" [] (started (startText t512 512 six)) ++
+    checkFault "gevm_t512 at 513" "beyond nvvm.maxntid 512" (started (startText t512 513 six)) ++
+    checkWords "gevm_kernel at 1024" [] (started (startText g1024 1024 six)) ++
+    checkFault "gevm_kernel at 1025" "beyond nvvm.maxntid 1024"
+      (started (startText g1024 1025 six)) ++
+    checkWords "nvvm.reqntid at its shape" [] (runText reqntid 2 fun b => [b]) ++
+    checkFault "nvvm.reqntid at another shape" "another shape than nvvm.reqntid"
+      (runText reqntid 1 fun b => [b]) ++
+    checkWords "reqntidx 32 annotation at 32" [] (runText (ann "" "reqntidx" 32) 32 fun b => [b]) ++
+    checkFault "reqntidx 32 annotation at 64" "another shape than nvvm.reqntid"
+      (runText (ann "" "reqntidx" 32) 64 fun b => [b]) ++
+    checkWords "maxntidx 64 annotation at 64" [] (runText (ann "" "maxntidx" 64) 64 fun b => [b]) ++
+    checkFault "maxntidx 64 annotation at 65" "beyond nvvm.maxntid 64"
+      (runText (ann "" "maxntidx" 64) 65 fun b => [b]) ++
+    checkWords "kernel annotation" [] (runText (ann "" "kernel" 1) 7 fun b => [b]) ++
+    checkFault "maxnreg annotation" "nvvm.annotations key maxnreg"
+      (runText (ann "" "maxnreg" 32) 7 fun b => [b]) ++
+    checkFault "maxntid attribute and annotation that disagree" "that disagree"
+      (runText (ann "\"nvvm.maxntid\"=\"64\"" "maxntidx" 32) 7 fun b => [b]) ++
+    checkFault "byval of alignment 2 ^ 8 at 8-bit pointers (TRUST T11)"
+      "no nonzero aligned address" (runText (byval0 "2048") 1 (fun b => [b, .agg []]) 1
+        (addr := 1) (ty := .int 8) (ch := fun _ => 3)) ++
+    checkWords "byval of alignment 2 ^ 7 at 8-bit pointers: address 128" [128]
+      (runText (byval0 "1024") 1 (fun b => [b, .agg []]) 1 (addr := 1) (ty := .int 8)
+        (ch := fun _ => 3)) ++
+    checkWords "byval of 2 bytes at 8-bit pointers, choice 255: address 1" [1]
+      (runText (byval8 "[2 x i8]") 1 (fun b => [b, zeros 2]) 1 (ty := .int 8)
+        (ch := fun _ => 255)) ++
+    checkWords "byval of 2 bytes at 8-bit pointers, choice 7: address 7" [7]
+      (runText (byval8 "[2 x i8]") 1 (fun b => [b, zeros 2]) 1 (ty := .int 8)
+        (ch := fun _ => 7)) ++
+    checkFault "byval of 128 bytes at 8-bit pointers" "no nonzero aligned address"
+      (runText (byval8 "[128 x i8]") 1 (fun b => [b, zeros 128]) 1 (ty := .int 8)) ++
+    checkWords "byval of 127 bytes at 8-bit pointers, choice 3: address 3" [3]
+      (runText (byval8 "[127 x i8]") 1 (fun b => [b, zeros 127]) 1 (ty := .int 8)
+        (ch := fun _ => 3)) ++
+    checkFault "byval of a type with padding" "padding"
+      (runText (byte1 "{ i8, i32 }") 1 (fun b => [b, .agg [.bits 8 1, .bits 32 2]]) 1
+        (ty := .int 8)) ++
+    checkWords "byval of a type without padding: byte 1" [2]
+      (runText (byte1 "{ i32, i32 }") 1 (fun b => [b, .agg [.bits 32 0x0201, .bits 32 2]]) 1
+        (ty := .int 8)) ++
+    checkFault "reqntidx annotation of type i64" "of another form"
+      (runText ("define ptx_kernel void @k(ptr addrspace(1) %0) {\n\
+          ret void\n\
+        }\n\
+        !nvvm.annotations = !{!0}\n\
+        !0 = !{ptr @k, !\"reqntidx\", i64 32}\n") 32 fun b => [b]) ++
+    checkWords "target-cpu" [] (runText (attrs "\"target-cpu\"=\"sm_80\"") 1 fun b => [b]) ++
+    checkFault "denormal-fp-math" "function attribute denormal-fp-math"
+      (runText (attrs "\"denormal-fp-math\"=\"ieee\"") 1 fun b => [b]) ++
+    checkWords "arguments for each parameter" [4] (runText unused 1 (fun b => [b, .bits 32 0]) 1) ++
+    checkFault "an argument missing" "has 2 parameters, launched on 1 arguments"
+      (runText unused 1 fun b => [b]) ++
+    checkFault "an argument extra" "has 2 parameters, launched on 3 arguments"
+      (runText unused 1 fun b => [b, .bits 32 0, .bits 32 1])
+
+/-- Small kernels for accesses, each with a twin. Grid dependency control's
+`llvm.nvvm.griddepcontrol.wait` and `llvm.nvvm.griddepcontrol.launch.dependents` do nothing (TRUST
+T19); an unknown `griddepcontrol` name is unsupported, and so is `griddepcontrol.wait` in a kernel
+whose `"target-cpu"` is "sm_80" (`Func.check`: the instruction requires "sm_90"); at "sm_90a" it
+runs. A helper `@h` with no `"target-cpu"` calling `griddepcontrol.wait` is unsupported from an
+"sm_80" entry, from an entry with no `"target-cpu"` and from an "sm_90" entry in a module with an
+"sm_80" function too (`Func.griddepBad`: the helper has the module's target, the one value its
+functions agree on), and runs from an "sm_90" entry, at the launch and at the call. A `volatile`
+load, store and `atomicrmw` are unsupported (`Stmt.checkMd`); without `volatile` each runs. A load
+from an `alloca` after `lifetime.end` or
+before `lifetime.start` is unsupported (LangRef, "Object Lifetime": poison, which the semantics does
+not give to a load), and a store after `lifetime.end` is undefined behavior (`Mem.check`: the block
+is dead); in the lifetime the load gives the stored word. A lifetime marker on a `getelementptr` of
+an `alloca` or on a pointer a callee returned is unsupported (`Func.lifetimeOk`), one on poison does
+nothing. A load through the pointer a callee returned to its `alloca` is undefined behavior (the
+frame's blocks are dead after `ret`); the same load in the callee, before its `ret`, gives the
+stored word. `getelementptr nuw` (unsigned offsets): index -1 into the zero-size `[0 x i8]`, at
+`i64` and at `i32`, is the base pointer; `i8` at -1 (the address wraps) and `i32` at `2 ^ 62` (the
+product wraps) are poison, so the store through them is undefined behavior; `i8` at 4 stores at byte
+4. A struct of 128 fields of size zero and an `i32`, at an 8-bit index width (`e-p:8:8`): `i32 128`
+selects the `i32` at offset 0 (the field by its own value, LangRef `getelementptr`), and `i32 129`
+is beyond the struct, unsupported. An `f0x` literal has exactly its type's hexadecimal digits
+(LangRef, "Simple Constants"): `double f0x3f800000` is unsupported (the parser's `litFits`), `double
+f0x3FF0000000000000`, `float f0x3f800000` and `float f0x7fc00001` (a quiet NaN with payload 1) store
+their bits. A struct index is a constant `i32` (LangRef, `getelementptr`): `i64 1` and `i32 %f` into
+`{i32, i32}` are unsupported (the parser's `gepStructOk`), and `i32 1` stores 11 to word 1; the
+semantics refuses a struct index of another type too (`gepSteps` at `(1, none)`), and steps `i32 1`
+to field 1 at offset 4. -/
+def accessTests : Array String :=
+  let buf (b : Val) : List Val := [b]
+  let kernel (body decls : String) := "define ptx_kernel void @k(ptr addrspace(1) %0) {\n" ++
+    body ++ "  ret void\n}\n" ++ decls
+  -- a kernel calling `griddepcontrol.wait` with the `"target-cpu"` `cpu`
+  let griddepAt (cpu : String) := "define ptx_kernel void @k(ptr addrspace(1) %0) #0 {\n\
+      call void @llvm.nvvm.griddepcontrol.wait()\n\
+      store i32 3, ptr addrspace(1) %0, align 4\n\
+      ret void\n\
+    }\n\
+    declare void @llvm.nvvm.griddepcontrol.wait()\n\
+    attributes #0 = { \"target-cpu\"=\"" ++ cpu ++ "\" }\n"
+  let griddep (wait : String) := "define ptx_kernel void @k(ptr addrspace(1) %0) #0 {\n\
+      call void @llvm.nvvm.griddepcontrol." ++ wait ++ "()\n\
+      call void @llvm.nvvm.griddepcontrol.launch.dependents()\n\
+      store i32 3, ptr addrspace(1) %0, align 4\n\
+      ret void\n\
+    }\n\
+    declare void @llvm.nvvm.griddepcontrol." ++ wait ++ "()\n\
+    declare void @llvm.nvvm.griddepcontrol.launch.dependents()\n\
+    attributes #0 = { \"target-cpu\"=\"sm_90a\" }\n"
+  -- an entry with the `"target-cpu"` `cpu` (none: no attribute) calling a helper `@h` that has
+  -- none and calls `griddepcontrol.wait`
+  let helperAt (cpu : Option String) := "define void @h() {\n\
+      call void @llvm.nvvm.griddepcontrol.wait()\n\
+      ret void\n\
+    }\n\
+    define ptx_kernel void @k(ptr addrspace(1) %0)" ++ (if cpu.isSome then " #0" else "") ++ " {\n\
+      call void @h()\n\
+      store i32 3, ptr addrspace(1) %0, align 4\n\
+      ret void\n\
+    }\n\
+    declare void @llvm.nvvm.griddepcontrol.wait()\n" ++ (match cpu with
+      | some c => "attributes #0 = { \"target-cpu\"=\"" ++ c ++ "\" }\n"
+      | none => "")
+  -- the same at "sm_90", with `@z` at "sm_80" beside it: the module's target is ambiguous
+  let helperMixed := helperAt (some "sm_90") ++ "define void @z() #1 {\n\
+      ret void\n\
+    }\n\
+    attributes #1 = { \"target-cpu\"=\"sm_80\" }\n"
+  let vol (v : String) := [
+    ("load", "  %2 = load " ++ v ++ "i32, ptr addrspace(1) %0, align 4\n\
+        store i32 5, ptr addrspace(1) %0, align 4\n", 5),
+    ("store", "  store " ++ v ++ "i32 6, ptr addrspace(1) %0, align 4\n", 6),
+    ("atomicrmw", "  store i32 0, ptr addrspace(1) %0, align 4\n\
+        %2 = atomicrmw " ++ v ++ "add ptr addrspace(1) %0, i32 1 seq_cst, align 4\n", 1)]
+  let decls := "declare void @llvm.lifetime.start.p0(ptr captures(none))\n\
+    declare void @llvm.lifetime.end.p0(ptr captures(none))\n"
+  let life (body : String) := kernel ("  %2 = alloca i32, align 4\n\
+      call void @llvm.lifetime.start.p0(ptr %2)\n\
+      store i32 7, ptr %2, align 4\n" ++ body) decls
+  -- a callee `@f` with an `alloca` holding 5 that returns `ret` (`load` the word first if `w`)
+  let callee (w : Bool) := if w then "define i32 @f() {\n\
+        %1 = alloca i32, align 4\n\
+        store i32 5, ptr %1, align 4\n\
+        %2 = load i32, ptr %1, align 4\n\
+        ret i32 %2\n\
+      }\n"
+    else "define ptr @f() {\n\
+        %1 = alloca i32, align 4\n\
+        store i32 5, ptr %1, align 4\n\
+        ret ptr %1\n\
+      }\n"
+  -- a struct of `n` fields of size zero and an `i32`, at an 8-bit index width, field `k`
+  let fields (n k : Nat) := "target datalayout = \"e-p:8:8\"\n" ++
+    kernel ("  %2 = getelementptr {" ++
+      String.intercalate ", " (List.replicate n "[0 x i8]" ++ ["i32"]) ++
+      "}, ptr addrspace(1) %0, i32 0, i32 " ++ toString k ++ "\n\
+      store i32 11, ptr addrspace(1) %2, align 4\n") ""
+  let dead := "  call void @llvm.lifetime.end.p0(ptr %2)\n"
+  let copy := "  %3 = load i32, ptr %2, align 4\n  store i32 %3, ptr addrspace(1) %0, align 4\n"
+  let gep (g : String) := kernel ("  %2 = getelementptr nuw " ++ g ++ "\n\
+      store i32 10, ptr addrspace(1) %2, align 4\n") ""
+  -- a store of the literal `v` of float type `t`
+  let lit (t v : String) := kernel ("  store " ++ t ++ " " ++ v ++ ", ptr addrspace(1) %0\n") ""
+  -- a store of 11 to field `idx` of `{i32, i32}` (`%f` is 1)
+  let sgep (idx : String) := kernel ("  %f = add i32 1, 0\n\
+      %2 = getelementptr { i32, i32 }, ptr addrspace(1) %0, i32 0, " ++ idx ++ "\n\
+      store i32 11, ptr addrspace(1) %2, align 4\n") ""
+  checkWords "griddepcontrol" [3] (runText (griddep "wait") 1 buf 1) ++
+  checkFault "griddepcontrol, unknown name" "unsupported intrinsic"
+    (runText (griddep "wait.all") 1 buf 1) ++
+  checkFault "griddepcontrol at sm_80" "is not sm_90 or higher"
+    (runText (griddepAt "sm_80") 1 buf 1) ++
+  checkWords "griddepcontrol at sm_90a" [3] (runText (griddepAt "sm_90a") 1 buf 1) ++
+  checkFault "griddepcontrol in a helper of an sm_80 entry" "griddepcontrol in @h"
+    (runText (helperAt (some "sm_80")) 1 buf 1) ++
+  checkWords "griddepcontrol in a helper of an sm_90 entry" [3]
+    (runText (helperAt (some "sm_90")) 1 buf 1) ++
+  checkFault "griddepcontrol with no target-cpu" "griddepcontrol in @h"
+    (runText (helperAt none) 1 buf 1) ++
+  checkFault "griddepcontrol in a helper, two module targets" "griddepcontrol in @h"
+    (runText helperMixed 1 buf 1) ++
+  (vol "volatile ").foldl (fun acc (k, body, _) => acc ++
+    checkFault s!"volatile {k}" "volatile access" (runText (kernel body "") 1 buf 1)) #[] ++
+  (vol "").foldl (fun acc (k, body, w) => acc ++
+    checkWords s!"{k}, not volatile" [w] (runText (kernel body "") 1 buf 1)) #[] ++
+  checkWords "load in the lifetime" [7] (runText (life copy) 1 buf 1) ++
+  checkFault "load after lifetime.end" "load from an alloca outside its lifetime"
+    (runText (life (dead ++ copy)) 1 buf) ++
+  checkFault "load before lifetime.start" "load from an alloca outside its lifetime"
+    (runText (kernel ("  %2 = alloca i32, align 4\n" ++ copy ++
+      "  call void @llvm.lifetime.start.p0(ptr %2)\n") decls) 1 buf) ++
+  checkFault "lifetime marker on a getelementptr" "on a value no alloca defines"
+    (runText (kernel ("  %2 = alloca [2 x i32], align 4\n\
+        %3 = getelementptr [2 x i32], ptr %2, i64 0, i64 1\n\
+        store i32 7, ptr %2, align 4\n\
+        call void @llvm.lifetime.end.p0(ptr %3)\n") decls) 1 buf) ++
+  checkFault "lifetime marker on a returned pointer" "on a value no alloca defines"
+    (runText (callee false ++ kernel ("  %2 = call ptr @f()\n\
+        call void @llvm.lifetime.start.p0(ptr %2)\n\
+        store i32 7, ptr %2, align 4\n" ++ copy) decls) 1 buf) ++
+  checkWords "lifetime marker on poison" [8]
+    (runText (kernel "  call void @llvm.lifetime.start.p0(ptr poison)\n\
+        store i32 8, ptr addrspace(1) %0, align 4\n" decls) 1 buf 1) ++
+  checkFault "load from a returned frame" "access to a dead block"
+    (runText (callee false ++ kernel ("  %2 = call ptr @f()\n" ++ copy) "") 1 buf) ++
+  checkWords "load before the return" [5]
+    (runText (callee true ++ kernel "  %2 = call i32 @f()\n\
+        store i32 %2, ptr addrspace(1) %0, align 4\n" "") 1 buf 1) ++
+  checkWords "store in the lifetime" [9]
+    (runText (life ("  store i32 9, ptr %2, align 4\n" ++ copy)) 1 buf 1) ++
+  checkFault "store after lifetime.end" "access to a dead block"
+    (runText (life (dead ++ "  store i32 9, ptr %2, align 4\n")) 1 buf) ++
+  checkWords "nuw, zero-size type, i64 -1" [10]
+    (runText (gep "[0 x i8], ptr addrspace(1) %0, i64 -1") 1 buf 1) ++
+  checkWords "nuw, zero-size type, i32 -1" [10]
+    (runText (gep "[0 x i8], ptr addrspace(1) %0, i32 -1") 1 buf 1) ++
+  checkFault "nuw, i8 -1" "memory access through poison"
+    (runText (gep "i8, ptr addrspace(1) %0, i64 -1") 1 buf) ++
+  checkFault "nuw, i32 2^62" "memory access through poison"
+    (runText (gep "i32, ptr addrspace(1) %0, i64 4611686018427387904") 1 buf) ++
+  (match runText (gep "i8, ptr addrspace(1) %0, i64 4") 1 buf 2 with
+    | .ok [_, v] => if v.word? == some 10 then #[] else #["nuw, i8 4: wrong word"]
+    | .ok _ => #["nuw, i8 4: not two values"]
+    | .error e => #[s!"nuw, i8 4: {e}"]) ++
+  checkWords "struct field 128 at an 8-bit index width" [11]
+    (runText (fields 128 128) 1 buf 1 (addr := 1)) ++
+  checkFault "struct field beyond the struct" "struct index out of range"
+    (runText (fields 128 129) 1 buf (addr := 1)) ++
+  checkFault "f0x literal of float's size at double" "f0x float literal with another size"
+    (runText (lit "double" "f0x3f800000") 1 buf 1 (ty := .int 64)) ++
+  checkWords "f0x literal of double's size at double" [0x3FF0000000000000]
+    (runText (lit "double" "f0x3FF0000000000000") 1 buf 1 (ty := .int 64)) ++
+  checkWords "f0x NaN with a payload at float" [0x7FC00001]
+    (runText (lit "float" "f0x7fc00001") 1 buf 1) ++
+  checkWords "f0x literal of float's size at float" [0x3f800000]
+    (runText (lit "float" "f0x3f800000") 1 buf 1) ++
+  checkFault "struct index i64 1" "struct index other than an i32 constant"
+    (runText (sgep "i64 1") 1 buf 2) ++
+  checkFault "struct index i32 %f" "struct index other than an i32 constant"
+    (runText (sgep "i32 %f") 1 buf 2) ++
+  (match runText (sgep "i32 1") 1 buf 2 with
+    | .ok [_, v] => if v.word? == some 11 then #[] else #["struct index i32 1: wrong word"]
+    | .ok _ => #["struct index i32 1: not two values"]
+    | .error e => #[s!"struct index i32 1: {e}"]) ++
+  (match gepSteps {} id (.struct [.int 32, .int 32]) [(0, some 0), (1, none)] with
+    | .error (.unsupported "struct index not of type i32") => #[]
+    | _ => #["struct index of another type than i32 in the semantics: not refused"]) ++
+  (match gepSteps {} id (.struct [.int 32, .int 32]) [(0, some 0), (1, some 1)] with
+    | .ok [_, (1, 4, true)] => #[]
+    | _ => #["struct index i32 1 in the semantics: not field 1 at offset 4"])
+
 /-- **`bitcast <4 x i8>` to `i32` puts lane 0 low**, a test of `castV_join` at a second size
 (`castV_halves` is its instance at `<2 x i32>`): for every layout, memory and oracle numbers, the
 `bitcast` of the bytes `[1, 2, 3, 4]` to `i32` is the word `0x04030201`. -/
@@ -995,8 +1361,10 @@ def evalTests : IO (Array String) := do
   let fails := vaddTests Kernels.vadd.prog ++ matmulTests Kernels.matmul.prog
   IO.println "evaluator: vector_addition (2 oracles, written tiles and their twin, 2 faults), \
     tiled_matmul (2 oracles, the full launch and one block race-checked), rsqrt, 3 oracle \
-    counterexamples, 93 small kernels, the reduction's atomic and 2 twins"
+    counterexamples, 147 small kernels, 2 index steps, 2 corpus starts, the reduction's atomic \
+    and 2 twins"
   return fails ++ rsqrtTests ++ oracleTests ++ textTests ++ paramAttrTests ++ intrinsicAttrTests ++
-    startMemTests ++ callAttrTests ++ pendingTests ++ (← atomicTests)
+    startMemTests ++ callAttrTests ++ pendingTests ++ (← atomicTests) ++ (← launchTests) ++
+    accessTests
 
 end MojoProofTest

@@ -17,8 +17,10 @@ I really like Mojo, for two reasons.
 
 GPU kernels are easy to get quietly wrong, and testing can't cover them. A kernel that passes on the sizes you tried can
 still read out of bounds, race, or give a different answer at another size or under another thread schedule. A proof can
-cover every input, every launch size and every schedule at once. MojoProof proves things about the code the Mojo
-compiler actually emits, so the guarantee is about what runs, not about a hand-written model of it.
+cover every input, every launch size and every schedule at once. MojoProof's proofs read the LLVM IR that the Mojo
+compiler prints for each kernel, not a hand-written transcription of the kernel. Applying them to what runs on a GPU
+still trusts the semantics given to that IR and every step after it: LLVM's optimizer, the NVPTX backend, `ptxas`, the
+driver and the hardware ([docs/TRUST.md](docs/TRUST.md) T2 and T7).
 
 ## What is proved today
 
@@ -26,10 +28,14 @@ Each line says how far it reaches. Every statement, with all its premises, is in
 [docs/proved.md](docs/proved.md), and what the proofs trust is in [docs/TRUST.md](docs/TRUST.md).
 
 - **Schedule independence**, every program: from a memory whose pointers name only its own
-  blocks, at one address choice and one NaN choice, one complete run of a launch with no fault, no
-  race and no broken `!invariant.load` promise shows that every thread schedule of it is safe,
-  terminates and ends with the same memory blocks, so every observation that reads only the blocks
-  is the same; the traces may differ (`Grid.confluent`, `Grid.start_sound`).
+  blocks, at one address choice and one float choice (the whole float oracle: the payload of every
+  NaN result, whether each `contract` operation is fused, and the other float freedoms of
+  [docs/TRUST.md](docs/TRUST.md) T7, so runs at two float choices may differ even where no NaN
+  occurs), one complete run of a launch with no fault, no race and no
+  broken `!invariant.load` promise shows that every thread schedule of it is safe, terminates and
+  ends with the same memory blocks, so every observation that reads only the blocks is the same;
+  the traces may differ (`Grid.confluent`, `Grid.start_sound`). It is about the semantics' runs,
+  not about the hardware's memory model or a launch the semantics does not describe.
 - **A sound symbolic checker**, every program: a block or path the checker accepts runs as its
   summary says whenever its conditions hold (`Block.sound`).
 - **Elementwise kernels**, a family: a kernel with two input buffers, an output and a count meets

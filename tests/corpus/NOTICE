@@ -25,6 +25,11 @@ Exceptions":
     max/kernels/test/gpu/layout/test_layout_mma.mojo              mma/
     max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo  mgemm/, mgemm_nocontract/
 
+The directories vadd_dev2026112705/, mgemm_dev2026112705/ and mgemm_nocontract_dev2026112705/
+hold the IR that Mojo 1.3.0.dev2026112705 wrote for two of these sources at the repository's
+later commit 483e1348, where they are the same bytes as at bbc13a71 (the same source sha256 in
+MANIFEST.tsv), and for the library code that Mojo version ships, under the same license.
+
 The library code that these kernels import comes from the same commit: the Mojo standard library
 (Mojo/stdlib/std) and the MAX kernel library (max/kernels/src, max/mojo/max). Every .mojo file
 under Mojo/stdlib/std and max/kernels/src carries the same header. So does every .mojo file under
@@ -37,6 +42,16 @@ what was changed:
                                    bbc13a71: the kernel renamed and its `+` replaced by `*`
     vsub/vector_subtraction.mojo   from max/examples/gpu-functions/vector_addition.mojo at
                                    bbc13a71: the kernel renamed and its `+` replaced by `-`
+    vadd16/vector_addition.mojo    from max/examples/gpu-functions/vector_addition.mojo at
+                                   bbc13a71: its `float_dtype` DType.float16 for DType.float32
+    vaddbf16/vector_addition.mojo  from max/examples/gpu-functions/vector_addition.mojo at
+                                   bbc13a71: its `float_dtype` DType.bfloat16 for DType.float32
+    ln16/test_layer_norm.mojo      from max/kernels/test/gpu/nn/test_layer_norm.mojo at
+                                   bbc13a71: the `run_layer_norm_gpu[.float32]` calls of its `main`
+                                   at `.float16`
+    lnbf16/test_layer_norm.mojo    from max/kernels/test/gpu/nn/test_layer_norm.mojo at
+                                   bbc13a71: the `run_layer_norm_gpu[.float32]` calls of its `main`
+                                   at `.bfloat16`
     gemv/gemv_f32.mojo             from max/kernels/test/gpu/linalg/test_gemv.mojo at bbc13a71:
                                    reduced to the two float32 launches of its `run_matvec`,
                                    `gemv_kernel` and `gevm_kernel` of max/kernels/src/linalg/gemv.mojo
@@ -51,8 +66,9 @@ what was changed:
                                    at bbc13a71: a driver of its float32 `matmul_kernel_naive`
                                    launch (BLOCK_DIM 16, transpose_b), its `main` replaced
 
-Their IR is in vmul/, vsub/, gemv/, gevm_t512/, naive_k512/ and mgemm_sm80/, under the same
-license.
+Their IR is in vmul/, vsub/, vadd16/, vaddbf16/, ln16/, lnbf16/, gemv/, gevm_t512/, naive_k512/
+and mgemm_sm80/, and, written by Mojo 1.3.0.dev2026112705, in vmul_dev2026112705/,
+vsub_dev2026112705/ and gemv_dev2026112705/, under the same license.
 
 LICENSE-APACHE-LLVM is the file Licenses/APACHE_LICENSE of the Modular repository at bbc13a71,
 byte for byte (git blob 62f360af9a9148bfae1d91e0a258dde0283adeb3). The repository's top-level

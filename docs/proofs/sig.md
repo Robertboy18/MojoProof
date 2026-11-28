@@ -294,7 +294,7 @@ the core other than `GPUProof/Sound.lean`, which gained `Sound.of_lift` and then
    - `Trace.Same.racy` is now `Trace.Same.clash`: the same traces have the same clashes by phases
      (`Schedule.lean`); with `racy_iff` at both traces they are both racy or both not.
    - The kernel theorems that take a memory's race freedom as a hypothesis
-     (`Kernel.sound_of_chainsWith`, `Kernel.sound_of_chains`, `Kernel.sound_of_paths`, and
+     (`Kernel.sound_of_chainsAt`, `Kernel.sound_of_chains`, `Kernel.sound_of_paths`, and
      `Kernel.sound_entryWith` and `Kernel.sound_entry` through `hend`, `Sym/Kernel.lean`, and the
      theorems `KernelCmd.lean` generates) take it under the two premises, as
      `(hU → Trace.Shaped m'.trace.reverse → racy … = false) ∧ kept … = true`; so do
@@ -403,7 +403,9 @@ the clean state back to `Grid.Sound`. Since `Clean.of_lift` observes states, not
   thread at any memory, had no caller and is deleted; its one instance,
   `MojoProofTest/Close.lean`'s `sound_one_ret`, is `Grid.sound_returning` at one thread.
 
-`MojoProofTest/Theorem0.lean`'s `sound_of_sig` goes through `Grid.Sound.of_clean` too. It still
+`Grid.Sound.of_sig` (MojoProof/Sym/SigKernel.lean, used by `MojoProofTest/Theorem0.lean` and,
+through `Kernel.Sound.of_sig`, by `MojoProofTest/GemvObs.lean`) goes through `Grid.Sound.of_clean`
+too. It still
 carries the core's `Sound`, which observes `sig.bytes`, back only for an `obs` that reads only
 the blocks (its premise `hO`). `Sound.of_one_run` is `Sound.of_lift` at the states reachable
 from a good start. `Clean.of_lift`:

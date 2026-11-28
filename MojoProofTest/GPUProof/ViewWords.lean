@@ -47,7 +47,8 @@ proved here.
   the bound (the `sub`, `llvm.smin` and `icmp eq` of :704-707, on which :712 branches to the
   store :722) is the guard's boolean. These are the semantics' operations at symbolic words, not
   an evaluation, and not a run theorem: that the index at step `j` is the word of `B j` and that
-  a run reaches these words and stores there are not proved.
+  a run reaches these words and stores there are not proved here (at block size 128 they are
+  MojoProofTest/LnRun.lean's run).
 * The premises' instances: the `example`s after each, with the `getelementptr`s into `oneBuf`, a
   memory of one buffer, at the default layout (64-bit pointers, 4-byte floats).
 * The mutants at the launches where the premise fails (`gemv_wrap`, `naive_wrap`, `ln_wrap`):
@@ -449,7 +450,8 @@ tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll, at
 words are the semantics' operations at symbolic words (`intCast`, `intBin`, `icmpV`), for every
 thread and step, not an evaluation. It is not a run theorem: that the index at step `j` is the
 word of `B j` (by induction from `0` at :679 over this step), that a run reaches these words and
-that it stores there are not proved. The second test of the same bound (:704-707) is
+that it stores there are not proved here; at block size 128 they are MojoProofTest/LnRun.lean's
+run. The second test of the same bound (:704-707) is
 `ln_second`. -/
 theorem ln_words (y n : Nat) {B : Nat} {σ : Sizes} {L : Launch} (ha : lnAdm B σ L)
     (hL : L.Valid) (hw : 2 * (4 * (B * σ 5)) < 2 ^ 64) (hn : 2 * n < 2 ^ 64) {t : Nat}

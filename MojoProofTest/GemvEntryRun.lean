@@ -1,6 +1,7 @@
 import MojoProofTest.SymGemvTail
 import MojoProof.Sym.Slot
 import MojoProof.Sym.WaitVia
+import MojoProof.Sym.SigKernel
 
 /-!
 # gemv_kernel's entry block `%6` at a free thread
@@ -394,14 +395,13 @@ def SlotEv (who : Who) (b7 b8 b9 : Nat) (e : Event) : Prop :=
 
 /-- For every thread `who`, block numbers `b7`, `b8`, `b9`, memories, layout, space, type, value,
 pointer `p` into one of the three blocks and alignment: a store by `who` at `p` that succeeds
-extends a memory's trace by an event of `SlotEv` (`Mem.store_trace`). -/
+extends a memory's trace by an event of `SlotEv`; `Ext.store` at `SlotEv`. -/
 theorem ext_store {who : Who} {b7 b8 b9 : Nat} {m₀ m m' : Mem} {l : Layout} {a : Nat} {t : Ty}
     {v : Val} {p : Ptr} {al : Option Nat} (h : Ext (SlotEv who b7 b8 b9) m₀ m)
     (hs : m.store l who a t v p al = .ok m') (hb : p.block = b7 ∨ p.block = b8 ∨ p.block = b9) :
     Ext (SlotEv who b7 b8 b9) m₀ m' :=
-  have ⟨E, h₁, h₂⟩ := h
-  ⟨_ :: E, by rw [Mem.store_trace hs, h₁]; rfl, fun e he =>
-    (List.mem_cons.1 he).elim (fun he => ⟨_, he, rfl, rfl, rfl, hb⟩) (h₂ e)⟩
+  h.trans (by simpa only [hs] using Ext.store (P := SlotEv who b7 b8 b9) (l := l) (w := who)
+                (m := m) (a := a) (t := t) (v := v) (p := p) (al := al) ⟨_, rfl, rfl, rfl, rfl, hb⟩)
 
 /-- `entry_obls` closes a lifetime marker's obligations from the node facts in context, then by
 `mojo_obl`. -/

@@ -15,7 +15,12 @@ by 32 (indices in x, y, z order, x fastest). A thread's special registers come f
   `internal` shared global (undefined bytes) and one block of `dynShared` bytes that every
   `external` shared global names (CUDA's dynamic shared memory). Thread `n` accesses memory as
   `⟨n, n / size⟩` (`Who`). The trace of the start memory is empty: it records the kernel's own
-  accesses. The caller's memory is checked before any allocation (`Mem.checkClosed`): a launch
+  accesses. The launch is checked before any allocation (`Func.checkLaunch`): as many arguments
+  as the kernel has parameters, and a block within the kernel's launch limits (NVVM's
+  `"nvvm.maxntid"` and `"nvvm.reqntid"`, PTX ISA 9.5, sections 11.5.2-3, or their legacy form in
+  the module's `!nvvm.annotations`), a launch beyond them failing (unsupported); an annotation
+  key other than `kernel` and the limits' is unsupported. The caller's memory is checked before any allocation
+  (`Mem.checkClosed`): a launch
   on a memory with `next = 0`, a block 0, or a pointer (of the arguments, or in a byte of a block
   below `next`) to a number from `next` on is unsupported. The check reads no block from `next`
   on, so that the start's grid is closed takes the caller's hypothesis on those blocks' pointer
@@ -53,7 +58,10 @@ by 32 (indices in x, y, z order, x fastest). A thread's special registers come f
 `Grid.run` is the evaluator: phases in which every thread runs until it waits or returns, then
 every collective call that can complete does; no progress is a deadlock (undefined behavior).
 
-Proved here: `Mem.compact` is the identity (`Mem.compact_eq`) and compiles to `Mem.tabulate`,
+Proved here: a launch within `"nvvm.maxntid"` of a kernel with no `!nvvm.annotations` entry
+passes `Func.checkLaunch` (`Func.checkLaunch_maxntid`), for every module, kernel, block and number
+of arguments;
+`Mem.compact` is the identity (`Mem.compact_eq`) and compiles to `Mem.tabulate`,
 the same memory tabulated (`Mem.compact_csimp`); the check's loop `allBelow` is
 `(List.range n).all` (`allBelow_eq_all`), which compiled code runs for it (`allBelow_csimp`);
 a closed memory passes the start's
@@ -313,13 +321,158 @@ structure Grid where
   /-- The memory the threads share. -/
   mem : Mem
 
+/-- The numbers separated by commas in the characters `cs`, each as its characters. -/
+def commaParts : List Char → List (List Char)
+  | [] => [[]]
+  | c :: cs =>
+    if c = ',' then [] :: commaParts cs
+    else match commaParts cs with
+      | p :: ps => (c :: p) :: ps
+      | [] => [[c]]
+
+/-- The number that the decimal digits `cs` write; `none` if `cs` is empty or has another
+character. -/
+def decimal (cs : List Char) : Option Nat :=
+  if cs ≠ [] ∧ cs.all fun c => '0' ≤ c ∧ c ≤ '9' then
+    some (cs.foldl (fun n c => 10 * n + (c.toNat - '0'.toNat)) 0)
+  else none
+
+/-- The extents, x, y and z, that a value of NVVM's string attribute `"nvvm.maxntid"` or
+`"nvvm.reqntid"` gives: one to three decimal numbers separated by commas, a missing extent being 1
+(NVVM's form `x[,y[,z]]`); `none` for another string. -/
+def ntidDims (v : String) : Option (Nat × Nat × Nat) :=
+  match (commaParts v.toList).map decimal with
+  | [some x] => some (x, 1, 1)
+  | [some x, some y] => some (x, y, 1)
+  | [some x, some y, some z] => some (x, y, z)
+  | _ => none
+
+/-- The value of the string attribute `k` of function `fn` of module `md` (the first, if there
+are several); `none` if it has none. -/
+def _root_.MojoProof.LLVM.Func.strAttr (md : Module) (fn : Func) (k : String) : Option String :=
+  (fn.attrs md).findSome? fun
+    | .str k' v => if k' = k then some v else none
+    | _ => none
+
+/-- The key and value pairs of the operands `ops` of an `!nvvm.annotations` entry after its
+function: each a metadata string `!"key"` and a nonnegative constant of type `i32` (`i32 v`, the
+type NVVM's annotations use); `none` for operands of another form, a constant of another type
+(`i64 32`) included. -/
+def annotPairs : List MD → Option (List (String × Nat))
+  | [] => some []
+  | .str k :: .val (.mk (.int 32) (.int v)) :: ops =>
+    if 0 ≤ v then (annotPairs ops).map ((k, v.toNat) :: ·) else none
+  | _ => none
+
+/-- The `!nvvm.annotations` pairs of function `fn` of module `md` (NVVM's legacy form of kernel
+properties, which `nvptx` still reads): the pairs (`annotPairs`) of every node
+`!{ptr @fn, !"key", i32 v, ...}` that the named metadata `!nvvm.annotations` lists, in order.
+An entry that is not a node whose first operand is a global (`@g`), or whose pairs after `@fn`
+`annotPairs` does not read, is unsupported (it may say anything of the kernel). -/
+def _root_.MojoProof.LLVM.Func.annots (md : Module) (fn : Func) :
+    Except Fault (List (String × Nat)) := do
+  let ids := ((md.namedMD.toList.find? (·.1 == "nvvm.annotations")).map (·.2)).getD []
+  let mut acc := []
+  for n in ids do
+    match ((md.mds.toList.find? (·.1 == n)).map (·.2) : Option MD) with
+    | some (MD.node (MD.val (TValue.mk _ (Value.glob g)) :: ops)) =>
+      if g == fn.name then
+        let some ps := annotPairs ops
+          | throw (.unsupported s!"nvvm.annotations entry !{n} on @{fn.name} of another form")
+        acc := acc ++ ps
+    | _ => throw (.unsupported s!"nvvm.annotations entry !{n} of another form")
+  return acc
+
+/-- The keys of `!nvvm.annotations` that `Func.checkLaunch` admits: `kernel`, the entry marker
+(`ptx_kernel` already makes the function a kernel), and the extents of `maxntid` and `reqntid`.
+Every other key is unsupported, such as `minctasm`, `maxnreg`, `maxclusterrank`,
+`cluster_max_blocks`, `cluster_dim_x` and `grid_constant`: the semantics does not model them. -/
+def ntidKeys : List String :=
+  ["kernel", "maxntidx", "maxntidy", "maxntidz", "reqntidx", "reqntidy", "reqntidz"]
+
+/-- The extents, x, y and z, that the `!nvvm.annotations` pairs `ps` give a launch limit `k`
+(`maxntid` or `reqntid`): the values of `kx`, `ky` and `kz`, a missing one being 1; `none` if
+`ps` has none of them. -/
+def annotDims (ps : List (String × Nat)) (k : String) : Option (Nat × Nat × Nat) :=
+  let get (d : String) := (ps.lookup (k ++ d)).getD 1
+  if ["x", "y", "z"].any fun d => (ps.lookup (k ++ d)).isSome then
+    some (get "x", get "y", get "z")
+  else none
+
+/-- The launch limit `k` (`"nvvm.maxntid"` or `"nvvm.reqntid"`) of function `fn` of module `md`,
+from its string attribute `k` (`ntidDims`) and the extents `a` of its annotations: either, or
+both if they are equal; unsupported if they disagree or the attribute's value `ntidDims` does not
+read. -/
+def _root_.MojoProof.LLVM.Func.ntidLimit (md : Module) (fn : Func) (k : String)
+    (a : Option (Nat × Nat × Nat)) : Except Fault (Option (Nat × Nat × Nat)) :=
+  match fn.strAttr md k with
+  | none => pure a
+  | some v => match ntidDims v with
+    | some d =>
+      if a.all (· == d) then pure (some d)
+      else throw (.unsupported s!"{k} {v} on @{fn.name} with !nvvm.annotations that disagree")
+    | none => throw (.unsupported s!"{k} value {v}")
+
+/-- The launch of kernel `fn` of module `md` with blocks of sides `block` on `n` arguments is one
+the kernel admits: `n` is its number of parameters, and the block meets its launch limits, the
+string attributes NVVM lowers to PTX's performance-tuning directives (PTX ISA 9.5), or their
+legacy form, the module's `!nvvm.annotations` entries on `fn` (`Func.annots`: `maxntidx`,
+`maxntidy`, `maxntidz`, `reqntidx`, `reqntidy` and `reqntidz`, a missing extent being 1;
+`annotDims`): with `"nvvm.maxntid"` the block has at most the product of its extents of threads
+(section 11.5.2, `.maxntid`: "Exceeding the maximum number of threads results in a runtime error
+or kernel launch failure"; it bounds the product, not each dimension), and with `"nvvm.reqntid"`
+each side of the block is its extent (section 11.5.3, `.reqntid`: "Specifying a different CTA
+dimension at launch will result in a runtime error or kernel launch failure"). A launch beyond
+them fails, so it has no run: unsupported. Both limits on one kernel (11.5.3: `.reqntid` "cannot
+be used in conjunction with the .maxntid directive"), an attribute and annotations of one limit
+that disagree, a value `ntidDims` does not read, an annotation key other than those and `kernel`
+(`ntidKeys`), or a key twice, are unsupported.
+-/
+def _root_.MojoProof.LLVM.Func.checkLaunch (md : Module) (fn : Func) (block : Dim → Nat)
+    (n : Nat) : Except Fault Unit := do
+  unless fn.params.length = n do
+    throw (.unsupported s!"@{fn.name} has {fn.params.length} parameters, launched on {n} arguments")
+  let ps ← fn.annots md
+  for (k, _) in ps do
+    unless ntidKeys.contains k do
+      throw (.unsupported s!"nvvm.annotations key {k} on @{fn.name}")
+    unless ps.countP (·.1 == k) = 1 do
+      throw (.unsupported s!"nvvm.annotations key {k} twice on @{fn.name}")
+  match ← fn.ntidLimit md "nvvm.maxntid" (annotDims ps "maxntid"),
+      ← fn.ntidLimit md "nvvm.reqntid" (annotDims ps "reqntid") with
+  | none, none => pure ()
+  | some (x, y, z), none =>
+    unless volume block ≤ x * y * z do
+      throw (.unsupported s!"launch of {volume block} threads a block on @{fn.name}, \
+        beyond nvvm.maxntid {x},{y},{z}: a launch failure")
+  | none, some (x, y, z) =>
+    unless block .x = x ∧ block .y = y ∧ block .z = z do
+      throw (.unsupported s!"launch of a block of another shape than nvvm.reqntid {x},{y},{z} on \
+        @{fn.name}: a launch failure")
+  | some _, some _ => throw (.unsupported "nvvm.maxntid with nvvm.reqntid")
+
+/-- **A launch within `nvvm.maxntid` passes its check**: for every module `md`, kernel `fn`,
+block sides `block` and number `n` of arguments, if `fn` has `n` parameters, no
+`!nvvm.annotations` entry, `"nvvm.maxntid"` `v` and no `"nvvm.reqntid"`, `v` reads as extents
+`(x, y, z)` and the block has at most `x * y * z` threads, then `Func.checkLaunch` passes. -/
+theorem _root_.MojoProof.LLVM.Func.checkLaunch_maxntid {md : Module} {fn : Func}
+    {block : Dim → Nat} {n x y z : Nat} {v : String} (hn : fn.params.length = n)
+    (ha : fn.annots md = .ok [])
+    (hv : fn.strAttr md "nvvm.maxntid" = some v) (hr : fn.strAttr md "nvvm.reqntid" = none)
+    (hd : ntidDims v = some (x, y, z)) (hb : volume block ≤ x * y * z) :
+    fn.checkLaunch md block n = .ok () := by
+  simp [Func.checkLaunch, Func.ntidLimit, annotDims, hn, ha, hv, hr, hd, hb, bind, Except.bind,
+    pure, Except.pure]
+
 /-- The kernel `fn` of `prog` launched with `L` on argument values `args` and memory `m`: the
 grid with every thread at the start, and the context of each thread number. Every address comes
 from the skeleton choices `ch`: block of threads `b`'s shared memory reads
 `ch (Nat.pair (b + 2) i)`, thread `n`'s `byval` copies `ch (Nat.pair 0 (Nat.pair n i))` and its
 `alloca`s `ch (Nat.pair 1 (Nat.pair n j))` (`Ctx.addr`). Thread `n` gets the payload choices
-`oracle n`. The kernel (`Func.check`) and then the caller's memory (`Mem.checkClosed`,
-unsupported if a pointer names a block from `next` on) are checked before any allocation; the
+`oracle n`. The kernel (`Func.check`), the launch (`Func.checkLaunch`: as many arguments as
+parameters, and the block within the kernel's launch limits) and then the caller's memory
+(`Mem.checkClosed`, unsupported if a pointer names a block from `next` on) are checked before any
+allocation; the
 memory is changed by nothing but the launch's allocations, each at a
 number with no block (`Mem.allocNext`): the start keeps every block of `m`
 (`Grid.start_blocks`), and no pointer of the launch names a number from `next` on but those of
@@ -329,6 +482,7 @@ def Grid.start (prog : Program) (fn : Func) (L : Launch) (args : List Val) (m : 
   let l := prog.layout
   let size := volume L.block
   fn.check prog.module
+  fn.checkLaunch prog.module L.block args.length
   m.checkClosed args
   let (m, tabs) ← (List.range (volume L.grid)).foldlM (init := (m, [])) fun (m, acc) b => do
     let (m, tab) ← shared l prog.module.globals.toList L.dynShared b
@@ -570,6 +724,10 @@ theorem shared_blocks {l : Layout} {gs : List Global} {dyn c : Nat} {ch : Nat �
 theorem launchArgs_blocks {l : Layout} {m m' : Mem} {n : Nat} {fn : Func} {args vs : List Val}
     {ch : Nat → Nat} (h : launchArgs l m n fn args ch = .ok (m', vs)) {b : Nat} {x : Block}
     (hb : m.blocks b = some x) : m'.blocks b = some x := by
+  unfold launchArgs at h
+  split at h
+  swap
+  · cases h
   refine foldlM_inv (P := fun r => r.1.blocks b = some x) (fun r pv r' hs hr => ?_) _ _ h hb
   obtain ⟨m1, acc⟩ := r
   obtain ⟨⟨p, v⟩, i⟩ := pv
@@ -596,6 +754,8 @@ theorem Grid.start_blocks {prog : Program} {fn : Func} {L : Launch} {args : List
     (hb : m.blocks b = some x) : g.mem.blocks b = some x := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h
@@ -636,6 +796,8 @@ theorem Grid.start_ctx {prog : Program} {fn : Func} {L : Launch} {args : List Va
       (c n).oracle = oracle n := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h

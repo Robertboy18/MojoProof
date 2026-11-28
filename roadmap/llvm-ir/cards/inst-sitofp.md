@@ -18,7 +18,7 @@ LangRef's section on `sitofp` (the quote is the first sentence of its overview).
 
 ## Corpus
 
-3 of the 116 corpus files use it (10 uses).
+3 of the 127 corpus files use it (10 uses).
 
 ## Out of scope
 

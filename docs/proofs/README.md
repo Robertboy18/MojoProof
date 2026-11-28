@@ -295,9 +295,6 @@ pointer facts' definitions) unless another file is named.
     `MojoProofTest/SymCast.lean`, `MojoProofTest/SymSeg.lean`); the segment checker's tail takes
     the `alloca` flag (`MojoProofTest/SymSegAlloca.lean`), and with it the whole of `%6` from
     statement 0 is in the fragment (`gemv_segs_alloca`). The runs proved:
-    - gevm_kernel's thread from its entry to `ret` at every launch with 1024 threads a block, for
-      every `K` and `N` with `K % 32 = 0` and `K * N < 2 ^ 29` and every delivered values of the
-      barrier and the shuffles (`whole`, `MojoProofTest/OblGevmWhole.lean`);
     - gevm_kernel's `%59` thread with its six waits whole (`thread`, `waits`,
       `MojoProofTest/GevmLane.lean`) and its thread from the entry to the barrier as a `ToWait`
       (`bar`, `MojoProofTest/GevmBar.lean`);
@@ -802,10 +799,8 @@ pointer facts' definitions) unless another file is named.
     `guardAt_subset`, `tile_subset_guardAt`, `cover_guardAt`, `Tiling.mono`) with layer norm at
     every row length (`ln_guard_*`, `lnStores_eq` for every block size, row length, thread and
     count, tests at `n = 300` and `n = 170`, mutant `ln_unguarded_300`); layer norm's loop run at
-    block size 128 for every row length, the addresses and the guard proved and the floats stored
-    given (MojoProofTest/LnGep.lean: `ln_gep_row`, `ln_gep_past`, poison past the row, no fault;
-    MojoProofTest/LnRound.lean: `round_true`, `round_false`; MojoProofTest/LnRun.lean:
-    `run_from`, `run`, `run_entry`);
+    every block size of its family (instances at 64, 128, 256, 1024) for every row length
+    ([layernorm.md](layernorm.md));
     gemv's warp view and the
     naive matmul's thread view at MojoProof's `sig` as natural-number models of the bytes their
     IR stores (the naive
@@ -842,8 +837,9 @@ pointer facts' definitions) unless another file is named.
     access that writes for the core overlapping a frozen read (`kept_sig_iff`), the instance `OneRun
     sig`, and `Grid.start_sound`'s
     exact statement, at `m.BytesIn m.Known`, from Theorem 0 (`MojoProofTest/Theorem0.lean`:
-    `sound_sig`, `sound_of_sig`, with `applies_one` and `applies_six` at two memories that are not
-    closed); `Clean.of_lift`, the one-run argument along a projection with no good start for every
+    `sound_sig`, through the conversion `Grid.Sound.of_sig` and `Kernel.Sound.of_sig` of
+    `MojoProof/Sym/SigKernel.lean`, with `applies_one` and `applies_six` at two memories that are
+    not closed); `Clean.of_lift`, the one-run argument along a projection with no good start for every
     observation of the states, with its cases `Sound.of_lift` (the bytes) and
     `Grid.sound_of_one_run` (the grid's memory at `sig`, through `Grid.Sound.of_clean`); and
     `Grid.sound_commuting` and its case `Grid.sound_returning`, at one thread on `Launch.one` (`MojoProofTest/Close.lean`,
@@ -886,11 +882,48 @@ pointer facts' definitions) unless another file is named.
     (`of_turns`), the one-level run as the case of one phase per block (`PhaseRun.of_canon`), with
     `CanonRun.done`, `CanonRun.start_done` and `CanonRun.start_sound` as the phase level's at that
     run, the instances through a barrier and two shuffles at one block of four threads and at 4
-    and 8 threads (`MojoProofTest/SymColl.lean`, `MojoProofTest/SymChain.lean`, with a shuffle
-    before the waits by `WarpWait.of_inv` at `J = 1`, `shfl_wait`), and the
+    and 8 threads (`MojoProofTest/SymColl.lean`, `MojoProofTest/SymChain.lean`, the warp past
+    the barrier by `warp_route`, the warp to the second shuffle's waits by `WarpWait.of_waits`
+    at `J = 1` with each lane's status, `statusAt`, `shfl_wait`), the kernel theorem from each
+    block's phases between its barriers (`WarpSegsBar`, `Kernel.run_of_phases`,
+    `Kernel.sound_of_phases`; `Kernel.sound_of_warps` its case with no barrier) with its
+    instances at SymColl's kernel at one block of 4 and of 8 threads
+    (`MojoProofTest/KernelPhases.lean` `run`, `sound`), and the
     instances at a kernel that stages through shared memory at one block of 34 threads and at two
     blocks of 6 (`MojoProofTest/SymCanonBar.lean`), and the instances at gevm_kernel's warps,
     blocks and grid (`MojoProofTest/GevmWarp0.lean`, `MojoProofTest/GevmWarp1.lean`).
+39. `layernorm.md`: layer norm's last loop at every block size `B` of its corpus family (the files'
+    `%469` to `%534`, the family `lnFam` of the bs128 program at `B`), run by the symbolic layer
+    for one thread at every row length, context and memory with the four row buffers, under
+    `0 < B`, `B ≤ 2 ^ 32` and the covers `LnCovers B`: the pointers past the row (`ln_gep_row`,
+    `ln_gep_past`), one round per guard value (`round_trueB`, `round_falseB`), and the run
+    (`run_fromB`, `runB`, `run_entryB`; at 128 `run_from`, `run`, `run_entry`) with its two
+    conclusions, the trace's order and number of accesses (`LnTrace`, `lnAcc_writes`) and the final
+    blocks with the floats stored (`LnOut` at `LnBytes`, `lnVal`, `lnVal_cases`, `lnVal_finite`,
+    `lnVal_error`, `LnOut.read`); the instance at a built memory (`run_mem`, `run_floats`,
+    `run_300`, `float_43`, `run_lnorm`, `run_torch`, `torch_iota`, `lnVal_two`, `log_blind`,
+    `short`), the instances at 64, 256 and 1024 (MojoProofTest/LnFamily.lean) and what is not
+    proved (the mean and inverse deviation, the files' own functions at 64, 256 and 1024, the whole
+    launch).
+40. `elementwise.md`: the three elementwise kernels at every float format: the retyping of a
+    program at a format (`Program.retype`, `Func.retype`, `Paths.retype`,
+    `MojoProof/Sym/Formats.lean`), the start for every kernel with `vector_addition`'s layout and
+    parameters (`vadd.startsOf`), the kernel theorem at every format for every kernel with that
+    layout and those parameters (`vadd.sound_retype`) and the tactic `mojo_map2_step`, and
+    `vadd.family`, `vmul.family`, `vsub.family` for every `FloatTy`
+    (`MojoProof/Kernels/Formats.lean`); the equations at `.float` and at the f16 and bf16 files,
+    and the kernel theorems at those files, in `MojoProofTest/Formats.lean`.
+41. `safe.md`: the spec-free kernel theorem `Kernel.Safe` (`Kernel.Sound` at the relation that
+    holds of every output; `MojoProof/Kernels/Safe.lean`) for every program, kernel, launch,
+    arguments, memory, admission and observation, and `Kernel.Safe.of_sound` from every kernel
+    theorem; its instance at `vector_addition` (`MojoProofTest/SafeVadd.lean` `vadd_safe`,
+    `vadd_safe23`, `vadd_safe_obs23`); the kinds table roadmap/llvm-ir/kinds.tsv; and the sweep of
+    Modular's GPU tests (scripts/safe_sweep.py, scripts/SafeSweep.lean, roadmap/kernels/sweep.tsv,
+    tests/sweep/); the spec-free mode (`MojoProof/Kernels/SafeCmd.lean`: `Kernel.safe_of_admits`
+    for every program, kernel and list of paths that `coversEntry` accepts, at the admission
+    `Kernel.Admits` decided by evaluation, and the command `mojo_safe`), which proves the two
+    `bitonic_global_step` kernels (`MojoProofTest/SweepSafe.lean`), the sweep's second round, and
+    the plan for loops.
 
 ## Not proved
 

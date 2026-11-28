@@ -81,7 +81,8 @@ on the offset (`View.guardAt`), not a layout (one layout serves every thread of 
 * `lnLoop`, `lnStores`: the floats the IR's loop stores at thread `t`, a model of the loop
   (exit :684, guard :708, step :681); `lnLoop_eq`, `lnStores_eq`: for every block size `B`, row
   length `n`, thread `t` and count `X` with `n ≤ t + B X`, they are the floats `t + B j`,
-  `j < X`, below `n`.
+  `j < X`, below `n`; `lnStores_nodup`: at `B ≥ 1` no float repeats (the `example` after it:
+  at `B = 0` one does).
 * `ln_guard_tile`: thread `t`'s guarded tile is the floats `t + B j`, `j < X`, below `n`, when
   it is in block 0, and no byte otherwise; `ln_guard_dvd`: at `n = B X` it is `ln_tile`'s tile
   (`View.guardAt_subset`, `View.tile_subset_guardAt`), so `ln_wf`, `ln_tile`, `ln_tiling`,
@@ -95,9 +96,10 @@ on the offset (`View.guardAt`), not a layout (one layout serves every thread of 
 * The mutant, `ln_unguarded_300`: at `n = 300`, byte 1532 of `y` (float 383) is in thread 127's
   tile without the guard and in no thread's stores.
 
-That a run of the kernel stores at these floats is not proved; `lnLoop` is a model of the IR's
-loop, not derived from it. The `example` after `lnLay_call` checks that `View.offAt` at the stride
-`cosize` is `View.off`.
+`lnLoop` is a model of the IR's loop, defined here, not derived from it. That a run of the
+kernel at block size 128 stores at `lnStores 128 n tid`'s floats, in that order, is
+MojoProofTest/LnRun.lean's `run`. The `example` after `lnLay_call` checks that `View.offAt` at
+the stride `cosize` is `View.off`.
 -/
 
 namespace MojoProofTest.GPUProof.ViewStride
@@ -566,6 +568,16 @@ theorem lnStores_eq {B n t X : Nat} (h : n ≤ t + B * X) :
   rw [Nat.mul_zero] at e
   rw [List.range_eq_range']
   exact e
+
+/-- **`lnStores` repeats no float**, for every block size `B ≥ 1`, row length `n` and thread `t`:
+by `lnStores_eq` at `X = n`, its floats are `t + B j` at distinct `j`. The premise is needed: at
+`B = 0`, `n = 2` and `t = 0` the index never steps and `lnStores` is `[0, 0]`. -/
+theorem lnStores_nodup {B : Nat} (hB : 0 < B) (n t : Nat) : (lnStores B n t).Nodup := by
+  rw [lnStores_eq (X := n) (Nat.le_add_left_of_le (Nat.le_mul_of_pos_left n hB))]
+  exact (List.nodup_range.filter _).map fun a b h =>
+    Nat.eq_of_mul_eq_mul_left hB (Nat.add_left_cancel h)
+
+example : lnStores 0 2 0 = [0, 0] := by decide
 
 /-- **Layer norm's guarded tile at a row of `n` floats**, a natural-number model. At MojoProof's
 `sig`, for every buffer `y`, block size `B` and row length `n`, at every assignment and launch

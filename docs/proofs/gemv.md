@@ -24,9 +24,12 @@ hand-built kernels and the run of `gemv_kernel`'s three `alloca`s as tests
 (MojoProofTest/SymAlloca.lean). Everything after the section "What the checker
 takes" is a plan, not a proof, but for items 1 to 3, item 5's node and item 6's done parts:
 the constructs each block of the two kernels uses that the checker refuses, the summaries that
-would take them, and the order of the work. The runs proved: `gevm_kernel`'s thread from its
-entry to `ret` at every launch with 1024 threads a block, for every `K` and `N` with `K % 32 = 0`
-and `K * N < 2 ^ 29` (`whole`, MojoProofTest/OblGevmWhole.lean), and `gemv_kernel`'s warps from
+would take them, and the order of the work. The runs proved: `gevm_kernel`'s grid from
+`Grid.start` to a done grid at every valid launch with 1024 threads a block in `x` and a
+one-dimensional grid, `N = 32 · L.grid .x`, `K % 32 = 0` and `K * N < 2 ^ 29`
+(`GevmWarp1.grid`, MojoProofTest/GevmWarp1.lean:795; a thread to its barrier by `GevmBar.bar`,
+MojoProofTest/GevmBar.lean:79, and from `%59` to its end by `GevmLane.thread`,
+MojoProofTest/GevmLane.lean:102), and `gemv_kernel`'s warps from
 `Grid.start` to a done grid at three launches with `K = 0` and two with one round of the loop,
 `K = 4` and `K = 3`, whose output cell holds `warpDot`'s word (item 6,
 MojoProofTest/GemvWarp.lean). And at every valid one-dimensional launch whose block's `x` size
@@ -578,7 +581,7 @@ and the segments take them, item 6) and the schedule through the reductions' col
      1))` with `M J (j + 1)` that memory (`out`), by `RunsVia.imp` (MojoProof/Sym/WaitVia.lean, a
      weaker final predicate, for every program, by induction on the waits);
    - then the deliveries at the warp, in this order: (a) done: lane `j`'s seven waits as
-     `WarpRun.of_waits` (MojoProof/Sym/Canon.lean:493) takes them, `(W i j).via fn (lbl i)` for
+     `WarpRun.of_waits` (MojoProof/Sym/Canon.lean:531) takes them, `(W i j).via fn (lbl i)` for
      `i < 7` with `W i j` the `i`-th of `entry`'s two and `%78`'s five (`GemvLoopTail.shfls`)
      and labels 6 and 65 (`waits_range`, by `Piece.Wait.map_via_append`, MojoProof/Sym/Canon.lean,
      which is `Piece.Wait.map_via` for two blocks), with the final predicate as that equation
@@ -666,7 +669,7 @@ and the segments take them, item 6) and the schedule through the reductions' col
      the start's `next` and every block outside the lanes' `alloca` numbers (`Out.warp_frame`); its
      premises (`Out.Pre`) from the grid's start (`Out.Pre.of_start`); (i) done at every
      one-dimensional launch: the warps as one canonical run, by `CanonRun.of_inv`
-     (MojoProof/Sym/Canon.lean:569) over `warps L N`, `N` the grid's thread count, with the
+     (MojoProof/Sym/Canon.lean:598) over `warps L N`, `N` the grid's thread count, with the
      invariant after `i` warps that the output buffer is kept, every later warp's premises hold on
      the memory (`Lanes.Pre` for a row below `M`, `Out.Pre` for one at `M` or more) and every
      earlier in-range warp's row word loads. At `i = 0` the premises are the start's
@@ -695,7 +698,7 @@ and the segments take them, item 6) and the schedule through the reductions' col
      participating warps share a row below `M` (only a warp whose row is below `M` stores), which
      not every one does: block (16, 2, 1) and grid (1, 1, 1) has one warp, and at `M = 0` no warp
      stores; block (32, 2, 1) and grid (1, 1, 1) at `M ≥ 1` has two warps of row 0, whose lanes
-     0 both store it: `row_race` (MojoProofTest/GemvSound.lean:552) has threads 0 and 32 of row
+     0 both store it: `row_race` (MojoProofTest/GemvSound.lean:527) has threads 0 and 32 of row
      0 there and their two stores at row 0 racy (thread 32's at row 1 would not be); no theorem
      states that a run reaches both stores.
 7. The kernel theorems (item 7), first gemv_kernel's.
@@ -717,15 +720,16 @@ and the segments take them, item 6) and the schedule through the reductions' col
    at `Q m₁`: `m₁.next` is `g`'s and `m₁`'s trace extends `g`'s by `Ev` events, `Ext`,
    MojoProof/Sym/SegTrace.lean:308), a warp's from its lanes' (`lanes_ext`, `out_ext`: the
    `alloca`s log nothing, `mem0_trace`, the butterfly shuffles change no memory, and the last
-   phase logs lane 0's store only, `ext_out`), and `grid_rows`' rows at that run's end memory
-   (`rows_of_loads`, MojoProofTest/GemvWarpWord.lean:272). `Grid.sound_cells`
+   phase logs lane 0's store only, `ext_out` by `Ext.store`, MojoProof/Sym/SigKernel.lean:285),
+   and `grid_rows`' rows at that run's end memory (`rows_of_loads`,
+   MojoProofTest/GemvWarpWord.lean:272). `Grid.sound_cells`
    (MojoProof/Sem/Shared.lean:567) is not used: its `racy_kept_of_cells` takes every block
    other than the output cells read-only, and gemv_kernel writes its `alloca` slots. Done:
-   `grid_end` (MojoProofTest/GemvSound.lean:287): gemv_kernel, for every valid
+   `grid_end` (MojoProofTest/GemvSound.lean:283): gemv_kernel, for every valid
    one-dimensional launch whose block's `x` size 32 divides, with `M ≤ L.block .x / 32 ·
    L.grid .x`, `grid_run`'s arguments, bounds and buffers: the warps' canonical run ends at a
    memory whose trace has no race and keeps the promise and whose rows meet `RowsDot`;
-   `grid_sound` (GemvSound.lean:370), with `m.BytesIn m.Known` too:
+   `grid_sound` (GemvSound.lean:360), with `m.BytesIn m.Known` too:
    `Grid.Sound L c g (rowsObs L M p0) (RowsDot L g c M K p0 A v)`; `rowsObs` reads the `M` rows
    at `p0` with the `who` that `Grid.start_ctx` (MojoProof/Sem/Grid.lean:632) gives thread
    `32 i`, `⟨32 i, 32 i / volume L.block⟩`, so it names no start's contexts; `RowsDot` is
@@ -737,25 +741,25 @@ and the segments take them, item 6) and the schedule through the reductions' col
    `GemvThread.mem_caller` gives `Caller`, its closed memory, buffers, fits and holds, for every
    `M`, `K < 2 ^ 31` with `M K < 2 ^ 61`; `m3_caller` and `GemvWarpRun.n3_caller` are its
    instances at the one-warp and two-warp memories. The lanes'
-   events, for every warp `w` with its premises: `lanes_events` (GemvSound.lean:249),
+   events, for every warp `w` with its premises: `lanes_events` (GemvSound.lean:244),
    `∀ j < 32, Ext (Ev w.m.next w.p0 bA bV w.M) (w.mem2 j) (w.mem2 (j + 1))` for an in-range warp
    (`Lanes.mem2`: lane `j`'s run from `%25`'s shuffle to `%78`'s first, IR lines 27-114), and
-   `out_events` (:240), `∀ j < 32, Ext (Ev w.m.next w.p0 bA bV w.M) (w.memE j) (w.memE (j + 1))`
+   `out_events` (:235), `∀ j < 32, Ext (Ev w.m.next w.p0 bA bV w.M) (w.memE j) (w.memE (j + 1))`
    for a warp whose row is `M` or more (`Out.memE`: lane `j`'s run from `%25` to its `ret`). The
    thread run lemmas carry the trace's extension to their continuations: `GemvEntryRun.entry`
    (MojoProofTest/GemvEntryRun.lean:481) the slot stores and loads of lines 29-44 as
-   `Ext (SlotEv …)` (`SlotEv`, :391: the thread's accesses of its three slots, none atomic or with
-   `!invariant.load`; `ext_store`, :398), `GemvLoop.run` (MojoProofTest/GemvLoop.lean:412) the loads
+   `Ext (SlotEv …)` (`SlotEv`, :392: the thread's accesses of its three slots, none atomic or with
+   `!invariant.load`; `ext_store`, :399), `GemvLoop.run` (MojoProofTest/GemvLoop.lean:412) the loads
    of lines 98-99 as `Ext (ReadEv bA bV)` (`ReadEv`, :129; two per round through `%70`, `roundA_inv`
    by `ext_reads`; none in a round through `%75`, `two_ext` by `Valuation.iterate_loads`),
    `GemvLoopTail.to_ret` (MojoProofTest/GemvLoopTail.lean:287) the same up to `%78`,
    `GemvThread.run` (MojoProofTest/GemvThread.lean:106) both from `d₂.2` to the wait at `%78`, and
    `GemvOut.run` (MojoProofTest/GemvOut.lean:120) the out-of-range lane's slot accesses to its end;
    `Lanes.mem2_ext` and `Out.memE_ext` (MojoProofTest/GemvWarpRun.lean:749 and :1180) take them to
-   the warp's lanes, and `slotEv_ev` (GemvSound.lean:224) makes a slot access an `Ev` event
+   the warp's lanes, and `slotEv_ev` (GemvSound.lean:219) makes a slot access an `Ev` event
    (`Mem.fresh` numbers the slots from `next` by their thread).
    (b) gemv_kernel's `GPUProof.Kernel.Sound` against `GPUProof.Spec.matVec` through Theorem 0,
-   with no `Res`: `kernel_sound` (GemvSound.lean:457). Statement:
+   with no `Res`: `kernel_sound` (GemvSound.lean:439). Statement:
    gemv_kernel, for every valid one-dimensional launch `L` whose block's `x` size 32 divides,
    with `M ≤ L.block .x / 32 · L.grid .x`, arguments
    `[.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bV, 0⟩, M, .bits 32 x4, K]` (every parameter is
@@ -767,15 +771,17 @@ and the segments take them, item 6) and the schedule through the reductions' col
    where `RowsRule K bits I f` says the rows load as words `W i` that meet the rule of
    `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)` at `(M, K)`,
    `MojoProof.Tile.matVecEnc FloatTy.float.fmt bits` and `I` (`GPUProof.FloatRule.Holds`). Route: at
-   each admitted choice, the start (`starts`, by `Grid.start_ok`, MojoProof/Sym/Start.lean:102, at
-   gemv's check, the closed memory and the `noundef` parameters, by evaluation), `grid_end`'s run,
-   its done grid (`CanonRun.start_done`, MojoProof/Sym/CanonBar.lean:768) not bad by
-   `Grid.Done.bad_iff` (MojoProof/Sem/Determinism.lean:164) with `grid_end`'s race and promise
-   facts, then Theorem 0 (`GPUProof.Sound.of_one_run`, GPUProof/Sound.lean:194) at `sig` as
-   MojoProofTest/Theorem0.lean's `sound_sig` (:39) applies it. The rows' relation is free of the
+   each admitted choice, the start (`starts`, MojoProofTest/GemvSound.lean:419, by
+   `Grid.start_of_check`, MojoProof/Sym/SigKernel.lean:93, whose `startCheck` `kernel_rfl`
+   evaluates: gemv's check, no globals, every parameter `noundef` with a defined argument),
+   `grid_end`'s run, its done grid (`CanonRun.start_done`, MojoProof/Sym/CanonBar.lean:768) not
+   bad by `Grid.not_bad` (SigKernel.lean:179, `Grid.Done.bad_iff`,
+   MojoProof/Sem/Determinism.lean:164) with `grid_end`'s race and promise facts, then Theorem 0
+   (`GPUProof.Sound.of_one_run`, GPUProof/Sound.lean:194) at `sig` as `kernel_sound_sig`
+   (SigKernel.lean:156, through `sound_sig`, :128) applies it. The rows' relation is free of the
    oracle: each row's word is its `warpDot` at its warp's loop oracle numbers up to NaNs
-   (`RowsDot`, MojoProofTest/GemvSound.lean:269, `MojoProof.Tile.WarpWords` at `matVecPairs`), and
-   `rows_holds` (:416) grades every row at whatever oracle numbers by
+   (`RowsDot`, MojoProofTest/GemvSound.lean:265, `MojoProof.Tile.WarpWords` at `matVecPairs`), and
+   `rows_holds` (:406) grades every row at whatever oracle numbers by
    `MojoProof.Tile.warpDot_matVec_holds` (MojoProof/Tile/MatVec.lean:597), the case of the row
    lemma `groupDot_rows_holds` (:496; through `holds_of`, :157, and `groupDot_nanEq_approx`, :420,
    with `GPUProof.ScalarEnc.decode_eq`, GPUProof/Spec/Basic.lean:154, for the NaNs).
@@ -798,24 +804,24 @@ and the segments take them, item 6) and the schedule through the reductions' col
      by `GevmWarp0.lane`, :172, from `GevmBar.bar`), each block's warps and its `BlockBar`
      (`GevmWarp0.block`, :279), the shared array then holding at cell `x` the loop sum of thread
      `1024 β + tpose 32 x` (`SegEvents.gevm_buffer`);
-   - each thread from the barrier to its end (`GevmWarp1.resume`, MojoProofTest/GevmWarp1.lean:83),
-     each warp through its five shuffles (`GevmWarp1.Warp.warp`, :384, by `WarpRun.of_waits` at
+   - each thread from the barrier to its end (`GevmWarp1.resume`, MojoProofTest/GevmWarp1.lean:84),
+     each warp through its five shuffles (`GevmWarp1.Warp.warp`, :375, by `WarpRun.of_waits` at
      `J = 5`, the deliveries by `Program.shfl_deliver_bfly`), lane 0's word NaN-equal to column
-     `32 β + w`'s `warpDot` (`Warp.acc_nanEq`, :497, by `warpDot_tpose`);
-   - each block from its entry to its end (`GevmWarp1.block`, :567), its 32 columns then loading
+     `32 β + w`'s `warpDot` (`Warp.acc_nanEq`, :488, by `warpDot_tpose`);
+   - each block from its entry to its end (`GevmWarp1.block`, :558), its 32 columns then loading
      as their `warpDot`s up to NaNs, the other blocks and columns kept;
-   - the trace: the loop adds only reads of `bA` and `bB` (`OblGevmRun.loop`, :176, an `Ext`
+   - the trace: the loop adds only reads of `bA` and `bB` (`OblGevmRun.loop`, :177, an `Ext`
      conjunct, from each round's two invariant loads), so a thread to the barrier adds those
-     reads and its store to its cell (`GevmBar.bar`, :79; `GevmWarp0.lane`), a block's phase 0
-     events of `GevmWarp0.Ev0` (:98: reads of the inputs, each thread's 4-byte store at its cell
+     reads and its store to its cell (`GevmBar.bar`, :80; `GevmWarp0.lane`), a block's phase 0
+     events of `GevmWarp0.Ev0` (:99: reads of the inputs, each thread's 4-byte store at its cell
      `32 laneid + tid.x / 32` of the block's array) and, after its barrier, events of
-     `GevmWarp1.Ev1` (:144: non-invariant reads of the array, lane 0's 4-byte store at its output
-     cell; `Warp.mout_ext`, :280); `GevmWarp1.block` concludes both extensions;
+     `GevmWarp1.Ev1` (:145: non-invariant reads of the array, lane 0's 4-byte store at its output
+     cell; `Warp.mout_ext`, :282); `GevmWarp1.block` concludes both extensions;
    - the blocks in turn on a grid of side 1 in `y` and `z` with `N ≤ 32 · L.grid .x`
-     (`GevmWarp1.blocks`, :706, by `PhaseRun.of_inv`): `∃ Es m', PhaseRun L c t
+     (`GevmWarp1.blocks`, :697, by `PhaseRun.of_inv`): `∃ Es m', PhaseRun L c t
      (List.range (volume L.grid)) m Es m' ∧ ColsDot … ∧ (m.trace = [] → ∀ x ∈ (phases
      m'.trace).1, Acc L c sb bA bB p0 x.2 x.1)`, every access with its phase one of
-     `GevmWarp1.Acc` (:157), the invariant's `PhaseInv` (MojoProof/Sym/PhaseExt.lean:28, for every
+     `GevmWarp1.Acc` (:158), the invariant's `PhaseInv` (MojoProof/Sym/PhaseExt.lean:28, for every
      property of accesses at a phase: `PhaseInv.ext` :44 over a block's `Ev0` events at count 0,
      `PhaseInv.bar` :66 at its barrier, `PhaseInv.ext` over its `Ev1` events at count 1,
      `PhaseInv.phases` :77 at the end), as the trace extends block by block
@@ -823,8 +829,9 @@ and the segments take them, item 6) and the schedule through the reductions' col
      of `p0`, read by thread `32 j`, is column `j`'s `warpDot`, `vecMatPairs A B j`, at its warp's
      loop oracle numbers up to NaNs: `MojoProof.Tile.WarpWords .float true o (vecMatPairs A B)`
      at those loads, MojoProof/Tile/Words.lean:42, the premise of `GevmSpec.cols_holds`, as
-     `RowsDot`, GemvSound.lean:269, is at `matVecPairs`); and `GevmWarp1.grid`
-     (:804): from a start (`Grid.start gevm.prog gevm.fn_0 L args m ch oracle = .ok (g₀, c)`)
+     `RowsDot`, GemvSound.lean:265, is at `matVecPairs`); and `GevmWarp1.grid`
+     (GevmWarp1.lean:795): from a start
+     (`Grid.start gevm.prog gevm.fn_0 L args m ch oracle = .ok (g₀, c)`)
      with arguments `[.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bB, 0⟩, x3, N, K]` (`%3` is not used),
      `N = 32 · L.grid .x`, the caller's memory `m` with the buffers `p0`, `bA` and `bB` of
      `Bufs`, and address choices whose shared arrays fit below `2 ^ 32` (`hch : ∀ β < L.grid .x,
@@ -844,15 +851,18 @@ and the segments take them, item 6) and the schedule through the reductions' col
      `2 ^ 32` (`Bufs`' fit); then `blocks` and `PhaseRun.start_done`. Tests at gevm_kernel's
      start at one block and at the layer-norm program's for every launch:
      MojoProofTest/StartShared.lean.
-   The done grid is not bad (`GevmSound.grid_bad`, MojoProofTest/GevmSound.lean:56, for every
-   such start, done grid reachable from it and `sb` with `Acc`): `Grid.Done.bad_iff`
-   (MojoProof/Sem/Determinism.lean:164), no race by `racy_cells` (MojoProof/Sem/Shared.lean:170)
-   at cell map `tpose 32` (injective below 1024, `tpose_tpose`), cell width 4, the owners
-   `z.mem.ctaOf` and the output's tiling `GevmTrace.warpTiles` (MojoProofTest/GevmTrace.lean:87;
-   lane 0's cell by `GevmTrace.out_cell`, :336), and the promise kept by `kept_of_split` (the
-   invariant loads read `bA` or `bB`, which no access writes). The owners at the done grid are
-   those at the start (`Grid.start_reach_above`): `p0`, `bA` and `bB` are the caller's (owner
-   `.all`, so no block of threads'), `sb β` is `β`'s. `GevmTrace.gevm_sound` (:174) takes the
+   The done grid is not bad (`GevmSound.grid_bad`, MojoProofTest/GevmSound.lean:55, for every
+   such start, done grid reachable from it and `sb` with `Acc`), an instance of
+   `Grid.not_bad_cells` (MojoProof/Sym/SigKernel.lean:213, for every program: `Grid.not_bad`'s
+   `Grid.Done.bad_iff`, MojoProof/Sem/Determinism.lean:164, no race by `racy_cells`,
+   MojoProof/Sem/Shared.lean:170, the promise kept by `Grid.start_kept`'s `kept_of_split`) at
+   cell map `tpose 32` (injective below 1024, `tpose_tpose`), cell width 4, the owners
+   `z.mem.ctaOf` and the output's tiling `GevmTrace.warpTiles` (MojoProofTest/GevmTrace.lean:80;
+   lane 0's cell by `GevmTrace.out_cell`, :228); the promise is kept because the invariant loads
+   read `bA` or `bB`, which no access writes. The owners at the done grid are those at the start:
+   `p0`, `bA` and `bB` are the caller's, no block of threads' (`Grid.start_reach_buffer`,
+   SigKernel.lean:252), `sb β` is `β`'s (`Grid.start_reach_ctaOf`, :237), and `bA`, `bB` are not
+   `p0` (`Mem.Buffer.ne`, :263). `GevmTrace.gevm_sound` (GevmTrace.lean:167) takes the
    trace as two rounds of the whole grid (`rounds (volume L.grid) [E₀, E₁]`) and is not used:
    the run's trace extends block by block, and `PhaseInv` counts each access's phase from its
    own block's barriers (`phases`, MojoProof/Sem/SigDef.lean:185) without rounds.
@@ -866,7 +876,7 @@ and the segments take them, item 6) and the schedule through the reductions' col
    (with buffers of exactly `N` and `K N` words). `Lane`'s column premise, `32 ctaid.x + 31 < N`,
    with `blocks`' `N ≤ 32 · L.grid .x`, already gives it at the last block.
    (d) gevm_kernel's `GPUProof.Kernel.Sound` against `GPUProof.Spec.vecMat`. Proved
-   (`GevmSound.kernel_sound`, MojoProofTest/GevmSound.lean:218): with (c)'s premises on the
+   (`GevmSound.kernel_sound`, MojoProofTest/GevmSound.lean:171): with (c)'s premises on the
    launch, sizes and caller's memory, `m` closed for the arguments (`Mem.Closed`), and every
    width `bits` and input words `I` that hold `A` and `B`,
    `GPUProof.Kernel.Sound sig (gevm.prog, gevm.fn_0) L args m adm
@@ -882,25 +892,27 @@ and the segments take them, item 6) and the schedule through the reductions' col
    no-wrap obligation (`blk.addr + size ≤ 2 ^ (l.ptr s).1`, MojoProof/Sym/Obl.lean:45;
    `GevmBar.bar`'s `hF`), and `grid` derives it from `hch`, the admission at `ω.1 = ch`. Where
    `colsObs` (MojoProofTest/GevmSpec.lean:55, `MojoProof.Tile.warpObs` at gevm's layout, as
-   `rowsObs`, GemvSound.lean:262) reads the `N` words at `p0`, and `ColsRule K bits I f`
+   `rowsObs`, GemvSound.lean:258) reads the `N` words at `p0`, and `ColsRule K bits I f`
    (GevmSpec.lean:64,
    `MojoProof.Tile.Loads`) says that they load as words meeting the rule of
    `GPUProof.Spec.vecMat g` at `(K, N)` and `vecMatEnc` with `g = vecMatLaneGrade 32 5 fun m =>
    (m + 31) / 32`. Proved: `cols_holds` (:80), `ColsDot` gives `ColsRule`; `TorchCols` (:98)
    and `torchCols_of_rule` (:114), the same words in TorchLean's `.vecMat` through
    `GPUProof.Importer.graded_of_holds`; tests at 3 × 2 and 40 × 3 and the mutants `off_ulp` and
-   `refused`. Route, as gemv's `kernel_sound` (GemvSound.lean:457): the start by
-   `GevmSound.starts` (:180, `Grid.start_ok`, MojoProof/Sym/Start.lean:102: gevm's one global an
-   internal shared array with an `undef` initializer, every parameter `noundef`, IR line 9),
-   (c)'s run and done grid by `GevmWarp1.grid`, not bad by (c)'s `grid_bad`, the observation
-   `colsObs` at the done grid by `rfl` and the relation by `cols_holds`, then Theorem 0
-   (`sound_sig`, MojoProofTest/Theorem0.lean:39). `GevmSound.gevm_torchLean` (:260) is the same
+   `refused`. Route, as gemv's `kernel_sound` (GemvSound.lean:439), an instance of
+   `kernel_sound_sig` (MojoProof/Sym/SigKernel.lean:156): the start by `GevmSound.starts` (:141,
+   `Grid.start_of_check`, SigKernel.lean:93: gevm's one global an internal shared array with an
+   `undef` initializer, every parameter `noundef`, IR line 9, by `kernel_rfl`; the twin after it,
+   a poison argument, fails the check), (c)'s run and done grid by `GevmWarp1.grid`, not bad by
+   (c)'s `grid_bad`, the observation `colsObs` at the done grid by `rfl` and the relation by
+   `cols_holds`, then Theorem 0 (`sound_sig`, SigKernel.lean:128). `GevmSound.gevm_torchLean`
+   (:214) is the same
    for `TorchCols` (`torchCols_of_rule`, for every grade of the importer's `.matVec`). Tests with
-   every premise proved and no run evaluated: `sound1024` (:314) and `torch1024` (:334, at
+   every premise proved and no run evaluated: `sound1024` (:268) and `torch1024` (:288, at
    `GPUProof.matVecGrade`), at one block of 1024 threads (`launch2 1 1 1024 1`), `N = K = 32`,
    every vector and matrix of binary32 words, the memory `GemvThread.mem B A` (the matrix at
    block 1, the vector at block 2, the output at block 3; closed for gevm's argument order,
-   `mem_closed`, :296) and the input words `colWords 32 A B`. The spec side
+   `mem_closed`, :250) and the input words `colWords 32 A B`. The spec side
    is in the core: the encoding `MojoProof.Tile.vecMatEnc` (MojoProof/Tile/MatVec.lean:141); the
    grade `g`, `GPUProof.vecMatLaneGrade (2 ^ 5) 5 fun m => (m + 2 ^ 5 - 1) / 2 ^ 5`
    (GPUProof/Spec/Linear.lean:296), `laneGrade (E.out.fmt j) 32 5 ⌈K / 32⌉ K` at column `j` where
@@ -915,6 +927,77 @@ and the segments take them, item 6) and the schedule through the reductions' col
    TorchLean's form is
    `MojoProof.Import.torchLean`'s `.vecMat` (`vecMat_eq`, MojoProof/Import/TorchLean.lean:121), as
    in `gemv_torchLean`.
+   (e) gevm_kernel's run through the prefix theorem. A plan; its first library lemma is built.
+   `GevmSound.kernel_sound`'s statement stays. Only the run inside `GevmWarp1.grid` changes: today
+   `blocks` and then `PhaseRun.start_done`. The replacement is `Kernel.run_of_prefixes`
+   (MojoProof/Sym/KernelWarps.lean).
+   From the start `h` and `Kernel.Prefixes gevm.prog gevm.fn_0 L c g₀ J T P`, it gives a done grid
+   `z`, reached by `Grid.Step`, with `P (volume L.grid) 0 0 z.mem`; `GPUProof.Path.exists_iff`
+   turns the reachability into `grid`'s path. `Kernel.sound_of_prefixes` itself does not fit,
+   because it concludes `Kernel.Sound` and the theorem is `GPUProof.Kernel.Sound sig`. Its
+   `EndChecks` stays replaced by `grid_bad` and `cols_holds`, as now. The instance, at the start's
+   `g₀` and `c` and the shared arrays `sb` of `Grid.start_shared`:
+   - `J := fun _ => 1`: one barrier per block. `blockWarps L b` has 32 warps.
+   - `T b 0 n t := t = Grid.thread g₀ n`. `Lane … (sb b) b n` comes from `grid`'s `hl`.
+   - `T b 1 n t := ∃ u xs e, AtBar c (Grid.thread g₀) N K p0 bA bB (sb b) b A B n
+     (.wait u .barrier xs e) ∧ t = u.resume none`. These are `GevmWarp1.warp`'s premise `hu` and
+     its threads.
+   - `P b i w` is a predicate of the memory alone. The block's entry memory, which
+     `GevmWarp0.block` and `GevmWarp1.block` name, becomes an existential:
+     `P b 0 w m' := ∃ m, Inv b m ∧ Bufs N K p0 bA bB (sb b) b A B m' ∧
+     (∀ q, q ≠ sb b → m'.blocks q = m.blocks q) ∧ ∃ Es', Turns (Cell ∧ Ext Ev0) ns m Es' m'`.
+     Here `ns` is the threads of the first `w` warps. `Inv b` is the invariant of `blocks`'
+     `PhaseRun.of_inv` after `b` blocks: the output buffer; the blocks other than `p0` and the
+     first `b` shared arrays kept; the first `b` blocks' columns; and `PhaseInv` of `Acc` at the
+     count "1 for the first `b` blocks".
+   - `P b 1 w` is the invariant of `GevmWarp1.block`'s `CanonRun.of_inv` after `w` warps. It has
+     the same existential and the shared array's `Holds` from `GevmWarp0.block`.
+   - `P (volume L.grid) 0 0 := Inv (volume L.grid)`. `ColsDot` and every trace access in `Acc`
+     follow from it, as `blocks`' conclusions do now (`PhaseInv.phases`).
+
+   The obligations, of which the library half of the first is built:
+   1. **The warp to the barrier.**
+      `WarpSegsTo gevm.prog gevm.fn_0 L c k t m₀ 0 gevm.fn_0.b_5.label 6 (T b 1) (P b 0 (w + 1))`,
+      with no shuffle before the barrier (`J = 0`). `GevmWarp0.lane` concludes an existential
+      memory (`∃ σ m', ToWait …`), and `WarpSegsTo` asks for the lanes' memories as one function
+      `M 0 j`. Built: the library lemma `WarpSegsTo.of_inv` (MojoProof/Sym/KernelWarps.lean), at
+      `J = 0` and for every program, function, launch, contexts, warp, threads, memory, barrier
+      word, block, position, thread predicate, memory predicate and invariant. Its premises: an
+      invariant `I j m` with `I 0 m₀`; for every lane `j` and memory of `I j`, a `ToWait` to a
+      barrier wait on one argument whose word is `bar`, at `(fn.name, l, p)`, whose resumed
+      thread is of `V` and whose memory is of `I (j + 1)`; and `Q` of every memory of `I` after
+      the last lane. No choice is needed: the lanes' memories are `nextWait`'s, lane `j + 1`'s the
+      memory at lane `j`'s wait (a `Nat.rec`), which every run to a wait gives (`nextWait_eq`), so
+      `GevmWarp0.lane`'s existential memory is that one. `RunsUpto` is the `ToWait`, and the `V`
+      clause holds since `statusAt c [] t m = (nextWait c t m).1`. Its concrete instance is
+      `KernelTwoWarp.seg_to`, now a corollary (the invariant `m = M0 (k + j)`). Not built: the
+      gevm instance, `GevmWarp0.lane` restated as `of_inv`'s lane premise at `I j := P b 0 j`
+      restricted to warp `k`'s lanes.
+   2. **The warp after the barrier.** `WarpSegs gevm.prog gevm.fn_0 L c k t m₀ (P b 1 (w + 1))`,
+      with five shuffles (`J = 5`, `shfl.sync.bfly`). `GevmWarp1.warp` proves `WarpRun.of_waits`'
+      premises and concludes `WarpRun`. Its lanes go by `resume` and `RunsVia.of_block`, its
+      deliveries by `shape` and `Program.shfl_deliver_bfly`. `WarpSegs` is those premises, with
+      `WarpRun.shfl_of`'s in place of the shuffle premise. This needs `warp` split in two:
+      - a lemma that states the premises as `WarpSegs`, with the lanes' memories `w.mlog j` and a
+        final predicate that carries `warp`'s other conclusions (the word at the output cell, the
+        frame, the output buffer);
+      - `warp` itself, as its corollary by `WarpSegs.run`.
+   3. **The barrier.** `P b 0 32 m₁ → P b 1 0 (m₁.log (.barrier b))`. This is the last part of
+      `GevmWarp0.block`: `SegEvents.gevm_buffer` for the shared array's `Holds`, `Bufs` after the
+      log, and `PhaseInv.bar`. It must be restated from the 32 warps' `Turns`, which `P b 0 32`
+      carries, instead of from `CanonWait.of_merge`.
+   4. **The block's end.** `P b 1 32 m → P (b + 1) 0 0 m`. These are `GevmWarp1.block`'s
+      conclusions (block `b`'s columns, the other blocks' loads, `Ext` of `Ev1`), then the step of
+      `blocks`' `PhaseRun.of_inv` (`bufferIn_ne`, `PhaseInv.ext`), restated on `P`.
+   5. **The start.** `T (n / 1024) 0 n (Grid.thread g₀ n)` holds by `rfl`. `P 0 0 0 g₀.mem`
+      follows from `grid`'s start facts, as now: `Grid.start_blocks`, `Grid.start_shared` and
+      `Grid.start_trace`.
+
+   What it removes is the hand composition of the phases in `GevmWarp0.block`, `GevmWarp1.block`
+   and `blocks`: `CanonWait.of_merge`, `BlockBar.of_waits`, `CanonRun.of_inv`, `BlockRun` and
+   `PhaseRun.of_inv`. The lane runs and their invariants stay. Obligation 1's library lemma no
+   longer needs a choice (`WarpSegsTo.of_inv` takes the lanes' memories from `nextWait`);
+   obligations 2 to 5 and the gevm instance of 1 are what remains.
 
 ## The specifications' premises
 

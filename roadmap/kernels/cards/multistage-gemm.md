@@ -22,9 +22,11 @@ several stages in flight.
 split-k form (float32, bfloat16 and float8 inputs, with and without an epilogue function). 22
 import: the importer accepts their inline asm `cp.async.cg.shared.global` copies
 (MojoProof/LLVM/Asm.lean) and refuses the 2 float8 ones at a `cvt.rn.satfinite.e4m3x2.f32`
-(tests/corpus/REFUSALS.tsv). exec faults at the copies, and the evaluator has no grid semantics
-for `ldmatrix` and `mma` yet (their models, `MojoProof.Sem.mmaStep`, `MojoProof.Sem.ldmatrix`
-and `MojoProof.Sem.Async`, are not dispatched).
+(tests/corpus/REFUSALS.tsv). exec faults at the copies, and the grid has no semantics for
+`ldmatrix` (unsupported, MojoProof/Sem/Grid.lean); the copies' model `MojoProof.Sem.Async` is not
+dispatched. The grid runs an `mma` of a whole warp with f16 or bf16 inputs and binary32
+accumulators by its model (`MojoProof.Sem.Grid.fire_mma`; tests/gpu/mma/record.txt is one
+instruction's conformance test on one GPU, not a proof).
 
-**Open.** The grid's dispatch of the copies, `ldmatrix` and `mma` to their models, then every
-level above L0.
+**Open.** The grid's dispatch of the copies and `ldmatrix` to their models, then every level
+above L0.

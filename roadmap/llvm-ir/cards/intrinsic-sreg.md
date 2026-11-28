@@ -5,7 +5,7 @@ kind: construct
 ref: PTX ISA 9.5 #special-registers-tid
 quote: "Thread identifier within a CTA."
 lean: MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sym.exec_sreg
-corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll
+corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gemv_dev2026112705/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv_dev2026112705/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll
 tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L3
@@ -19,7 +19,7 @@ PTX ISA's section on the instruction NVPTX lowers it to (the quote is the sectio
 
 ## Corpus
 
-108 of the 116 corpus files use it (532 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.read.ptx.sreg.ctaid.x`, `llvm.nvvm.read.ptx.sreg.ctaid.y`, `llvm.nvvm.read.ptx.sreg.ctaid.z`, `llvm.nvvm.read.ptx.sreg.nctaid.x`, `llvm.nvvm.read.ptx.sreg.nctaid.y`, `llvm.nvvm.read.ptx.sreg.ntid.x`, `llvm.nvvm.read.ptx.sreg.ntid.y`, `llvm.nvvm.read.ptx.sreg.tid.x`, `llvm.nvvm.read.ptx.sreg.tid.y`, `llvm.nvvm.read.ptx.sreg.tid.z`.
+119 of the 127 corpus files use it (571 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.read.ptx.sreg.ctaid.x`, `llvm.nvvm.read.ptx.sreg.ctaid.y`, `llvm.nvvm.read.ptx.sreg.ctaid.z`, `llvm.nvvm.read.ptx.sreg.nctaid.x`, `llvm.nvvm.read.ptx.sreg.nctaid.y`, `llvm.nvvm.read.ptx.sreg.ntid.x`, `llvm.nvvm.read.ptx.sreg.ntid.y`, `llvm.nvvm.read.ptx.sreg.tid.x`, `llvm.nvvm.read.ptx.sreg.tid.y`, `llvm.nvvm.read.ptx.sreg.tid.z`.
 
 The programs of the library's `mojo_kernel` theorems use it (`tests/corpus/vadd/vadd_vector_addition_vector_addition6A6A_793e5fe36a195e73.nvptx.ll`, `tests/corpus/vmul/vector_multiply_vector_multiply_vector_multiply6A6A_227fc544da3deaff.nvptx.ll`, `tests/corpus/vsub/vector_subtraction_vector_subtraction_vector_subtr6A6A_a0b4d9d2b6e652e1.nvptx.ll`).
 

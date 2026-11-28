@@ -567,6 +567,8 @@ theorem Grid.start_run {prog : Program} {fn : Func} {L : Launch} {args : List Va
   · cases h
   split at h
   · cases h
+  split at h
+  · cases h
   rename_i v2 h2
   cases h
   refine foldlM_mem_inv (P := fun r : Mem × Array Status =>
@@ -708,6 +710,10 @@ theorem launchArgs_closed {l : Layout} {m m' : Mem} {n : Nat} {fn : Func} {args 
     {ch : Nat → Nat} (h : launchArgs l m n fn args ch = .ok (m', vs)) (hm : m.BytesIn m.Known)
     (hargs : ∀ v ∈ args, v.NamesIn m.Known) :
     m'.BytesIn m'.Known ∧ (∀ b, m.Known b → m'.Known b) ∧ ∀ v ∈ vs, v.NamesIn m'.Known := by
+  unfold launchArgs at h
+  split at h
+  swap
+  · cases h
   refine foldlM_mem_inv (P := fun r : Mem × List Val => r.1.BytesIn r.1.Known ∧
       (∀ b, m.Known b → r.1.Known b) ∧ ∀ v ∈ r.2, v.NamesIn r.1.Known)
     (Q := fun pv : (Param × Val) × Nat => pv.1.2.NamesIn m.Known)
@@ -766,6 +772,8 @@ theorem Grid.start_closed {prog : Program} {fn : Func} {L : Launch} {args : List
     g.Closed c := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h

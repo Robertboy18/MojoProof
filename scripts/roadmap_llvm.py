@@ -21,14 +21,16 @@ The cards are generated, not written by hand. The inputs are:
   `Kernel.Sound`, which scripts/roadmap_status.py checks by the same table), with, for each L2
   theorem, the corpus file of the program it is about (`theorem_files`), read from
   roadmap/llvm-ir/programs.tsv, the table scripts/L3Programs.lean writes from the built
-  environment (`roadmap_status.programs`): for each L2 theorem and each theorem of the modules
-  MojoProof.Kernels.* that concludes `Kernel.Sound`, the programs of the `Kernel.Sound`
-  applications of its conclusion (after its binders; not of a premise, not under a negation),
-  each bound to a corpus file by its term: it unfolds to the program constant `mojo_import` added
-  for that file, which passed the import's checks. A program that only records a corpus file's
-  digest (a mutant that keeps it with another module) is bound to no file. The file must be a
-  manifest row of tests/corpus with the digest the constant records, and have it
-  (`corpus_file`). The gate checks the table against the build
+  environment (`roadmap_status.programs`): for each L2 theorem the kernel cards name and each
+  theorem of MojoProof/ and MojoProofTest/ that concludes `Kernel.Sound` (MojoProof's, or
+  GPUProof's at a MojoProof program) of a program bound to a corpus file, the programs of the
+  `Kernel.Sound` applications of its conclusion (after its binders; not of a premise, not under a
+  negation), each bound to a corpus file by its term: it unfolds to the program constant
+  `mojo_import` added for that file, which passed the import's checks. This script reads the
+  rows of the cards' L2 theorems and of the modules MojoProof.Kernels.* only. A program that
+  only records a corpus file's digest (a mutant that keeps it with another module) is bound to no
+  file. The file must be a manifest row of tests/corpus with the digest the constant records, and
+  have it (`corpus_file`). The gate checks the table against the build
   (`lake env lean --run scripts/L3Programs.lean --check`); this script only reads it.
 
 It writes one card per opcode the corpus uses, one per intrinsic family the corpus calls, one
@@ -42,17 +44,24 @@ MojoProofTest/Modelled.lean's table says `returns`, that is, the grid evaluator 
 construct (one block of one thread, a straight-line body) until every thread returned. Any other
 row (the run stops with `unsupported`, or with another fault, or does not start) makes the card
 L0, "parsed, not modelled": its `lean` is `not stated yet` and its body names the importer's
-declarations and the row. The table is computed by the semantics, not written by hand: the
-module's build fails unless the evaluator's output is the pinned table, so the table changes with
-the semantics; a construct with no row is an error here. A `returns` row is a positive witness
-for the form the test kernel runs; an incidental fault of a test kernel can only make a card L0,
-never L1. An L1 card is L2 when a record of a GPU run whose result is agreement ran a corpus
+declarations and the row. Its open work reports the row as that test kernel's failure, and joins
+the other evidence about the construct, which does not change the level: a theorem of the grid's
+step at it (`STEP_THEOREMS`, with the members of the family whose calls it covers and what it
+assumes), and the records of GPU runs of a test of one instruction whose intrinsics are members
+of it (`instruction_records`: tests/gpu/<name>/record.txt with no `kernel:` line). The table is
+computed by the semantics, not written by hand: the module's build fails unless the evaluator's
+output is the pinned table, so the table changes with the semantics; a construct with no row is
+an error here. A `returns` row is a positive witness for the form the test kernel runs; an
+incidental fault of a test kernel can only make a card L0, never L1. An L1 card is L2 when a
+record of a GPU run whose result is agreement ran a corpus
 kernel whose IR uses the construct (the token scan of that kernel's file, not a list): the card's
 `evidence: L2:` lists those records. Such a record is a conformance test, not a proof: the
 evaluator and the GPU gave the same output buffer, bit for bit, on the launches it lists. A record
-whose kernel file's sha256 is not the one it states is an error here. An L2 card is L3 when the
-IR of a proved kernel uses the construct: a kernel card with L2 evidence has an L2 theorem about a
-program whose corpus file's token scan finds it, and the card's `evidence: L3:` lists those
+whose result is agreement but that fails the check scripts/roadmap_status.py reads cards' records
+by (scripts/gpu_record.py: its kernel file's sha256, and each launch comparing as many words, at
+least one, as its `launches:` line states the output has) is an error here. An L2 card is L3 when
+the IR of a proved kernel uses the construct: a kernel card with L2 evidence has an L2 theorem
+about a program whose corpus file's token scan finds it, and the card's `evidence: L3:` lists those
 kernel card ids. Only the files of the theorems' programs count, not every file a kernel card's
 `corpus` field cites (which must cite them); a theorem whose program is bound to no corpus file
 (a conclusion about no fixed program or about two, or a program that unfolds to no program
@@ -91,6 +100,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 import cited  # noqa: E402  (the declaration index: `scan`)
 import roadmap_status  # noqa: E402  (the cards' front matter: `front_matter`, `parse_evidence`)
+import gpu_record  # noqa: E402  (the check of a GPU run record: `problem`)
 
 AREA = ROOT / 'roadmap' / 'llvm-ir'
 KERNEL_CARDS = ROOT / 'roadmap' / 'kernels' / 'cards'
@@ -268,9 +278,26 @@ FAMILY_NOTE = {
     'lifetime': 'The family is `llvm.lifetime.start` and `llvm.lifetime.end`; the ref is the '
                 'section on `llvm.lifetime.start`. ',
     'griddepWait': 'PTX ISA has one section for `griddepcontrol.wait` and '
-                   '`griddepcontrol.launch_dependents`. ',
+                   '`griddepcontrol.launch_dependents`. The semantics runs both as doing nothing: '
+                   'a launch is one isolated grid, with no prerequisite or dependent grid in '
+                   'flight (docs/TRUST.md T19, PTX ISA 9.5 section 9.7.15.14); a programmatic '
+                   'dependent launch is out of scope. ',
     'griddepLaunch': 'PTX ISA has one section for `griddepcontrol.wait` and '
-                     '`griddepcontrol.launch_dependents`. ',
+                     '`griddepcontrol.launch_dependents`. The semantics runs both as doing '
+                     'nothing: a launch is one isolated grid, with no prerequisite or dependent '
+                     'grid in flight (docs/TRUST.md T19, PTX ISA 9.5 section 9.7.15.14); a '
+                     'programmatic dependent launch is out of scope. ',
+}
+# A theorem of the grid's step at a call of a family whose test kernel's run stops (its row of
+# the Modelled table is not `returns`): the theorem, its file, a regex of the members whose calls
+# it covers (those of `Mma.table` with bf16 or f16 inputs and an f32 accumulator), and what it
+# assumes of the call.
+STEP_THEOREMS = {
+    'mma': ('MojoProof.Sem.Grid.fire_mma', 'MojoProof/Sem/TensorCoreWarp.lean',
+            r'llvm\.nvvm\.mma\.m16n8k(?:8|16)\.row\.col\.(?:bf16|f32\.f32)$',
+            'the 32 lanes of the warp lie whole in their block of threads and wait at the same '
+            '`mma`, its inputs are bf16 or f16 (`gridFmt`) with an f32 accumulator, and its A, B '
+            'and C words are finite'),
 }
 # PTX instructions an inline asm string starts with, and their PTX sections.
 ASM_REF = {
@@ -523,10 +550,9 @@ def proved_kernels(table=None) -> dict[str, dict[str, str]]:
     (`theorem_files`, from the elaborated statement, not from the card). The card's `corpus`
     field (files or directories, each path a glob) must cite each of those files, else it is an
     error here. The other files a card cites do not count: a construct that only they use is used
-    by no proved kernel. A row of the table (`programs`) of a theorem outside MojoProof.Kernels
-    that no card names as L2 evidence is an error here (the table is stale)."""
+    by no proved kernel. The table (`programs`) has rows of other theorems too (every theorem of
+    MojoProof/ and MojoProofTest/ about a bound program); they are not read here."""
     table = programs() if table is None else table
-    named = set()
     out = {}
     for p in sorted(KERNEL_CARDS.glob('*.md')):
         keys, _ = roadmap_status.front_matter(p.read_text())
@@ -542,9 +568,6 @@ def proved_kernels(table=None) -> dict[str, dict[str, str]]:
         for n, f in sorted(files.items()):
             assert f in cites, f'{p.relative_to(ROOT)}: {n} is about {f}, which it does not cite'
         out[keys['id']] = files
-        named |= set(ev['L2'])
-    stale = sorted(n for n, (mod, _) in table.items() if n not in named and not is_kernels(mod))
-    assert not stale, f'roadmap/llvm-ir/programs.tsv: rows of no L2 evidence {stale}; run `{REGEN}`'
     return out
 
 
@@ -570,57 +593,74 @@ def scan_corpus(ops: dict[str, Op], fams: dict[str, re.Pattern]):
     return used
 
 
-def gpu_launches(text: str) -> bool:
-    """Whether the launches of a GPU run record (its text `text`) all agree. A launch line is
-    `launch: n grid block words` (a 1-D launch) or `launch: m n k gx gy bx by words` (a 2-D launch
-    of the naive matmul kernel: sizes `m`, `n`, `k`, the grid's and the block's sides in x and
-    y). Its per-launch `evaluator: n N grid G block B: ...` or `evaluator: m M n N k K grid GX GY
-    block BX BY: ...` lines are as many as its launch lines (at least one), name the same numbers
-    but the words in the same order and each says `W words agree` with W the launch's words; its
-    `evaluator: L launches, 0 differ` line has L the number of launches; and its `compare:`
-    command passes that number as its last argument."""
-    launches = [line.split() for line in re.findall(r'^launch: (\d+(?: \d+)*)$', text, re.M)]
-    head = r'n \d+ grid \d+ block \d+|m \d+ n \d+ k \d+ grid \d+ \d+ block \d+ \d+'
-    evals = [(re.findall(r'\d+', e[1]), e[2])
-             for e in re.finditer(rf'^evaluator: ({head}): (.*)$', text, re.M)]
-    n = len(launches)
-    summary = re.findall(r'^evaluator: (\d+) launches, (\d+) differ$', text, re.M)
-    return (n > 0 and n == len(evals) and summary == [(str(n), '0')] and
-            re.findall(r'^compare: .* (\d+)$', text, re.M) == [str(n)] and
-            all(len(lt) in (4, 8) and lt[:-1] == et[0] and et[1] == f'{lt[-1]} words agree'
-                for lt, et in zip(launches, evals)))
-
-
 def gpu_records() -> dict[str, str]:
-    """The records of GPU runs (tests/gpu/*/record.txt) whose `result:` line starts with `agree`
-    and whose launches all agree (`gpu_launches`): for each, the corpus file of the kernel it ran
-    (its `kernel:` line). A record with no `kernel:` line, of one instruction (tests/gpu/mma/,
-    ldmatrix/, cp-async/), is skipped. The file must exist and have the sha256 of the record's
-    `kernel sha256:` line. A record whose `result:` says `agree` but whose launch, evaluator and
-    compare lines do not is not counted, with a message on stderr. Each counted record, with its
-    first launch's words changed, must be rejected by `gpu_launches`."""
+    """The records of GPU runs of corpus kernels (tests/gpu/*/record.txt with a `kernel:` line)
+    whose `result:` line starts with `agree`: for each, the corpus file of the kernel it ran. A
+    record with no `kernel:` line, of one instruction (tests/gpu/mma/, ldmatrix/, cp-async/), is
+    skipped, and so is one whose result is not agreement. Every other record must pass the check
+    scripts/roadmap_status.py reads a card's GPU run evidence by (scripts/gpu_record.py,
+    `problem`: its header, the kernel file and its sha256, and each launch's positive word count,
+    the one its `launches:` line states, with the evaluator's agreement), else this fails; and each,
+    with its first launch's words changed to one more or to 0 (the evaluator's line changed with
+    it), must fail that check."""
     out = {}
     for p in sorted(GPU.glob('*/record.txt')):
         text = p.read_text()
-        f = dict(re.findall(r'^([a-z][a-z0-9 ]*): (.*)$', text, re.M))
+        f = gpu_record.fields(text)
         rel = str(p.relative_to(ROOT))
         if 'kernel' not in f:
             continue  # the record of one instruction, not of a corpus kernel
-        k = ROOT / f['kernel']
-        assert k.is_file() and f['kernel'].startswith('tests/corpus/'), f'{rel}: no kernel file'
-        sha = hashlib.sha256(k.read_bytes()).hexdigest()
-        assert f['kernel sha256'] == sha, f'{rel}: {f["kernel"]} has sha256 {sha}'
-        if not f['result'].startswith('agree'):
+        if not f.get('result', '').startswith('agree'):
             continue
-        if gpu_launches(text):
-            out[rel] = f['kernel']
-            bad = re.sub(r'^(launch: (?:\d+ )+)(\d+)$', lambda m: m[1] + str(int(m[2]) + 1),
-                         text, count=1, flags=re.M)
-            assert bad != text and not gpu_launches(bad), f'{rel}: a changed word count is accepted'
-        else:
-            print(f'{rel}: result agree, but its launch, evaluator and compare lines do not '
-                  'agree; not counted', file=sys.stderr)
+        why = gpu_record.problem(text, ROOT)
+        assert why is None, f'{rel} {why}'
+        out[rel] = f['kernel']
+        first = re.search(r'^launch: (?:\d+ )+(\d+)$', text, re.M)
+        for w in (int(first[1]) + 1, 0):
+            bad = text.replace(first[0], first[0][:first.start(1) - first.start(0)] + str(w), 1)
+            bad = re.sub(rf'^(evaluator: [^:]*): {first[1]} words agree$',
+                         rf'\g<1>: {w} words agree', bad, count=1, flags=re.M)
+            assert bad != text and gpu_record.problem(bad, ROOT) is not None, \
+                f'{rel}: the launch with {w} words is accepted'
     return out
+
+
+def instruction_records() -> list[tuple[str, int, list[str], str]]:
+    """The records of GPU runs of a test of one instruction (tests/gpu/*/record.txt with no
+    `kernel:` line: tests/gpu/mma/, ldmatrix/, cp-async/), each as (record, the line number of
+    its `result:` line, the `llvm.nvvm.` intrinsics its `instruction:` and `ir:` lines name, its
+    GPU: the `gpu:` line up to its first ` (`). They are not runs of corpus kernels, so no
+    construct card's level counts them (`gpu_records` skips them)."""
+    out = []
+    for p in sorted(GPU.glob('*/record.txt')):
+        text = p.read_text()
+        f = gpu_record.fields(text)
+        if 'kernel' in f:
+            continue
+        rel = str(p.relative_to(ROOT))
+        lines = text.split('\n')
+        line = next((i + 1 for i, x in enumerate(lines) if x.startswith('result: ')), 0)
+        assert line and 'gpu' in f, f'{rel}: no result: or gpu: line'
+        names = sorted({n.rstrip('.') for x in lines if x.startswith(('instruction: ', 'ir: '))
+                        for n in re.findall(r'llvm\.nvvm\.[A-Za-z0-9_.]*', x)})
+        out.append((rel, line, names, f['gpu'].split(' (')[0]))
+    return out
+
+
+def step_theorem(fam: str, decls: set[str], members: list[str]):
+    """The theorem of `STEP_THEOREMS` for family `fam`, as (name, file, line, the members of
+    `members` it covers, the others, what it assumes), or None. The name must be a declaration,
+    stated by a line `theorem <name without MojoProof.Sem.>` of its file."""
+    if fam not in STEP_THEOREMS:
+        return None
+    name, rel, rx, assumes = STEP_THEOREMS[fam]
+    assert name in decls, f'STEP_THEOREMS: {name} is no declaration'
+    short = name.removeprefix('MojoProof.Sem.')
+    line = next((i + 1 for i, x in enumerate(read(rel).split('\n'))
+                 if x.startswith(f'theorem {short} ')), 0)
+    assert line, f'STEP_THEOREMS: {rel} states no theorem {short}'
+    cov = [n for n in members if re.match(rx, n)]
+    return name, rel, line, cov, [n for n in members if n not in cov], assumes
 
 
 def accepted_asm() -> list[tuple[str, str, str]]:
@@ -683,9 +723,17 @@ def card(cid, title, ref, lean, files, tests, body, gpu=(), kernels=()) -> str:
     return '\n'.join(head) + body.rstrip('\n') + '\n'
 
 
-def open_text(run: str, gpu=(), kernels=()) -> str:
-    """A construct card's open work, from its row of the Modelled table, its GPU records and the
-    proved kernels with a theorem about a program whose IR uses it."""
+def open_text(run: str, gpu=(), kernels=(), recs=(), thm=None) -> str:
+    """A construct card's open work, from its row of the Modelled table, its GPU records, the
+    proved kernels with a theorem about a program whose IR uses it, the records of GPU runs of
+    one instruction of it (`instruction_records`) and the theorem of the grid's step at it
+    (`step_theorem`). The last two do not change the level; they are named with what they cover."""
+    def codes(ns):
+        return ', '.join(f'`{n}`' for n in ns)
+    inst = ''.join(
+        f'{rel}:{line} records a GPU run, on {g}, of a test kernel of one instruction that calls '
+        f'{codes(ns)}; it is not a corpus kernel, so the rule of L2 (a record of a corpus kernel '
+        'whose IR uses the construct) does not count it. ' for rel, line, ns, g in recs)
     if run == 'returns' and gpu and kernels:
         return ('L3 is the top of the construct ladder. It says the construct is used by a proved '
                 'kernel, not that it has a theorem of its own: the forms of it that no proved '
@@ -693,10 +741,28 @@ def open_text(run: str, gpu=(), kernels=()) -> str:
     if run == 'returns' and gpu:
         return ('L3 needs a kernel card (roadmap/kernels/) with L2 evidence, a proved kernel, '
                 'with a theorem about a program whose IR uses the construct; there is none.\n')
-    if run == 'returns':
+    if run == 'returns' and not recs:
         return 'L2 needs a recorded GPU run of a test of the construct; there is none.\n'
-    return ('L1 needs a semantics of the construct: the run of its test kernel stops with '
-            f'`{run}`. L2 then needs a recorded GPU run of a test of it; there is none.\n')
+    if run == 'returns':
+        return ('L2 needs a recorded GPU run of a corpus kernel whose IR uses the construct; there '
+                'is none. ' + inst).rstrip() + '\n'
+    if thm is None:
+        head = ('L1 needs a semantics of the construct: the run of its test kernel stops with '
+                f'`{run}`. ')
+    else:
+        name, rel, line, cov, rest, assumes = thm
+        head = (f'L1 needs the run of its test kernel ({MODELLED}) to return; it stops with '
+                f'`{run}`. That is the failure of this test kernel, not the absence of a '
+                f'semantics: `{name}` ({rel}:{line}) proves that the grid\'s step at a call '
+                f'succeeds, with the results the model gives, when {assumes}. Of the members the '
+                f'corpus calls, its premises admit {codes(cov) if cov else "none"}'
+                + (f', and not {codes(rest)}' if rest else '') + '. ')
+    tail = ('L2 then needs a recorded GPU run of a test of it; there is none. '
+            if not recs else 'L2 then needs a recorded GPU run of a corpus kernel whose IR uses '
+            'it; there is none. ' + inst)
+    scope = ('Neither the theorem nor the record covers every member of the family, every launch '
+             'or every GPU.' if thm is not None and recs else '')
+    return (head + tail + scope).rstrip() + '\n'
 
 
 def checker_text(entries: list[str]) -> str:
@@ -714,6 +780,7 @@ def generate() -> dict[str, str]:
     kfiles = kernel_files(table)
     proved = proved_kernels(table)
     records = gpu_records()
+    irecs = instruction_records()
     used = scan_corpus(ops, fams)
     runs = modelled()
     collectives = set(re.findall(r'\| \.(\w+)[^\n]*convergent := true',
@@ -845,7 +912,19 @@ def generate() -> dict[str, str]:
                            '`MojoProof.Sem.Grid.fire`' if fam in collectives else '')
                         + f'. {MODELLED} runs a kernel of a call (its row `Intrinsic.{fam}`), and '
                         'the run returns. ')
-        else:
+        names_used = sorted({n for f in files for n in CALL.findall((ROOT / f).read_text())
+                             if fams[fam].match(n)})
+        thm = step_theorem(fam, decls, names_used) if run != 'returns' else None
+        recs = [r for r in irecs if any(fams[fam].match(n) for n in r[2])]
+        if run != 'returns' and thm is not None:
+            sem_text = (f'The level counts the family as parsed, not modelled: {MODELLED}\'s '
+                        f'kernel of a call (its row `Intrinsic.{fam}`) stops with `{run}`. '
+                        'The grid gives a call a meaning in `MojoProof.Sem.Grid.fire` all the '
+                        f'same: `{thm[0]}` ({thm[1]}:{thm[2]}) proves that the step at it '
+                        f'succeeds when {thm[5]}. The declarations: '
+                        + ', '.join(f'`{x}`' for x in lean) + '. ')
+            lean = []
+        elif run != 'returns':
             sem_text = (f'The family is parsed, not modelled: {MODELLED}\'s kernel of a call (its '
                         f'row `Intrinsic.{fam}`) stops with `{run}`. The declarations: '
                         + ', '.join(f'`{x}`' for x in lean) + '. ')
@@ -854,8 +933,6 @@ def generate() -> dict[str, str]:
         title = f'The intrinsic family `Intrinsic.{fam}`'
         src = 'PTX ISA\'s section on the instruction NVPTX lowers it to' \
             if anchor in PTX_ANCHORS else 'LangRef\'s section on the intrinsic'
-        names_used = sorted({n for f in files for n in CALL.findall((ROOT / f).read_text())
-                             if fams[fam].match(n)})
         body = (f'# {title}\n\n'
                 f'## Rule\n\n{src} (the quote is the section\'s first sentence). The importer '
                 f'accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its '
@@ -872,7 +949,7 @@ def generate() -> dict[str, str]:
                    + ').' if anchor in PTX_ANCHORS else
                    'That the semantics gives the family the meaning LLVM gives it rests on reading '
                    'LangRef (docs/TRUST.md T7).') + '\n\n'
-                '## Open\n\n' + open_text(run, gpu, kernels))
+                '## Open\n\n' + open_text(run, gpu, kernels, recs, thm))
         out[f'cards/{cid}.md'] = card(cid, title, ref_of(anchor), lean, sorted(files),
                                       ['MojoProofTest.Rule', 'MojoProofTest.Corpus',
                                        'MojoProofTest.Modelled'], body, gpu, kernels)
@@ -1096,7 +1173,12 @@ def self_test() -> int:
     vadd file; a theorem with no program (a premise or a negation), one with two, a mutant that
     keeps the vadd digest (bound to no file), a row whose file is no manifest row, one whose
     digest is not its file's, a name with no declaration and a name with no row are each an
-    error."""
+    error. The open work of the mma card (`open_text`, the Modelled row's stop) reports the test
+    kernel's failure as such, names `Grid.fire_mma` with its line and the members it covers (the
+    bf16 member, not the f64 one), and the record tests/gpu/mma/record.txt with its result's
+    line. The records counted include tests/gpu/vadd/record.txt, and that record with its first
+    launch comparing no word (`launch: 1 1 1 0`, its evaluator line `0 words agree`) fails their
+    check."""
     m = manifest(CORPUS)
     vadd, vmul = (next(p for p in sorted(m) if p.startswith(d + '/')) for d in ('vadd', 'vmul'))
     fa, fm = f'tests/corpus/{vadd}', f'tests/corpus/{vmul}'
@@ -1119,10 +1201,27 @@ def self_test() -> int:
             bad.append(n)
         except AssertionError:
             pass
+    mma = 'llvm.nvvm.mma.m16n8k16.row.col.bf16'
+    recs = [r for r in instruction_records() if mma in r[2]]
+    thm = step_theorem('mma', index(), [mma, 'llvm.nvvm.mma.m8n8k4.row.col.f64'])
+    text = open_text('unsupported: mma in a warp cut by its block of threads', (), (), recs, thm)
+    if not (recs and recs[0][0] == 'tests/gpu/mma/record.txt' and thm and thm[3] == [mma]
+            and '`MojoProof.Sem.Grid.fire_mma` (MojoProof/Sem/TensorCoreWarp.lean:' in text
+            and f'tests/gpu/mma/record.txt:{recs[0][1]} ' in text
+            and 'not the absence of a semantics' in text and 'L1 needs a semantics' not in text):
+        bad.append('the mma card\'s open text')
+    rec = (GPU / 'vadd' / 'record.txt').read_text()
+    zero = rec.replace('launch: 1 1 1 65', 'launch: 1 1 1 0').replace(
+        'n 1 grid 1 block 1: 65 words agree', 'n 1 grid 1 block 1: 0 words agree')
+    if 'tests/gpu/vadd/record.txt' not in gpu_records() or zero == rec \
+            or gpu_record.problem(zero, ROOT) is None:
+        bad.append('the vadd record and its zero-word change')
     for n in bad:
         print(f'self-test: {n} is not what the reader should make of it')
     print('self-test: ' + ('failed' if bad else 'the shadowing program is taken to the inner '
-                           'declaration\'s file; the bad rows are refused'))
+                           'declaration\'s file; the bad rows are refused; the mma card\'s open '
+                           'text names the failed test kernel, the theorem of a whole warp and the '
+                           'instruction\'s record; the zero-word record fails'))
     return 1 if bad else 0
 
 

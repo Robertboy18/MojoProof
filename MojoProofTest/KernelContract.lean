@@ -53,7 +53,8 @@ array. On the launch `L23` (two blocks of three threads) with `%n = 3`, every th
   checked left open, with the thread's oracle.
 * `kg`, `kgP`: a loop-free kernel with `fmul contract` and `fadd contract`. `kgK`: `mojo_kernel`
   on it with the flag `contract` and no loop clause (`kgK.sound_of`,
-  `Kernel.sound_of_chainsWith (contract := true)` at `kgK.covers` and no sequence of loops).
+  `Kernel.sound_of_chainsAt (alloca := false) (contract := true)` at `kgK.covers` and no sequence
+  of loops, with `Mem.Dead false` unfolded).
   Without `mojo_kernel.share` its arguments are the module's `kfK.args`, and `kgK.args` is not
   added. The twin: without the flag the command refuses its block.
 * `contractProg` (vadd's program under another hash) and `map2_contract`: `mojo_kernel` on it
@@ -540,9 +541,10 @@ def kgP : Program :=
 
 -- `kgK`: `mojo_kernel` on the loop-free `kg` with the flag `contract` and no loop clause: its
 -- block is in the fragment with the flag (`summarizeC`), its paths are checked by
--- `coversEntryWith true`, and `kgK.sound_of` is `Kernel.sound_of_chainsWith (contract := true)`
--- at `kgK.covers` and no sequence of loops. Without `mojo_kernel.share` the command shares with
--- the module's own earlier definitions: its arguments are `kfK.args`.
+-- `coversEntryWith true`, and `kgK.sound_of` is `Kernel.sound_of_chainsAt` at `alloca := false`,
+-- `contract := true`, `kgK.covers` and no sequence of loops (`Mem.Dead false` unfolded).
+-- Without `mojo_kernel.share` the command shares with the module's own earlier definitions: its
+-- arguments are `kfK.args`.
 mojo_kernel kgK := kgP kg
   scalars n := a0
   pointers p := a1

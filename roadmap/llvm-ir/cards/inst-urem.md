@@ -18,7 +18,7 @@ LangRef's section on `urem` (the quote is the first sentence of its overview). T
 
 ## Corpus
 
-30 of the 116 corpus files use it (186 uses); `corpus` lists the first 5 in path order.
+30 of the 127 corpus files use it (186 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

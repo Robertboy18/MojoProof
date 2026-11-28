@@ -338,16 +338,19 @@ valid launch with `ntid.x = 1024`).
 * Proved, one program: the two rounds meet `Mem.CellAt` at `cell = tpose 32`, `w = 4` and the
   output tiled by warps (`gevm_rounds`), keep the promise of `!invariant.load` (`gevm_inv`), and
   so a run whose trace extends an empty one by such rounds makes the start's grid sound
-  (`gevm_sound`). The segments' events: the entry block adds none (`entry_events`), the latch adds
-  reads by the thread (`latch_reads`), the four segments between the shuffles add none
-  (`shfl_events`), and the end adds lane 0's store or nothing (`thread_trace`). Threads in turn
-  with those facts extend the trace by the rounds' events (`gevm_before`, `gevm_after`).
+  (`gevm_sound`). The segments' events: the entry block adds none (`entry_events`) and the latch
+  adds reads by the thread (`latch_reads`). `gevm_sound` is a conditional statement that no kernel
+  theorem instantiates: it stays as the test of `Grid.sound_rounds`, `Ext.rounds` and
+  `Mem.CellAt`. gevm_kernel's theorem (MojoProofTest/GevmSound.lean) proves the whole run instead,
+  and its `grid_bad` is an instance of `Grid.not_bad_cells` (MojoProof/Sym/SigKernel.lean). The
+  events of the segments between the shuffles and of the end are those of `OblGevmThread.thread`
+  (MojoProofTest/OblGevmThread.lean:105), which `GevmLane.thread` uses, and of `Mem.store_trace`.
 * The output cell `32 ctaid.x + tid.x / 32` is `k / 32` only on a grid of one block of threads in
   `y` and `z` (`out_cell`); its twin leaves the goal open without those sides, and on a grid of two
   blocks of threads in `y` threads `0` and `1024` have the same output cell, 0 (an `example`
   decided after the twin).
-* Still a premise: that the loop's reads are of blocks that are no block of threads' shared memory
-  and not the output (`latch_reads` names the thread, not the block); that the start's threads
+* Still a premise of `gevm_sound` (gevm_kernel's theorem proves each): that the loop's reads are
+  of blocks that are no block of threads' shared memory and not the output (`latch_reads` names the thread, not the block); that the start's threads
   reach `%59` with `to_barrier_events`' premises; the owners of the blocks in the last memory.
 * Why 1024: it is the kernel's static shape. The shared array is `[1024 x float]`
   (tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll:6), the

@@ -142,6 +142,7 @@ threads with `m = 1`, `n = 2`, a `C` block of 201,028 bytes and read-only `A` an
 caller's memory in place, for every `K` (`start12`); `trace12` is `Grid.start_trace`, for every
 `K`, and `facts12` rewrites the check by `Mem.checkClosed_of_closed`, so that the kernel does not
 read every byte again for each. At `K = 768`, `correct` at this start is `NaiveKernel.sound12`;
-`obs12` gives it a complete run at every address choice and oracle (`Grid.Sound.result`), and
+`obs12` gives it a valid launch and a complete run at every address choice and oracle
+(`Grid.Sound.result`), the witness form of scripts/L3Programs.lean, and
 `cells12` is `read12` at that run, its premise discharged. `soundOff12` and `obsOff12` are their
 counterparts for the contraction-off build.

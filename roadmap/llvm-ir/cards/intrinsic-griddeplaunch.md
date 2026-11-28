@@ -14,11 +14,11 @@ level: L1
 
 ## Rule
 
-PTX ISA's section on the instruction NVPTX lowers it to (the quote is the section's first sentence). The importer accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its name and signature (`Intrinsic.name`, `Intrinsic.sig`). PTX ISA has one section for `griddepcontrol.wait` and `griddepcontrol.launch_dependents`. The semantics gives a call its meaning in `MojoProof.Sem.intrinsic`. MojoProofTest/Modelled.lean runs a kernel of a call (its row `Intrinsic.griddepLaunch`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): refused: SState.stmt takes calls of special registers and of minmax only.
+PTX ISA's section on the instruction NVPTX lowers it to (the quote is the section's first sentence). The importer accepts a declaration of this family only if `Intrinsic.ofDecl` recognizes its name and signature (`Intrinsic.name`, `Intrinsic.sig`). PTX ISA has one section for `griddepcontrol.wait` and `griddepcontrol.launch_dependents`. The semantics runs both as doing nothing: a launch is one isolated grid, with no prerequisite or dependent grid in flight (docs/TRUST.md T19, PTX ISA 9.5 section 9.7.15.14); a programmatic dependent launch is out of scope. The semantics gives a call its meaning in `MojoProof.Sem.intrinsic`. MojoProofTest/Modelled.lean runs a kernel of a call (its row `Intrinsic.griddepLaunch`), and the run returns. The block checker (MojoProof/Sym/Rules.lean): refused: SState.stmt takes calls of special registers and of minmax only.
 
 ## Corpus
 
-12 of the 116 corpus files use it (12 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.griddepcontrol.launch.dependents`.
+12 of the 127 corpus files use it (12 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.griddepcontrol.launch.dependents`.
 
 ## Out of scope
 

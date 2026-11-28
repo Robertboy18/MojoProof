@@ -68,6 +68,11 @@ inductive FloatLit
   `"K"`, `"L"` and `"M"` (`x86_fp80`, `fp128`, `ppc_fp128`), which the printer prints and the
   semantics does not evaluate (`floatLit`, MojoProof/Sem/Eval.lean). -/
   | hex (pfx : String) (bits : Nat)
+  /-- `f0x<digits>`: the bits of a value of the type the literal is used at, as many hexadecimal
+  digits as the type has bits divided by four (LangRef, "Simple Constants"); the number of digits
+  written and the bits they give. The parser checks the count against the type (`Parser.litFits`,
+  MojoProof/LLVM/Parser.lean). -/
+  | bits (digits : Nat) (bits : Nat)
   deriving DecidableEq, Repr, Inhabited, Hashable
 
 /-- Integer arithmetic and bitwise binary operators. -/

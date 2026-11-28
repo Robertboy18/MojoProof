@@ -53,13 +53,18 @@ what its effects leave.
    has a trace with no data race that keeps the promise of `!invariant.load`, and an observation
    `y` with `R y`. Then `Kernel.Sound prog fn L args m adm obs R`. `Kernel.sound_of_paths` is the
    case `chains = []`, whose second disjunct is false: the same conclusion from `coversEntry` and
-   a `Ret` along some path of `paths` for every thread. `Kernel.sound_of_chainsWith` is the
-   theorem for every flag `contract`: the checks are `coversEntryWith contract` and
-   `coversChainsWith contract` (with `fmul contract` in the path checker when `contract`,
-   `coversPathWith`), and each thread's run is a `RetWith contract` along a path or a
-   `RetLsWith contract` through a sequence of loops, in which a `fadd contract` reads the operands
-   of a recorded `fmul contract` and fuses them or not by the thread's oracle.
-   `Kernel.sound_of_chains` is its case `contract = false`.
+   a `Ret` along some path of `paths` for every thread. `Kernel.sound_of_chainsAt` at
+   `alloca := false` is the theorem for every flag `contract`: the checks are
+   `coversEntryWith contract` and `coversChainsWith contract` (with `fmul contract` in the path
+   checker when `contract`, `coversPathWith`), and each thread's run is a `RetWith contract` along a
+   path or a `RetLsWith contract` through a sequence of loops, in which a `fadd contract` reads the
+   operands of a recorded `fmul contract` and fuses them or not by the thread's oracle.
+   `Kernel.sound_of_chains` is its case `contract = false`. `Kernel.sound_of_chainsAt` is the
+   theorem for both values of the flag `alloca` too: the checks are `coversEntryAt alloca contract`
+   and `coversChainsAt alloca contract` (with `alloca` in the path checker when `alloca`), and each
+   thread's run reaches a memory `me` of `Mem.Dead alloca m' (P (k + 1))`, so that with the flag
+   `P (k + 1)` holds of `me` with the blocks it adds to `m'` (the thread's `alloca` blocks) set
+   dead, and without it of `me` itself.
 4. The elementwise invariant `Elem m₀ out w cell bs k m`: block `out` of `m` is block `out` of
    `m₀` after threads `i < k` in turn wrote `bs i` at `cell i` (nothing when `bs i = none`), every
    other block is `m₀`'s, and every access of `m`'s trace is owned (`Elem.Own`: one to `out` lies
@@ -332,11 +337,16 @@ what its effects leave.
    `alloca` blocks, so the memory left is the `RetLs`'s. The conclusion `Grid.Sound L c g obs R`
    with the start's equation is `Kernel.Sound` at this choice. `Kernel.sound_of_paths`: the
    theorem at `chains = []` (`coversChains` of no sequence is `true` by evaluation), each thread's
-   premise the first disjunct. The theorem proved this way is `Kernel.sound_of_chainsWith`, at
+   premise the first disjunct. The theorem proved this way is `Kernel.sound_of_chainsAt`, at
    every flag, with `Runs.of_retWith` for a path and `Runs.of_chainsWith` for a sequence of loops
    (MojoProof/Sym/Loop.lean; `Block.sound_retWith` for the last block, MojoProof/Sym/Path.lean).
    `Kernel.sound_of_chains` is it at `false`: `coversEntryWith false` is `coversEntry` and
    `RetWith false` is `Ret` and `RetLs` is `RetLsWith false` by definition.
+   `Kernel.sound_of_chainsAt` is proved for both values of the flag `alloca`: for a path,
+   `Block.sound_retWith` leaves the thread done on the memory with its `alloca` blocks dead and
+   `Block.sound_pathAt_ptrs` says those blocks are the ones the path adds (`Mem.Adds`); for a
+   sequence of loops, `Runs.of_chainsAt` gives both. At `alloca := false` the path adds no block
+   (`Valuation.allocsWith_nil`), so the memory is the path's.
 4. Zero: the fold over `range 0` is the identity (so block `out` is `(m₀.blocks out).map id`),
    and an empty trace has no access. Successor: `range (k + 1)` is `range k` followed by `k`, so
    the fold for `k + 1` is thread `k`'s write after the fold for `k`; old accesses were owned and
@@ -463,22 +473,22 @@ what its effects leave.
    with the puts (`Elem.cells`), which is block `out` of `m` (`Grid.start_blocks`) after the puts
    of the `g.threads.size = N` threads (`Grid.start_args`); every other block is `g.mem`'s
    (`Elem.rest`), hence `m`'s. The theorem proved this way is `Kernel.sound_cellsWith`, through
-   `Kernel.sound_of_chainsWith` (3); `Kernel.sound_cells` is it at `false` (the premise as it
-   is, by definition). `Kernel.sound_mapNWith`: apply `Kernel.sound_cellsWith`. For a thread `k`
-   with frame `f` on a memory `m'` of `Elem k` and `Elem.Only`: `f.fn = fn` (`Grid.start_thread`),
-   `k` is below the thread count (`Grid.start_args`), the context facts are `Grid.start_ctx`. For
-   each position `i` of `bl`, parameter `i` is `ps[i]` and argument `i` is the struct of `bl[i]`
-   (`List.getElem?_append_left`, `List.getElem?_map`); no earlier parameter is named `%i`, since
-   parameter `j` is named `%j` (`take_names`); so register `%i` points to a block `q` of `g.mem`
-   owned by thread `k` from which `T` loads as the struct (8, `Grid.start_buffer` with the codec).
-   `q` is not `o`, which `g.mem` has with `m`'s owner `.all` (`Grid.start_blocks`), so the struct
-   load moves from `g.mem` to `m'` (`Elem.load`). For each position `j` of `sc`, parameter and
-   argument `n + j` are `sc[j]`'s (`List.getElem?_append_right`), so `%(n + j)` holds its value
-   (`Grid.start_scalar`). The blocks of `m` other than `o` are blocks of `g.mem`
-   (`Grid.start_blocks`) and of `m'` (`Elem.rest`; together `Elem.start_block`). Then the premise
-   applies at `m₀ = g.mem`. `Launch.apart_xy`: `Launch.cell_apart` (MojoProof/Sem/Index.lean) on
-   the threads of the subtype, at base 0 and width `w`, for two threads whose values differ
-   (`Subtype.ext`).
+   `Kernel.sound_of_chainsAt` (3) at `alloca := false`; `Kernel.sound_cells` is it at `false`
+   (the premise as it is, by definition). `Kernel.sound_mapNWith`: apply
+   `Kernel.sound_cellsWith`. For a thread `k` with frame `f` on a memory `m'` of `Elem k` and
+   `Elem.Only`: `f.fn = fn` (`Grid.start_thread`), `k` is below the thread count
+   (`Grid.start_args`), the context facts are `Grid.start_ctx`. For each position `i` of `bl`,
+   parameter `i` is `ps[i]` and argument `i` is the struct of `bl[i]` (`List.getElem?_append_left`,
+   `List.getElem?_map`); no earlier parameter is named `%i`, since parameter `j` is named `%j`
+   (`take_names`); so register `%i` points to a block `q` of `g.mem` owned by thread `k` from which
+   `T` loads as the struct (8, `Grid.start_buffer` with the codec). `q` is not `o`, which `g.mem`
+   has with `m`'s owner `.all` (`Grid.start_blocks`), so the struct load moves from `g.mem` to `m'`
+   (`Elem.load`). For each position `j` of `sc`, parameter and argument `n + j` are `sc[j]`'s
+   (`List.getElem?_append_right`), so `%(n + j)` holds its value (`Grid.start_scalar`). The blocks
+   of `m` other than `o` are blocks of `g.mem` (`Grid.start_blocks`) and of `m'` (`Elem.rest`;
+   together `Elem.start_block`). Then the premise applies at `m₀ = g.mem`. `Launch.apart_xy`:
+   `Launch.cell_apart` (MojoProof/Sem/Index.lean) on the threads of the subtype, at base 0 and width
+   `w`, for two threads whose values differ (`Subtype.ext`).
 12. `Kernel.sound_entry`: apply 3 with `P := I` at each admitted start `(g, c)`. `P 0 g.mem`:
    `g.mem` has every block of `m` (`Grid.start_blocks`) and an empty trace (`Grid.start_trace`).
    For a thread `k < g.threads.size` with frame `f` and memory `m'` of `I k`: `g.threads.size = N`
@@ -493,7 +503,8 @@ what its effects leave.
    argument and attributes by `rfl` on the concrete function and `n.args`; `withAttrs` of a value
    with no `range`, `nonnull` or `align` attribute returns it, by `rfl`), then `n.loop` on
    `pre V` and `post V`, the second disjunct. The theorem proved this way is
-   `Kernel.sound_entryWith`, through `Kernel.sound_of_chainsWith` (3) with `P := I g.mem`, the
+   `Kernel.sound_entryWith`, through `Kernel.sound_of_chainsAt` (3) at `alloca := false` with
+   `P := I g.mem`, the
    oracle by `Grid.start_ctx` and each `byval` parameter's register by `Grid.start_buffer` (8) at
    the frame `f`; `Kernel.sound_entry` is it at `false` with `I` constant in `m₀` (each
    thread's premise as it is, by definition).
@@ -606,9 +617,10 @@ instances FloatLib's `Model.toReal_add_eq_roundAt`, `Model.toReal_mul_eq_roundAt
   on the start's memory, and the existential over `m₀` in `memF` stands in for it. The
   open-goal test there checks the per-thread premise that `kernelK` proves.
   With the flag and no loop clause, for a loop-free kernel, `n.covers` is `coversEntryWith true`
-  and `n.sound_of` is `Kernel.sound_of_chainsWith` at `contract = true`, `n.covers` and no
-  sequence of loops (`coversChainsWith true P fn [] = true` by `rfl`), so each thread's run is a
-  `RetWith true` along some path. Its instance `kgK` (MojoProofTest/KernelContract.lean) is the
+  and `n.sound_of` is `Kernel.sound_of_chainsAt` at `alloca = false` and `contract = true`,
+  `n.covers` and no sequence of loops (`coversChainsWith true P fn [] = true` by `rfl`), its
+  statement with `Mem.Dead false m Q` unfolded to `Q`, so each thread's run is a `RetWith true`
+  along some path. Its instance `kgK` (MojoProofTest/KernelContract.lean) is the
   one-block kernel `kg` (`fadd contract (fmul contract 3.0, 2.0), 1.0`, stored). With `map2`,
   the flag gives `n.ret` as a `RetWith true`, the `mojo_ret` proof of a `Ret` moved by
   `RetWith.exists_true_of_ret`, which covers only paths with no `fmul contract` product (decided
@@ -630,7 +642,7 @@ instances FloatLib's `Model.toReal_add_eq_roundAt`, `Model.toReal_mul_eq_roundAt
   does not apply. Each thread's run is checked by evaluation in the kernel on a memory symbolic
   but for its output block (`kernel_check`). `Kernel.sound_cells` and `Kernel.sound_entry` take
   `coversChains` and `RetLs`, whose loops are checked without `contract` flags on float
-  operations; `Kernel.sound_of_chainsWith` (3), `Kernel.sound_cellsWith` (11) and
+  operations; `Kernel.sound_of_chainsAt` (3), `Kernel.sound_cellsWith` (11) and
   `Kernel.sound_entryWith` (12) hold for both flags, with the same generality.
 - `kernelF` (MojoProofTest/KernelContract.lean) is an instance of `Kernel.sound_mapNWith` (11) at
   `contract = true`, so of `Kernel.sound_cellsWith`, with every premise closed. It is one program
@@ -866,7 +878,7 @@ finite cell's distance from the real matmul.
 
 **Premises and the module whose theorem gives each.** Every name in this list is in the tree.
 Of the proof after the list, steps 1, 2 and 5 and the cell fact are in Lean
-(`Kernel.sound_of_chainsWith`, `Kernel.sound_cellsWith`, `Kernel.sound_mapNWith`,
+(`Kernel.sound_of_chainsAt`, `Kernel.sound_cellsWith`, `Kernel.sound_mapNWith`,
 `Launch.apart_xy`, and `naive_sound` and `naive_read` of MojoProofTest/NaiveSound.lean); steps 3
 and 4 are the statements `RunOut` and `RunIn` of MojoProofTest/NaiveSpec.lean.
 
@@ -891,7 +903,7 @@ and 4 are the statements `RunOut` and `RunIn` of MojoProofTest/NaiveSpec.lean.
 
 **Proof, through `Kernel.sound_mapNWith`.**
 
-1. A `contract` form of 3 and 11 (in Lean). `Kernel.sound_of_chainsWith` and
+1. A `contract` form of 3 and 11 (in Lean). `Kernel.sound_of_chainsAt` and
    `Kernel.sound_cellsWith` take `coversChainsWith contract` and `RetLsWith contract`, which the
    naive loop needs at `true`; `Kernel.sound_of_chains` and `Kernel.sound_cells` are their
    `false` cases, one line each.
@@ -1720,12 +1732,14 @@ for every program, launch, contexts, thread and memory).
 The instance (MojoProofTest/SymColl.lean): a hand-built kernel (`tid.x`, a barrier, two
 butterfly shuffles at offsets 1 and 2, each followed by an `add`, `ret`) at one block of four
 threads. `sound` is `PhaseRun.start_sound` at the block's run: its warp's lanes to the barrier and
-`BlockBar` (`hb1`), then the warp's run through the two shuffles (`WarpShfl`, `hx2` and `hx3`,
-each lane resumed with `shflSource`'s lane's value) to the ends, with the runs `runTo` computes
-and the kernel's evaluation (`kernel_rfl`, MojoProofTest/KernelRfl.lean); `lanes`: each lane
-holds in `%4` `bflyRounds (· + ·) [1, 2] (fun l => l) l`, by `bflyRoundsAt_of_shfl` at the
-registers `%0`, `%2`, `%4`, which is 6 (`lanes_six`). The open-goal twin (`#guard_msgs`) leaves
-the second shuffle's `WarpShfl` as the goal when its fire is missing.
+`BlockBar` (`hb1`), then the warp's run through the two shuffles to the ends (`warp`, one
+`warp_route` call: `WarpRun.of_waits` with each lane's run `lane` and the shuffles by
+`WarpRun.shfl_of`, each lane resumed with `shflSource`'s lane's value, `shfls`), with the runs
+`runTo` computes and the kernel's evaluation (`kernel_rfl`, MojoProofTest/KernelRfl.lean);
+`lanes`: each lane holds in `%4` `bflyRounds (· + ·) [1, 2] (fun l => l) l`, by
+`bflyRoundsAt_of_shfl` at the registers `%0`, `%2`, `%4`, which is 6 (`lanes_six`). The
+open-goal twin (`#guard_msgs`) leaves `WarpRun.of_waits`' premise on the shuffles as the goal when
+the shuffles' checks (`shfls`) are missing.
 
 **The runs from the threads' segments.** Lean: MojoProof/Sym/SchedChain.lean, and
 `WarpRun.of_inv` (MojoProof/Sym/Canon.lean) and `BlockRun.of_inv` and `PhaseRun.of_inv`
@@ -1761,10 +1775,14 @@ MojoProofTest/SymChain.lean.
   shuffles at offsets 1 and 2, `ret`) at 4 and at 8 threads, one block, in one proof
   (`SymChain.sound_inv`): `PhaseRun.start_sound` at the block's run by `BlockRun.of_inv`, its
   barrier phase by `WarpWait.of_inv` and `BlockBar` (`bar0`), its warp's two shuffles by
-  `WarpRun.of_inv` (`warp`), the invariants being equations with the threads, statuses and
-  memories `runTo` computes (`ph`, `stat`, `memAt`), each fire's `WarpShfl` from those statuses
-  (`fires`). The open-goal twin (`#guard_msgs`) leaves the second shuffle's fire as the goal when
-  it is left out.
+  `warp_route` (`warp`: `WarpRun.of_waits`, which is `WarpRun.of_inv` at the lanes' waits, with
+  each lane's run `lane` and the shuffles' checks `shfls`), the invariants being equations with
+  the threads, statuses and memories `runTo` computes (`ph`, `stat`, `memAt`).
+  `SymChain.shfl_wait` is `WarpWait.of_waits` (MojoProof/Sym/WarpWaits.lean) at one shuffle, from
+  the lanes' runs `lane` and the checks `shfls`, as `warp` is `WarpRun.of_waits`; its statement on
+  the statuses, the `example` after it, is `WarpWait.of_inv` with the fires `fires`. The
+  open-goal twin (`#guard_msgs`) leaves `WarpRun.of_waits`' premise on the lanes' runs as the
+  goal when they are left out.
 - Not built: gevm_kernel's `PhaseRun` (its barrier and shuffles, docs/proofs/gemv.md, "The order
   of the work", item 7 (c)) from MojoProofTest/OblGevm.lean's segments. `RunsVia`'s waits state
   the instruction a thread waits at (`Thread.at`), which both fires need (`BlockBar`,

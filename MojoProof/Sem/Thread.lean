@@ -23,7 +23,9 @@ Statements about all executions quantify over both.
   starts dead if the function calls `llvm.lifetime.start` on it, live otherwise (LangRef,
   "llvm.lifetime.start"); a frame's blocks die when it returns. `lifetime.start` makes its block
   live with undefined bytes, `lifetime.end` dead; on poison both do nothing, and on a block the
-  thread does not own they are unsupported.
+  thread does not own they are unsupported. Their operand must be poison or a register that an
+  `alloca` of the function defines, which `Func.check` checks of the function's text (LangRef,
+  "llvm.lifetime.start", Arguments: otherwise the IR is ill-formed; unsupported).
 * Calls to defined functions push a frame; `byval` arguments of such calls are unsupported. A
   `noundef` parameter (of the callee or at the call) or return value that is poison or `undef`
   is undefined behavior, and so is such a value from a load with `!noundef` (LangRef, "load").
@@ -41,14 +43,22 @@ Statements about all executions quantify over both.
   arguments are is undefined behavior (LangRef).
   A load records `!invariant.load` in the trace, whose promise is an obligation
   (MojoProof/Sem/Spec.lean, `Grid.Kept`); other metadata than it and `!noundef` on a load, and
-  any metadata on another instruction (a `phi` included), is unsupported (`Stmt.checkMd`).
+  any metadata on another instruction (a `phi` included), is unsupported, and so is a `volatile`
+  access (`Stmt.checkMd`). A store to a dead `alloca` (outside its lifetime or of a returned
+  frame) is undefined behavior (`Mem.check`), and so is a load from a returned frame's; a load
+  from one of the loading frame's own `alloca`s outside its lifetime is unsupported, as LangRef
+  ("Object Lifetime") makes it poison, which the semantics does not carry to the load's uses.
+  Stricter than LangRef: a callee's load from a caller's `alloca` outside its lifetime is
+  undefined behavior, not poison (the frame knows its own `alloca`s only).
   Call-site attributes other than `noundef` are unsupported, and so are fast-math flags on a
   call except `nnan` / `ninf` on `maxnum`, `minnum` and `rsqrt.approx`.
 * Intrinsics: the special registers read the thread's `Env`; `smax`/`smin`/`umax`/`umin`,
   `maxnum`/`minnum` (`MojoProof.Sem.maxnum`), `vector.reduce.and`, `vector.extract` and
   `stepvector` lane by lane; `rsqrt.approx.ftz.f` returns a word that meets PTX's contract
-  (`MojoProof.Sem.rsqrt`, TRUST T10); grid dependency control and `cp.async` commit and wait do
-  nothing (the subset has no asynchronous copies). The barrier, warp shuffles, `ldmatrix` and
+  (`MojoProof.Sem.rsqrt`, TRUST T10); `cp.async` commit and wait do nothing (the subset has no
+  asynchronous copies), and so do grid dependency control's `llvm.nvvm.griddepcontrol.wait`
+  and `llvm.nvvm.griddepcontrol.launch.dependents`, since a launch here is an isolated grid with no
+  prerequisite or dependent grid in flight (TRUST T19). The barrier, warp shuffles, `ldmatrix` and
   `mma` involve other threads: the thread stops at them (`Step.wait`) for the grid layer.
 * `atomicrmw` must be `seq_cst` at system scope (no `syncscope`), of an integer type whose width
   is a power of two of at least 8, with a commutative and associative operation (`add`, `and`,
@@ -64,9 +74,13 @@ Statements about all executions quantify over both.
   operation).
 * Branching on poison and `unreachable` are undefined behavior.
 
-This module defines functions; the one theorem it proves is a general fact about `Except`:
-a bind succeeds exactly when its first part succeeds and the rest succeeds on its value
-(`Except.bind_eq_ok`, for all types and computations).
+This module defines functions. Its theorems are a general fact about `Except`, that a bind
+succeeds exactly when its first part succeeds and the rest succeeds on its value
+(`Except.bind_eq_ok`, for all types and computations), and two about `byval` copies' addresses,
+for every width, alignment, size and choice: when the lowest nonzero aligned address keeps
+LangRef's rules for allocated objects, every choice's address does (`place_placed`), and every
+aligned address that keeps them is a choice's (`place_onto`); and one about `launchArgs`' blocks,
+for every launch: each is so placed (`launchArgs_placed`).
 -/
 
 namespace MojoProof.Sem
@@ -227,14 +241,98 @@ def memAccess (xs : List (List String)) (loc : Option String) : Except Fault (Bo
     | _ => throw (.unsupported "memory attribute item")
   return named.getD dflt
 
+/-- The string function attributes the semantics admits. `"target-cpu"`, `"target-features"` and
+`"tune-cpu"` name the target the code generator compiles for and tunes to; they do not change the
+meaning of the IR (LangRef, "Function Attributes"), so they are informational. `"nvvm.maxntid"`
+and `"nvvm.reqntid"` limit the launch, which `Func.checkLaunch` checks at the launch (with the
+module's `!nvvm.annotations`). Every other
+string attribute is unsupported: some change the meaning of the code (such as
+`"denormal-fp-math"`), and the semantics reads none of them. -/
+def strAttrs : List String :=
+  ["target-cpu", "target-features", "tune-cpu", "nvvm.maxntid", "nvvm.reqntid"]
+
+/-- Register `r` of function `fn` is an `alloca`'s result: an `alloca` of `fn` defines it, and
+no other statement and no parameter does. Its value in a frame of `fn` is then the pointer at
+offset 0 of the block that `alloca` last allocated in the frame (`exec`). -/
+def _root_.MojoProof.LLVM.Func.allocaReg (fn : Func) (r : Nat) : Bool :=
+  !(fn.params.any (·.name == some r)) &&
+    fn.blocks.toList.any (·.stmts.toList.any fun st =>
+      st.res == some r && st.inst matches .alloca ..) &&
+    fn.blocks.toList.all (·.stmts.toList.all fun st =>
+      st.res != some r || st.inst matches .alloca ..)
+
+/-- The operands of the lifetime markers of function `fn` are ones LangRef admits
+("llvm.lifetime.start", Arguments: "either a poison value or an SSA variable whose defining
+instruction is alloca or a call of the llvm.structured.alloca intrinsics. Otherwise, the IR is
+considered ill-formed"): every call of `@llvm.lifetime.start.p0` or `@llvm.lifetime.end.p0` (the
+names of `Intrinsic.lifetime`, by which `Module.check` finds them) has one argument, poison or a
+register `Func.allocaReg` admits. So a marker never takes a pointer into a block at another
+offset (a `getelementptr` of the `alloca`), nor a pointer a callee returned. -/
+def _root_.MojoProof.LLVM.Func.lifetimeOk (fn : Func) : Bool :=
+  fn.blocks.toList.all (·.stmts.toList.all fun st => match st.inst with
+    | .call _ _ (.fn g) args =>
+      !(g == "llvm.lifetime.start.p0" || g == "llvm.lifetime.end.p0") ||
+        match args with
+        | [(.mk _ .poison, _)] => true
+        | [(.mk _ (.loc r), _)] => fn.allocaReg r
+        | _ => false
+    | _ => true)
+
+/-- The compute capability `NN` that a `"target-cpu"` value `sm_NN` or `sm_NNa` names (NVPTX's
+processor names; `a` marks the architecture-specific features), `NN` one or more decimal digits;
+`none` for another value. -/
+def smVersion (v : String) : Option Nat :=
+  match v.toList with
+  | 's' :: 'm' :: '_' :: cs =>
+    let ds := if cs.getLast? = some 'a' then cs.dropLast else cs
+    if ds ≠ [] ∧ ds.all fun c => '0' ≤ c ∧ c ≤ '9' then
+      some (ds.foldl (fun n c => 10 * n + (c.toNat - '0'.toNat)) 0)
+    else none
+  | _ => none
+
+/-- Function `fn` calls a grid dependency control intrinsic: a call of
+`@llvm.nvvm.griddepcontrol.wait` or `@llvm.nvvm.griddepcontrol.launch.dependents` (the names of
+`Intrinsic.griddepWait` and `Intrinsic.griddepLaunch`). -/
+def _root_.MojoProof.LLVM.Func.callsGriddep (fn : Func) : Bool :=
+  fn.blocks.toList.any (·.stmts.toList.any fun st => match st.inst with
+    | .call _ _ (.fn g) _ =>
+      g == "llvm.nvvm.griddepcontrol.wait" || g == "llvm.nvvm.griddepcontrol.launch.dependents"
+    | _ => false)
+
+/-- The `"target-cpu"` string attribute of function `fn` of module `md`, if it has one. -/
+def _root_.MojoProof.LLVM.Func.cpu (md : Module) (fn : Func) : Option String :=
+  (fn.attrs md).findSome? fun | .str "target-cpu" v => some v | _ => none
+
+/-- The `"target-cpu"` of module `md`: the one value that every function of `md` with a
+`"target-cpu"` gives (`Func.cpu`); `none` when no function has one or two give different
+values. -/
+def _root_.MojoProof.LLVM.Module.cpu (md : Module) : Option String :=
+  match md.funcs.toList.filterMap (·.cpu md) with
+  | v :: vs => if vs.all (· == v) then some v else none
+  | [] => none
+
+/-- The names of the functions of a launch of function `fn` of module `md` (`fn` and every
+function of `md`, reachable or not) that call a grid dependency control intrinsic
+(`Func.callsGriddep`) at an effective target below `sm_90` or unresolved: the effective target
+of `g` is its own `"target-cpu"` (`Func.cpu`), else the module's (`Module.cpu`), and it must
+name `sm_NN` or `sm_NNa` (`smVersion`) with `NN` at least 90. No function's target depends on
+`fn`, so the check at the launch of the kernel and the check at each call agree. -/
+def _root_.MojoProof.LLVM.Func.griddepBad (md : Module) (fn : Func) : List String :=
+  (fn :: md.funcs.toList).filterMap fun g =>
+    if !g.callsGriddep || (((g.cpu md).orElse fun _ => md.cpu).bind smVersion).any (90 ≤ ·) then
+      none
+    else some g.name
+
 /-- The attributes of function `fn` of module `md` are ones the semantics gives a meaning to;
 `i` is the intrinsic a declaration denotes. Parameter and return attributes `noundef`,
 `nonnull`, `range` and `align` (`withAttrs`) on every function. A defined function may have the
 function attributes `norecurse` (checked at calls), `convergent`, `noinline`, `nounwind` and
-string attributes, and `byval` parameters, with `readonly`, `noundef` and `nonnull` only.
-An intrinsic declaration may make the promises its member keeps (`Intrinsic.effects`; LangRef,
-"Function Attributes", "Parameter Attributes"): `nounwind`, `nocallback`, `nofree` and strings
-always (no intrinsic here raises, calls back into the module or frees memory); `nosync`,
+the string attributes of `strAttrs`, and `byval` parameters, with `readonly`, `noundef` and
+`nonnull` only (`launchArgs` puts a `byval` copy at a nonzero address, so `nonnull` and
+`noundef` hold of it). An intrinsic declaration may make the promises its member keeps
+(`Intrinsic.effects`; LangRef, "Function Attributes", "Parameter Attributes"): `nounwind`,
+`nocallback`, `nofree` and the strings of `strAttrs` always (no intrinsic here raises, calls
+back into the module or frees memory); `nosync`,
 `willreturn` and `nocreateundeforpoison` (checked at calls) only if it completes alone;
 `speculatable` only if it has no effect but its result; `memory(...)` only if it allows the
 member's accesses (all memory, read and written, for one that orders other memory); the
@@ -242,7 +340,14 @@ parameter attributes `captures(none)` (no intrinsic here keeps a pointer), `read
 writes through its argument, and `immarg` (a constant argument, checked at calls). A collective
 the grid layer matches at one instruction (the barrier, `shfl.sync`) must be `convergent`.
 Every other attribute (`willreturn` on a defined function, `writeonly`, `dereferenceable(n)`,
-`noreturn`, ...) is a promise the semantics does not check: unsupported. -/
+`noreturn`, ...) is a promise the semantics does not check: unsupported. A defined function's
+lifetime markers must take operands LangRef admits (`Func.lifetimeOk`): another operand is
+ill-formed IR, unsupported. A defined function `fn` is unsupported when it or any function of
+`md` calls a grid dependency control intrinsic at an effective target (the function's own
+`"target-cpu"`, else the module's: the one value its functions agree on) that is not `sm_NN` or
+`sm_NNa` with `NN` at least 90, an absent, ambiguous or unrecognized target included
+(`Func.griddepBad`): the instructions "Require sm_90 or higher" (PTX ISA 9.5 section 9.7.15.14,
+Target ISA Notes), so such PTX does not assemble, or its target is unknown. -/
 def _root_.MojoProof.LLVM.Func.check (md : Module) (fn : Func) (i : Option Intrinsic := none) :
     Except Fault Unit := do
   let decl := fn.blocks.isEmpty
@@ -250,9 +355,16 @@ def _root_.MojoProof.LLVM.Func.check (md : Module) (fn : Func) (i : Option Intri
   let broken (a : Attr) : Fault := .unsupported s!"function attribute {a.name} on @{fn.name}, \
     a promise its semantics does not keep"
   if decl && e.isNone then throw (.unsupported s!"declaration @{fn.name} of no intrinsic")
+  unless fn.lifetimeOk do
+    throw (.unsupported s!"lifetime marker in @{fn.name} on a value no alloca defines")
+  if !decl then
+    if let g :: _ := fn.griddepBad md then
+      throw (.unsupported s!"griddepcontrol in @{g}, whose target-cpu (its own, else \
+        the module's) is not sm_90 or higher")
   for a in fn.attrs md do
     match e, a with
-    | _, .flag "convergent" | _, .flag "nounwind" | _, .str .. => pure ()
+    | _, .flag "convergent" | _, .flag "nounwind" => pure ()
+    | _, .str k _ => unless strAttrs.contains k do throw (.unsupported s!"function attribute {k}")
     | none, .flag "norecurse" | none, .flag "noinline" => pure ()
     | some _, .flag "nocallback" | some _, .flag "nofree" => pure ()
     | some e, .flag "nosync" | some e, .flag "willreturn" | some e, .flag "nocreateundeforpoison" =>
@@ -396,10 +508,15 @@ def lifetimeStarted (c : Ctx) (fn : Func) (r : Nat) : Bool :=
       r' == r && (c.prog.intrinsics.lookup g matches some (.lifetime true))
     | _ => false
 
-/-- The metadata attachments of `st` are ones the semantics gives a meaning to: `!invariant.load`
-and `!noundef` on a load (`exec`). Any other attachment, and any on another instruction (such as
-`!noundef`, `!range` or `!nonnull` on a `phi`, LangRef "phi"), is unsupported. -/
+/-- The access kind and the metadata attachments of `st` are ones the semantics gives a meaning
+to. A `volatile` load, store or `atomicrmw` is unsupported: LangRef ("Volatile Memory Accesses")
+leaves its meaning to the target and lets it have target-specific effects, which the semantics
+does not model. The metadata attachments must be `!invariant.load` and `!noundef` on a load
+(`exec`); any other attachment, and any on another instruction (such as `!noundef`, `!range` or
+`!nonnull` on a `phi`, LangRef "phi"), is unsupported. -/
 def _root_.MojoProof.LLVM.Stmt.checkMd (st : Stmt) : Except Fault Unit := do
+  if st.inst matches .load true .. | .store true .. | .atomicrmw true .. then
+    throw (.unsupported "volatile access")
   for (k, _) in st.md do
     unless st.inst matches .load .. && (k == "invariant.load" || k == "noundef") do
       throw (.unsupported s!"metadata !{k}")
@@ -428,6 +545,19 @@ def _root_.MojoProof.LLVM.Stmt.checkAtomic (fn : Func) (st : Stmt) : Except Faul
     throw (.unsupported "atomicrmw width not a power of two of at least 8 (LangRef)")
   if st.res.any fn.uses then
     throw (.unsupported "atomicrmw whose result is used (it depends on the order)")
+
+/-- The fault of a load from block `b`, which faulted with `e`, by a frame whose `alloca`s are
+`allocas`: for a dead block (`Mem.check`), unsupported when `b` is one of them (dead only outside
+its lifetime, as the frame has not returned: LangRef, "Object Lifetime", makes that load poison,
+which the semantics does not give), else undefined behavior (another frame's block, dead after
+its `ret` or after its `lifetime.end`: the case where the semantics is stricter than LangRef,
+TRUST T7); every other fault `e` itself. -/
+def deadLoad (allocas : List Nat) (b : Nat) : Fault → Fault
+  | .ub "access to a dead block" =>
+    if allocas.contains b then
+      .unsupported "load from an alloca outside its lifetime (poison in LLVM)"
+    else .ub "access to a dead block"
+  | e => e
 
 /-- The scope of a frame at step `k`. -/
 def Ctx.scope (c : Ctx) (m : Mem) (f : Frame) (k : Nat) : Scope :=
@@ -481,7 +611,9 @@ def exec (c : Ctx) (s : Scope) (k : Nat) (f : Frame) (st : Stmt) : Except Fault 
       pc := f.pc + 1, allocas := b :: f.allocas } m')
   | .load _ t (.mk (.ptr a) p) al => do
     let q ← (← ev (.ptr a) p).addr?
-    let v ← m.load l c.who a t q (some (al.getD (l.align t)))
+    let v ← match m.load l c.who a t q (some (al.getD (l.align t))) with
+      | .ok v => pure v
+      | .error e => .error (deadLoad f.allocas q.block e)
     if st.md.any (·.1 == "noundef") && !v.defined then throw (.ub "noundef load not defined")
     let inv := st.md.any (·.1 == "invariant.load")
     pure (.next { f.set st.res (some v) none with pc := f.pc + 1 }
@@ -607,23 +739,167 @@ def step (c : Ctx) (t : Thread) (m : Mem) : Except Fault Step := do
       | g :: rest =>
         return .next { t' with frames := { g.set f.dest v none with pc := g.pc + 1 } :: rest } m
 
+/-- Address `x` of a block of `size` bytes, for pointers and indices of `w` bits, keeps LangRef's
+rules for allocated objects ("Allocated Objects": "no allocated object may cross the unsigned
+address space boundary (including the pointer after the end of the object)", and its size must
+"not exceed the largest signed integer that fits into the index type"), and is nonzero if `nz`:
+`x + size < 2 ^ w`, `size < 2 ^ (w - 1)`, and `x ≠ 0` if `nz`. -/
+def placed (w size : Nat) (nz : Bool) (x : Nat) : Bool :=
+  decide (x + size < 2 ^ w) && decide (size < 2 ^ (w - 1)) && (!nz || x != 0)
+
+/-- The address choice of a block of `size` bytes with alignment `al`, for pointers of `w` bits,
+nonzero if `nz`, from choice `a`: `a` if its address `a * al % 2 ^ w` is `placed`, else `1` if
+`nz` (the address `al`, the lowest nonzero aligned one) and `0` if not (the address 0). So when
+that lowest address is `placed`, every choice's address is (`place_placed`), and every `placed`
+multiple of `al` below `2 ^ w` is some choice's (`place_onto`): the addresses of all choices are
+exactly the aligned ones LangRef admits, and when the lowest is not `placed` no aligned address
+is. -/
+def place (w al size : Nat) (nz : Bool) (a : Nat) : Nat :=
+  if placed w size nz (a * al % 2 ^ w) then a else if nz then 1 else 0
+
+/-- **Every choice is placed**: for every width `w`, alignment `al`, size, `nz` and choice `a`, if
+the lowest address (`al % 2 ^ w` if `nz`, else 0) is `placed`, so is choice `a`'s address
+`place w al size nz a * al % 2 ^ w`. -/
+theorem place_placed {w al size : Nat} {nz : Bool}
+    (h : placed w size nz ((if nz then 1 else 0) * al % 2 ^ w)) (a : Nat) :
+    placed w size nz (place w al size nz a * al % 2 ^ w) := by
+  unfold place
+  split <;> assumption
+
+/-- **Every placed aligned address is a choice's**: for every width `w`, alignment `al`, size,
+`nz` and multiple `x` of `al` below `2 ^ w` that is `placed`, some choice `a` gives the address
+`place w al size nz a * al % 2 ^ w = x`. -/
+theorem place_onto {w al size x : Nat} {nz : Bool} (hx : x < 2 ^ w) (hal : al ∣ x)
+    (hp : placed w size nz x) : ∃ a, place w al size nz a * al % 2 ^ w = x := by
+  obtain ⟨a, rfl⟩ := hal
+  have he : a * al % 2 ^ w = al * a := by rw [Nat.mul_comm]; exact Nat.mod_eq_of_lt hx
+  refine ⟨a, ?_⟩
+  unfold place
+  rw [he]
+  simp only [hp, ↓reduceIte]
+  exact he
+
+/-- Every `byval` copy of kernel `fn` on argument values `args` can be placed in layout `l`, and
+copies all its bytes: for each parameter paired with an argument, the type `T` of its first
+`byval(T)` attribute (the one `launchArgs` reads) has a nonzero lowest aligned address `al % 2 ^ w`
+at which a block of `T`'s size is `placed` (its end below `2 ^ w`, its size below `2 ^ (w - 1)`,
+for pointers of `w` bits in address space 0), so every address choice gives a placed address
+(`place_placed`), and `T` has no padding (`Layout.dense`), so the copy of a value of `T` is the
+caller's bytes (LangRef, "byval": a copy of the bytes, padding included, which a value does not
+hold). -/
+def _root_.MojoProof.LLVM.Func.byvalPlaced (l : Layout) (fn : Func) (args : List Val) : Bool :=
+  (fn.params.zip args).all fun pv =>
+    match pv.1.attrs.findSome? fun | .ty "byval" t => some t | _ => none with
+    | some t => placed (l.ptr 0).1 (l.size t) true (l.align t % 2 ^ (l.ptr 0).1) && l.dense t
+    | none => true
+
+/-- **No `byval` parameter, every copy placed**: for every layout, kernel `fn` and argument values
+`args`, if no parameter paired with an argument has a `byval` attribute, `Func.byvalPlaced`
+passes. -/
+theorem _root_.MojoProof.LLVM.Func.byvalPlaced_of_none {l : Layout} {fn : Func}
+    {args : List Val} (h : ∀ p v, (p, v) ∈ fn.params.zip args → ∀ t, Attr.ty "byval" t ∉ p.attrs) :
+    fn.byvalPlaced l args = true := by
+  refine List.all_eq_true.2 fun pv hq => ?_
+  split
+  · rename_i t ht
+    obtain ⟨a, ha, hfa⟩ := List.exists_of_findSome?_eq_some ht
+    split at hfa
+    · cases hfa
+      exact absurd ha (h pv.1 pv.2 hq _)
+    · cases hfa
+  · rfl
+
 /-- The arguments of kernel `fn` in thread number `n` from argument values `args`: a `byval(T)`
 parameter gets a fresh block owned by the thread holding its argument as a `T` (LangRef, "byval":
 a hidden copy made between the caller and the callee; each thread is a call of the kernel),
-read-only if the parameter is `readonly`, with addresses from `ch` (unsupported if the argument
-is not a value of `T`, or if the block's number has a block, `Mem.allocNext`); the others get
-their argument under the parameter's attributes (`withAttrs`). Parameters and arguments are
-paired in order, and those past the shorter list are dropped. -/
+read-only if the parameter is `readonly`, with addresses from `ch`, the one in address space 0
+admitted by LangRef's rules for allocated objects and nonzero (`place`, `placed`; so its
+`nonnull` and `noundef` hold; `launchArgs_placed`), unsupported if the argument is not a value of
+`T`, or if the block's number has a block (`Mem.allocNext`); the others get their argument under
+the parameter's attributes (`withAttrs`). Before any allocation, a copy that no address admits
+(for pointers of `w` bits in address space 0: the lowest nonzero aligned address, `T`'s alignment,
+plus its size reaches `2 ^ w`, or its size is not below `2 ^ (w - 1)`) or whose type has padding
+(`Layout.dense`: a copy of a value would not hold the caller's padding bytes) is unsupported
+(`Func.byvalPlaced`). Parameters and arguments are paired in order; `Grid.start` checks that
+their numbers are equal (`Func.checkLaunch`) before it calls this. -/
 def launchArgs (l : Layout) (m : Mem) (n : Nat) (fn : Func) (args : List Val)
     (ch : Nat → Nat) : Except Fault (Mem × List Val) :=
-  (fn.params.zip args).zipIdx.foldlM (init := (m, [])) fun (m, acc) ((p, v), i) =>
-    match p.attrs.findSome? fun | .ty "byval" t => some t | _ => none with
-    | some t => do
-      let some bs := l.encode t v | throw (.unsupported "byval argument not of its type")
-      let (m, b) ← m.allocNext l 0 (l.size t) (l.align t) true
-        (p.attrs.contains (.flag "readonly")) (.thread n) (ch (2 * i)) (ch (2 * i + 1)) bs
-      pure (m, acc ++ [.ptr ⟨b, 0⟩])
-    | none => do pure (m, acc ++ [← withAttrs l m p.ty p.attrs v])
+  if fn.byvalPlaced l args then
+    (fn.params.zip args).zipIdx.foldlM (init := (m, [])) fun (m, acc) ((p, v), i) =>
+      match p.attrs.findSome? fun | .ty "byval" t => some t | _ => none with
+      | some t => do
+        let some bs := l.encode t v | throw (.unsupported "byval argument not of its type")
+        let (m, b) ← m.allocNext l 0 (l.size t) (l.align t) true
+          (p.attrs.contains (.flag "readonly")) (.thread n)
+          (place (l.ptr 0).1 (l.align t) (l.size t) true (ch (2 * i))) (ch (2 * i + 1)) bs
+        pure (m, acc ++ [.ptr ⟨b, 0⟩])
+      | none => do pure (m, acc ++ [← withAttrs l m p.ty p.attrs v])
+  else .error (.unsupported "byval copy of a type with padding, or with no nonzero aligned \
+    address whose end is below 2 ^ (pointer width) at a size below 2 ^ (index width - 1)")
+
+/-- **Every made copy is placed**: for every layout, memory `m`, thread number, kernel `fn`,
+argument values `args` and address choice, if `launchArgs` returns memory `m'`, every block of
+`m'` that is not `m`'s is in address space 0 at an address LangRef's rules for allocated objects
+allow, and nonzero (`placed`: its end below `2 ^ w`, its size below `2 ^ (w - 1)`, for pointers
+of `w` bits in address space 0). -/
+theorem launchArgs_placed {l : Layout} {m : Mem} {n : Nat} {fn : Func} {args : List Val}
+    {ch : Nat → Nat} {r : Mem × List Val} (h : launchArgs l m n fn args ch = .ok r) {b : Nat}
+    {blk : Block} (hb : r.1.blocks b = some blk) :
+    m.blocks b = some blk ∨ blk.space = 0 ∧ placed (l.ptr 0).1 blk.size true blk.addr := by
+  unfold launchArgs at h
+  split at h
+  · rename_i hg
+    generalize hL : (fn.params.zip args).zipIdx = L at h
+    have hmem : ∀ e ∈ L, e.1 ∈ fn.params.zip args :=
+      hL ▸ fun _ he => List.fst_mem_of_mem_zipIdx he
+    clear hL
+    have h0 : ∀ b blk, (m, ([] : List Val)).1.blocks b = some blk → m.blocks b = some blk ∨
+        blk.space = 0 ∧ placed (l.ptr 0).1 blk.size true blk.addr := fun _ _ h => .inl h
+    generalize (m, ([] : List Val)) = s at h h0
+    induction L generalizing s with
+    | nil => cases h; exact h0 _ _ hb
+    | cons e L ih =>
+      obtain ⟨⟨p, v⟩, i⟩ := e
+      obtain ⟨ms, acc⟩ := s
+      simp only [List.foldlM_cons, bind, Except.bind] at h
+      split at h
+      · cases h
+      · rename_i s' hs'
+        refine ih (fun e he => hmem e (List.mem_cons_of_mem _ he)) s' h fun c cb hc => ?_
+        split at hs'
+        · rename_i t ht
+          split at hs'
+          · rename_i bs _
+            split at hs'
+            · cases hs'
+            · rename_i v hv
+              simp only [pure, Except.pure, Except.ok.injEq] at hs'
+              subst hs'
+              unfold Mem.allocNext at hv
+              split at hv
+              · cases hv
+              · simp only [pure, Except.pure, Except.ok.injEq] at hv
+                subst hv
+                simp only [Mem.alloc, Mem.set] at hc
+                split at hc
+                · cases hc
+                  refine .inr ⟨rfl, ?_⟩
+                  have hpv := List.all_eq_true.1 hg _ (hmem _ (List.mem_cons_self ..))
+                  dsimp only at hpv
+                  split at hpv
+                  · rename_i t' ht'
+                    obtain rfl : t' = t := Option.some.inj (ht'.symm.trans ht)
+                    simp only [Bool.and_eq_true] at hpv
+                    exact place_placed (by simpa using hpv.1) _
+                  · rename_i hn; rw [ht] at hn; cases hn
+                · exact h0 c cb hc
+          · simp [throw, throwThe, MonadExceptOf.throw] at hs'
+        · split at hs'
+          · cases hs'
+          · simp only [pure, Except.pure, Except.ok.injEq] at hs'
+            subst hs'
+            exact h0 c cb hc
+  · cases h
 
 /-- A thread at the start of kernel `fn` with arguments `args` (as `launchArgs` makes them). -/
 def Thread.start (fn : Func) (args : List Val) : Except Fault Thread := do

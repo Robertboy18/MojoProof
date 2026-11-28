@@ -13,6 +13,7 @@ T8	const	MojoProof.Sem.Layout.align
 T9	const	MojoProof.Sem.contract
 T10	const	MojoProof.Sem.rsqrtOk
 T11	const	MojoProof.Sem.Mem.alloc
+T11	const	MojoProof.Sem.place
 T12	const	MojoProof.Sem.withAttrs
 T12	const	MojoProof.LLVM.Func.check
 T12	const	MojoProof.Sem.Grid.Kept
@@ -36,3 +37,5 @@ T16	module	GPUProof.Layout.Crd
 T16	module	GPUProof.Layout.TwoLevel
 T17	const	MojoProof.Float.Ex2Close
 T18	const	MojoProof.Import.torchLean
+T19	const	MojoProof.Sem.intrinsic
+T19	const	MojoProof.LLVM.Func.griddepBad

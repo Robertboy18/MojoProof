@@ -24,7 +24,17 @@ as bytes, and loads, stores and allocation.
   undefined byte (and no poison one) `undef`, with a nonzero bit beyond its width poison.
 * An access is undefined behavior unless its block is live, its owner admits the accessing
   thread, it lies within the block, and its address is a multiple of the access alignment; a
-  store to a read-only block is undefined behavior. The owner of a thread's local memory (its
+  store to a read-only block is undefined behavior. A dead block that a thread owns is an
+  `alloca` outside its lifetime or one whose frame returned (`ret` sets its blocks dead,
+  MojoProof/Sem/Thread.lean), and an access to it is undefined behavior here. LangRef ("Object
+  Lifetime") makes a load from a stack object outside its lifetime poison, and an access to
+  storage reclaimed on return (`alloca`) undefined behavior; the memory does not tell the two
+  apart (a block is live or dead), so the thread semantics does (`exec`, Thread.lean): a load
+  from a dead block of the loading frame's own `alloca`s (necessarily outside its lifetime,
+  as the frame has not returned) is unsupported, not undefined behavior, and a load from
+  another dead block (a returned frame's) is undefined behavior. Still stricter than LangRef:
+  a callee's load from a caller's `alloca` outside its lifetime is undefined behavior, not
+  poison. The owner of a thread's local memory (its
   `alloca`s and `byval` copies) is the thread, of shared memory the block of threads: PTX ISA
   9.5 makes local memory private to each thread (section 5.1.5) and shared memory accessible to
   the threads of its cluster (5.1.7; a launch here has no clusters, so a cluster is one block of
@@ -35,10 +45,10 @@ as bytes, and loads, stores and allocation.
   that the semantics only extends (`Mem.log`) and never reads, so that race freedom can be
   stated (MojoProof/Sem/Spec.lean). A store records the bytes it writes (`Mem.store`).
 
-This module defines data and functions. Its only theorems are about `ByteTree`: the tree of a
-list reads the list (`ByteTree.get_ofList`, from `ByteTree.halves_getD` and
-`ByteTree.halves_length`), so `ByteTree.bytesOf init` is `fun i => init.getD i .undef`
-(`ByteTree.bytesOf_eq`), and compiled code runs the latter (`ByteTree.bytesOf_csimp`).
+This module defines data and functions. Its theorems are about `ByteTree`. The tree of a list
+reads the list (`ByteTree.get_ofList`, from `ByteTree.halves_getD` and `ByteTree.halves_length`),
+so `ByteTree.bytesOf init` is `fun i => init.getD i .undef` (`ByteTree.bytesOf_eq`), and compiled
+code runs the latter (`ByteTree.bytesOf_csimp`).
 -/
 
 namespace MojoProof.Sem
@@ -470,7 +480,10 @@ def addr (l : Layout) (m : Mem) (a : Nat) (p : Ptr) : Except Fault Nat :=
 
 /-- Check an access by thread `w` of `n` bytes at `p` with alignment `align` through a pointer of
 space `a`: the block is live, its owner admits `w`, the bytes lie within it, the address is
-aligned. Returns the block and the offset. -/
+aligned. Returns the block and the offset. An access to a dead block (an `alloca` outside its
+lifetime or of a returned frame) is undefined behavior here; `exec` (MojoProof/Sem/Thread.lean)
+makes a load from one of the loading frame's own dead `alloca`s unsupported, as LangRef makes it
+poison (see the module docstring). -/
 def check (l : Layout) (m : Mem) (w : Who) (a : Nat) (p : Ptr) (n : Nat) (align : Option Nat) :
     Except Fault (Block × Nat) := do
   let some b := m.block p | throw (.ub "access to no block")
@@ -483,7 +496,8 @@ def check (l : Layout) (m : Mem) (w : Who) (a : Nat) (p : Ptr) (n : Nat) (align 
   return (b, p.off.toNat)
 
 /-- Load by thread `w` of a value of type `t` from `p` (a pointer of space `a`), after `check`;
-unsupported if the bytes hold no value of `t`. -/
+unsupported if the bytes hold no value of `t`. A load from a dead block is undefined behavior
+here (`check`; `exec` reclassifies the lifetime-dead loads of the loading frame). -/
 def load (l : Layout) (m : Mem) (w : Who) (a : Nat) (t : Ty) (p : Ptr) (align : Option Nat) :
     Except Fault Val := do
   let n := l.stored t

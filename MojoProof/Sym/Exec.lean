@@ -124,7 +124,7 @@ theorem exec_gep {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {fl src
     exec c s k f st = .ok (.next { f.set st.res (some r) none with pc := f.pc + 1 } s.mem) := by
   simp only [exec, hmd, hi, hidx, hb, hr, bind, Except.bind, pure, Except.pure]
 
-/-- `exec` of a `load`. -/
+/-- `exec` of a `load` whose `Mem.load` succeeds. -/
 theorem exec_load {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {vol t a p al pv q v}
     (hmd : st.checkMd = .ok ()) (hi : st.inst = .load vol t (.mk (.ptr a) p) al)
     (hp : evalV s (.ptr a) p = .ok pv) (hq : pv.addr? = .ok q)
@@ -133,8 +133,8 @@ theorem exec_load {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt} {vol t
     exec c s k f st = .ok (.next { f.set st.res (some v) none with pc := f.pc + 1 }
       (s.mem.log (.access ⟨c.who, q, c.prog.layout.stored t, false, none,
         st.md.any (·.1 == "invariant.load")⟩))) := by
-  simp only [exec, hmd, hi, hp, hq, hv, hu, bind, Except.bind, pure, Except.pure,
-    Bool.false_eq_true, ↓reduceIte]
+  simp only [exec, hmd, hi, hp, hq, hv, hu, bind, Except.bind, pure,
+    Except.pure, Bool.false_eq_true, ↓reduceIte]
 
 /-- `exec` of a `store`. -/
 theorem exec_store {c : Ctx} {s : Scope} {k : Nat} {f : Frame} {st : Stmt}

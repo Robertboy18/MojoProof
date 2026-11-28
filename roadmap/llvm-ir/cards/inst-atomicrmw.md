@@ -18,7 +18,7 @@ LangRef's section on `atomicrmw` (the quote is the first sentence of its overvie
 
 ## Corpus
 
-1 of the 116 corpus files use it (1 uses).
+1 of the 127 corpus files use it (1 uses).
 
 ## Out of scope
 

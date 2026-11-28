@@ -26,10 +26,15 @@ card and checks, reporting every problem it finds:
   or `<area>/<id>`;
 * evidence is `L<k>: item, item; L<m>: ...`, each level once, at most the kind's top level;
   an item is a declaration name (as for lean), except that a GPU run level's items (kernel L1,
-  construct L2) are files of this repository, each the record of a GPU run that agrees (its
+  construct L2) are files of this repository, each the record of a GPU run that agrees, by the
+  check scripts/roadmap_llvm.py counts records by too (scripts/gpu_record.py, `problem`: its
   first line starts with `GPU run record:`, its `kernel:` line names a file under tests/corpus/,
-  for a kernel card one of the card's corpus files, and its `result:` line starts with
-  `agree`), and construct L3's items are kernel card ids whose card has L2 evidence;
+  for a kernel card one of the card's corpus files, its `kernel sha256:` line is that file's
+  sha256, its `result:` line starts with `agree`, it has at least one launch, and each launch
+  compares a positive number of words, the number its `launches:` line's `where words = <expr>`
+  gives at the launch, with an evaluator line saying that many words agree, the summary line and
+  the compare command),
+  and construct L3's items are kernel card ids whose card has L2 evidence;
 * level is the computed level: the highest level whose evidence, and that of every level below
   it, is present (L0 is the card itself; construct L1's evidence is its lean names);
 * a kernel's L2 evidence concludes `Kernel.Sound` of programs bound to corpus files, by the
@@ -37,10 +42,24 @@ card and checks, reporting every problem it finds:
   writes from the built environment: each theorem's row must name a declaration whose
   conclusion, after its binders, is `Kernel.Sound` of a program (or a conjunction of such), and
   every such program must be bound to a corpus file, that is, unfold to a program constant
-  `mojo_import` added for that file. A theorem that mentions `Kernel.Sound` only in a premise or
-  under a negation, or about a program that keeps an imported program's digest with another
-  module, does not count. The gate checks the table against the build
-  (`lake env lean --run scripts/L3Programs.lean --check`); this script only reads it.
+  `mojo_import` added for that file, one of the card's corpus files, whose sha256 is the digest
+  the row records. A theorem that mentions `Kernel.Sound` only in a premise or under a negation,
+  or about a program that keeps an imported program's digest with another module, or another
+  kernel's program, does not count. It must also have a witness, by the table
+  roadmap/llvm-ir/witnesses.tsv (`witnesses`): a closed theorem
+  `L.Valid ∧ ∃ y, Kernel.Obs … L … y ∧ Q y`, proved by `Kernel.Sound.exists_obs` at a proof that
+  applies it (directly, through a conversion from `GPUProof.Kernel.Sound`, or as an instance), so
+  that its premises hold together at a launch with a thread and some complete run observes an
+  output its relation constrains; a theorem true for want of a run (its premises unsatisfiable,
+  no thread, or no observation) has none;
+* a kernel's L3 and L4 evidence is a theorem whose statement states that level about a run of a
+  program bound to one of the card's corpus files, by the table roadmap/llvm-ir/evidence.tsv
+  (`evidence_table`, `l34_problem`): each row is one program the statement mentions, with the
+  levels the statement states about that program's observed runs only, and the row with the
+  level must be bound to one of the card's files with that file's digest. A definition, a
+  theorem about another kernel's run (one that mentions this kernel only in a premise), or one
+  about no program does not count. The gate checks the three tables against the build
+  (`lake env lean --run scripts/L3Programs.lean --check`); this script only reads them.
 
 For a kernel's L2 to L4 evidence it also reads what the cited theorems' premises restrict, from the
 theorem's statement and the section variables it takes (those it `include`s or names), in its
@@ -63,10 +82,11 @@ sorted and has no timestamps, so it is the same for the same cards and code.
 With --check it writes nothing, and exits 1 if a check fails or if STATUS.md, status.yaml or
 graph.dot differ from what it would write (graph.svg is not compared). Without it, it exits 1,
 writing nothing, if a check fails. With --self-test it reads no card and exits 1 unless
-`l2_problem` accepts the bound rows of `self_test` and refuses its others. Python 3 standard
-library only.
+`l2_problem`, `l34_problem` and the record check accept the good rows and records of `self_test`
+and refuse its others, and scripts/gpu_record.py's self-test passes. Python 3 standard library only.
 """
 import glob
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -75,11 +95,18 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 import cited  # noqa: E402  (the declaration index: `scan`)
+import gpu_record  # noqa: E402  (the check of a GPU run record: `problem`)
 
 ROADMAP = ROOT / 'roadmap'
 PROGRAMS = ROADMAP / 'llvm-ir' / 'programs.tsv'   # written by scripts/L3Programs.lean
 REGEN = 'lake env lean --run scripts/L3Programs.lean'
 PROGRAMS_HEADER = 'theorem\tmodule\tprogram\tfile\tsha256'
+WITNESSES = ROADMAP / 'llvm-ir' / 'witnesses.tsv'   # written by scripts/L3Programs.lean
+WITNESSES_HEADER = 'theorem\twitness'
+EVIDENCE_TSV = ROADMAP / 'llvm-ir' / 'evidence.tsv'   # written by scripts/L3Programs.lean
+EVIDENCE_HEADER = 'name\tkind\tlevels\tprogram\tfile\tsha256'
+# an evidence name's kind and its rows: (program, file, sha256, the levels stated of its runs)
+Evidence = dict[str, tuple[str, list[tuple[str, str, str, set[str]]]]]
 REQUIRED = ('id', 'title', 'kind', 'ref', 'quote', 'lean', 'corpus', 'tests', 'upstream', 'level')
 OPTIONAL = ('depends', 'evidence')
 NONE = {'lean': 'not stated yet', 'corpus': 'none', 'tests': 'none'}
@@ -298,12 +325,26 @@ class Index:
             self.templates.setdefault(m.group(1), cmd[m.start():].split(':=', 1)[0])
         self.packages: dict[str, set[str]] = {}
         self.table: dict[str, tuple[str, list[tuple[str, str, str]]]] | None = None
+        self.wit: dict[str, list[str]] | None = None
+        self.ev: Evidence | None = None
 
     def programs(self) -> dict[str, tuple[str, list[tuple[str, str, str]]]]:
         """The table of programs (`programs`), read once."""
         if self.table is None:
             self.table = programs()
         return self.table
+
+    def witnesses(self) -> dict[str, list[str]]:
+        """The witness table (`witnesses`), read once."""
+        if self.wit is None:
+            self.wit = witnesses()
+        return self.wit
+
+    def evidence(self) -> Evidence:
+        """The table of the cards' L3 and L4 names (`evidence_table`), read once."""
+        if self.ev is None:
+            self.ev = evidence_table()
+        return self.ev
 
     def add_file(self, text: str) -> None:
         decls = cited.scan(text)[0]
@@ -393,10 +434,81 @@ def programs(text: str | None = None) -> dict[str, tuple[str, list[tuple[str, st
     return out
 
 
-def l2_problem(table: dict[str, tuple[str, list[tuple[str, str, str]]]], name: str) -> str | None:
+def table_rows(path: pathlib.Path, header: str, cols: int,
+               text: str | None = None) -> list[list[str]]:
+    """The rows of a table scripts/L3Programs.lean writes (`path`, or `text`), each split into its
+    `cols` columns. Raises ValueError on another header line or a row of another width."""
+    if text is None:
+        text = path.read_text() if path.is_file() else ''
+    rel = path.relative_to(ROOT).as_posix()
+    rows = text.split('\n')
+    if rows[0] != header:
+        raise ValueError(f'{rel} is not the table scripts/L3Programs.lean writes; run `{REGEN}`')
+    out = []
+    for r in rows[1:]:
+        if r:
+            cs = r.split('\t')
+            if len(cs) != cols:
+                raise ValueError(f'{rel}: a row of {len(cs)} columns, not {cols}: {r!r}; '
+                                 f'run `{REGEN}`')
+            out.append(cs)
+    return out
+
+
+def witnesses(text: str | None = None) -> dict[str, list[str]]:
+    """The witness table scripts/L3Programs.lean writes (roadmap/llvm-ir/witnesses.tsv, or
+    `text`): for each theorem of the table of programs, its witnesses, the theorems that apply it
+    by `Kernel.Sound.exists_obs` at premises they prove, with no premise of their own, and an
+    observation and a relation that depend on the output (none: an empty list)."""
+    out: dict[str, list[str]] = {}
+    for n, w in table_rows(WITNESSES, WITNESSES_HEADER, 2, text):
+        ws = out.setdefault(n, [])
+        if w != '-':
+            ws.append(w)
+    return out
+
+
+def evidence_table(text: str | None = None) -> Evidence:
+    """The table of the kernel cards' L3 and L4 names scripts/L3Programs.lean writes
+    (roadmap/llvm-ir/evidence.tsv, or `text`): for each name, its kind (`theorem`, `definition`,
+    `other`, or `-` for no declaration) and one row per program its type mentions (in a
+    `Kernel.Sound`, `Kernel.Safe`, `GPUProof.Kernel.Sound` or `Kernel.Obs` anywhere in it):
+    (program, file, sha256) as in `programs`, and the levels the statement states about the
+    observed runs of that program and function only (L3Programs' level rule, `runLevels`: `L3`
+    for an output of the run equal to a TorchLean operation's value, `L4` for an output's real
+    value equal to a real rounded or an error bound on it; none for `-`). A name whose type
+    mentions no program has no row."""
+    out: Evidence = {}
+    for n, kind, lvs, prog, f, sha in table_rows(EVIDENCE_TSV, EVIDENCE_HEADER, 6, text):
+        rows = out.setdefault(n, (kind, []))[1]
+        if prog != '-':
+            rows.append((prog, f, sha, set(lvs.split()) - {'-'}))
+    return out
+
+
+DIGESTS: dict[str, str | None] = {}
+
+
+def digest(rel: str) -> str | None:
+    """The sha256 of the file `rel` (relative to the repository), None if it is no file."""
+    if rel not in DIGESTS:
+        f = ROOT / rel
+        DIGESTS[rel] = hashlib.sha256(f.read_bytes()).hexdigest() \
+            if '..' not in rel and f.is_file() else None
+    return DIGESTS[rel]
+
+
+def l2_problem(table: dict[str, tuple[str, list[tuple[str, str, str]]]], name: str,
+               corpus: set[str] | None = None,
+               wit: dict[str, list[str]] | None = None) -> str | None:
     """Why theorem `name` is no L2 evidence by the table of programs (`programs`), or None when
     it is: it must have a row (else the table is stale), be a declaration, conclude `Kernel.Sound`
-    of a program, and have every program its conclusion is about bound to a corpus file."""
+    of a program, and have every program its conclusion is about bound to a corpus file. For a
+    kernel card, `corpus` is the card's corpus files: each such file must be one of them and have
+    the digest its row records. With the witness table `wit` (`witnesses`), it must have a
+    witness: a theorem with no premise that applies it at an admitted choice and reaches an
+    observed output its relation constrains (scripts/L3Programs.lean, `witnessOf`), so that its
+    premises can be met and it is not true for want of a run."""
     if name not in table:
         return f'has no row in roadmap/llvm-ir/programs.tsv; run `{REGEN}`'
     mod, ps = table[name]
@@ -408,15 +520,72 @@ def l2_problem(table: dict[str, tuple[str, list[tuple[str, str, str]]]], name: s
     if unbound:
         return (f'concludes Kernel.Sound of {", ".join(unbound)}, which no corpus file\'s '
                 'imported program is (roadmap/llvm-ir/programs.tsv)')
+    if corpus is not None:
+        for p, f, sha in ps:
+            if f not in corpus:
+                return (f'concludes Kernel.Sound of {p}, bound to {f}, which is none of the '
+                        'card\'s corpus files (roadmap/llvm-ir/programs.tsv)')
+            if digest(f) != sha:
+                return (f'concludes Kernel.Sound of {p}, which records the digest {sha}, not the '
+                        f'sha256 of {f} (roadmap/llvm-ir/programs.tsv)')
+    if wit is not None:
+        if name not in wit:
+            return f'has no row in roadmap/llvm-ir/witnesses.tsv; run `{REGEN}`'
+        if not wit[name]:
+            return ('has no witness (roadmap/llvm-ir/witnesses.tsv): no theorem without premises '
+                    'applies it by Kernel.Sound.exists_obs to an admitted choice and an observed '
+                    'output that its relation constrains')
+    return None
+
+
+def l34_problem(ev: Evidence, name: str, corpus: set[str], level: str) -> str | None:
+    """Why `name` is no evidence at `level` (`L3` or `L4`) of a kernel card whose corpus files are
+    `corpus`, by the table of the cards' L3 and L4 names (`evidence_table`), or None when it is:
+    it must have a row (else the table is stale), be a theorem, and state `level` about a run of
+    the kernel: one of its rows, a program bound with its function to one of the card's corpus
+    files with that file's digest, must have `level` among the levels stated of that program's
+    runs. A statement that mentions the kernel only in a premise (its levels are another run's),
+    or concludes soundness and nothing about an output, has no level for it."""
+    if name not in ev:
+        return f'has no row in roadmap/llvm-ir/evidence.tsv; run `{REGEN}`'
+    kind, rows = ev[name]
+    if kind == '-':
+        return 'is no declaration (roadmap/llvm-ir/evidence.tsv)'
+    if kind != 'theorem':
+        return f'is a {kind}, not a theorem (roadmap/llvm-ir/evidence.tsv)'
+    if not any(level in lvs for _, _, _, lvs in rows):
+        said = '; '.join(f'{p}: {" ".join(sorted(lvs)) or "none"}' for p, _, _, lvs in rows)
+        return (f'states {level} of no run: the levels of its programs\' runs are '
+                f'{said or "none (no program)"} (roadmap/llvm-ir/evidence.tsv)')
+    if not any(level in lvs and f in corpus and digest(f) == sha for _, f, sha, lvs in rows):
+        said = ', '.join(f'{p} ({f})' for p, f, _, lvs in rows if level in lvs)
+        return (f'states {level} only of runs of {said}, no program of the card\'s corpus files '
+                '(roadmap/llvm-ir/evidence.tsv)')
     return None
 
 
 def self_test() -> int:
-    """`l2_problem` on rows of the shapes scripts/L3Programs.lean's self-test elaborates: a
-    theorem about a program bound to a file and one about two such programs pass; a premise-only
-    or negated mention (a declaration with no program), a mutant that keeps a corpus digest (a
-    program bound to no file), a theorem with a bound and an unbound program, a name with no
-    declaration and a name with no row fail; a table of the old four-column shape is refused."""
+    """`l2_problem`, `l34_problem` and the record check (scripts/gpu_record.py) on rows of the
+    shapes scripts/L3Programs.lean's self-test elaborates and on records. By the table of
+    programs alone: a theorem about a program bound to a file and one about two such programs
+    pass; a premise-only or negated mention (a declaration with no program), a mutant that keeps
+    a corpus digest (a program bound to no file), a theorem with a bound and an unbound program, a
+    name with no declaration and a name with no row fail; a table of the old four-column shape is
+    refused.
+    At the vadd card's corpus files, on the tables' rows of the real theorems: vadd's theorem with
+    its witness passes; vmul's theorem (another kernel's file), a row whose digest is not its
+    file's, a theorem with no witness (`outer`, true for want of a run) and one with no row in the
+    witness table fail. As L3 and as L4 evidence of that card: vadd's `vadd_real` (of both
+    forms) passes; the definition `vadd.bytes`, vmul's `vmul_real`, a theorem about vadd's
+    program only in a premise (`premise`), one whose conclusion is soundness and `True` (`both`),
+    both of no level, `pair` (its output identified by no equation, no level), and a theorem
+    about no program (an old row with levels and no program) fail; a theorem of the form of L3
+    only passes as L3 and fails as L4; `vmul_extra`, about vadd's run with a premise about a vmul
+    run, passes at the vadd card and fails at the vmul card. As GPU run
+    records of that card: tests/gpu/vadd/record.txt passes; a record of three lines (its first
+    line, the kernel and an agreeing result), one whose kernel sha256 is changed, one with a
+    launch that disagrees and one whose first launch compares no word (`launch: 1 1 1 0`, its
+    evaluator line `0 words agree`) fail; and scripts/gpu_record.py's own self-test passes."""
     d = '8e4779ad' + '0' * 56
     t = programs(PROGRAMS_HEADER + '\n'
                  f'T.outer\tT\tT.p.prog\ttests/corpus/vadd/a.ll\t{d}\n'
@@ -436,10 +605,74 @@ def self_test() -> int:
         bad.append('the four-column table')
     except ValueError:
         pass
+    va = 'tests/corpus/vadd/vadd_vector_addition_vector_addition6A6A_793e5fe36a195e73.nvptx.ll'
+    vm = ('tests/corpus/vmul/'
+          'vector_multiply_vector_multiply_vector_multiply6A6A_227fc544da3deaff.nvptx.ll')
+    corpus = {va}
+    real = programs(PROGRAMS_HEADER + '\n'
+                    f'K.vadd.correct\tK\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                    f'K.vmul.correct\tK\tK.vmul.prog\t{vm}\t{digest(vm)}\n'
+                    f'K.stale\tK\tK.vadd.prog\t{va}\t{d}\n'
+                    f'T.outer\tT\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                    f'T.unlisted\tT\tK.vadd.prog\t{va}\t{digest(va)}\n')
+    wit = witnesses(WITNESSES_HEADER + '\n'
+                    'K.vadd.correct\tT.vadd_obs23\n'
+                    'K.vmul.correct\tT.vmul_obs23\n'
+                    'K.stale\tT.vadd_obs23\n'
+                    'T.outer\t-\n')
+    if l2_problem(real, 'K.vadd.correct', corpus, wit) is not None:
+        bad.append('vadd.correct at the vadd card')
+    bad += [f'{n} at the vadd card' for n in ('K.vmul.correct', 'K.stale', 'T.outer', 'T.unlisted')
+            if l2_problem(real, n, corpus, wit) is None]
+    ev = evidence_table(EVIDENCE_HEADER + '\n'
+                        f'T.vadd_real\ttheorem\tL3 L4\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                        f'T.vadd_eq\ttheorem\tL3\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                        f'K.vadd.bytes\tdefinition\t-\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                        f'T.vmul_real\ttheorem\tL3 L4\tK.vmul.prog\t{vm}\t{digest(vm)}\n'
+                        f'T.premise\ttheorem\t-\tT.p.prog\t{va}\t{digest(va)}\n'
+                        f'T.both\ttheorem\t-\tT.p.prog\t{va}\t{digest(va)}\n'
+                        f'T.pair\ttheorem\t-\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                        f'T.vmul_extra\ttheorem\tL3 L4\tK.vadd.prog\t{va}\t{digest(va)}\n'
+                        f'T.vmul_extra\ttheorem\t-\tK.vmul.prog\t{vm}\t{digest(vm)}\n'
+                        'T.nothing\ttheorem\tL3 L4\t-\t-\t-\n')
+    for lv in ('L3', 'L4'):
+        for n in ('T.vadd_real', 'T.vmul_extra'):
+            if l34_problem(ev, n, corpus, lv) is not None:
+                bad.append(f'{n} as {lv} evidence of the vadd card')
+        bad += [f'{n} as {lv} evidence of the vadd card'
+                for n in ('K.vadd.bytes', 'T.vmul_real', 'T.premise', 'T.both', 'T.pair',
+                          'T.nothing', 'T.absent') if l34_problem(ev, n, corpus, lv) is None]
+        if l34_problem(ev, 'T.vmul_extra', {vm}, lv) is None:
+            bad.append(f'vmul_extra as {lv} evidence of the vmul card')
+        if l34_problem(ev, 'T.vmul_real', {vm}, lv) is not None:
+            bad.append(f'vmul_real as {lv} evidence of the vmul card')
+    if l34_problem(ev, 'T.vadd_eq', corpus, 'L3') is not None:
+        bad.append('vadd_eq as L3 evidence of the vadd card')
+    if l34_problem(ev, 'T.vadd_eq', corpus, 'L4') is None:
+        bad.append('vadd_eq as L4 evidence of the vadd card')
+    rec = (ROOT / 'tests/gpu/vadd/record.txt').read_text()
+    if (why := gpu_record.problem(rec, ROOT, corpus)) is not None:
+        bad.append(f'tests/gpu/vadd/record.txt ({why})')
+    three = f'GPU run record: a conformance test, not a proof.\nkernel: {va}\nresult: agree\n'
+    shaed = rec.replace(digest(va), d)
+    differ = rec.replace('launches, 0 differ', 'launches, 1 differ')
+    zero = rec.replace('launch: 1 1 1 65', 'launch: 1 1 1 0').replace(
+        'n 1 grid 1 block 1: 65 words agree', 'n 1 grid 1 block 1: 0 words agree')
+    bad += [f'the {n} record' for n, r in (('three-line', three), ('changed sha', shaed),
+                                            ('disagreeing', differ), ('zero-word', zero))
+            if r == rec or gpu_record.problem(r, ROOT, corpus) is None]
+    bad += gpu_record.self_test(ROOT)
     for n in bad:
-        print(f'self-test: {n} is not what l2_problem should make of it')
-    print('self-test: ' + ('failed' if bad else 'the bound rows pass; the premise, the negation, '
-                           'the mutant, the mixed row, the missing name and the old table fail'))
+        print(f'self-test: {n} is not what the check should make of it')
+    print('self-test: ' + ('failed' if bad else
+                           'the bound rows pass; the premise, the negation, the mutant, the mixed '
+                           'row, the missing name and the old table fail; at the vadd card, '
+                           'vmul\'s theorem, the stale digest, the theorem with no witness, the '
+                           'definition, the other kernel\'s theorem, the premise, the soundness '
+                           'conjunction, the unidentified pair and the program-less theorem as L3 '
+                           'and L4, the L3 form as L4, the extra premise\'s run at the vmul card, '
+                           'the three-line, re-hashed, disagreeing and zero-word records '
+                           'fail'))
     return 1 if bad else 0
 
 
@@ -506,30 +739,6 @@ class Card:
         return f'{self.area}/{self.id}'
 
 
-def record_problem(text: str, corpus: set[str] | None) -> str | None:
-    """Why `text` is not the record of a GPU run that agrees, or None: its first line starts with
-    `GPU run record:`, its `kernel:` line names a file under tests/corpus/ (for a kernel card,
-    `corpus` is the card's corpus files and the file is one of them), and its `result:` line
-    starts with `agree`. The rest of the record (the launches, the inputs, the evaluator's lines)
-    is not read."""
-    lines = text.split('\n')
-    if not lines[0].startswith('GPU run record:'):
-        return 'is no GPU run record (its first line does not start with GPU run record:)'
-    keys: dict[str, str] = {}
-    for line in lines[1:]:
-        key, sep, value = line.partition(': ')
-        if sep and key in ('kernel', 'result'):
-            keys.setdefault(key, value.strip())
-    kern = keys.get('kernel', '')
-    if not kern.startswith('tests/corpus/') or '..' in kern or not (ROOT / kern).is_file():
-        return 'names no file under tests/corpus on its kernel: line'
-    if corpus is not None and kern not in corpus:
-        return f'ran {kern}, none of the card\'s corpus files'
-    if not keys.get('result', '').startswith('agree'):
-        return 'records no agreement (its result: line does not start with agree)'
-    return None
-
-
 def check_card(c: Card, index: Index) -> list[str]:
     """The card's problems, the evidence present (in `c.evidence`) set aside for `levels`."""
     errs = []
@@ -594,8 +803,8 @@ def check_card(c: Card, index: Index) -> list[str]:
             for p in its:
                 if not (ROOT / p).is_file() or '..' in p:
                     errs.append(f'{lv} evidence {p} is no file of this repository')
-                elif bad := record_problem((ROOT / p).read_text(),
-                                           c.corpus if k['kind'] == 'kernel' else None):
+                elif bad := gpu_record.problem((ROOT / p).read_text(), ROOT,
+                                               c.corpus if k['kind'] == 'kernel' else None):
                     errs.append(f'{lv} evidence {p} {bad}')
         elif not (k['kind'] == 'construct' and lv == 'L3'):
             for n in its:
@@ -605,14 +814,24 @@ def check_card(c: Card, index: Index) -> list[str]:
                 c.scopes[lv] = level_scope({n: scope(lv, index.statement(n)) for n in its})
                 if lv == 'L2':
                     try:
-                        table = index.programs()
+                        table, wit = index.programs(), index.witnesses()
                     except ValueError as e:
                         errs.append(str(e))
-                        table = None
+                        table = wit = None
                     for n in its:
                         if table is not None and index.has(n) and \
-                                (bad := l2_problem(table, n)) is not None:
+                                (bad := l2_problem(table, n, c.corpus, wit)) is not None:
                             errs.append(f'L2 evidence {n} {bad}')
+                elif lv in ('L3', 'L4'):
+                    try:
+                        ev = index.evidence()
+                    except ValueError as e:
+                        errs.append(str(e))
+                        ev = None
+                    for n in its:
+                        if ev is not None and index.has(n) and \
+                                (bad := l34_problem(ev, n, c.corpus, lv)) is not None:
+                            errs.append(f'{lv} evidence {n} {bad}')
     return errs
 
 

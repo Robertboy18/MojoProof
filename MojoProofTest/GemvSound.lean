@@ -1,5 +1,5 @@
 import MojoProofTest.GemvWarpWord
-import MojoProofTest.Theorem0
+import MojoProof.Sym.SigKernel
 import MojoProof.Tile.Words
 
 /-!
@@ -12,8 +12,8 @@ of memories that each warp's run keeps. MojoProofTest/GemvWarpWord.lean's `rows_
 those words their rows' `warpDot` up to NaNs. This file adds the trace: every event of the run is
 one of `Ev`, and such a trace has no race and keeps the promise of `!invariant.load`, so the
 start's grid is sound (`Grid.Sound`, through `CanonRun.start_sound`), and the kernel is sound
-against `GPUProof.Spec.matVec` (`GPUProof.Kernel.Sound` at `sig`, through Theorem 0's
-`MojoProofTest.Theorem0.sound_sig`).
+against `GPUProof.Spec.matVec` (`GPUProof.Kernel.Sound` at `sig`, through Theorem 0 at `sig`,
+`kernel_sound_sig` in MojoProof/Sym/SigKernel.lean).
 
 * `Ev`: a lane's events, as gemv_kernel's IR has them (tests/corpus/gemv/, the `.ll` of
   `b79a852b`): the accesses of its own `alloca` slots (`%7`, `%8`, `%9`: stores at lines 29, 32
@@ -44,9 +44,9 @@ against `GPUProof.Spec.matVec` (`GPUProof.Kernel.Sound` at `sig`, through Theore
 * `RowsRule`, `rows_holds`, `starts`, `kernel_sound`: rows that load as their `warpDot`s up to
   NaNs meet the rule of `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 _)`
   (`MojoProof.Tile.warpDot_matVec_holds`); gemv_kernel's launch starts on
-  a memory closed for its arguments (`Sym.Grid.start_ok`); so gemv_kernel is sound at `sig`
+  a memory closed for its arguments (`Grid.start_of_check`); so gemv_kernel is sound at `sig`
   for the admission "address choice below `2 ^ 60`"
-  (`grid_end`, `CanonRun.start_done`, `Grid.Done.bad_iff`, `MojoProofTest.Theorem0.sound_sig`);
+  (`grid_end`, `CanonRun.start_done`, `Grid.not_bad`, `kernel_sound_sig`);
 * instances, every premise proved (`GemvThread.mem_caller`), no run evaluated: the example after
   `kernel_sound` (`grid_sound`, one warp, from `starts`) and `sound64` (two warps, `words`);
 * `row_race`: why the launch is one-dimensional: at one block of 32 × 2 threads, two warps have
@@ -163,8 +163,8 @@ theorem mem0_trace (w : Alloc) : ∀ j, (w.mem0 j).trace = w.m.trace
 /-- **A thread's final memory logs its store only**: for every property `P` of events, layout
 `l`, thread `who`, value, block numbers `p0`, `b7`, `b8`, `b9`, offset `o`, decidable `z` and
 memory `my`: `GemvThread.out` extends `my`'s trace by events of `P` if the binary32 store of
-`who` at offset `o` of `p0` is of `P` when `z` holds (`Mem.store_trace`; the dead slots log
-nothing, `Mem.foldl_setLive_trace`). -/
+`who` at offset `o` of `p0` is of `P` when `z` holds (`Ext.store`, MojoProof/Sym/SigKernel.lean;
+the dead slots log nothing, `Mem.foldl_setLive_trace`). -/
 theorem ext_out {P : Event → Prop} (l : Layout) (who : Who) (x : Val) (p0 b7 b8 b9 : Nat)
     (o : Int) (z : Prop) [Decidable z] (my : Mem)
     (hP : z → P (.access ⟨who, ⟨p0, o⟩, l.stored (.fp .float), true, none, false⟩)) :
@@ -173,12 +173,7 @@ theorem ext_out {P : Event → Prop} (l : Layout) (who : Who) (x : Val) (p0 b7 b
   refine (fun m' (h : Ext P my m') => h.trans (Ext.of_trace (Mem.foldl_setLive_trace _ _ _))) _ ?_
   by_cases hz : z
   · simp only [hz, ↓reduceIte]
-    split
-    · rename_i me hme
-      exact ⟨[_], by rw [Mem.store_trace hme]; rfl, fun e he => by
-        rw [List.mem_singleton] at he
-        exact he ▸ hP hz⟩
-    · exact Ext.refl _ _
+    exact Ext.store (hP hz)
   · simp only [hz, ↓reduceIte]
     exact Ext.refl _ _
 
@@ -257,7 +252,8 @@ theorem lanes_events {bA bV : Nat} {w : Lanes} (h : w.Pre bA bV) {j : Nat} (hj :
 row `i`'s binary32 load at offset `4 i` of `p0` by thread `32 i` of `L`
 (`⟨32 i, 32 i / volume L.block⟩`, the `who` the start gives it, `Grid.start_ctx`), for each
 `i < M`: `MojoProof.Tile.warpObs` at gemv_kernel's layout (gemv IR line 136 stores row `i` from
-lane 0 of warp `i`). It reads only the blocks (`Mem.load_of_block`), and names no start's
+lane 0 of warp `i`, which is thread `32 i` at gemv's launches, where 32 divides the block's `x`
+side). It reads only the blocks (`Mem.load_of_block`), and names no start's
 contexts. -/
 def rowsObs (L : Launch) (M p0 : Nat) (m : Mem) : Option (Fin M → Except Fault Val) :=
   MojoProof.Tile.warpObs gemv.prog.layout L M p0 m
@@ -323,14 +319,8 @@ theorem grid_end {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
     have h1 := hfree q (by omega)
     rw [Grid.start_blocks hs hx] at h1
     cases h1
-  have hro : ∀ {q size al : Nat}, m.Buffer q size al false → q ≠ p0 := by
-    intro q size al hq e
-    obtain ⟨x, hx, -, -, -, h1, -⟩ := hq
-    obtain ⟨y, hy, -, -, -, h2, -⟩ := hb0
-    rw [e, hy] at hx
-    cases hx
-    rw [h1] at h2
-    exact absurd h2 (by decide)
+  have hro : ∀ {q size al : Nat}, m.Buffer q size al false → q ≠ p0 := fun hq =>
+    Mem.Buffer.ne hq hb0
   have hp0 : p0 < g.mem.next := let ⟨_, hx, _⟩ := hb0; hnx hx
   have hA' : bA < g.mem.next := let ⟨_, hx, _⟩ := hbA; hnx hx
   have hV' : bV < g.mem.next := let ⟨_, hx, _⟩ := hbV; hnx hx
@@ -422,26 +412,18 @@ theorem rows_holds (bits : Nat) {M K : Nat} {A : TorchLean.Tensor (Model FloatTy
     (h : MojoProof.Tile.WarpWords .float true o (matVecPairs A v) f) : RowsRule K bits I f :=
   h.loads fun _ hW => MojoProof.Tile.warpDot_matVec_holds (σ := (M, K)) rfl bits true o A v hA hv hW
 
-unseal Array.anyM.loop in
 /-- **gemv_kernel's launch starts** (test of gemv_kernel, for every launch, argument values
 `p0`, `bA`, `bV` (pointers at offset 0), `M`, a word `%4` and `K`, memory closed for them,
-address choice and oracle): `Grid.start` gives a grid and contexts (`Sym.Grid.start_ok`: gemv
-has no globals, `gemv_globals`, no `byval` parameter, and its `noundef` parameters accept the
-arguments, by evaluation). -/
+address choice and oracle): `Grid.start` gives a grid and contexts. An instance of
+`Grid.start_of_check` (MojoProof/Sym/SigKernel.lean), its `startCheck` and its launch check
+(gemv_kernel has no launch limit) by `kernel_rfl`. -/
 theorem starts (L : Launch) {m : Mem} {p0 bA bV M K : Nat} {x4 : BitVec 32}
     (hC : m.Closed [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bV, 0⟩, .bits 32 (BitVec.ofNat 32 M),
       .bits 32 x4, .bits 32 (BitVec.ofNat 32 K)]) (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
     ∃ g c, Grid.start gemv.prog gemv.fn_0 L [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bV, 0⟩,
       .bits 32 (BitVec.ofNat 32 M), .bits 32 x4, .bits 32 (BitVec.ofNat 32 K)] m ch oracle =
-        .ok (g, c) := by
-  refine Sym.Grid.start_ok ch oracle rfl hC gemv_globals (fun p v hpv t ht => ?_)
-    (fun p v hpv hnb m' => ?_) (of_decide_eq_true (by kernel_rfl))
-  all_goals
-    simp only [gemv.fn_0, List.zip_cons_cons, List.zip_nil_right, List.mem_cons, Prod.mk.injEq,
-      List.not_mem_nil] at hpv
-    repeat' rcases hpv with ⟨hp, hv⟩ | hpv
-  all_goals subst_vars
-  all_goals first | exact ⟨_, rfl⟩ | simp at ht
+        .ok (g, c) :=
+  Grid.start_of_check ch oracle hC (by kernel_rfl) (by kernel_rfl)
 
 /-- **gemv_kernel is sound against the matrix-vector spec**: gemv_kernel, for every valid launch `L`
 whose blocks and grid are one-dimensional (`y` and `z` sizes 1), whose block's `x` size 32 divides
@@ -452,8 +434,9 @@ words `I` that hold `A` and `v`: the kernel is sound at `sig` (`GPUProof.Kernel.
 admission "address choice below `2 ^ 60`", the output rows (`rowsObs`) and the rule of
 `GPUProof.Spec.matVec (GPUProof.laneVecGrade 32 5 fun n => ⌈n / 32⌉)` (`RowsRule`). At each admitted
 choice the launch starts (`starts`), `grid_end` gives the run, `CanonRun.start_done` its done grid,
-not bad by `Grid.Done.bad_iff`, and Theorem 0 at `sig` (`MojoProofTest.Theorem0.sound_sig`, by
-`GPUProof.Sound.of_one_run`) the soundness; the rows' relation by `rows_holds`. -/
+not bad by `Grid.not_bad`, and Theorem 0 at `sig` the soundness (an instance of
+`kernel_sound_sig`, MojoProof/Sym/SigKernel.lean, by `GPUProof.Sound.of_one_run`); the rows'
+relation by `rows_holds`. -/
 theorem kernel_sound {L : Launch} {m : Mem} {M K p0 bA bV : Nat} {x4 : BitVec 32}
     (hC : m.Closed [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bV, 0⟩, .bits 32 (BitVec.ofNat 32 M),
       .bits 32 x4, .bits 32 (BitVec.ofNat 32 K)])
@@ -477,23 +460,16 @@ theorem kernel_sound {L : Launch} {m : Mem} {M K p0 bA bV : Nat} {x4 : BitVec 32
       .ptr ⟨bV, 0⟩, .bits 32 (BitVec.ofNat 32 M), .bits 32 x4, .bits 32 (BitVec.ofNat 32 K)] m
       (fun ω => ∀ q, ω.1 q < 2 ^ 60) (fun b => rowsObs L M p0 { blocks := b })
       (RowsRule K bits I) := by
-  rintro ⟨ch, oracle⟩ hch
-  obtain ⟨g, c, hs⟩ := starts L hC ch oracle
+  refine kernel_sound_sig hC.bytesIn
+    (fun m₁ m₂ hb => congrArg some (funext fun _ => Mem.load_of_block (congrFun hb _) _ _ _ _))
+    (fun ω _ => starts L hC ω.1 ω.2) fun ω g c hch hs => ?_
   obtain ⟨_, _, hc, hr, hk, f, hy, hR⟩ := grid_end hs rfl hL hx hby hbz hgy hgz hch hM hK hMK hMx
     hC.above hb0 hf0 hbA hbV hfA hfV hA hV
   obtain ⟨z, ⟨_, hp⟩, hd, rfl⟩ := CanonRun.start_done hs hL.volume_pos hc
   have hreach := GPUProof.Path.exists_iff.1 ⟨_, hp⟩
   have hfits := Grid.start_reach_fits hs hreach
-  have hb : ¬ GPUProof.Bad sig (z, L, c) := fun hb =>
-    ((Grid.Done.bad_iff (Grid.start_reach_size hs hreach).le hd).1 hb).elim
-      (fun h' => Bool.false_ne_true ((hr hfits.trace hfits.2).symm.trans h'))
-      fun h' => Bool.false_ne_true (h'.symm.trans hk)
-  refine ⟨(g, L, c), ?_, MojoProofTest.Theorem0.sound_sig hs hC.bytesIn
-    (fun m₁ m₂ hb => congrArg some (funext fun _ => Mem.load_of_block (congrFun hb _) _ _ _ _))
-    hp hd hb hy (rows_holds bits hIA hIv hR)⟩
-  show (Grid.start gemv.prog gemv.fn_0 L _ m ch oracle).map _ = _
-  rw [hs]
-  rfl
+  exact ⟨z, hreach, hd, Grid.not_bad hs hreach hd (hr hfits.trace hfits.2) hk, f, hy,
+    rows_holds bits hIA hIv hR⟩
 
 /-- Test: `grid_sound` at one block of 32 threads (`launch2 1 1 32 1`), `M = 1`, `K = 4`, the
 memory `GemvThread.m3` (`GemvThread.mem` at the matrix `GemvThread.A3` and the vector

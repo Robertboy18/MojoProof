@@ -1,4 +1,5 @@
 import Lean
+import MojoProof.Util.Modules
 
 /-!
 # The audit step of the gate
@@ -230,15 +231,7 @@ partial def axiomsOf (env : Environment) (n : Name) :
   modify (·.insert n r)
   return r
 
-/-- Module names of the `.lean` files under `dir` (relative to the working directory). -/
-partial def modulesIn (dir : System.FilePath) : IO (Array Name) := do
-  let mut acc := #[]
-  for e in ← dir.readDir do
-    if ← e.path.isDir then acc := acc ++ (← modulesIn e.path)
-    else if e.path.extension == some "lean" then
-      let parts := (e.path.withExtension "").components
-      acc := acc.push (parts.foldl (fun n s => if s == "." then n else .str n s) .anonymous)
-  return acc
+open MojoProof.Util (modulesIn)
 
 /-- The constants reachable from `root` through the type and body of each constant that `within`
 accepts; a constant outside it is reached but not expanded. This is the transitive walk of the

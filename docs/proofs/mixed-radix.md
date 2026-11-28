@@ -834,8 +834,9 @@ thread `t`'s guarded tile is the bytes of `lnStores B n t` when `n ≤ t + B X` 
 `X = 3`, where block 1 owns nothing), each one application with the premise by `omega`; an
 `example` evaluates `lnStores` at both sizes. The mutant `ln_unguarded_300`: byte 1532, float
 `383 = 127 + 128 · 2`, is in thread 127's unguarded tile and no thread's stores write it.
-`lnLoop` is defined as a model of the IR's loop; at the IR's block size 128 the run of the loop
-stores at `lnStores 128 n tid`'s floats (MojoProofTest/LnRun.lean's `run`, below).
+`lnLoop` is defined as a model of the IR's loop; at every block size `B` the run of the loop
+stores at `lnStores B n tid`'s floats, in that order (MojoProofTest/LnRun.lean's `runB`, and `run`
+at the IR's block size 128, [layernorm.md](layernorm.md)).
 
 ### Layer norm's loop words at every thread and step
 
@@ -879,51 +880,24 @@ evaluation of the kernel is used; the examples at two launches are instances of 
   `sub` is the negative word `2 ^ 63`, whose minimum with 1 is itself).
 
 The run that reaches these words and stores the float at the pointer (:722) is the next
-section's, at the IR's block size 128.
+section's, at every block size `B` ([layernorm.md](layernorm.md)).
 
 ### Layer norm's loop run at every row length
 
-**Status.** Proved at block size 128 (the corpus file is that kernel): MojoProofTest/LnGep.lean,
-MojoProofTest/LnRound.lean and MojoProofTest/LnRun.lean. These are run theorems of the symbolic
-layer (`Block.sound_edge`), for one thread, every context (so every launch and thread),
-`tid < 1024`, row length `n < 2 ^ 32` and memory in which `y` (writable), `g`, `b` and `x`
-(read-only) are buffers of `4 n` bytes that fit, `x`, `g` and `b` hold the rows and `y` is none
-of the other three. The value side is not proved: the mean `%460` and the inverse deviation
-`%464` are given registers, and the bytes stored are given (4 bytes for each float); the
-addresses and the guard are proved.
-
-* The inactive threads' pointers (MojoProofTest/LnGep.lean). At a buffer of exactly the row's
-  `4 n` bytes, the `getelementptr inbounds` of float `128 j + tid` (:700) is `ln_gep`'s pointer
-  inside the row (`ln_gep_row`), the pointer one past the end at float `n`, and poison past the
-  block (`gep_inbounds_past`, `ln_gep_past`: `gepPtr`'s rule for `inbounds`,
-  MojoProof/Sem/Eval.lean, as LangRef's "getelementptr Instruction" says). The semantics never
-  faults there (`gep_buffer_ok`), so it accepts the step LLVM accepts.
-* One round (MojoProofTest/LnRound.lean). `round_false`: with `i < n ≤ i + tid` the round on the
-  path `%469`, `%483`, `%484`, `%531`, `%532` has its premises (`RoundWith`); it evaluates the
-  `getelementptr`s by `i + tid ≥ n` and has no store. `round_true`: with `i + tid < n` the round
-  through `%495`, `%496` (the three loads and the store at :722) has its premises.
-* The run (MojoProofTest/LnRun.lean). `AtHead` is the state at the header after its `phi`s at
-  index `i`. `AtHead.roundT` and `AtHead.roundF` give the round's premises, `AtHead` at `i + 128`
-  and the memory: `LnOut y [i + tid]` (4 bytes put at byte `4 (i + tid)` of `y`, by `run_put`
-  from the store's effect) or `LnOut y []`. `AtHead.exit` is the path out `%469`, `%482` to
-  `%534`. `run_from`, the hand-proved run lemma (57 lines, 68 with its docstring), is an induction
-  on the fuel `K` with `n ≤ i + 128 K`: one `Block.sound_edge` per round and `run_exit` at the
-  end, giving `LnOut y (lnLoop 128 n tid K i)`. `run` is `run_from` at `K = n`, `i = 0`:
-
-```lean
-theorem run ... (hA : AtHead n tid 0 y g b x X G Bt mu rs (Valuation.entry c t.k m f)) :
-    ∃ t' m' f', Steps c t m t' m' ∧ t'.frames = f' :: rest ∧ f'.fn = ln.fn_0 ∧
-      f'.label = ln.fn_0.b_58.label ∧ f'.pc = 0 ∧ f'.dest = f.dest ∧
-      LnOut y (lnStores 128 n tid) m m'
-```
-
-  `entry_edge` and `run_entry` add the edge from `%453`'s branch (:675), whose `phi`s
-  (:678-680) set the index to 0, so the run is from the loop's entry to `%534` (:774). With
-  `lnStores_eq` and `ln_guard_stores`, the floats stored are thread `tid`'s guarded tile when
-  `n ≤ tid + 128 X`.
-
-Not proved: the floats stored (`%503`, from `%460`, `%464`, `x`, `g` and `b`), the loops before
-this one (the mean and the deviation) and block sizes other than the corpus file's 128.
+**Status.** Proved at every block size `B` with `0 < B`, `B ≤ 2 ^ 32` and the path checker's
+covers, for the family's function `lnFam.fn B` (the bs128 file's with the step of :681 at `B`) in a
+context of the bs128 file's program: MojoProofTest/LnGep.lean, MojoProofTest/LnRound.lean and
+MojoProofTest/LnRun.lean, with the tests MojoProofTest/LnRunTest.lean (at 128) and the instances at
+the bs64, bs256 and bs1024 files' block sizes in MojoProofTest/LnFamily.lean, on its own page,
+[layernorm.md](layernorm.md). The bs64, bs256 and bs1024 files' own functions, in their own
+programs, are not run. For one thread, every context, row length `n < 2 ^ 32` and memory with the
+four buffers, the run from the loop's entry (:675) to `%534` (:774) gives three things. `LnTrace`
+gives the order and number of the accesses at the floats of `lnStores B n tid`. `LnOut` gives the
+final blocks (`LnOut.read`: the final 4 bytes at each such float, and the first memory's bytes at
+every other float). `LnBytes` names them: the binary32 bytes of `lnVal`, which is `%503` (:721) of
+the rows, the mean and the inverse deviation (`lnVal_cases`: up to NaN payloads, the fused or the
+unfused result; `lnVal_finite`, `lnVal_error`: a finite one is the float library's `lnOut`, within
+its bound `lnErr`). The mean `%460` and the inverse deviation `%464` are given registers.
 
 ### Separated footprints: a condition both necessary and sufficient
 

@@ -15,9 +15,9 @@ memory closed for the arguments, address choice and oracle, `Grid.start` returns
 The twin of the premise on `byval` arguments: with the size in place of the first buffer (`argsB`),
 `memV` is closed for the arguments, but on `launch2 2 1 2 1` the start faults for every address
 choice and oracle, since the size does not encode as the buffer's type (`byval_twin`). With the size
-left out (`argsV.take 3`, three values for four parameters), `vadd` starts on `launch2 2 1 2 1` on
-`memV` (`short_starts`): the start does not compare the number of arguments with the number of
-parameters.
+left out (`argsV.take 3`, three values for four parameters), `vadd` on `launch2 2 1 2 1` on `memV`
+is refused (`short_refused`): the start compares the number of arguments with the number of
+parameters (`Func.checkLaunch`, MojoProof/Sem/Grid.lean).
 -/
 
 namespace MojoProofTest.SymLaunch
@@ -73,13 +73,15 @@ theorem byval_twin (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
         .error (.unsupported "byval argument not of its type") :=
   ⟨{ memV_closed with vals := by decide }, rfl⟩
 
-/-- **The start does not count the arguments.** `vadd` has four parameters, `argsV.take 3` three
-values, and `vadd` on `launch2 2 1 2 1` starts on them on `memV`, for every address choice and
-oracle. -/
-theorem short_starts (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
-    Kernels.vadd.fn_0.params.length = 4 ∧ (argsV.take 3).length = 3 ∧ ∃ g c,
+/-- **The twin of the premise on the number of arguments.** `vadd` has four parameters,
+`argsV.take 3` three values, and `vadd` on `launch2 2 1 2 1` on them on `memV` is refused, for
+every address choice and oracle: the start compares the number of arguments with the number of
+parameters (`Func.checkLaunch`) before it allocates. -/
+theorem short_refused (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
+    Kernels.vadd.fn_0.params.length = 4 ∧ (argsV.take 3).length = 3 ∧
       Grid.start Kernels.vadd.prog Kernels.vadd.fn_0 (launch2 2 1 2 1) (argsV.take 3) memV ch
-        oracle = .ok (g, c) :=
-  ⟨rfl, rfl, _, _, rfl⟩
+        oracle = .error (.unsupported
+          s!"@{Kernels.vadd.fn_0.name} has 4 parameters, launched on 3 arguments") :=
+  ⟨rfl, rfl, rfl⟩
 
 end MojoProofTest.SymLaunch

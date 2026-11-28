@@ -11,13 +11,15 @@ oracle.
   `allocNext_res` and `shared_res` are in MojoProof/Sem/Grid.lean, with their names, so that the
   semantics' own start results use them.
 * `launchArgs_res`: on a memory with `Mem.FreeAbove` the arguments of a thread (`launchArgs`)
-  are made when every `byval(T)` parameter's argument encodes as a `T` (`Layout.encode`) and
-  every other parameter's attributes accept its argument on every memory (`withAttrs`).
+  are made when every `byval` copy can be placed and has no padding (`Func.byvalPlaced`), every
+  `byval(T)` parameter's argument encodes as a `T` (`Layout.encode`) and every other
+  parameter's attributes accept its argument on every memory (`withAttrs`).
 * `Grid.start_ok`: the launch starts when the kernel passes its check (`Func.check`), the
-  caller's memory is closed for the arguments (`Mem.Closed`), the globals and arguments are as
-  above, and the kernel has a body. No premise is about the launch, the address choice or the
-  oracle: `Grid.start` checks none of them, and it does not compare the number of arguments with
-  the number of parameters (it pairs them by `List.zip`).
+  launch passes `Func.checkLaunch` (as many arguments as parameters, the block within the
+  kernel's launch limits), the caller's memory is closed for the arguments (`Mem.Closed`), the
+  globals and arguments are as above, the kernel has a body and its `byval` copies have nonzero
+  addresses. No premise is about the address
+  choice or the oracle: `Grid.start` checks neither.
 * `foldlM_range'_inv` (MojoProof/Sem/Grid.lean): an invariant indexed by the next number of a
   fold over consecutive numbers that succeeds, a case of `foldlM_idx_inv` (the same file), an
   invariant indexed by the position of a fold over any list that succeeds.
@@ -38,17 +40,25 @@ namespace MojoProof.Sym
 open MojoProof.LLVM MojoProof.Sem
 
 /-- **The arguments of a thread are made.** For every layout, memory with `Mem.FreeAbove`, thread
-number, kernel `fn`, argument values `args` and address choice: if the argument of every
-parameter with an attribute `byval(T)` encodes as a `T` (`Layout.encode`), and the attributes of
-every parameter with no `byval` accept its argument on every memory (`withAttrs`), then
-`launchArgs` returns `.ok`, with a memory with `Mem.FreeAbove`. -/
+number, kernel `fn`, argument values `args` and address choice: if every `byval` copy has a
+nonzero address LangRef's rules for allocated objects allow and its type has no padding
+(`Func.byvalPlaced`, for pointers of `w` bits in address space 0), the argument of every
+parameter with an attribute
+`byval(T)` encodes as a `T` (`Layout.encode`), and the attributes of every parameter with no
+`byval` accept its argument on every memory (`withAttrs`), then `launchArgs` returns `.ok`, with
+a memory with `Mem.FreeAbove`. -/
 theorem launchArgs_res {l : Layout} {m : Mem} {n : Nat} {fn : Func} {args : List Val}
     {ch : Nat → Nat} {x : Except Fault (Mem × List Val)}
     (hbv : ∀ p v, (p, v) ∈ fn.params.zip args → ∀ t, Attr.ty "byval" t ∈ p.attrs →
       (l.encode t v).isSome)
     (hpl : ∀ p v, (p, v) ∈ fn.params.zip args → (∀ t, Attr.ty "byval" t ∉ p.attrs) →
       ∀ m : Mem, ∃ v', withAttrs l m p.ty p.attrs v = .ok v')
-    (h : m.FreeAbove) (hx : launchArgs l m n fn args ch = x) : ∃ r, x = .ok r ∧ r.1.FreeAbove := by
+    (h : m.FreeAbove) (hal : fn.byvalPlaced l args = true) (hx : launchArgs l m n fn args ch = x) :
+    ∃ r, x = .ok r ∧ r.1.FreeAbove := by
+  unfold launchArgs at hx
+  split at hx
+  swap
+  · contradiction
   refine foldlM_res (P := fun r => r.1.FreeAbove) (Q := fun pv => pv.1 ∈ fn.params.zip args)
     (fun b pvi y hq hb hy => ?_) _ _ x (fun a ha => List.fst_mem_of_mem_zipIdx ha) h hx
   obtain ⟨m1, acc⟩ := b
@@ -90,31 +100,34 @@ theorem launchArgs_res {l : Layout} {m : Mem} {n : Nat} {fn : Func} {args : List
 `args`, memory `m`, address choice `ch` and oracle: `Grid.start` returns a grid and contexts
 (`.ok`) if
 * `fn` passes its check against the module (`Func.check`);
+* the launch passes `Func.checkLaunch`: as many arguments as parameters, and the block within
+  the kernel's launch limits;
 * `m` is closed for `args` (`Mem.Closed`);
 * every global of the module is in address space 3 and either has no initializer and is not
   `constant` or is initialized with `undef` (`shared`);
 * the argument of every `byval(T)` parameter encodes as a `T`, and the attributes of every other
   parameter accept its argument on every memory (`launchArgs`);
-* `fn` has a body (`Thread.start`).
-
-Arguments and parameters are paired by `List.zip`: no premise compares their numbers, since
-`Grid.start` does not. -/
+* `fn` has a body (`Thread.start`);
+* every `byval` copy has a nonzero address LangRef's rules for allocated objects allow and its
+  type has no padding (`Func.byvalPlaced`, for pointers of `w` bits in address space 0;
+  `launchArgs`). -/
 theorem Grid.start_ok {prog : Program} {fn : Func} {L : Launch} {args : List Val} {m : Mem}
     (ch : Nat → Nat) (oracle : Nat → Nat → Nat) (hf : fn.check prog.module = .ok ())
-    (hC : m.Closed args)
+    (hk : fn.checkLaunch prog.module L.block args.length = .ok ()) (hC : m.Closed args)
     (hg : ∀ g ∈ prog.module.globals.toList,
       g.addrSpace = 3 ∧ (g.init = none ∧ g.isConst = false ∨ g.init = some .undef))
     (hbv : ∀ p v, (p, v) ∈ fn.params.zip args → ∀ t, Attr.ty "byval" t ∈ p.attrs →
       (prog.layout.encode t v).isSome)
     (hpl : ∀ p v, (p, v) ∈ fn.params.zip args → (∀ t, Attr.ty "byval" t ∉ p.attrs) →
       ∀ m : Mem, ∃ v', withAttrs prog.layout m p.ty p.attrs v = .ok v')
-    (hb : 0 < fn.blocks.size) : ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c) := by
+    (hb : 0 < fn.blocks.size) (hal : fn.byvalPlaced prog.layout args = true) :
+    ∃ g c, Grid.start prog fn L args m ch oracle = .ok (g, c) := by
   cases hs : Grid.start prog fn L args m ch oracle with
   | ok r => exact ⟨r.1, r.2, rfl⟩
   | error e =>
     exfalso
     unfold Grid.start at hs
-    simp only [bind, Except.bind, hf, Mem.checkClosed_of_closed hC] at hs
+    simp only [bind, Except.bind, hf, hk, Mem.checkClosed_of_closed hC] at hs
     split at hs
     · rename_i e' he
       obtain ⟨r, hr, -⟩ := sharedFold_res hg _ _ hC.above he
@@ -129,10 +142,10 @@ theorem Grid.start_ok {prog : Program} {fn : Func} {L : Launch} {args : List Val
             simp only [pure, Except.pure] at hy
             split at hy
             · rename_i e he
-              obtain ⟨r, hr, -⟩ := launchArgs_res hbv hpl hb' he
+              obtain ⟨r, hr, -⟩ := launchArgs_res hbv hpl hb' hal he
               cases hr
             · rename_i v hv
-              obtain ⟨r, hr, hA'⟩ := launchArgs_res hbv hpl hb' hv
+              obtain ⟨r, hr, hA'⟩ := launchArgs_res hbv hpl hb' hal hv
               cases hr
               split at hy
               · rename_i e he
@@ -158,6 +171,8 @@ theorem Grid.start_args {prog : Program} {fn : Func} {L : Launch} {args : List V
         ∀ b x, m₂.blocks b = some x → g.mem.blocks b = some x := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h
@@ -210,12 +225,16 @@ def _root_.MojoProof.LLVM.Param.byval? (p : Param) : Option Ty :=
 
 /-- The block `launchArgs` makes for thread `n`'s `byval(T)` argument at position `i` of the
 kernel's parameters, holding bytes `bs`: in address space 0, of `l.size T` bytes, live, read-only
-if `ro`, owned by thread `n`, at the addresses `ch (2 i)` and `ch (2 i + 1)` times `T`'s
-alignment, modulo `2 ^ w` (`Mem.alloc`, `w` the width of an address-space-0 pointer). -/
+if `ro`, owned by thread `n`, at the addresses `place w (align T) (size T) true (ch (2 i))`
+(nonzero and inside LangRef's rules for allocated objects when the lowest nonzero aligned address
+is, `place_placed`) and `ch (2 i + 1)` times `T`'s alignment, modulo `2 ^ w` (`Mem.alloc`, `w`
+the width of an address-space-0 pointer). -/
 def byvalBlock (l : Layout) (n : Nat) (ch : Nat → Nat) (i : Nat) (t : Ty) (ro : Bool)
     (bs : List MemByte) : Sem.Block :=
   { space := 0, size := l.size t, live := true, readOnly := ro, owner := .thread n,
-    bytes := fun j => bs.getD j .undef, addr := ch (2 * i) * l.align t % 2 ^ (l.ptr 0).1,
+    bytes := fun j => bs.getD j .undef,
+    addr := place (l.ptr 0).1 (l.align t) (l.size t) true (ch (2 * i)) * l.align t %
+      2 ^ (l.ptr 0).1,
     gaddr := ch (2 * i + 1) * l.align t % 2 ^ (l.ptr 0).1 }
 
 /-- **Value `w` is what `launchArgs` makes in thread `n` for parameter `p` at position `i` from
@@ -260,6 +279,9 @@ theorem launchArgs_byval {l : Layout} {m m' : Mem} {n : Nat} {fn : Func} {args v
     vs.length = (fn.params.zip args).length ∧ ∀ i p v w, fn.params[i]? = some p →
       args[i]? = some v → vs[i]? = some w → LaunchArg l m' n ch i p v w := by
   unfold launchArgs at h
+  split at h
+  swap
+  · cases h
   refine foldlM_zipIdx_inv (P := fun i (r : Mem × List Val) => r.2.length = i ∧
       ∀ j p v w, fn.params[j]? = some p → args[j]? = some v → r.2[j]? = some w →
         LaunchArg l r.1 n ch j p v w) (fn.params.zip args)

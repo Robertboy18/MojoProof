@@ -18,7 +18,7 @@ PTX ISA's section on the instruction NVPTX lowers it to (the quote is the sectio
 
 ## Corpus
 
-24 of the 116 corpus files use it (564 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.b16.p3`, `llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.trans.b16.p3`.
+24 of the 127 corpus files use it (564 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.b16.p3`, `llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.trans.b16.p3`.
 
 ## Out of scope
 
@@ -26,4 +26,4 @@ Members of the family the corpus does not call. The NVPTX backend's documentatio
 
 ## Open
 
-L1 needs a semantics of the construct: the run of its test kernel stops with `unsupported: ldmatrix in a grid`. L2 then needs a recorded GPU run of a test of it; there is none.
+L1 needs a semantics of the construct: the run of its test kernel stops with `unsupported: ldmatrix in a grid`. L2 then needs a recorded GPU run of a corpus kernel whose IR uses it; there is none. tests/gpu/ldmatrix/record.txt:27 records a GPU run, on NVIDIA A100-SXM4-80GB, of a test kernel of one instruction that calls `llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.b16.p3`, `llvm.nvvm.ldmatrix.sync.aligned.m8n8.x4.trans.b16.p3`; it is not a corpus kernel, so the rule of L2 (a record of a corpus kernel whose IR uses the construct) does not count it.

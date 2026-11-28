@@ -77,7 +77,9 @@ jobs:
         run: python3 scripts/cited.py
 
       - name: Corpus manifest
-        run: python3 scripts/corpus.py check
+        run: |
+          python3 scripts/corpus.py check
+          python3 scripts/corpus.py check --root tests/sweep
 
       - name: Roadmap status is current
         run: python3 scripts/roadmap_status.py --check

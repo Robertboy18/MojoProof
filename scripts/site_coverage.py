@@ -1,21 +1,24 @@
 """How much of Modular's GPU code is proved: the coverage figure, the progress figure and the coverage page.
 
 The kernels are the ones roadmap/kernels/universe.tsv lists (scripts/kernel_universe.py universe, from Modular's
-repository at a pinned commit). A kernel's status comes from the kernel cards: a card whose `ref` and `quote` name
-the kernel's file and function gives it the card's level, and other kernels of that file whose names start with the
-card's function are on the roadmap through the card. Levels L2 and up mean a proved specialization: the card's kernel
-theorem (`Kernel.Sound`) is about the IR files of its `corpus`, compiled from the function's source at the revision
-its `ref` names, which need not be the universe's. The page shows both revisions and the IR, and claims nothing about
-the function's other specializations or about its source at the universe's revision.
+repository at a pinned commit). A kernel has a proved specialization when a theorem of roadmap/llvm-ir/programs.tsv
+(scripts/L3Programs.lean: each theorem concluding `Kernel.Sound`, with the corpus file its program is bound to by its
+term) is about a file compiled from it (`kernel_universe.proved_functions`, through the file's manifest row); the page
+names those files and their digests, and the revision they were compiled from, which need not be the universe's. A
+kernel card's level is shown next to it but does not decide the count. Other kernels are on the roadmap when a card's
+`ref` and `quote` name their file and function, or name a function of the same directory their name starts with.
+Nothing is claimed about a function's other specializations or about its source at the universe's revision.
 
-The progress figure reads roadmap/kernels/levels.tsv and roadmap/kernels/theorems.tsv (scripts/kernel_universe.py
-history) and adds the current tree's levels and theorem counts (`kernel_universe.count_theorems`: the `theorem` and
-`lemma` declarations in the source, not the theorems commands generate), so it is never older than the site.
+The progress figure reads roadmap/kernels/proved.tsv and roadmap/kernels/theorems.tsv (scripts/kernel_universe.py
+history) and adds the current tree's proved kernels and theorem counts (`kernel_universe.count_theorems`: the
+`theorem` and `lemma` declarations in the source, not the theorems commands generate), so it is never older than the
+site.
 
 Like the home page's figures, these are inline SVG coloured by the stylesheet, with no JavaScript: marks are links,
 hover is CSS, tooltips are SVG titles, and the page's filters are radio buttons read by CSS `:has()`.
 """
 import datetime
+import fnmatch
 import re
 import subprocess
 from html import escape
@@ -45,8 +48,8 @@ def esc(s) -> str:
     return escape(str(s), quote=True)
 
 
-def lvl(level: str) -> int:
-    return int(str(level)[1:] or 0)
+def lvl(level) -> int:
+    return int(str(level)[1:] or 0) if level else 0
 
 
 def universe(site):
@@ -94,24 +97,74 @@ def statuses(site):
             if above:
                 c['fn'] = max(above, key=lambda r: r['line'])['name']
     exact = {(c['path'], c['fn']): c for c in cards if c['path'] and c['fn']}
+    proofs = kernel_universe.proved_functions(_read(site, 'roadmap/llvm-ir/programs.tsv'),
+                                              _read(site, 'tests/corpus/MANIFEST.tsv'), rows)
     out = []
     for r in rows:
+        r['proofs'] = proofs.get((r['path'], r['name']), [])
         c = exact.get((r['path'], r['name']))
-        if c:
-            out.append((r, 'proved' if lvl(c['level']) >= 2 else 'roadmap', c, c['level']))
-            continue
-        fam = next((c for c in cards if c['fn'] and c['path'] and r['name'].startswith(c['fn'])
-                    and r['path'].rsplit('/', 1)[0] == c['path'].rsplit('/', 1)[0]), None)
-        out.append((r, 'roadmap', fam, None) if fam else (r, 'none', None, None))
+        fam = c or next((c for c in cards if c['fn'] and c['path'] and r['name'].startswith(c['fn'])
+                         and r['path'].rsplit('/', 1)[0] == c['path'].rsplit('/', 1)[0]), None)
+        status = 'proved' if r['proofs'] else 'roadmap' if fam else 'none'
+        out.append((r, status, fam, c['level'] if c else None))
     return commit, date, head, out, cards
 
 
-def proved_at(c: dict, commit: str) -> str:
-    """What a card's theorems are about, in words: the IR it names and the revision that IR was compiled from, with a
-    note when that is not the universe's revision `commit`."""
-    note = '' if commit.startswith(c['rev'] or '-') else \
+def _read(site, rel: str) -> str:
+    f = site.root / rel
+    return f.read_text() if f.is_file() else ''
+
+
+def _manifest(site) -> dict[str, dict]:
+    """tests/corpus/MANIFEST.tsv by file (tests/corpus/<path>)."""
+    out = {}
+    for line in _read(site, 'tests/corpus/MANIFEST.tsv').split('\n'):
+        cols = line.split('\t')
+        if len(cols) == len(kernel_universe.MANIFEST_COLS) and cols[0] != 'path':
+            out['tests/corpus/' + cols[0]] = dict(zip(kernel_universe.MANIFEST_COLS, cols))
+    return out
+
+
+def _refused(site) -> set[str]:
+    """The corpus files the importer refuses (tests/corpus/REFUSALS.tsv), as tests/corpus/<path>."""
+    return {'tests/corpus/' + l.split('\t')[0] for l in _read(site, 'tests/corpus/REFUSALS.tsv').split('\n')[1:] if l}
+
+
+def _selected(c: dict, files) -> list[str]:
+    """The files of `files` (tests/corpus/<path>) a card's `corpus` selector names: a directory names the files under
+    it, a pattern the files it matches, `none` nothing."""
+    out = []
+    for sel in [s.strip().rstrip('/') for s in (c or {}).get('corpus', '').split(',') if s.strip()]:
+        if sel == 'none':
+            continue
+        glob = any(ch in sel for ch in '*?[')
+        out += [f for f in files if (fnmatch.fnmatch(f, sel) if glob else f.startswith(sel + '/'))]
+    return sorted(set(out))
+
+
+def _rev(m: dict | None) -> str:
+    """The Modular revision a manifest row's source is at (`modular/modular@<rev>:<path>`), or `-`."""
+    g = re.match(r'modular/modular@([0-9a-f]+):', (m or {}).get('source', ''))
+    return g.group(1) if g else '-'
+
+
+def proved_at(site, r: dict, c: dict | None, commit: str) -> str:
+    """What a kernel's theorems are about, in words: the corpus files they are bound to (with their digests) and the
+    revision those were compiled from, with a note when that is not the universe's revision `commit`; then the other
+    files the card's `corpus` selector names, which no theorem is about, and how many of them the importer refuses."""
+    man = _manifest(site)
+    files = sorted({f for _, f, _ in r['proofs']})
+    revs = sorted({_rev(man.get(f)) for f in files})
+    named = ', '.join(f'{f.removeprefix("tests/corpus/")} (sha256 {man[f]["sha256"][:12]})' for f in files)
+    note = '' if all(commit.startswith(v) for v in revs) else \
         f"; the function at the inventory's revision {commit[:8]} is not checked"
-    return f'proved for the IR in {c["corpus"]}, compiled at modular@{c["rev"]}{note}'
+    text = f'Kernel.Sound for {named}, compiled at modular@{"/".join(revs)}{note}'
+    rest = [f for f in _selected(c, man) if f not in files]
+    if rest:
+        refused = sum(1 for f in rest if f in _refused(site))
+        text += (f'; the card\'s corpus also has {len(rest)} other file{"s" if len(rest) != 1 else ""} with no kernel '
+                 f'theorem' + (f', {refused} of them refused by the importer' if refused else ''))
+    return text
 
 
 def source_url(commit: str, r: dict) -> str:
@@ -155,17 +208,19 @@ def coverage_svg(site, prefix: str, fig_id: str) -> str:
         for i, (r, s, c, level) in enumerate(items):
             row, col = divmod(i, per_row)
             x, yy = label_w + col * pitch, y + row * pitch
-            what = (f'a proved specialization ({c["id"]}, {level}), {proved_at(c, commit)}' if s == 'proved' else
+            what = (f'a proved specialization ({c["id"] + ", " + level if c and level else c["id"] if c else "no card"}), '
+                    f'{proved_at(site, r, c, commit)}' if s == 'proved' else
                     f'on the roadmap ({c["id"]})' if s == 'roadmap' else 'not started')
             href = card_href(prefix, c) if c else source_url(commit, r)
+            level = ('L4' if level == 'L4' else 'L2') if s == 'proved' else level
             cls = f'sq {s}' + (f' lv{lvl(level)}' if s == 'proved' else '')
             out.append(f'<a href="{esc(href)}" class="k"><title>{esc(r["name"])} ({esc(r["path"])}): {esc(what)}'
                        f'</title><rect class="{cls}" x="{x}" y="{yy}" width="{cell}" height="{cell}" rx="2.5" '
                        f'{sq_paint(s, level)}/></a>')
         y += max(nrows * pitch, 28) + 8
     ly = y + 6
-    legend = [('sq proved lv4', ('proved', 'L4'), 'proved specialization, L4'),
-              ('sq proved lv2', ('proved', 'L2'), 'proved specialization, L2 or L3'),
+    legend = [('sq proved lv4', ('proved', 'L4'), 'proved specialization, card at L4'),
+              ('sq proved lv2', ('proved', 'L2'), 'proved specialization, card below L4'),
               ('sq roadmap', ('roadmap', None), 'on the roadmap'), ('sq none', ('none', None), 'not started')]
     for i, (cls, (s, level), text) in enumerate(legend):
         lx, yy = label_w + (i % 2) * 280, ly + (i // 2) * 20
@@ -204,20 +259,17 @@ def _head_date(site) -> str:
     return r.stdout.strip() or datetime.date.today().isoformat()
 
 
-def _level_series(site, cards):
-    """[(date, set of the cards of Modular's kernels with a proved specialization)]: the history of levels.tsv, then today's
-    levels. MojoProof's own corpus kernels are left out, as in the coverage figure."""
-    modular = {c['id'] for c in cards if c['modular']}
-    level: dict[str, str] = {}
+def _proved_series(site, st):
+    """[(date, set of Modular's kernel functions with a proved specialization, by name)]: roadmap/kernels/proved.tsv
+    (from the day programs.tsv was first written), then today's tree. MojoProof's own corpus kernels are left out, as
+    in the coverage figure."""
     steps = []
-    for l in (site.root / 'roadmap' / 'kernels' / 'levels.tsv').read_text().split('\n'):
-        if l and not l.startswith('#') and not l.startswith('time\t'):
-            t, cid, lv = l.split('\t')
-            level[cid] = lv
-            steps.append((t[:10], {k for k, v in level.items() if lvl(v) >= 2 and k in modular}))
-    now = {c['id'] for c in cards if lvl(c['level']) >= 2 and c['modular']}
-    if not steps or steps[-1][1] != now:
-        steps.append((_head_date(site), now))
+    for l in _read(site, 'roadmap/kernels/proved.tsv').split('\n'):
+        if l and not l.startswith('#') and not l.startswith('date\t'):
+            d, fns = (l.split('\t') + [''])[:2]
+            steps.append((d, {f.rsplit(':', 1)[1] for f in fns.split(';') if f}))
+    today = _head_date(site)
+    steps = [s for s in steps if s[0] < today] + [(today, {r['name'] for r, s, _, _ in st if s == 'proved'})]
     return steps
 
 
@@ -225,7 +277,7 @@ def _level_series(site, cards):
 def progress_svg(site, fig_id: str) -> str:
     commit, date, head, st, cards = statuses(site)
     th = _theorem_series(site)
-    lv = _level_series(site, cards)
+    lv = _proved_series(site, st)
     days = [datetime.date.fromisoformat(th[0][0]) + datetime.timedelta(d)
             for d in range((datetime.date.fromisoformat(th[-1][0]) - datetime.date.fromisoformat(th[0][0])).days + 1)]
     W, left, right = 760, 62, 34
@@ -249,11 +301,12 @@ def progress_svg(site, fig_id: str) -> str:
     by_day: dict[str, set] = {}
     for d, s in lv:
         by_day[d] = s
-    cur, path = set(), []
+    cur, path = None, []
     for d in [x.isoformat() for x in days]:
         if d in by_day:
             cur = by_day[d]
-        path.append((x(d), ya(len(cur)), d, sorted(cur)))
+        if cur is not None:   # no point before the first day with a table of theorem programs
+            path.append((x(d), ya(len(cur)), d, sorted(cur)))
     pd = f'M{path[0][0]},{path[0][1]}' + ''.join(f' H{px} V{py}' for px, py, _, _ in path[1:])
     out.append(f'<path class="kline" d="{pd}" fill="none" stroke="{GOOD}" stroke-width="2.4"/>')
     for px, py, d, ids in path:
@@ -307,6 +360,7 @@ def progress_svg(site, fig_id: str) -> str:
 def coverage_page(site) -> str:
     """The body of roadmap/kernels/coverage.html."""
     commit, date, head, st, cards = statuses(site)
+    lv_start = _proved_series(site, st)[0][0]
     s = summary(site)
     areas = sorted({r['area'] for r, *_ in st}, key=lambda a: (-sum(1 for r, *_ in st if r['area'] == a), a))
     rows_by_area = []
@@ -327,15 +381,16 @@ def coverage_page(site) -> str:
         f'<label for="ar-{esc(a)}">{esc("All areas" if a == "all" else a)}</label>' for a in ['all'] + areas)
     trs = []
     for r, stt, c, level in sorted(st, key=lambda x: ({'proved': 0, 'roadmap': 1, 'none': 2}[x[1]], x[0]['area'], x[0]['name'])):
-        status = (f'<a href="{c["id"]}.html">{esc(c["id"])}</a>, {esc(level)}, {esc(proved_at(c, commit))}'
-                  if stt == 'proved' else
+        card = f'<a href="{c["id"]}.html">{esc(c["id"])}</a>' + (f', {esc(level)}' if level else '') if c else 'no card'
+        status = (f'{card}, {esc(proved_at(site, r, c, commit))}' if stt == 'proved' else
                   f'<a href="{c["id"]}.html">{esc(c["id"])}</a>' if stt == 'roadmap' else '-')
         trs.append(f'<tr data-st="{stt}" data-area="{esc(r["area"])}"><td><a href="{esc(source_url(commit, r))}">'
                    f'<code>{esc(r["name"])}</code></a></td><td>{esc(r["area"])}</td>'
                    f'<td><code>{esc(r["path"])}:{r["line"]}</code></td><td class="num">{r["sites"]}</td>'
                    f'<td>{esc(STATUS_NAME[stt])}</td><td>{status}</td></tr>')
     own = ', '.join(f'<a href="{c["id"]}.html">{esc(c["id"])}</a>' for c in s['own'])
-    revs = sorted({c['rev'] for _, stt, c, _ in st if stt == 'proved'})
+    man = _manifest(site)
+    revs = sorted({_rev(man.get(f)) for r, stt, _, _ in st if stt == 'proved' for _, f, _ in r['proofs']})
     revs_text = ', '.join(f'<code>{esc(r)}</code>' for r in revs) or 'none'
     same = 'the revision this list is from' if all(commit.startswith(r) for r in revs) else \
         f'not the revision this list is from (<code>{commit[:10]}</code>)'
@@ -346,9 +401,9 @@ def coverage_page(site) -> str:
 <p class="lede">Of the {s["n"]} GPU kernel functions that Modular's open-source code launches, {s["proved"]}
 {"has" if s["proved"] == 1 else "have"} a proved specialization today, {s["roadmap"]} more are on the roadmap, and
 {s["none"]} are not started.</p>
-<p>A proved specialization is a kernel theorem (<code>Kernel.Sound</code>, level L2 and up) about one compiled program
-of the function: the IR of one choice of its element types and parameters, compiled from Modular's source at the
-revision the card names ({revs_text}), {same}. It
+<p>A proved specialization is a kernel theorem (<code>Kernel.Sound</code>) about one compiled program of the
+function: the IR of one choice of its element types and parameters, compiled from Modular's source at the revision
+the corpus records ({revs_text}), {same}. The list below names each such file and its digest. It
 says nothing about the function's other specializations, or about its source at another revision. The theorem says
 that every valid launch of the shape it states, at every choice of addresses and of the oracle that the theorem
 admits, is memory safe, race free and deadlock free, terminates, and meets its spec, and that the runs that finish
@@ -367,7 +422,8 @@ built.</figcaption>
 <figure id="figure-2">
 {progress_svg(site, "cov2")}
 <figcaption><span class="fig">Figure 2.</span> Progress over time. (a) Modular's kernels with a proved
-specialization, by day, from the history of the cards' levels (MojoProof's own corpus kernels are not counted).
+specialization, by day, from the table of theorem programs at the last commit of each day, which exists from
+{esc(lv_start)} (MojoProof's own corpus kernels are not counted).
 (b) The <code>theorem</code> and <code>lemma</code> declarations in the source of the library and of the kernel and
 test programs at the last commit of each day, outside comments, strings and quoted templates. Lean checks each of
 them (the build allows no <code>sorry</code>); the theorems that commands such as <code>mojo_kernel</code> generate
@@ -392,12 +448,18 @@ built from. Hover a point for its numbers.</figcaption>
 whose function's name is on a later line than its bracket counts, and one in a comment or a docstring does not. The list is from Modular's repository at
 <a href="https://github.com/modular/modular/tree/{commit}"><code>{commit[:10]}</code></a> ({esc(date)}), written by
 <a href="{site.blob}scripts/kernel_universe.py"><code>scripts/kernel_universe.py</code></a>. {esc(head[1])}
-A function counts once however many launches name it. A function has a proved specialization when a card's
-<code>ref</code> names its file and function and the card's level is L2 or more: the card's theorems are about the IR
-its <code>corpus</code> names, compiled at the card's revision; the list above gives both. The match is by file and
-function name, so it does not show that the function at this list's revision, or another specialization of it,
-meets the theorem. Other functions of that file whose names start with the card's function are on the roadmap
-through it.</p>
+A function counts once however many launches name it. A function has a proved specialization when a theorem in
+<a href="{site.blob}roadmap/llvm-ir/programs.tsv"><code>roadmap/llvm-ir/programs.tsv</code></a> is about a corpus file
+compiled from it. <a href="{site.blob}scripts/L3Programs.lean"><code>scripts/L3Programs.lean</code></a> writes that
+table: each theorem that a kernel card gives as evidence or that a module of <code>MojoProof.Kernels</code> proves,
+concluding <code>Kernel.Sound</code> of a program, with the corpus file the program is bound to by its term and that
+file's digest. The file's row in <code>tests/corpus/MANIFEST.tsv</code> names the Mojo file that defines its kernel and
+the kernel's name, which is the function's name followed by the specialization; the function is the one of that file
+whose name it starts with. A kernel theorem that the table does not list is not counted. The card's level is shown
+next to the function but does not decide the count, and the card's other corpus files, which no theorem is about, are
+counted apart, with the ones the importer refuses. The match is by file and function name, so it does not show that
+the function at this list's revision, or another specialization of it, meets the theorem. Other functions are on the
+roadmap when a card names them, or names a function of their directory that their name starts with.</p>
 '''
 
 

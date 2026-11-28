@@ -85,6 +85,9 @@ theorem launchArgs_free {l : Layout} {m : Mem} {n : Nat} {fn : Func} {args : Lis
     {ch : Nat → Nat} {r : Mem × List Val} (hx : launchArgs l m n fn args ch = .ok r)
     (h : m.FreeAbove) : r.1.FreeAbove := by
   unfold launchArgs at hx
+  split at hx
+  swap
+  · cases hx
   refine foldlM_idx_inv (P := fun _ (r : Mem × List Val) => r.1.FreeAbove) _
     (fun _ pvi b b' _ hy hb => ?_) hx h
   obtain ⟨m1, acc⟩ := b
@@ -124,6 +127,8 @@ theorem Grid.start_free {prog : Program} {fn : Func} {L : Launch} {args : List V
   · cases h
   split at h
   · cases h
+  split at h
+  · cases h
   rename_i v1 h1
   obtain ⟨r1, hr1, hA1⟩ := sharedFold_res hg _ _ hm h1
   cases hr1
@@ -153,6 +158,8 @@ theorem Grid.start_addr {prog : Program} {fn : Func} {L : Launch} {args : List V
     (c n).addr = fun j => ch (Nat.pair 1 (Nat.pair n j)) := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h

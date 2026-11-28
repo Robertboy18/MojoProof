@@ -13,12 +13,13 @@ ones of `MojoProof.Sem.Op` lane by lane; lane `i` gets the oracle number `ch i` 
   the sum of index times allocation size (struct fields: the field offset), wrapped to the index
   width. Under `nusw` (implied by `inbounds`) the result is poison if a truncation changes an
   index's signed value, or a term, a partial sum or the address plus a partial sum leaves the
-  signed (sums: unsigned address) range; under `nuw` if an index is negative, a truncation
-  changes an index's unsigned value, or a term, a partial sum or the address plus a partial sum
-  reaches `2 ^ width`; under `inbounds` with a nonzero index, if the
-  base offset or the offset after a partial sum lies outside `[0, size]` of the base's block
-  (LangRef, "getelementptr"). The `nuw` rule makes more results poison than LangRef's (a
-  negative index is poison here); more poison only removes behaviors a proof may rely on.
+  signed (sums: unsigned address) range; under `nuw` if a truncation changes an index's unsigned
+  value, or, with each index read as an unsigned number of the index width (a narrower index
+  sign-extended first, so `-1` is `2 ^ width - 1`), a term, a partial sum or the address plus a
+  partial sum reaches `2 ^ width` (so an index into a zero-sized type never makes it poison);
+  under `inbounds` with a nonzero index, if the base offset or the offset after a partial sum lies
+  outside `[0, size]` of the base's block (LangRef, "getelementptr": `trunc nsw`/`trunc nuw`,
+  `mul nsw`/`mul nuw`, `add nsw`/`add nuw`).
 * A cast in a constant expression is one LangRef admits there (`CastOp.const`; LangRef, "Constant
   Expressions"); the others are unsupported. So evaluating an operand reads no oracle number.
 * Pointer comparisons and `ptrtoint` read addresses (`Mem.addr`); `addrspacecast` keeps the block
@@ -131,12 +132,17 @@ def digits (cs : List Char) : Option Nat :=
 once to `t` (`near`: FloatLib's `Model.ofRat`, nearest with ties to even), and faults if the
 rounding overflows to infinity or a nonzero literal underflows to zero; a `0x` literal (LLVM's
 legacy form, sixteen hexadecimal digits) is the bits of a `double` and faults unless it converts
-exactly to `t` (`exactIn`); `0xH` and `0xR` are the bits of a `half` and a `bfloat`. -/
+exactly to `t` (`exactIn`); `0xH` and `0xR` are the bits of a `half` and a `bfloat`; an `f0x`
+literal is the bits of a value of `t` itself, and faults unless its digits are `t`'s width
+divided by four. -/
 def floatLit (t : FloatTy) (lit : FloatLit) : Except Fault Val :=
   match lit with
   | .hex "H" b => if t = .half then pure (.bits 16 (BitVec.ofNat 16 b)) else wrong
   | .hex "R" b => if t = .bfloat then pure (.bits 16 (BitVec.ofNat 16 b)) else wrong
   | .hex "" b => exactIn (Model.ofNatBits b)
+  | .bits n b =>
+    if 4 * n = t.fmt.bitWidth then pure (.bits t.fmt.bitWidth (BitVec.ofNat _ b))
+    else throw (.unsupported "f0x float literal with another width than its type")
   | .dec neg i f e =>
     match digits (i.toList ++ f.toList) with
     | some d => near neg ((d : Rat) * (10 : Rat) ^ (e - f.length))
@@ -193,47 +199,76 @@ theorem floatLit_dec (t : FloatTy) (neg : Bool) (i f : String) (e : Int)
   rw [← digits_toList _ h, String.toList_append]
   rfl
 
-/-- The steps of the indices `is` of a GEP with source type `src`: each index with the byte
-offset it adds. The first index steps over `src`, each later one into the current type (array and
-vector elements by allocation size, struct fields by field offset). -/
-def gepSteps (l : Layout) (src : Ty) : List Int → Except Fault (List (Int × Int))
+/-- The steps of the indices `is` of a GEP with source type `src`, each index given as its value
+`i` at the index width and, for an `i32` index, its own value `n` (unsigned; `none` for another
+width): each index with the byte offset it adds and whether it selects a struct field. The first
+index steps over `src`, each later one into the current type: array and vector elements by `i`
+times the allocation size, struct fields by field `n` at its offset, converted to the index width
+by `cv`; a struct index of another width than `i32` is refused (LangRef, "getelementptr",
+Arguments: "When indexing into a (optionally packed) structure, only i32 integer constants are
+allowed"; the importer refuses one that is not a constant, `Parser.gepStructOk`) (LangRef,
+"getelementptr": "If the currently indexed type is a struct type, the struct offset
+corresponding to the index is sign-extended or truncated to the pointer index type. Otherwise,
+the index itself is sign-extended or truncated"). -/
+def gepSteps (l : Layout) (cv : Int → Int) (src : Ty) :
+    List (Int × Option Nat) → Except Fault (List (Int × Int × Bool))
   | [] => pure []
-  | i :: is => do return (i, i * l.size src) :: (← into src is)
+  | (i, _) :: is => do return (i, i * l.size src, false) :: (← into src is)
 where
   /-- The steps of the later indices into type `t`: array and vector elements by allocation size,
-  struct fields by field offset; a fault for a struct index out of range or an index into a
-  scalar type. -/
-  into : Ty → List Int → Except Fault (List (Int × Int))
+  struct fields by field offset; a fault for a struct index out of range or not of type `i32`, or
+  an index into a scalar type. -/
+  into : Ty → List (Int × Option Nat) → Except Fault (List (Int × Int × Bool))
     | _, [] => pure []
-    | .arr _ e, i :: is | .vec _ e, i :: is => do return (i, i * l.size e) :: (← into e is)
-    | .struct fs, i :: is =>
-      if h : 0 ≤ i ∧ i.toNat < fs.length then do
-        return (i, l.fieldOffset 0 fs i.toNat) :: (← into (fs[i.toNat]'h.2) is)
+    | .arr _ e, (i, _) :: is | .vec _ e, (i, _) :: is => do
+      return (i, i * l.size e, false) :: (← into e is)
+    | .struct fs, (_, some n) :: is =>
+      if h : n < fs.length then do
+        return (n, cv (l.fieldOffset 0 fs n), true) :: (← into (fs[n]'h) is)
       else throw (.unsupported "struct index out of range")
+    | .struct _, (_, none) :: _ => throw (.unsupported "struct index not of type i32")
     | _, _ :: _ => throw (.unsupported "index into a scalar type")
 
 /-- `getelementptr` with flags `fl` and source type `src` on pointer `p` of address space `a`, with
-index values `idx` (scalars only). -/
+index values `idx` (scalars only). A struct index selects its field by its own value, and the
+field's offset is converted to the index width (`gepSteps`); every other index is converted, and
+`nusw` and `nuw` check that conversion (LangRef: "If the type of an index is larger than the
+pointer index type, the truncation to the pointer index type preserves the signed value"), which
+a struct index does not undergo. -/
 def gepPtr (l : Layout) (m : Mem) (fl : GepFlags) (src : Ty) (a : Nat) (p : Ptr)
     (idx : List Val) : Except Fault Val := do
   let iw := (l.ptr a).1
-  -- each index: its value at the index width, lossless in the signed and in the unsigned sense
+  -- each index: its value at the index width and its own unsigned value, and whether the former
+  -- is lossless in the signed and in the unsigned sense
   let some ix := idx.mapM (fun
       | .bits w b =>
         let i := if w ≤ iw then b.toInt else Int.bmod b.toInt (2 ^ iw)
-        some (some (i, i == b.toInt, i ≥ 0 && b.toNat < 2 ^ iw))
+        some (some ((i, if w = 32 then some b.toNat else none), i == b.toInt,
+          decide (b.toNat < 2 ^ iw)))
       | .poison => some none
       | _ => none)
     | throw (.unsupported "GEP index that is not an integer scalar")
   let some ix := ix.mapM id | return .poison
-  let steps ← gepSteps l src (ix.map (·.1))
-  let terms := steps.map (·.2)
+  let steps ← gepSteps l (Int.bmod · (2 ^ iw)) src (ix.map (·.1))
+  let terms := steps.map (·.2.1)
   let sums := (terms.scanl (· + ·) 0).tail
   let ad : Int := (← m.addr l a p)
-  let badS := ix.any (!·.2.1) || (terms ++ sums).any (outS iw) ||
+  -- the converted indices (not a struct's) that lose their value
+  let lossS := (ix.zip steps).any fun (x, st) => !st.2.2 && !x.2.1
+  let lossU := (ix.zip steps).any fun (x, st) => !st.2.2 && !x.2.2
+  let badS := lossS || (terms ++ sums).any (outS iw) ||
     sums.any fun s => ad + s < 0 || ad + s ≥ 2 ^ iw
-  let badU := ix.any (!·.2.2) || (terms ++ sums).any (· ≥ 2 ^ iw) ||
-    sums.any fun s => ad + s ≥ 2 ^ iw
+  -- the unsigned reading (`nuw`): each index's value at the index width as an unsigned number
+  -- and each struct offset so converted (the steps succeed, as the signed ones do: a struct
+  -- index selects the same field in both)
+  let usteps : Except Fault (List (Int × Int × Bool)) :=
+    gepSteps l (· % 2 ^ iw) src (ix.map fun x => (x.1.1 % 2 ^ iw, x.1.2))
+  let uterms : List Int := match usteps with
+    | .ok us => us.map (·.2.1)
+    | .error _ => [2 ^ iw]
+  let usums := (uterms.scanl (· + ·) 0).tail
+  let badU := lossU || (uterms ++ usums).any (· ≥ 2 ^ iw) ||
+    usums.any fun s => ad + s ≥ 2 ^ iw
   let outside := match m.block p with
     | some b => (p.off :: sums.map (p.off + ·)).any fun o => o < 0 || o > b.size
     | none => true

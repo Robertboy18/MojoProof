@@ -19,7 +19,7 @@ LangRef's section on `fsub` (the quote is the first sentence of its overview). T
 
 ## Corpus
 
-35 of the 116 corpus files use it (480 uses); `corpus` lists the first 5 in path order.
+38 of the 127 corpus files use it (509 uses); `corpus` lists the first 5 in path order.
 
 The programs of the library's `mojo_kernel` theorems use it (`tests/corpus/vsub/vector_subtraction_vector_subtraction_vector_subtr6A6A_a0b4d9d2b6e652e1.nvptx.ll`).
 

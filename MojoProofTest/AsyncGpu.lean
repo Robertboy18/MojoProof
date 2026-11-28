@@ -19,9 +19,9 @@ disjoint, `ops_disjoint`). After `wait 1` every run gives them at the 48 bytes o
 groups (`wait1_bytes`, from `Async.determined`), but not at the bytes of copy 3, which may still
 be pending (`wait1_pending`).
 
-It refuses a dump with a malformed case or a number of launches other than `<launches>`
-(exit code 2). Exit code 0 when every word agrees and the GPU wrote every word (none is the
-initial word of the output buffers); 1 otherwise.
+It refuses a dump with a malformed case, with no launch, or with a number of launches other than
+`<launches>` (`TensorCoreGpu.launches`, exit code 2). Exit code 0 when every word agrees and the
+GPU wrote every word (none is the initial word of the output buffers); 1 otherwise.
 
 A conformance test of one instruction and its groups on these inputs and one GPU, not a proof.
 -/
@@ -29,7 +29,7 @@ A conformance test of one instruction and its groups on these inputs and one GPU
 namespace MojoProofTest.AsyncGpu
 
 open MojoProof.Sem
-open MojoProofTest.TensorCoreGpu (nums numsOf)
+open MojoProofTest.TensorCoreGpu (nums numsOf launches)
 
 /-- One launch of the dump: the global words, the initial shared words, the lanes' plans, the
 word the output buffers held before the launch, and the words the lanes read back after
@@ -224,19 +224,16 @@ def compare (cs : List Case) : IO UInt32 := do
   IO.println s!"{cs.length} launches: {bad} words differ, {left} words unwritten"
   return if bad = 0 ∧ left = 0 then 0 else 1
 
-/-- The entry point: `<dump> <launches>`; refuses a malformed dump or another number of
-launches (exit code 2), else `compare`. -/
+/-- The entry point: `<dump> <launches>`; refuses a malformed dump, one with no launch or another
+number of launches (`TensorCoreGpu.launches`, exit code 2), else `compare`. -/
 def main (args : List String) : IO UInt32 := do
   let [path, count] := args
     | IO.eprintln "usage: lean --run tests/gpu/cp-async/Compare.lean <dump> <launches>"; return 2
   let some expected := count.toNat?
     | IO.eprintln s!"not a number of launches: {count}"; return 2
-  match parse (← IO.FS.lines path).toList with
+  match launches parse (← IO.FS.lines path).toList expected with
   | .error e => IO.eprintln s!"{path}: {e}"; return 2
-  | .ok cs =>
-    if cs.length ≠ expected then
-      IO.eprintln s!"{path}: {cs.length} launches, expected {expected}"; return 2
-    compare cs
+  | .ok cs => compare cs
 
 /-- A made-up case: global word `i` is `i`, the shared words and the output buffers' word
 `0x7fbadbad`, lane `l`'s copy `j` from byte `16 (4 l + j)` with source size 16, so lane `l`'s

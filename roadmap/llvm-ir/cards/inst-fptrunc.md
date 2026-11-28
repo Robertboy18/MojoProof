@@ -5,7 +5,7 @@ kind: construct
 ref: LLVM LangRef 24.0.0git #fptrunc-to-instruction
 quote: "The ‘fptrunc’ instruction truncates value to type ty2."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast
-corpus: tests/corpus/mgemm/g_matmul_kernel_naive_bfloat16_bfloat16_bfloat16_True_16_ba3789d9.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_126ea5ea.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_d7e21bec.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_01cf4f39.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_True_c8f5de2a.nvptx.ll
+corpus: tests/corpus/ln16/test_layer_norm_rowwise_block_t0_r1_ax0_w1_bs128_c5012e49.nvptx.ll, tests/corpus/lnbf16/test_layer_norm_rowwise_block_t0_r1_ax0_w1_bs128_ae9cae70.nvptx.ll, tests/corpus/mgemm/g_matmul_kernel_naive_bfloat16_bfloat16_bfloat16_True_16_ba3789d9.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_126ea5ea.nvptx.ll, tests/corpus/mgemm/g_multistage_gemm_kernel_bfloat16_bfloat16_bfloat16_False_d7e21bec.nvptx.ll
 tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
@@ -18,7 +18,7 @@ LangRef's section on `fptrunc` (the quote is the first sentence of its overview)
 
 ## Corpus
 
-6 of the 116 corpus files use it (321 uses); `corpus` lists the first 5 in path order.
+8 of the 127 corpus files use it (325 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

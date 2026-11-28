@@ -469,20 +469,46 @@ block of four threads (one warp), from the empty memory with address choice and 
 * `sound` (SymColl): the launch is sound by `PhaseRun.start_sound` at the one block's run
   `BlockRun.bar`: the warp's lanes to the barrier (`CanonWait` of one `WarpWait.waits`), the
   barrier (`hb1`, a `BlockBar`), then `BlockRun.ends` at the warp's `WarpRun` through the two
-  shuffles (`hx2`, `hx3`, each a `WarpShfl`) to the returns. Each lane's run is the one `runTo`
-  computes (`Seq.ToWait.of_runTo`, `Seq.of_runTo`). `lanes`: each lane ends with the butterfly
+  shuffles to the returns (`warp`). `warp` is one `warp_route` call (`WarpRun.of_waits`): each
+  lane's run through its two waits (`lane`, the one `runTo` computes, by `ToWait.of_runTo` and
+  `Runs.of_runTo`) and the shuffles by `WarpRun.shfl_of` from each lane's `Piece.Wait.shflOk`
+  (`shfls`, by the kernel) and `Program.shfl_nil`. `lanes`: each lane ends with the butterfly
   rounds of the thread numbers (`bflyRoundsAt_of_shfl`), 6.
 * `sound_inv` (SymChain), at 4 and at 8 threads, one proof for both: `BlockRun.of_inv` at one
-  barrier, phase 0 by `WarpWait.of_inv` and the barrier `bar0`, the last phase by `warp`, which
-  is `WarpRun.of_inv` at two shuffles (`fires`); the runs (`waits`, `ends`) are evaluated at each
-  size.
-* `shfl_wait` (SymChain), at 4 and at 8 threads: `WarpWait.of_inv` at `J = 1`, the one instance
-  of its shuffle premise `hf`: past the barrier, the lanes to the first shuffle's waits, its fire
-  (`fires`), then the resumed lanes to the second shuffle's waits. The waits it ends at are a
-  shuffle's, not a barrier's; the lemma does not ask which collective they are at.
+  barrier, phase 0 by `WarpWait.of_inv` and the barrier `bar0`, the last phase by `warp`, the
+  same `warp_route` call as SymColl's at each size (its lanes' runs `lane` and checks `shfls`);
+  the runs (`waits`, `lane`) are evaluated at each size.
+* `shfl_wait` (SymChain), at 4 and at 8 threads: `WarpWait.of_waits`
+  (MojoProof/Sym/WarpWaits.lean) at `J = 1`, so `WarpWait.of_inv` at `J = 1`, the instance of its
+  shuffle premise `hf`: past the barrier, the lanes run through their waits (`lane`), the first
+  shuffle's premise is `WarpRun.of_waits`' (`WarpRun.shfl_of` from `shfls`), and the warp runs
+  to the second shuffle's waits; each lane waits there at position 4 with the shuffle's
+  arguments, its status is the one its thread reaches after the first shuffle's delivery
+  (`statusAt`), and resumed with its delivery it runs to its return. The waits it ends at are a
+  shuffle's, not a barrier's; the lemma does not ask which collective they are at. A wait does
+  not pin the lane's thread or callee, so the statement on the statuses (`stat k 2`, at
+  01391ef) is the `example` after it from it: `statusAt` is `stat k 2` by the runs to the waits
+  (`stops`: `waits` on the memory past the barrier, `mem_past`) and `nextWait_eq`.
+* SymChain's `ends` at 67bd004 is an `example` from `lane`, its waiting threads by `stops` and
+  `ToWait.det`. SymColl's `hw2`, `hw3`, `hs4`, `hx2` and `hx3` are named tests again (the runs in
+  turn to each shuffle and to the returns, and the two `WarpShfl`s at those statuses): `lane` and
+  `warp` do not state the threads the lanes wait from, the callee or the statuses.
 
-The open-goal twins leave out the second shuffle's fire: SymColl's leaves its `WarpShfl`,
-SymChain's (`warp` at 4 threads) the shuffle in the form `WarpRun.of_inv` takes.
+The open-goal twins leave out one premise of `warp_route`: SymColl's the shuffles' checks
+(`shfls`), which leaves `WarpRun.of_waits`' premise on the shuffles (`hW`); SymChain's (`warp` at
+8 threads) the lanes' runs (`lane`), which leaves its premise on the runs (`hr`).
+
+The same kernel at one block of 4 and of 8 threads, on the empty memory, is also an instance of
+the kernel theorem with barriers, `Kernel.sound_of_phases` (MojoProof/Sym/KernelWarps.lean): its
+proof is the one above (`CanonWait.of_merge`, `BlockBar.of_waits`, `BlockRun.of_inv`,
+`PhaseRun.of_inv`, then the run to a done grid by `PhaseRun.start_done`, which is
+`Kernel.run_of_phases`, and Theorem 0 at it with `EndChecks`) for every kernel, each warp's phase
+to a barrier a `WarpSegsBar` (`WarpSegsBar.wait`: `WarpWait.of_waits` and `WarpRun.shfl_of`) and
+its last phase a `WarpSegs`. `MojoProofTest/KernelPhases.lean`'s `phases` supplies those premises
+from SymChain's `waits`, `lane` and `shfls` at one barrier (`J = 1`); `sound` adds SymChain's
+`checks` and the postcondition that the memory's blocks at the end are the start's, and `run` is
+`Kernel.run_of_phases` there (the run to a done grid, with no end checks); `bar_other` refuses a
+wait at a barrier word other than 0. `Kernel.sound_of_warps` is its case of no barrier.
 
 The grid-wide schedule these instances used before (every thread through each phase in turn,
 with its own phases of barriers and shuffles) is deleted; `Seq.start_sound_bar` is proved

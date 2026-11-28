@@ -33,18 +33,32 @@ def succs : LLVM.Term → List Nat
   | _ => []
 
 /-- The position of the first statement of block `b` of `fn` from position `p0` that the checker
-refuses, the number of statements when the terminator is refused, `none` when the block is in
-the fragment. It runs from the checker's start state (`SState.start`, the block's float
-constants as nodes), as `summarizeWith` does. -/
-def refusal (P : Program) (fn : Func) (b : LLVM.Block) (p0 : Nat) : Option Nat :=
-  go (b.stmts.toList.drop p0) 0 (SState.start fn b.label p0 b)
+with the flags `alloca` and `contract` refuses, the number of statements when the terminator is
+refused, `none` when the block is in the fragment. It runs from the checker's start state
+(`SState.start`, the block's float constants as nodes, with the flag `alloca`), as
+`summarizeAt alloca` does with the exit `SState.exitAt`. -/
+def refusalAt (alloca contract : Bool) (P : Program) (fn : Func) (b : LLVM.Block) (p0 : Nat) :
+    Option Nat :=
+  go (b.stmts.toList.drop p0) 0 { SState.start fn b.label p0 b with alloca }
 where
   /-- From statements `sts`, `n` after `p0`, in state `σ`. -/
   go : List Stmt → Nat → SState → Option Nat
     | [], n, σ => if (σ.exitAt fn b.label b.term).isSome then none else some (p0 + n)
-    | st :: sts, n, σ => match σ.stmt P b.label (p0 + n) n st with
+    | st :: sts, n, σ => match σ.stmt P b.label (p0 + n) n st contract with
       | some σ' => go sts (n + 1) σ'
       | none => some (p0 + n)
+
+/-- The position of the first statement of block `b` of `fn` from position `p0` that the checker
+refuses (`refusalAt` with both flags off, as `summarize` runs). -/
+def refusal (P : Program) (fn : Func) (b : LLVM.Block) (p0 : Nat) : Option Nat :=
+  refusalAt false false P fn b p0
+
+/-- Where block `b` of `fn` is refused, for a position `i` that `refusalAt` gives: statement `i`
+as LLVM text, or the terminator when `b` has no statement `i`. -/
+def refusedText (fn : Func) (b : LLVM.Block) (i : Nat) : String :=
+  match b.stmts[i]? with
+  | some st => s!"at statement {i}: {Printer.stmt fn.names st}"
+  | none => s!"at the terminator: {Printer.term fn.names b.term}"
 
 /-- A local's name as LLVM prints it. -/
 def lname (fn : Func) (l : Nat) : String := "%" ++ Printer.name (fn.names.getD l "")
@@ -54,9 +68,7 @@ def blockLine (P : Program) (fn : Func) (b : LLVM.Block) : String :=
   let p0 := (b.stmts.toList.takeWhile (·.inst matches .phi _ _)).length
   let verdict := match refusal P fn b p0 with
     | none => "in the fragment"
-    | some i => match b.stmts[i]? with
-      | some st => s!"outside the fragment at statement {i}: {Printer.stmt fn.names st}"
-      | none => s!"outside the fragment at the terminator: {Printer.term fn.names b.term}"
+    | some i => s!"outside the fragment {refusedText fn b i}"
   s!"  {lname fn b.label}: {b.stmts.size} statements, {p0} phis, to " ++
     s!"[{", ".intercalate ((succs b.term).map (lname fn))}]; {verdict}"
 

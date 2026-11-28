@@ -3,17 +3,27 @@
 
   corpus.py import <study-ir-dir>   copy every *.nvptx.ll of the study into tests/corpus/<family>/ and
                                     write tests/corpus/MANIFEST.tsv
-  corpus.py check                   recompute every sha256 and line count and compare with the manifest
-  corpus.py add [--mojo VERSION] [--lib PATHS] <family> <src.mojo> <modular-path> <flags>
-                <file.nvptx.ll>...
+  corpus.py check [--root DIR]      recompute every sha256 and line count and compare with the
+                                    manifest; a path listed twice is a problem (DUPLICATE), and a
+                                    row of another number of columns stops it
+  corpus.py add [--mojo VERSION] [--lib PATHS] [--root DIR] <family> <src.mojo> <modular-path>
+                <flags> <file.nvptx.ll>...
                                     add files compiled with `mojo build --emit llvm` to the
                                     manifest; a <modular-path> of the form repo:<path> records a
-                                    source written for this repository, at <path> in it; VERSION
+                                    source written for this repository, at <path> in it, one of
+                                    the form modular/modular@<commit>:<path> a modular/modular
+                                    source at that commit, and any other path one at MODULAR's
+                                    commit; VERSION
                                     is the Mojo version recorded in the rows (default: the pinned
                                     version MOJO); PATHS is the `lib` of the rows (default `-`);
                                     a file whose name is already listed, or a <src.mojo> whose
                                     header lacks the Apache-LLVM line, is refused before anything
                                     is copied
+
+With --root DIR (a directory of the repository, relative to it), `add` and `check` work on the
+corpus at DIR and its DIR/MANIFEST.tsv instead of tests/corpus: tests/sweep/ is the corpus of the
+breadth sweep (docs/proofs/safe.md), with a manifest of its own so that MojoProofTest/Corpus.lean's
+`#mojo_corpus`, which reads tests/corpus/MANIFEST.tsv, does not import its files.
 
 Columns: path, sha256, lines, kernel (the one `ptx_kernel` define), arch and PTX version (from the
 "target-cpu"/"target-features" attributes), Mojo version, flags passed to `mojo build`, the Mojo source
@@ -81,12 +91,18 @@ def describe(path):
 
 
 def read():
+    """The manifest's rows, each a dict of COLS. Exits on another header or on a row of another
+    number of columns (an empty line included), naming its line."""
     rows = []
     with open(MANIFEST, encoding="utf-8") as f:
         header = f.readline().rstrip("\n").split("\t")
-        assert header == COLS, header
-        for line in f:
-            rows.append(dict(zip(COLS, line.rstrip("\n").split("\t"))))
+        if header != COLS:
+            sys.exit(f"{MANIFEST}:1: the header is {header}, not {COLS}")
+        for n, line in enumerate(f, 2):
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) != len(COLS):
+                sys.exit(f"{MANIFEST}:{n}: a row of {len(cols)} columns, not {len(COLS)}: {line!r}")
+            rows.append(dict(zip(COLS, cols)))
     return rows
 
 
@@ -102,7 +118,8 @@ def row(rel, flags, source, source_sha, mojo=MOJO, lib="-"):
     kernel, arch, ptx, lines = describe(os.path.join(CORPUS, rel))
     return dict(path=rel, sha256=sha(os.path.join(CORPUS, rel)), lines=str(lines), kernel=kernel,
                 arch=arch, ptx=ptx, mojo=mojo, flags=flags,
-                source=source if source.startswith("repo:") else f"{MODULAR}:{source}",
+                source=source if source.startswith(("repo:", "modular/modular@")) else
+                f"{MODULAR}:{source}",
                 source_sha256=source_sha, lib=lib)
 
 
@@ -148,6 +165,12 @@ def cmd_add(fam, src_file, src_path, flags, files, mojo=MOJO, lib="-"):
 def cmd_check():
     rows = read()
     bad = 0
+    seen = {}
+    for n, r in enumerate(rows, 2):
+        if r["path"] in seen:
+            print(f"DUPLICATE {r['path']}: manifest lines {seen[r['path']]} and {n}"); bad += 1
+        else:
+            seen[r["path"]] = n
     on_disk = {os.path.relpath(os.path.join(dp, n), CORPUS)
                for dp, _, ns in os.walk(CORPUS) for n in ns if n.endswith(".ll")}
     for r in rows:
@@ -168,12 +191,26 @@ def cmd_check():
                 print(f"MISMATCH {r['path']} {k}: manifest {r[k]}, file {v}"); bad += 1
     for extra in sorted(on_disk - {r["path"] for r in rows}):
         print(f"UNLISTED {extra}"); bad += 1
-    print(f"corpus: {len(rows)} files, {bad} problems")
+    print(f"corpus: {len(seen)} files" + (f" in {len(rows)} rows" if len(rows) != len(seen) else "")
+          + f", {bad} problems")
     sys.exit(1 if bad else 0)
+
+
+def set_root(rel):
+    """Work on the corpus at directory `rel` of the repository (`--root`)."""
+    global CORPUS, MANIFEST
+    if os.path.isabs(rel) or ".." in rel.split("/") or not os.path.isdir(os.path.join(ROOT, rel)):
+        sys.exit(f"bad --root {rel!r}: a directory of the repository, relative to it")
+    CORPUS = os.path.join(ROOT, rel)
+    MANIFEST = os.path.join(CORPUS, "MANIFEST.tsv")
 
 
 if __name__ == "__main__":
     a = sys.argv[1:]
+    if a[:1] in (["check"], ["add"]) and "--root" in a[:-1]:
+        i = a.index("--root")
+        set_root(a[i + 1])
+        a = a[:i] + a[i + 2:]
     if a[:1] == ["import"] and len(a) == 2:
         cmd_import(a[1])
     elif a[:1] == ["check"]:

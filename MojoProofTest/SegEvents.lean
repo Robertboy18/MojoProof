@@ -43,8 +43,9 @@ before its first shuffle. The two segments around the barrier are the summaries 
 Not proved: that a thread's run from gevm_kernel's start reaches `%59` with these registers and
 memory (the entry block, the loop and their global loads), so `to_barrier_mem` and
 `gevm_buffer`'s run premise, and `to_shfl_mem` and `gevm_reads`' run premise, are not yet joined
-for the launch's threads. The runs after the first shuffle and the trace of a whole run, with
-the loop's global loads as a premise, are in MojoProofTest/GevmTrace.lean.
+for the launch's threads. The runs after the first shuffle are `OblGevmThread.thread` and
+`GevmWarp1.resume`; the trace of a whole run, with the loop's global loads as a premise, is in
+MojoProofTest/GevmTrace.lean (`gevm_sound`).
 -/
 
 namespace MojoProofTest.SegEvents

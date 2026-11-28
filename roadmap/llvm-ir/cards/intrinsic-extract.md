@@ -18,7 +18,7 @@ LangRef's section on the intrinsic (the quote is the section's first sentence). 
 
 ## Corpus
 
-30 of the 116 corpus files use it (4868 uses); `corpus` lists the first 5 in path order. The members called: `llvm.vector.extract.v2bf16.v4bf16`, `llvm.vector.extract.v2f16.v4f16`, `llvm.vector.extract.v2f32.v2f32`, `llvm.vector.extract.v2i32.v4i32`, `llvm.vector.extract.v4bf16.v8bf16`, `llvm.vector.extract.v4f32.v4f32`, `llvm.vector.extract.v4i32.v8i32`.
+30 of the 127 corpus files use it (4868 uses); `corpus` lists the first 5 in path order. The members called: `llvm.vector.extract.v2bf16.v4bf16`, `llvm.vector.extract.v2f16.v4f16`, `llvm.vector.extract.v2f32.v2f32`, `llvm.vector.extract.v2i32.v4i32`, `llvm.vector.extract.v4bf16.v8bf16`, `llvm.vector.extract.v4f32.v4f32`, `llvm.vector.extract.v4i32.v8i32`.
 
 ## Out of scope
 

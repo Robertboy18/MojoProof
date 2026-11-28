@@ -53,6 +53,7 @@ def floatLit : FloatLit → String
   | .hex p bits =>
     let w := match p with | "" => 16 | "K" => 20 | "L" | "M" => 32 | _ => 4
     "0x" ++ p ++ hex w bits
+  | .bits n b => "f0x" ++ hex n b
 
 private def floatTy : FloatTy → String
   | .half => "half" | .bfloat => "bfloat" | .float => "float" | .double => "double"

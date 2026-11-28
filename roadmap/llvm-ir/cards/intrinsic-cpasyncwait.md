@@ -18,7 +18,7 @@ PTX ISA's section on the instruction NVPTX lowers it to (the quote is the sectio
 
 ## Corpus
 
-24 of the 116 corpus files use it (48 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.cp.async.wait.group`.
+24 of the 127 corpus files use it (48 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.cp.async.wait.group`.
 
 ## Out of scope
 
@@ -26,4 +26,4 @@ Members of the family the corpus does not call. The NVPTX backend's documentatio
 
 ## Open
 
-L2 needs a recorded GPU run of a test of the construct; there is none.
+L2 needs a recorded GPU run of a corpus kernel whose IR uses the construct; there is none. tests/gpu/cp-async/record.txt:25 records a GPU run, on NVIDIA A100-SXM4-80GB, of a test kernel of one instruction that calls `llvm.nvvm.barrier.cta.sync.aligned.all`, `llvm.nvvm.cp.async.commit.group`, `llvm.nvvm.cp.async.wait.group`; it is not a corpus kernel, so the rule of L2 (a record of a corpus kernel whose IR uses the construct) does not count it.

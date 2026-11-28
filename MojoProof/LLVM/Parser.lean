@@ -76,6 +76,52 @@ private def fail {α : Type} (msg : String) : P α := do
 private def unsupported {α : Type} (what : String) : P α := do
   fail s!"unsupported {what} '{(← peek).show}'"
 
+/-- Value `v` is no `f0x` literal of another size than its float type `t`: such a literal has
+exactly as many hexadecimal digits as the type's size needs (LangRef, "Simple Constants": "The
+number must have exactly as many hexadecimal digits as is necessary for the size of the
+floating-point number"; 4 for `half` and `bfloat`, 8 for `float`, 16 for `double`). Another value
+or type is not checked here. -/
+def litFits : Ty → Value → Bool
+  | .fp t, .float (.bits n _) => n == match t with
+    | .half | .bfloat => 4
+    | .float => 8
+    | .double => 16
+  | _, _ => true
+
+/-- The indices `idx` of a `getelementptr` with source type `src` index every struct by an `i32`
+constant (LangRef, "getelementptr", Arguments: "When indexing into a (optionally packed)
+structure, only i32 integer constants are allowed"): the first index steps over `src`, each later
+one into the current type (an array's or vector's element, a struct's field). An index into
+another type, and the indices after a struct constant out of range, are left to the semantics,
+which refuses them (`Eval.gepSteps`: "struct index out of range"). -/
+def gepStructOk (src : Ty) : List TValue → Bool
+  | [] => true
+  | _ :: idx => go src idx
+where
+  /-- The later indices `idx` into type `t`. -/
+  go : Ty → List TValue → Bool
+    | _, [] => true
+    | .arr _ e, _ :: idx | .vec _ e, _ :: idx => go e idx
+    | .struct fs, .mk (.int 32) (.int k) :: idx =>
+      if 0 ≤ k then match fs[k.toNat]? with
+        | some f => go f idx
+        | none => true
+      else true
+    | .struct _, _ :: _ => false
+    | _, _ :: _ => true
+
+/-- Value `v`, refused unless it fits type `t` (`litFits`). -/
+private def fits (t : Ty) (v : Value) : P Value := do
+  unless litFits t v do fail "unsupported f0x float literal with another size than its type"
+  return v
+
+/-- The indices `idx`, refused unless they index every struct of source type `src` by an `i32`
+constant (`gepStructOk`). -/
+private def gepIdx (src : Ty) (idx : List TValue) : P (List TValue) := do
+  unless gepStructOk src idx do
+    fail "unsupported getelementptr struct index other than an i32 constant"
+  return idx
+
 private def expectP (c : Char) : P Unit := do
   if (← peek) == .punct c then bump else fail s!"expected '{c}', found '{(← peek).show}'"
 
@@ -237,7 +283,7 @@ mutual
       bump
       let f ← gepFlags
       expectP '('; let src ← ty; expectP ','; let b ← tvalue
-      let idx ← if ← acceptP ',' then sepBy ')' tvalue else pure []
+      let idx ← gepIdx src (← if ← acceptP ',' then sepBy ')' tvalue else pure [])
       expectP ')'
       constant (.gep f src b idx)
     | .kw k =>
@@ -251,7 +297,7 @@ mutual
   /-- A typed operand `T v`. -/
   partial def tvalue : P TValue := do
     let t ← ty
-    return .mk t (← value)
+    return .mk t (← fits t (← value))
 end
 
 /-! ## Attributes -/
@@ -388,14 +434,15 @@ private def callee : P Callee := do
 private def arg : P (TValue × List Attr) := do
   let t ← ty
   let as ← attrs
-  return (.mk t (← value), as)
+  return (.mk t (← fits t (← value)), as)
 
 /-- A non-terminator instruction, after its opcode keyword `op`. -/
 partial def inst (op : String) : P Inst := do
   if let some b := binOp? op then
     let f ← intFlags; let t ← ty; let a ← value; expectP ','; return .bin b f t a (← value)
   if let some b := fbinOp? op then
-    let f ← fastMath; let t ← ty; let a ← value; expectP ','; return .fbin b f t a (← value)
+    let f ← fastMath; let t ← ty; let a ← fits t (← value); expectP ','
+    return .fbin b f t a (← fits t (← value))
   if let some c := castOp? op then
     let a ← tvalue; expectKw "to"; return .cast c a (← ty)
   match op with
@@ -406,13 +453,13 @@ partial def inst (op : String) : P Inst := do
   | "fcmp" =>
     let f ← fastMath
     let p ← choice fcmp? "fcmp predicate"
-    let t ← ty; let a ← value; expectP ','; return .fcmp f p t a (← value)
+    let t ← ty; let a ← fits t (← value); expectP ','; return .fcmp f p t a (← fits t (← value))
   | "select" =>
     let c ← tvalue; expectP ','; let a ← tvalue; expectP ','; return .select c a (← tvalue)
   | "phi" =>
     let t ← ty
     let one : P (Value × Nat) := do
-      expectP '['; let v ← value; expectP ','; let l ← loc; expectP ']'; pure (v, l)
+      expectP '['; let v ← fits t (← value); expectP ','; let l ← loc; expectP ']'; pure (v, l)
     let x ← one
     return .phi t (x :: (← commaMany (· == .punct '[') one))
   | "alloca" =>
@@ -431,7 +478,7 @@ partial def inst (op : String) : P Inst := do
   | "getelementptr" =>
     let f ← gepFlags
     let src ← ty; expectP ','; let b ← tvalue
-    return .gep f src b (← commaMany startsTy tvalue)
+    return .gep f src b (← gepIdx src (← commaMany startsTy tvalue))
   | "extractvalue" => let a ← tvalue; return .extractvalue a (← idxList)
   | "insertvalue" =>
     let a ← tvalue; expectP ','; let e ← tvalue; return .insertvalue a e (← idxList)
@@ -602,7 +649,7 @@ private def global (n : String) : P Global := do
   let c ← if ← acceptKw "constant" then pure true else do expectKw "global"; pure false
   let t ← ty
   let init ← if (← peek) == .punct ',' || (← peek) == .eof || "external" ∈ lk then pure none
-    else some <$> value
+    else some <$> (value >>= fits t)
   let al ← align?
   return { name := n, linkage := lk, addrSpace := a, isConst := c, ty := t, init, align := al }
 

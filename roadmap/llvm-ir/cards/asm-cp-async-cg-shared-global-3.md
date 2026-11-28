@@ -18,7 +18,7 @@ The importer accepts a call `call void asm sideeffect "cp.async.cg.shared.global
 
 ## Corpus
 
-8 of the 116 corpus files use it (256 uses); `corpus` lists the first 5 in path order.
+8 of the 127 corpus files use it (256 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

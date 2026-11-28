@@ -19,7 +19,7 @@ LangRef's section on `extractvalue` (the quote is the first sentence of its over
 
 ## Corpus
 
-112 of the 116 corpus files use it (11637 uses); `corpus` lists the first 5 in path order.
+121 of the 127 corpus files use it (11732 uses); `corpus` lists the first 5 in path order.
 
 The programs of the library's `mojo_kernel` theorems use it (`tests/corpus/vadd/vadd_vector_addition_vector_addition6A6A_793e5fe36a195e73.nvptx.ll`, `tests/corpus/vmul/vector_multiply_vector_multiply_vector_multiply6A6A_227fc544da3deaff.nvptx.ll`, `tests/corpus/vsub/vector_subtraction_vector_subtraction_vector_subtr6A6A_a0b4d9d2b6e652e1.nvptx.ll`).
 

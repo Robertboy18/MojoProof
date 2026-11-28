@@ -96,7 +96,7 @@ theorem chainF_ok (sA sB sC : Nat) :
 `entryF_eq`, the rest by the kernel). -/
 theorem skipF_ok (sA sB sC : Nat) :
     coversEntryWith true (prog sA sB sC) (fn sA sB sC) [skipF sA sB sC] = true := by
-  simp only [coversEntryWith, List.all_cons, List.all_nil, Bool.and_true, coversPathWith,
+  simp only [coversEntryWith, coversEntryAt, List.all_cons, List.all_nil, Bool.and_true,
     coversPathAt, coversAt_eq (entryF_eq sA sB sC)]
   kernel_rfl
 
@@ -554,9 +554,10 @@ theorem startsF (sA sB sC : Nat) (L : Launch) (bC bA bB m n K : Nat) {mem : Mem}
     (oracle : Nat → Nat → Nat) :
     ∃ g c, Sem.Grid.start (prog sA sB sC) (fn sA sB sC) L (Mat.args NaiveSpec.z bC bA bB m n K)
       mem ch oracle = .ok (g, c) := by
-  refine Sym.Grid.start_ok ch oracle rfl hC
+  refine Sym.Grid.start_ok ch oracle rfl rfl hC
     (fun g hg => by rw [show (prog sA sB sC).module.globals.toList = [] from rfl] at hg; cases hg)
     (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (of_decide_eq_true (by kernel_rfl))
+    (by kernel_rfl)
   all_goals
     change (p, v) ∈ naive.fn_0.params.zip _ at hpv
     simp only [Mat.args, SymPhi.naive.fn_0, List.zip_cons_cons, List.zip_nil_left,

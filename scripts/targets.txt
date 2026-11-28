@@ -172,6 +172,9 @@ MojoProof.Sem.Grid.start_reach_shaped
 MojoProof.Sem.sig_trace_agree
 MojoProof.Sem.sig_oneRun
 MojoProof.Sem.sig_obs
+MojoProof.Sem.launchArgs_placed
+MojoProof.Sem.place_placed
+MojoProof.Sem.place_onto
 # kernel theorem (Sym/Sched, Sym/Start, Sym/Kernel, Sym/KernelMat, Sym/KernelIter, Sym/KernelCmd, Kernels/)
 MojoProof.Sym.Grid.start_ok
 MojoProof.Sym.Kernel.sound_of_paths
@@ -182,6 +185,16 @@ MojoProof.Kernels.vmul.sound
 MojoProof.Kernels.vmul.correct
 MojoProof.Kernels.vsub.sound
 MojoProof.Kernels.vsub.correct
+MojoProof.Kernels.vadd.sound_retype
+MojoProof.Kernels.vadd.family
+MojoProof.Kernels.vmul.family
+MojoProof.Kernels.vsub.family
+MojoProof.Kernels.vadd.step_half
+MojoProof.Kernels.vadd.step_bfloat
+MojoProof.Kernels.vmul.step_half
+MojoProof.Kernels.vmul.step_bfloat
+MojoProof.Kernels.vsub.step_half
+MojoProof.Kernels.vsub.step_bfloat
 MojoProof.Sym.Elem.Out.outBelow
 MojoProof.Sym.Kernel.replay_canaries
 MojoProof.Sym.Kernel.map2_min
@@ -297,6 +310,17 @@ MojoProof.Sym.PhaseInv.nil
 MojoProof.Sym.PhaseInv.ext
 MojoProof.Sym.PhaseInv.bar
 MojoProof.Sym.PhaseInv.phases
+MojoProof.Sym.Grid.start_of_check
+MojoProof.Sem.kernel_sound_sig
+MojoProof.Sem.Grid.not_bad_cells
+MojoProof.Sem.Grid.start_reach_ctaOf
+MojoProof.Sem.Grid.start_reach_buffer
+MojoProof.Sem.Mem.Buffer.ne
+MojoProof.Sym.Ext.store
+MojoProof.Sym.WarpWait.of_waits
+MojoProof.Sym.Kernel.sound_of_warps
+MojoProof.Sym.Kernel.sound_of_phases
+MojoProof.Sym.WarpSegsBar.wait
 # block checker (Sym/Block, Sym/Term, Sym/Loop, Sym/PtrMem)
 MojoProof.Sym.Block.sound
 MojoProof.Sym.Block.sound_pathWith_ptrs
@@ -400,6 +424,7 @@ MojoProof.Sym.elabSymSummaryFamily
 MojoProofTest.kernelRflLate
 MojoProof.Sym.warpRoute
 MojoProof.Sym.evalWarpRoute
+MojoProof.Kernels.tacticMojo_map2_step
 # layout laws (GPUProof/Layout/)
 GPUProof.Layout.Lay.compose
 GPUProof.Layout.Lay.call_add
@@ -594,3 +619,6 @@ GPUProof.Importer.graded_of_holds
 GPUProof.Tiling.mono
 GPUProof.View.tile_subset_guardAt
 GPUProof.View.cover_guardAt
+MojoProof.Util.modulesIn
+MojoProof.Sem.Kernel.Safe.of_sound
+MojoProof.Sym.mojoSafe

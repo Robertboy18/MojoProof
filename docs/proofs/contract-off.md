@@ -180,8 +180,8 @@ clears it, and the contraction-off program records none.
 - `NaiveStart.soundOff12` and `NaiveStart.obsOff12` (MojoProofTest/NaiveStart.lean):
   `NaiveOff.correct` at the concrete launch and memory of `NaiveKernel.sound12` (one block of
   2 × 2 threads, `m = 1`, `n = 2`, `K = 768`, `mem12 A B` for every `A` and `B`, `Mat.Pre` by
-  `NaiveKernel.pre12`), and an observation of it at every address choice and oracle family
-  (`Kernel.Sound.exists_obs`, by `Grid.Sound.result`).
+  `NaiveKernel.pre12`), and, with `L12.Valid` (the launch has a thread), an observation of it at
+  every address choice and oracle family (`Kernel.Sound.exists_obs`, by `Grid.Sound.result`).
 - Twin of the fragment premise: the bfloat16 naive kernel of the corpus (`ba3789d9`) widens its
   words with `fpext`, whose result reads the whole oracle number, and fails `Program.fbinOracle`
   (`bf16_fbinOracle`).

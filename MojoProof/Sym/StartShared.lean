@@ -133,6 +133,8 @@ theorem Grid.start_shared {prog : Program} {fn : Func} {L : Launch} {args : List
   · cases h
   split at h
   · cases h
+  split at h
+  · cases h
   rename_i v1 h1
   split at h
   · cases h

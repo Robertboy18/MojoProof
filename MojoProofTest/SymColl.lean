@@ -1,13 +1,16 @@
 import MojoProofTest.Confluence
 import MojoProof.Sym.CanonBar
+import MojoProof.Sym.WarpRoute
 import MojoProofTest.KernelRfl
 
 /-!
 # A canonical run through a barrier and two butterfly shuffles, on a concrete launch
 
-Instances of `PhaseRun.start_sound`, `BlockRun`, `BlockBar` and `WarpShfl`
-(MojoProof/Sym/CanonBar.lean, MojoProof/Sym/Canon.lean), of `Seq.ToWait.of_runTo`, `Seq.of_runTo`
-and `bflyRoundsAt_of_shfl` (MojoProof/Sym/SchedWait.lean). The kernel `kern` is
+Instances of `PhaseRun.start_sound`, `BlockRun` and `BlockBar` (MojoProof/Sym/CanonBar.lean), of
+`WarpRun.of_waits` (MojoProof/Sym/Canon.lean) through `warp_route` and `WarpRun.shfl_of`
+(MojoProof/Sym/WarpRoute.lean), of `WarpShfl` (MojoProof/Sym/Canon.lean), and of
+`Seq.ToWait.of_runTo`, `Seq.of_runTo`, `ToWait.of_runTo`, `Runs.of_runTo` and
+`bflyRoundsAt_of_shfl` (MojoProof/Sym/SchedWait.lean). The kernel `kern` is
 
     %0 = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
     call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)
@@ -22,15 +25,22 @@ with the barrier and the shuffle declared `convergent`, launched on one block of
 
 * `sound`: the launch is sound (`Grid.Sound`), by `PhaseRun.start_sound` at the run of its one
   block (`BlockRun`): the warp's lanes in turn to the barrier (`WarpWait.waits`) and the barrier
-  (`hb1`, a `BlockBar`); the lanes in turn to the first shuffle and the shuffle (`hx2`, a
-  `WarpShfl`, each lane resumed with `shflSource`'s lane's `%0`); the same for the second
-  shuffle with `%2` (`hx3`); the lanes in turn to their returns. Each run is the one `runTo`
-  computes (`Seq.ToWait.of_runTo`, `Seq.of_runTo`).
+  (`hb1`, a `BlockBar`); then the warp through the two shuffles to the returns (`warp`, a
+  `WarpRun`, by `warp_route`): each lane's run through its two waits (`lane`, as `runTo` computes
+  it), and the shuffles' deliveries, each lane resumed with `shflSource`'s lane's `%0` and then
+  `%2`, checked by the kernel (`shfls`, `Piece.Wait.shflOk`, for `WarpRun.shfl_of`).
 * `lanes`: at its return each lane `l` holds in `%4` the value of the butterfly rounds at offsets
   1 and 2 over the lanes' thread numbers (`bflyRounds (· + ·) [1, 2] (fun l => l) l`, by
   `bflyRoundsAt_of_shfl`), which is 6 (`lanes_six`).
-* The open-goal twin (an `example` with `#guard_msgs`): the warp's run with the second shuffle's
-  fire left out leaves that shuffle's `WarpShfl` as the goal.
+* `hw2`, `hw3`, `hs4`, `hx2`, `hx3`: the statements at 67bd004, with that commit's `m2`, `m3`,
+  `fin` and `u3` unfolded: the threads in turn to each shuffle and to their returns, as `runTo`
+  computes them, and the two shuffles (`WarpShfl`) at those statuses; with `m1_eq`, the memories
+  the threads' runs past the barrier leave are `m1`. Tests of `Seq.ToWait.of_runTo`,
+  `Seq.of_runTo` and `WarpShfl`: `lane` and `warp` do not give them, since a wait
+  (`Piece.Wait.via`) does not state the thread it waits from or the callee, and `WarpRun`'s
+  statuses are existential.
+* The open-goal twin (an `example` with `#guard_msgs`): `warp` without the shuffles' checks
+  (`shfls`) leaves `WarpRun.of_waits`' premise on the shuffles as the goal.
 
 Statements about this launch, not about every launch.
 -/
@@ -141,20 +151,14 @@ def t1 (n : Nat) : Thread := (u1 n).resume none
 /-- The threads at the first shuffle. -/
 def u2 : Nat → Thread := stop t1 m1
 
-/-- The memory at the first shuffle. -/
-def m2 : Mem := memAt t1 m1 4
-
 /-- Lane `n`'s `%1`, what the first shuffle gives it: lane `n ^^^ 1`'s `%0`. -/
 def r2 (n : Nat) : Option Val := some (.bits 32 (BitVec.ofNat 32 (n ^^^ 1)))
 
 /-- The threads past the first shuffle. -/
 def t2 (n : Nat) : Thread := (u2 n).resume (r2 n)
 
-/-- The threads at the second shuffle. -/
-def u3 : Nat → Thread := stop t2 m2
-
-/-- The memory at the second shuffle. -/
-def m3 : Mem := memAt t2 m2 4
+/-- The threads at the second shuffle (no lane changes the memory past the barrier). -/
+def u3 : Nat → Thread := stop t2 m1
 
 /-- Lane `n`'s `%2`, the value it offers at the second shuffle. -/
 def a3 (n : Nat) : Val := .bits 32 (BitVec.ofNat 32 (n + (n ^^^ 1)))
@@ -165,11 +169,8 @@ def r3 (n : Nat) : Option Val := some (.bits 32 (BitVec.ofNat 32 ((n ^^^ 2) + (n
 /-- The threads past the second shuffle. -/
 def t3 (n : Nat) : Thread := (u3 n).resume (r3 n)
 
-/-- The memory the threads end on. -/
-def fin : Mem := memAt t3 m3 4
-
 /-- The threads at their returns. -/
-def u4 : Nat → Thread := stop t3 m3
+def u4 : Nat → Thread := stop t3 m1
 
 -- Each phase's runs are stated from `memAt`'s first memory rewritten (`memAt.eq_1`) rather than
 -- unified with it: the elaborator would compare `memAt t m 0` with the previous phase's memory by
@@ -187,41 +188,61 @@ theorem hw1 : ∃ Es, Seq.ToWait c (Grid.thread g0)
   rw [memAt.eq_1] at h
   exact ⟨Es, h⟩
 
-/-- The threads in turn to the first shuffle, each lane `n` offering its `%0`, its thread
-number. -/
+/-- **The memories past the barrier are `m1`**: no lane changes the memory past the barrier, so
+the four threads' runs in turn from `t1` on `m1`, then from `t2` on what they leave, then from
+the threads past the second shuffle on what those leave, each leave `m1`, by the kernel. These
+are the bodies of `m2`, `m3` and `fin` at 67bd004 (`memAt t1 m1 4`, `memAt t2 m2 4`,
+`memAt t3 m3 4`, with that commit's `u3 := stop t2 m2` in `t3`), so that commit's `u3` and `u4`
+(`stop t2 m2`, `stop t3 m3`) are `u3` and `u4`. -/
+theorem m1_eq : memAt t1 m1 4 = m1 ∧ memAt t2 (memAt t1 m1 4) 4 = m1 ∧
+    memAt (fun n => (stop t2 (memAt t1 m1 4) n).resume (r3 n)) (memAt t2 (memAt t1 m1 4) 4) 4 =
+      m1 :=
+  ⟨by kernel_rfl, by kernel_rfl, by kernel_rfl⟩
+
+/-- **The threads in turn to the first shuffle** (`hw2` at 67bd004, its `m2` unfolded), as
+`runTo` computes them (`Seq.ToWait.of_runTo`): thread `n` from `t1 n` on the memory the threads
+before it leave waits at the shuffle offering its thread number, from `u2 n`, with callee
+`shflDecl`. A test of `Seq.ToWait.of_runTo`; `lane` does not give it, since its waits
+(`Piece.Wait.via`) state each lane's position, call, arguments and memory, not the thread it
+waits from (`u2 n`) or the callee, and it runs each lane from `m1`, not in turn. -/
 theorem hw2 : ∃ Es, Seq.ToWait c t1
     (fun n => .wait (u2 n) (.shfl .bfly)
       [.bits 32 (-1), .bits 32 (.ofNat 32 n), .bits 32 1, .bits 32 31] shflDecl)
-    (List.range 4) m1 Es m2 := by
+    (List.range 4) m1 Es (memAt t1 m1 4) := by
   obtain ⟨Es, h⟩ := Seq.ToWait.of_runTo (c := c) (t := t1) (N := 4) (fuel := 4)
     (s := fun n => .wait (u2 n) (.shfl .bfly)
       [.bits 32 (-1), .bits 32 (.ofNat 32 n), .bits 32 1, .bits 32 31] shflDecl)
-    (mem := memAt t1 m1) fun k hk => by
-      refine ⟨_, _, _, _, rfl, ?_⟩
-      interval_cases k <;> kernel_rfl
-  rw [memAt.eq_1] at h
-  exact ⟨Es, h⟩
+    (mem := memAt t1 m1) fun k hk => ⟨_, _, _, _, rfl, by interval_cases k <;> kernel_rfl⟩
+  exact ⟨Es, memAt.eq_1 t1 m1 ▸ h⟩
 
-/-- The threads in turn to the second shuffle. -/
+/-- **The threads in turn to the second shuffle** (`hw3` at 67bd004, its `m2`, `m3` and `u3`
+unfolded), as `runTo` computes them: thread `n` from `t2 n` waits at the shuffle offering
+`a3 n`, from `stop t2 (memAt t1 m1 4) n`, with callee `shflDecl`; by `m1_eq`, the runs from `t2`
+on `m1`. A test of `Seq.ToWait.of_runTo`; `lane` does not give it, as for `hw2`. -/
 theorem hw3 : ∃ Es, Seq.ToWait c t2
-    (fun n => .wait (u3 n) (.shfl .bfly) [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31] shflDecl)
-    (List.range 4) m2 Es m3 := by
+    (fun n => .wait (stop t2 (memAt t1 m1 4) n) (.shfl .bfly)
+      [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31] shflDecl)
+    (List.range 4) (memAt t1 m1 4) Es (memAt t2 (memAt t1 m1 4) 4) := by
+  rw [m1_eq.1]
   obtain ⟨Es, h⟩ := Seq.ToWait.of_runTo (c := c) (t := t2) (N := 4) (fuel := 4)
     (s := fun n => .wait (u3 n) (.shfl .bfly) [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31]
-      shflDecl) (mem := memAt t2 m2) fun k hk => by
-      refine ⟨_, _, _, _, rfl, ?_⟩
-      interval_cases k <;> kernel_rfl
-  rw [memAt.eq_1] at h
-  exact ⟨Es, h⟩
+      shflDecl) (mem := memAt t2 m1) fun k hk =>
+      ⟨_, _, _, _, rfl, by interval_cases k <;> kernel_rfl⟩
+  exact ⟨Es, memAt.eq_1 t2 m1 ▸ h⟩
 
-/-- The threads in turn to their returns. -/
-theorem hs4 : ∃ Es, Seq c t3 (List.range 4) m3 Es fin := by
-  obtain ⟨Es, h⟩ := Seq.of_runTo (c := c) (t := t3) (N := 4) (fuel := 4) (mem := memAt t3 m3)
-    fun k hk => by
-      refine ⟨(next k (t3 k) (memAt t3 m3 k)).1, (next k (t3 k) (memAt t3 m3 k)).2.1, ?_⟩
-      interval_cases k <;> kernel_rfl
-  rw [memAt.eq_1] at h
-  exact ⟨Es, h⟩
+/-- **The threads in turn to their returns** (`hs4` at 67bd004, its `t3`, `m3` and `fin`
+unfolded), as `runTo` computes them (`Seq.of_runTo`); by `m1_eq`, the runs from `t3` on `m1`. A
+test of `Seq.of_runTo`; `lane` does not give it: its runs to the returns are from the threads its
+waits reach, which it does not state, and from `m1`, not in turn. -/
+theorem hs4 : ∃ Es, Seq c (fun n => (stop t2 (memAt t1 m1 4) n).resume (r3 n)) (List.range 4)
+    (memAt t2 (memAt t1 m1 4) 4) Es
+    (memAt (fun n => (stop t2 (memAt t1 m1 4) n).resume (r3 n)) (memAt t2 (memAt t1 m1 4) 4)
+      4) := by
+  rw [m1_eq.2.1, m1_eq.1]
+  obtain ⟨Es, h⟩ := Seq.of_runTo (c := c) (t := t3) (N := 4) (fuel := 4) (mem := memAt t3 m1)
+    fun k hk => ⟨(next k (t3 k) (memAt t3 m1 k)).1, (next k (t3 k) (memAt t3 m1 k)).2.1, by
+      interval_cases k <;> kernel_rfl⟩
+  exact ⟨Es, memAt.eq_1 t3 m1 ▸ h⟩
 
 /-- The warp of first thread 0 is the block's four threads. -/
 theorem warp0 : warpThreads L 0 = List.range 4 := by decide
@@ -236,48 +257,104 @@ theorem hb1 : BlockBar L 0 (fun n => .wait (u1 n) .barrier [.bits 32 0] Launch.b
       omega
     interval_cases n <;> exact ⟨rfl, rfl, by kernel_rfl⟩⟩
 
-/-- The first shuffle (`WarpShfl`), from the threads at it on `m2`: lane `j` resumed from `u2 j`
-with `r2 j`. -/
+/-- **The first shuffle** (`WarpShfl`; `hx2` at 67bd004, its `m2` unfolded): from the threads at
+it (`hw2`'s statuses) on the memory they leave, lane `j` resumed from `u2 j` with `r2 j`, lane
+`j ^^^ 1`'s thread number; by `m1_eq` on `m1`, each lane's checks by the kernel. A test of
+`WarpShfl` at these statuses; `warp` does not give it, since `WarpRun`'s statuses, threads and
+deliveries are existential, and getting these back needs the runs in turn to be unique (there is
+no `Seq.ToWait.det`) and the deliveries on the lanes to be. -/
 theorem hx2 : WarpShfl L c 0
     (fun n => .wait (u2 n) (.shfl .bfly)
-      [.bits 32 (-1), .bits 32 (.ofNat 32 n), .bits 32 1, .bits 32 31] shflDecl) m2 u2 r2 :=
-  ⟨.bfly, fun _ => .bits 32 (-1), fun n => .bits 32 (.ofNat 32 n), fun _ => .bits 32 1,
-    fun _ => .bits 32 31, fun _ => 1, fun _ => 31, fun _ => shflDecl, fun j hj => by
-    have hj : j < 4 := by simpa [show warpLanes L 0 = List.range 4 by decide] using hj
-    interval_cases j <;> exact ⟨rfl, rfl, rfl, rfl, by kernel_rfl, by kernel_rfl⟩⟩
+      [.bits 32 (-1), .bits 32 (.ofNat 32 n), .bits 32 1, .bits 32 31] shflDecl) (memAt t1 m1 4)
+      u2 r2 := by
+  rw [m1_eq.1]
+  refine ⟨.bfly, fun _ => .bits 32 (-1), fun n => .bits 32 (.ofNat 32 n), fun _ => .bits 32 1,
+    fun _ => .bits 32 31, fun _ => 1, fun _ => 31, fun _ => shflDecl, fun j hj => ?_⟩
+  have hj : j < 4 := by simpa [show warpLanes L 0 = List.range 4 by decide] using hj
+  interval_cases j <;> exact ⟨rfl, rfl, rfl, rfl, by kernel_rfl, by kernel_rfl⟩
 
-/-- The second shuffle (`WarpShfl`), from the threads at it on `m3`: lane `j` resumed from `u3 j`
-with `r3 j`. -/
-theorem hx3 : WarpShfl L c 0
-    (fun n => .wait (u3 n) (.shfl .bfly) [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31] shflDecl)
-    m3 u3 r3 :=
-  ⟨.bfly, fun _ => .bits 32 (-1), a3, fun _ => .bits 32 2, fun _ => .bits 32 31, fun _ => 2,
-    fun _ => 31, fun _ => shflDecl, fun j hj => by
-    have hj : j < 4 := by simpa [show warpLanes L 0 = List.range 4 by decide] using hj
-    interval_cases j <;> exact ⟨rfl, rfl, rfl, rfl, by kernel_rfl, by kernel_rfl⟩⟩
+/-- **The second shuffle** (`WarpShfl`; `hx3` at 67bd004, its `m2`, `m3` and `u3` unfolded): from
+`hw3`'s statuses on the memory the threads leave, lane `j` resumed from
+`stop t2 (memAt t1 m1 4) j` with `r3 j`, lane `j ^^^ 2`'s `a3`; by `m1_eq` on `m1`. A test of
+`WarpShfl`; `warp` does not give it, as for `hx2`. -/
+theorem hx3 : WarpShfl L c 0 (fun n => .wait (stop t2 (memAt t1 m1 4) n) (.shfl .bfly)
+      [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31] shflDecl) (memAt t2 (memAt t1 m1 4) 4)
+      (stop t2 (memAt t1 m1 4)) r3 := by
+  rw [m1_eq.2.1, m1_eq.1]
+  refine ⟨.bfly, fun _ => .bits 32 (-1), a3, fun _ => .bits 32 2, fun _ => .bits 32 31,
+    fun _ => 2, fun _ => 31, fun _ => shflDecl, fun j hj => ?_⟩
+  have hj : j < 4 := by simpa [show warpLanes L 0 = List.range 4 by decide] using hj
+  interval_cases j <;> exact ⟨rfl, rfl, rfl, rfl, by kernel_rfl, by kernel_rfl⟩
+
+/-- The value lane `j` offers at shuffle `i`: its `%0` (its thread number), then `a3 j`. -/
+def x (i j : Nat) : Val := if i = 0 then .bits 32 (.ofNat 32 j) else a3 j
+
+/-- Lane `j`'s waits past the barrier, in `kern`'s block 0 on memory `m`: the first shuffle at
+position 2 offering `x 0 j`, delivered `r2 j`, and the second at position 4 offering `x 1 j`,
+delivered `r3 j`; no lane changes the memory. -/
+def ws (m : Mem) (j : Nat) : List Piece.Wait :=
+  [⟨2, .shfl .bfly, [.bits 32 (-1), x 0 j, .bits 32 1, .bits 32 31], m, (r2 j, m)⟩,
+    ⟨4, .shfl .bfly, [.bits 32 (-1), x 1 j, .bits 32 2, .bits 32 31], m, (r3 j, m)⟩]
+
+/-- The `i`-th of `ws m j` (a barrier wait at position 0 on the empty memory if there is none). -/
+def wt (m : Mem) (i j : Nat) : Piece.Wait := (ws m j).getD i ⟨0, .barrier, [], {}, (none, {})⟩
+
+/-- **Each lane past the barrier through its two waits** (`RunsVia` at `Piece.Wait.via` of block
+0), as `runTo` computes it: from `t1 j` on `m1` to the first shuffle at `u2 j`, from `t2 j` to the
+second at `u3 j`, and from `t3 j` to its return on `m1`. -/
+theorem lane : ∀ j < 4, RunsVia (c (0 + j)) (· = m1) ((ws m1 j).map (Piece.Wait.via kern 0))
+    (t1 (0 + j)) m1 := by
+  intro j hj
+  refine ⟨u2 j, _, _, shflDecl, m1, ToWait.of_runTo (fuel := 4) ?_, ⟨?_, rfl, rfl, rfl⟩,
+    u3 j, _, _, shflDecl, m1, ToWait.of_runTo (fuel := 4) ?_, ⟨?_, rfl, rfl, rfl⟩,
+    m1, Runs.of_runTo (fuel := 4) (u := u4 j) (m₁ := m1) ?_, rfl⟩ <;>
+    interval_cases j <;> kernel_rfl
+
+/-- Each lane has two waits and runs the program `prog`. -/
+theorem waits : ∀ j < 4, (ws m1 j).length = 2 ∧ (c (0 + j)).prog = prog :=
+  fun j hj => ⟨rfl, by interval_cases j <;> rfl⟩
+
+/-- **The lanes' waits are the two butterfly shuffles** (`Piece.Wait.shflOk`): at positions 2 and
+4, offsets 1 and 2, clamp 31, lane `j` offering `x i j` and delivered what `Grid.fire` delivers,
+by the kernel. -/
+theorem shfls : ∀ j < 4, Piece.Wait.shflOk (warpLanes L 0) (fun _ => .bfly)
+    (fun i => if i = 0 then 2 else 4) (fun i => if i = 0 then 1 else 2) (fun _ => 31) x
+    ⟨0, .barrier, [], {}, (none, {})⟩ 2 j (ws m1 j) = true := by
+  decide +kernel
+
+/-- The waits are on `m` and deliver `m`, for every memory `m` and lanes `ls`. -/
+theorem mems {m : Mem} {ls : List Nat} :
+    ∀ i < 2, ∀ j ∈ ls, (wt m i j).mem = m ∧ (wt m i j).dlv.2 = m :=
+  fun i hi _ _ => by interval_cases i <;> exact ⟨rfl, rfl⟩
+
+/-- **The warp past the barrier through the two shuffles** (`WarpRun`), from `t1` on `m1`, by
+`warp_route`: `WarpRun.of_waits` with the lanes' runs by `lane` (`RunsVia.of_block`) and the
+shuffles by `WarpRun.shfl_of`, from `shfls` and `Program.shfl_nil`; so each shuffle's deliveries
+are `Grid.fire`'s (`WarpShfl`). -/
+theorem warp : ∃ Es, WarpRun L c 0 t1 m1 Es m1 := by
+  have hN : (warpLanes L 0).length = 4 := by decide
+  have hl := lane
+  have hw := waits
+  have hs := shfls
+  warp_route (J := 2) (fn := kern) (lbl := fun _ => 0) (W := wt m1) (mo := fun _ => .bfly)
+    (X := x) (M := fun _ _ => m1) using mems, Program.shfl_nil (P := prog) (by decide)
 
 /-- **The launch through a barrier and two shuffles is sound** (`Grid.Sound`), with the
 observation that is always `()`: by `PhaseRun.start_sound` at the run of the one block
 (`BlockRun`): its one warp's run to the barrier (`CanonWait`, `WarpWait.waits`), the barrier
-(`hb1`), then the warp's run through the two shuffles (`WarpRun.shfl` with `hx2` and `hx3`) to
-the returns (`WarpRun.ends`), with the runs `runTo` computes; the final trace's checks by the
-kernel. -/
+(`hb1`), then the warp's run through the two shuffles to the returns (`warp`); the final trace's
+checks by the kernel. -/
 theorem sound : Grid.Sound L c g0 (fun _ => some ()) fun _ => True := by
   obtain ⟨_, w1⟩ := hw1
-  obtain ⟨_, w2⟩ := hw2
-  obtain ⟨_, w3⟩ := hw3
-  obtain ⟨_, s4⟩ := hs4
-  rw [← warp0] at w1 w2 w3 s4
+  obtain ⟨_, w⟩ := warp
+  rw [← warp0] at w1
   have e1 : CanonWait L c (Grid.thread g0)
       (fun n => .wait (u1 n) .barrier [.bits 32 0] Launch.barrierDecl) [0] g0.mem _ _ :=
     .cons (.waits w1) (.nil _)
-  have r3 : WarpRun L c 0 t2 m2 _ fin := .shfl (s := fun n => .wait (u3 n) (.shfl .bfly)
-    [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31] shflDecl) w3 hx3 (.ends s4)
-  have e2 : CanonRun L c t1 [0] m1 _ fin := .cons (.shfl (s := fun n => .wait (u2 n) (.shfl .bfly)
-    [.bits 32 (-1), .bits 32 (.ofNat 32 n), .bits 32 1, .bits 32 31] shflDecl) w2 hx2 r3) (.nil _)
+  have e2 : CanonRun L c t1 [0] m1 _ m1 := .cons w (.nil _)
   rw [show [0] = blockWarps L 0 by decide] at e1 e2
-  have hr : BlockRun L c 0 (Grid.thread g0) g0.mem _ fin := .bar e1 hb1 (.ends e2)
-  have hc : PhaseRun L c (Grid.thread g0) [0] g0.mem _ fin := .cons hr (.nil _)
+  have hr : BlockRun L c 0 (Grid.thread g0) g0.mem _ m1 := .bar e1 hb1 (.ends e2)
+  have hc : PhaseRun L c (Grid.thread g0) [0] g0.mem _ m1 := .cons hr (.nil _)
   rw [show [0] = List.range (volume L.grid) by decide] at hc
   exact PhaseRun.start_sound start_eq (fun _ _ _ _ _ hc => by cases hc) (fun _ _ _ => rfl)
     (by decide) hc ⟨fun _ _ => by decide +kernel, by decide +kernel, (), rfl, trivial⟩
@@ -306,24 +383,32 @@ theorem lanes_six : ∀ l < 4, bflyRounds (· + ·) [1, 2] (fun l => l) l = 6 :=
 
 /--
 error: unsolved goals
-⊢ WarpShfl L c 0
-    (fun n =>
-      Status.wait (u3 n) (Intrinsic.shfl Shfl.bfly) [Val.bits 32 (-1), a3 n, Val.bits 32 2, Val.bits 32 31] shflDecl)
-    m3 u3 r3
+case refine_2
+⊢ ∀ i < 2,
+    ∀ j ∈ warpLanes L 0,
+      (wt m1 i j).call.intr = Intrinsic.shfl Shfl.bfly ∧
+        (wt m1 i j).pos = (wt m1 i 0).pos ∧
+          ∃ Mk Bv Cv b cl,
+            (wt m1 i j).args = [Mk, x i j, Bv, Cv] ∧
+              Mk.word? = some (2 ^ 32 - 1) ∧
+                Bv.word? = some b ∧
+                  Cv.word? = some cl ∧
+                    ∀ (g : String) (e : Func),
+                      Array.find? (fun x => x.name == g) (c (0 + j)).prog.module.funcs = some e →
+                        List.lookup g (c (0 + j)).prog.intrinsics = some (Intrinsic.shfl Shfl.bfly) →
+                          Option.mapM (withAttrs (c 0).prog.layout m1 e.ret e.retAttrs)
+                              (some (shflVal (warpLanes L 0) (x i) (shflSource Shfl.bfly j b cl))) =
+                            Except.ok (wt m1 i j).dlv.1
 -/
 #guard_msgs in
-/-- **The open-goal twin**: the warp's run past the barrier with the second shuffle's fire left
-out leaves that shuffle's `WarpShfl` (from the threads at it on `m3`, lane `j` resumed from
-`u3 j` with `r3 j`) as the goal. -/
-example : ∃ Es, WarpRun L c 0 t1 m1 Es fin := by
-  obtain ⟨_, w2⟩ := hw2
-  obtain ⟨_, w3⟩ := hw3
-  obtain ⟨_, s4⟩ := hs4
-  rw [← warp0] at w2 w3 s4
-  refine ⟨_, .shfl (s := fun n => .wait (u2 n) (.shfl .bfly)
-    [.bits 32 (-1), .bits 32 (.ofNat 32 n), .bits 32 1, .bits 32 31] shflDecl) w2 hx2
-    (.shfl (s := fun n => .wait (u3 n) (.shfl .bfly)
-      [.bits 32 (-1), a3 n, .bits 32 2, .bits 32 31] shflDecl) w3 ?_ (.ends s4))⟩
+/-- **The open-goal twin**: the warp's run past the barrier without the shuffles' checks
+(`shfls`) leaves `WarpRun.of_waits`' premise on the shuffles (`hW`) as the goal. -/
+example : ∃ Es, WarpRun L c 0 t1 m1 Es m1 := by
+  have hN : (warpLanes L 0).length = 4 := by decide
+  have hl := lane
+  have hw := waits
+  warp_route (J := 2) (fn := kern) (lbl := fun _ => 0) (W := wt m1) (mo := fun _ => .bfly)
+    (X := x) (M := fun _ _ => m1) using mems, Program.shfl_nil (P := prog) (by decide)
   clear * -
 
 end MojoProofTest.SymColl

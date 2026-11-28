@@ -264,17 +264,21 @@ same file).
 binders, premises and conclusion: for every program, kernel, launch, arguments, memory every
 pointer byte of whose blocks names a known number (`m.BytesIn m.Known`, `sig`'s `Closed`),
 address choice, oracle and observation that reads only the blocks. It proves it from
-`Sound.of_one_run` at `sig` with the instance `OneRun sig` (`sound_sig`), and
-carries the core's `Sound` back to `Grid.Sound` (`sound_of_sig`). It uses no `Grid.start_sound`,
-`Grid.sound_of_one_run` or `Grid.confluent`; `OneRun sig` reaches `Grid.confluent` only through
-`Grid.start_oneRun`. Without their docstrings the example takes 9 lines, `sound_sig` 21 and
-`sound_of_sig` 16; `sound_of_sig` holds at every grid and contexts, not only a start's.
+`Sound.of_one_run` at `sig` with the instance `OneRun sig` (`sound_sig`,
+MojoProof/Sym/SigKernel.lean:141, in the library because gemv's and gevm's theorems use it
+through `kernel_sound_sig`), and carries the core's `Sound` back to `Grid.Sound`
+(`Grid.Sound.of_sig`, SigKernel.lean:194, in the library because `Kernel.Sound.of_sig`, which
+MojoProofTest/GemvObs.lean's observations of gemv's and gevm's theorems use, goes through it). It
+uses no `Grid.start_sound`, `Grid.sound_of_one_run` or `Grid.confluent`; `OneRun sig` reaches
+`Grid.confluent` only through `Grid.start_oneRun`. Without their docstrings the example takes 9
+lines, `sound_sig` 21 and `Grid.Sound.of_sig` 16; `Grid.Sound.of_sig` holds at every grid and
+contexts, not only a start's.
 
-`sound_of_sig` gives the core's `Clean` part of `Sound` to `Grid.Sound.of_clean`, which carries
+`Grid.Sound.of_sig` gives the core's `Clean` part of `Sound` to `Grid.Sound.of_clean`, which carries
 its five fields: `safe` as it is (`Grid.Safe` reads the core's faults at `sig`), `raceFree` and
 `kept` as they are (`Grid.RaceFree` and `Grid.Kept` read the core's `racy` and `kept` at `sig`),
 `progress` with the core's `Done` as it is, and `sig_step_iff` for `progress` and `terminates`.
-`sound_of_sig` carries `determinate` and `post`, with the core's `Done` as it is and `sig_obs`
+`Grid.Sound.of_sig` carries `determinate` and `post`, with the core's `Done` as it is and `sig_obs`
 for the observations. The run's premise `¬ Bad` is the core's at
 `sig` on both sides. Nothing else of MojoProof enters, and no change to its semantics.
 

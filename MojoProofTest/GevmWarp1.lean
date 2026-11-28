@@ -6,6 +6,7 @@ import MojoProof.Sym.LaneFrame
 import MojoProof.Sym.StartShared
 import MojoProof.Sym.PhaseExt
 import MojoProof.Tile.Words
+import MojoProof.Sym.SigKernel
 
 /-!
 # gevm_kernel's second phase, warp by warp
@@ -276,24 +277,14 @@ theorem mout_frame {N : Nat} (hy : w.M.Buffer w.p0 (N * 4) 4 true)
 /-- **A warp's second-phase events** (test): gevm_kernel (the corpus file), for every warp `w`
 whose first thread `w.k` is of lane 0 (`w.k % 32 = 0`) in block of threads `g`: `mout`'s trace
 extends the start memory's by `Ev1` events (`Ext`): the lanes' loads of their cells `x j` of
-`w.b` (`mlog`) and lane 0's store to `w.p0`. -/
+`w.b` (`mlog`, `Ext.chain`) and lane 0's store to `w.p0` (`Ext.store`,
+MojoProof/Sym/SigKernel.lean). -/
 theorem mout_ext {g : Nat} (hk : w.k % 32 = 0) (hg : w.k / 1024 = g) :
-    Ext (Ev1 w.L w.c w.b w.p0 g) w.M w.mout := by
-  have hl : ∀ j ≤ 32, Ext (Ev1 w.L w.c w.b w.p0 g) w.M (w.mlog j) := by
-    intro j hj
-    induction j with
-    | zero => exact .refl _ _
-    | succ j ih =>
-      exact (ih (by omega)).trans ⟨[_], rfl, fun e he => by
-        rw [List.mem_singleton.1 he]
-        exact ⟨_, w.k + j, rfl, by omega, rfl, .inl ⟨rfl, rfl, rfl⟩⟩⟩
-  unfold mout
-  split
-  · rename_i h
-    exact (hl 32 le_rfl).trans ⟨[_], Mem.store_trace h, fun e he => by
-      rw [List.mem_singleton.1 he]
-      exact ⟨_, w.k, rfl, hg, rfl, .inr ⟨hk, rfl⟩⟩⟩
-  · exact hl 32 le_rfl
+    Ext (Ev1 w.L w.c w.b w.p0 g) w.M w.mout :=
+  (Ext.chain (mm := w.mlog) (n := 32) (fun j hj => ⟨[_], rfl, fun e he => by
+    rw [List.mem_singleton.1 he]
+    exact ⟨_, w.k + j, rfl, by omega, rfl, .inl ⟨rfl, rfl, rfl⟩⟩⟩) 32 le_rfl).trans
+    (Ext.store ⟨_, w.k, rfl, hg, rfl, .inr ⟨hk, rfl⟩⟩)
 
 /-- For every warp, each `mlog j` loads as the start memory does (a log keeps the blocks). -/
 theorem mlog_load {l : Layout} {who : Who} {a : Nat} {ty : Ty} {p : Ptr} {al : Option Nat} :

@@ -18,7 +18,7 @@ LangRef's section on the intrinsic (the quote is the section's first sentence). 
 
 ## Corpus
 
-34 of the 116 corpus files use it (361 uses); `corpus` lists the first 5 in path order. The members called: `llvm.maxnum.f32`, `llvm.maxnum.v2f32`, `llvm.maxnum.v4f32`.
+36 of the 127 corpus files use it (381 uses); `corpus` lists the first 5 in path order. The members called: `llvm.maxnum.f32`, `llvm.maxnum.v2f32`, `llvm.maxnum.v4f32`.
 
 ## Out of scope
 

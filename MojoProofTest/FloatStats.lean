@@ -229,10 +229,11 @@ theorem errA_lt : errA < 1 := by
     show FloatFormat.binary32.fracWidth = 23 by decide,
     show FloatFormat.binary32.exponentBias = 127 by decide]
 
--- Mathlib v4.36.0 exposes `Real`'s operations to files outside the module system, so elaborating
--- the premise `A < 1` about concrete reals unfolds their arithmetic, which needs a deeper recursion
--- limit (as in MojoProof/Sem/Float.lean).
-set_option maxRecDepth 4096 in
+-- FloatLib's `unitRoundoffAt` and `underflowErrorAt` are powers `bpow 2 e`, and Mathlib v4.36.0
+-- exposes `Real`'s operations to files outside the module system: a premise about these reals
+-- in weak head normal form would unfold the powers past the default recursion limit. `bpow` is
+-- irreducible here, so it is not unfolded.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **The instance of `softmax_error`**, a test of one example: four inputs `1`, shifted by their
 maximum `top` along `pairs` (an input's value by `max_exact`); the differences, the sum of the
 exponentials along `pairs` and entry 0 are finite (by evaluation) and `A < 1` (`errA_lt`), so
@@ -251,7 +252,8 @@ theorem softmax_ones :
   exact softmax_error rfl pairs (by decide +kernel) {} ones top hk (by decide +kernel) errA_lt
     (by decide +kernel) 0 (by decide +kernel)
 
-set_option maxRecDepth 4096 in
+-- `bpow` is irreducible here, as above.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **The instance of `lse_error`**, a test of one example: at `ones` shifted by their maximum
 `top` along `pairs`, the differences, the sum `4` of the exponentials and `lse = 1 + log 4` are
 finite (by evaluation) and `A < 1` (`errA_lt`), so the word is within the stated mixed error of
@@ -268,7 +270,8 @@ theorem lse_ones :
   exact lse_error rfl pairs (by decide +kernel) {} {} ones top hk (by decide +kernel) errA_lt
     (by decide +kernel) (by decide +kernel)
 
-set_option maxRecDepth 4096 in
+-- `bpow` is irreducible here, as above.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **The instance of `logSoftmax_error`**, a test of one example: under `lse_ones`'s premises,
 entry 0, `(1 - 1) - log 4`, is finite (by evaluation), so it is within the stated mixed error of
 `1 - log Σ_i exp 1`. -/
@@ -328,7 +331,8 @@ theorem maskSum_masked :
   maskSum_error rfl pairs (by decide +kernel) {} masked one kept (by decide +kernel)
     (by decide +kernel) (by decide +kernel)
 
-set_option maxRecDepth 4096 in
+-- `bpow` is irreducible here, as above.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **The instance of `maskSoftmax_error`**, a test of one example: under `maskSum_masked`'s
 premises, with `m = 1 = masked 0`, `A < 1` (`errM_lt`) and entry 0 finite (by evaluation), entry
 0 is within the stated mixed error of TorchLean's real softmax over `kept` at `0`, `1 / 2`. -/

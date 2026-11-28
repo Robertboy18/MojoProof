@@ -20,8 +20,9 @@ related results); `bin` by `lanes2_skel` and `intBin_skel`, `fbin` by `floatBin_
 by `fnegV_skel`, `icmp` and `fcmp` by `icmpV_skel` and `fcmpV_skel`, casts by `castV_skel` (and,
 for a skeleton result, `castV_ch`), `select`, `extractvalue`, `insertvalue`, `extractelement`,
 `insertelement` and `shufflevector` by their lemmas; `getelementptr` and `alloca` on skeleton
-operands by `gep_shape` and `Mem.alloc_skel`; `load`, `store` and `atomicrmw` by `Mem.load_skel`,
-`Mem.store_skel` and `rmw_skel`, with `Labels.MemAt` for the block; `call` by `exec_call_skel`
+operands by `gep_shape` and `Mem.alloc_skel`; `load` by `Mem.load_skel`, `store` by
+`Mem.store_skel` and `atomicrmw` by `Mem.load_skel` and `rmw_skel`, with `Labels.MemAt` for the
+block; `call` by `exec_call_skel`
 (`withAttrs_skel` for payload arguments and results, `fminmax_skel`, `rsqrt_skel`,
 `intrinsic_skel`, `shfl_erase`). `phi` is refused by `exec` in both runs (it is `enter`'s).
 
@@ -1068,11 +1069,23 @@ theorem exec_skel {lab : Labels} {pay : Nat → Prop} {c : Ctx} {o : Nat → Nat
       rw [hsk _ p hok.1]
       refine .bind_eq _ fun x hx => .bind_eq _ fun q hq => ?_
       obtain rfl := Val.addr?_eq hq
-      refine (Mem.load_skel hm (p := q) (t := t) ?_ _ _ _ _).bind fun v₁ v₂ hv => ?_
-      · intro hq'
+      have hd : pay q.block → t.data := by
+        intro hq'
         cases pr
         · exact absurd hq' (hM hpr q hx)
         · simpa using hok.2
+      have hl := Mem.load_skel hm hd c.prog.layout c.who a (some (al.getD (c.prog.layout.align t)))
+      revert hl
+      generalize m₁.load c.prog.layout c.who a t q (some (al.getD (c.prog.layout.align t))) = r₁
+      generalize m₂.load c.prog.layout c.who a t q (some (al.getD (c.prog.layout.align t))) = r₂
+      intro hl
+      cases hl with
+      | error e =>
+        dsimp only
+        rw [congrArg Frame.allocas hf.shape]
+        exact (Except.Rel.error (R := fun (_ _ : Val) => False) _).bind fun _ _ h => h.elim
+      | ok hv =>
+      simp only [pure_bind]
       rw [Val.Skel.defined hv.1]
       refine .ite (fun _ => .error _) (fun _ => .ok ⟨hf.next (.some ?_) .none, Mem.log_skel hm _⟩)
       cases pr

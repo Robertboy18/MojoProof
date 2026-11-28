@@ -75,9 +75,10 @@ contexts and every launch:
   which the two threads have one layout, two collective calls that complete give the same grid, or
   each completes after the other and the two orders give the same grid (`Grid.Same`);
   `Grid.start_fire_fire_comm`: the same in the start's contexts, for every grid.
-- `Mem.check_bind_admits`, `Mem.load_admits`, `Mem.store_admits`, `exec_admits`, `step_admits`,
-  `Grid.advance_admits`: every access a step that succeeds would log is to a block of the memory
-  whose owner admits the stepping thread; `Grid.pending_who`: and is by that thread.
+- `Mem.check_bind_admits`, `Mem.load_admits`, `Mem.store_admits`,
+  `exec_admits`, `step_admits`, `Grid.advance_admits`: every access a step that succeeds would
+  log is to a block of the memory whose owner admits the stepping thread; `Grid.pending_who`: and
+  is by that thread.
 - `Grid.pending_apart` (the premise on accesses from ownership): for every discipline `(T, own)`
   (Trace.lean), if each pending access of two threads with different tiles whose steps succeed
   follows the discipline or is to a block its thread owns, no write of one overlaps an access of
@@ -1120,6 +1121,8 @@ theorem Grid.start_reach_byThreads {prog : Program} {fn : Func} {L : Launch} {ar
   | refl =>
     unfold Grid.start at h
     simp only [bind, Except.bind] at h
+    split at h
+    · cases h
     split at h
     · cases h
     split at h

@@ -68,7 +68,7 @@ What each one checks:
   does not, in any case: no
   suffix of such a name that names nothing now (`warpBound`, `Sem.warpBound`) may begin a
   backticked span in a docstring or comment of our Lean files or in a tracked Markdown file, except
-  `docs/BUGS.md`, `docs/found-bugs.md` and `docs/UPSTREAM.md`, which record deleted names.
+  `docs/found-bugs.md` and `docs/UPSTREAM.md`, which record deleted names.
 - `scripts/corpus.py check`: every corpus file matches its manifest row (sha256, line count, kernel
   name, arch, PTX version), and no `.ll` file under `tests/corpus/` is missing from the manifest.
   A row whose source lacks the Apache-LLVM line is flagged `UNLICENSED`, and a row whose `lib` is
@@ -171,9 +171,9 @@ python3 scripts/deps.py check /tmp/facts.json
 - Floats go only through FloatLib, never a local IEEE model. Specifications come from TorchLean; if
   TorchLean lacks one, record the gap instead of defining a second copy.
 - A new trusted item goes in `docs/TRUST.md` with its reason, and needs an anchor line in
-  `scripts/trust.tsv` (`all`, `module`, `modules` or `const`). A new issue goes in `docs/BUGS.md`.
+  `scripts/trust.tsv` (`all`, `module`, `modules` or `const`). A new issue goes in the bugs ledger, which is kept outside the repository.
 - A headline theorem nothing else uses goes in `scripts/targets.txt`, in the section for its module.
-- Findings about Mojo or other upstream projects go in `docs/BUGS.md`, marked upstream, with a
+- Findings about Mojo or other upstream projects go in the bugs ledger, marked upstream, with a
   reproducer under `tests/upstream/`.
 - Commit messages describe the change in plain words.
 
@@ -212,9 +212,9 @@ request, and rebuilds and publishes it from main when the pull request is merged
 - `tests/corpus/`: the kernel files, `MANIFEST.tsv` and `REFUSALS.tsv`; `NOTICE`, the sources the
   kernel files are compiled from, with their commit and license, and `LICENSE-APACHE-LLVM`, the
   license of those sources. `tests/stale/`: a changed file that the digest check must refuse.
-  `tests/upstream/`: Mojo reproducers for the upstream rows of `docs/BUGS.md`.
+  `tests/upstream/`: Mojo reproducers for the upstream rows of the bugs ledger.
 - `scripts/`: `Audit.lean`, `cited.py`, `corpus.py`, `deps.py`, `counts.tsv` and `counts.py`,
   `targets.txt`, `trust.tsv`, and `SymBench.lean` (the block checker's benchmark).
-- `docs/`: `TRUST.md` (the trusted base), `BUGS.md` (issues), `new-kernel.md`, `kernel.md`,
+- `docs/`: `TRUST.md` (the trusted base), `new-kernel.md`, `kernel.md`,
   `automation.md` and `tactics.md` (how to prove a kernel), `proofs/` (the proofs written out),
   `DEPENDENCIES.md` and `deps/` (generated).

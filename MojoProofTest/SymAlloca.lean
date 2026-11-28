@@ -1,4 +1,5 @@
 import MojoProofTest.SymLane
+import MojoProofTest.KernelCmd
 import MojoProof.Sym.SchedWait
 
 /-!
@@ -56,6 +57,20 @@ entry frame's (`EndsAt`). Tests:
   (`path_dead`); `step`, iterated from the launch (`runTo`), reaches `.done` with the same
   `pathEnd` (`path_steps`). On the memory that has a block at number 2 already, the premises
   fail (`path_used`).
+* `alloc2`, `pathA`, `pathA_sound`: `mojo_kernel … alloca` on `allocP 2` and on the two-block
+  alloca path's `pathP`. The command summarizes with the flag (`summarizeAt true`), checks the
+  paths by `coversEntryAt true false` (`alloc2.covers`, `pathA.covers`; `pathA_paths`: its paths
+  are `pathPs`) and gives `Kernel.sound_of_chainsAt (alloca := true)` for that one program
+  (`pathA.sound_of`, whose thread predicates are of the memory with the `alloca` blocks dead,
+  `Mem.Dead true`; with `mojo_kernel.share`, `pathA.sound`'s arguments, none, are
+  MojoProofTest/KernelCmd.lean's `cntk.args`). `pathA_sound` meets its premises at a launch of
+  one thread (`Launch.one`, no arguments) from the empty memory, with blocks 2 and 6 dead at the
+  end. The twins: the command without the flag refuses both kernels at their first block
+  (`alloc2_twin`, `pathA_twin`).
+* `gemvA`, `gemvAC`: on gemv_kernel with the flag, with or without `contract`, the command stops
+  at `%6`'s statement 17, the first `shfl.sync.idx`, and its message names the statement; the
+  twin `gemvA_twin` without the flag stops at the block. Under the flag the `loop` clause, `map2`
+  and `mat` are refused (`pathL`, `pathM2`, `pathM`).
 
 The kernels are hand-built and gemv_kernel's block is one; `pathK` is the parse of its text.
 `Block.soundAt` and `Block.sound_alloca` cover every program; the path tests are of one
@@ -487,5 +502,184 @@ theorem path_used (Q : Mem → Prop) : ¬ RetWith false
       pathPs := by
     decide +kernel
   exact fun hR => h hR.1
+
+-- `alloc2`: `mojo_kernel` with the flag `alloca` on `allocP 2`, the one-block kernel of two
+-- `alloca`s (`%1 = alloca i32`, `%2 = alloca i32, i64 2`) and `ret void`: its block is in the
+-- fragment with the flag (`summarizeAt true`), its one path is checked by `coversEntryAt true
+-- false`, and `alloc2.sound_of` is `Kernel.sound_of_chainsAt (alloca := true)` at `alloc2.covers`
+-- and no sequence of loops. Each theorem covers that one program.
+mojo_kernel alloc2 := (allocP 2) (allocK 2) alloca
+
+/--
+info: MojoProofTest.SymAlloca.alloc2.covers : coversEntryAt true false (allocP 2) (allocK 2)
+  alloc2.paths = true
+-/
+#guard_msgs (whitespace := lax) in
+#check alloc2.covers
+
+/-- error: mojo_kernel: block %entry (block 0 of (allocK 2)) is outside the checker's fragment -/
+#guard_msgs in
+mojo_kernel alloc2_twin := (allocP 2) (allocK 2)
+
+-- `pathA`: `mojo_kernel` with the flag `alloca` on `pathP`, the parsed kernel of the two-block
+-- alloca path (`pathText`): its paths are the one path 0, 2 of `pathS` (`pathA_paths`), checked by
+-- `coversEntryAt true false`; `pathA.sound_of` is `Kernel.sound_of_chainsAt (alloca := true)`
+-- with each thread's predicate after the `ret` of the memory with its `alloca` blocks dead
+-- (`Mem.Dead true`), and `pathA.sound` its form with the command's arguments (none: with
+-- `mojo_kernel.share`, the list is MojoProofTest/KernelCmd.lean's `cntk.args`). Each theorem
+-- covers that one program.
+set_option mojo_kernel.share true in
+mojo_kernel pathA := pathP pathK alloca
+
+/--
+info: MojoProofTest.SymAlloca.pathA.covers : coversEntryAt true false pathP pathK pathA.paths =
+  true
+-/
+#guard_msgs (whitespace := lax) in
+#check pathA.covers
+
+/--
+info: @pathA.sound_of : ∀ {L : Launch} {args : List Val} {m : Mem} {adm : (ℕ → ℕ) → (ℕ → ℕ → ℕ) →
+Prop} {β : Type} {obs : Mem → Option β} {R : β → Prop}, Mem.BytesIn m.Known m → (∀ (ch : ℕ → ℕ)
+(oracle : ℕ → ℕ → ℕ), adm ch oracle → ∃ g c, Grid.start pathP pathK L args m ch oracle = Except.ok
+(g, c)) → (∀ (m m' : Mem), m.blocks = m'.blocks → obs m = obs m') → (∀ (ch : ℕ → ℕ) (oracle : ℕ → ℕ
+→ ℕ) (g : Grid) (c : ℕ → Ctx), adm ch oracle → Grid.start pathP pathK L args m ch oracle =
+Except.ok (g, c) → ∃ P, P 0 g.mem ∧ (∀ k < g.threads.size, ∀ (m' : Mem) (f : Frame), P k m' →
+(Grid.thread g k).frames = [f] → (∃ ps ∈ pathA.paths, RetWith false (Valuation.entry (c k) 0 m' f)
+(Mem.Dead true m' (P (k + 1))) ps) ∨ ∃ C ∈ [], RetLsWith false (Mem.Dead true m' (P (k + 1)))
+C.loops (Valuation.entry (c k) 0 m' f) C.l C.ds C.S C.E) ∧ ∀ (m' : Mem), P g.threads.size m' → ((∀
+(a : Access), Event.access a ∈ m'.trace → a.who.thread < volume L.grid * volume L.block ∧ a.who.cta
+= a.who.thread / volume L.block) → Trace.Shaped m'.trace.reverse → GPUProof.racy sig (List.map
+(Event.toCore L) m'.trace).reverse = false) ∧ GPUProof.kept sig (List.map (Event.toCore L)
+m'.trace).reverse = true ∧ ∃ y, obs m' = some y ∧ R y) → Kernel.Sound pathP pathK L args m adm obs
+R
+-/
+#guard_msgs (whitespace := lax) in
+#check @pathA.sound_of
+
+/-- The command's paths of `pathP` are `pathPs`, the path 0, 2 with the summaries of `pathS` (the
+kernel decides it). -/
+theorem pathA_paths : pathA.paths = [pathPs] := by decide +kernel
+
+/-- error: mojo_kernel: block %0 (block 0 of pathK) is outside the checker's fragment -/
+#guard_msgs in
+mojo_kernel pathA_twin := pathP pathK
+
+/-- The admission of `pathA_sound`'s launch: the skeleton choices `pathCh` and every payload
+choice 0. -/
+def pathAdm (ch : Nat → Nat) (oracle : Nat → Nat → Nat) : Prop :=
+  ch = pathCh ∧ oracle = fun _ _ => 0
+
+/-- The observation of `pathA_sound`: the live flags of the blocks at numbers 2 and 6, the
+`alloca` blocks of thread 0 (`path_dead`). It reads only the blocks. -/
+def pathObs (m : Mem) : Option (Option Bool × Option Bool) :=
+  some ((m.blocks 2).map (·.live), (m.blocks 6).map (·.live))
+
+/-- The per-thread predicate of `pathA_sound`, indexed by the number of threads done: before
+thread 0, the launch's memory `pathMem`; after it, an empty trace and blocks 2 and 6 dead. -/
+def pathInv : Nat → Mem → Prop
+  | 0, m => m = pathMem
+  | _ + 1, m => m.trace = [] ∧ ∀ b ∈ [2, 6], (m.blocks b).map (·.live) = some false
+
+/-- `pathK`'s launch of one thread from the empty memory, at the choices `pathCh` and every payload
+choice 0, starts (`path_start`). -/
+theorem path_start_ok :
+    ∃ g c, Grid.start pathP pathK Launch.one [] {} pathCh (fun _ _ => 0) = .ok (g, c) := by
+  have e := path_start
+  revert e
+  generalize Grid.start pathP pathK Launch.one [] {} pathCh (fun _ _ => 0) = r
+  rcases r with _ | ⟨g, c⟩
+  · intro e; cases e
+  · exact fun _ => ⟨g, c, rfl⟩
+
+/-- Every start of that launch has the grid of the one thread `pathT` on `pathMem` and thread 0's
+context `pathCtx` (`path_start`). -/
+theorem path_start_eq {g : Grid} {c : Nat → Ctx}
+    (h : Grid.start pathP pathK Launch.one [] {} pathCh (fun _ _ => 0) = .ok (g, c)) :
+    g = ⟨#[.run pathT], pathMem⟩ ∧ c 0 = pathCtx := by
+  have e := path_start
+  rw [h] at e
+  exact Prod.mk.inj (Except.ok.inj e)
+
+/-- **An instance of `pathA.sound_of`'s premises**: `pathK` launched as one thread (`Launch.one`,
+no arguments) from the empty memory, at the choices `pathCh` and every payload choice 0
+(`pathAdm`), with the predicate `pathInv`: the thread's path is `pathPs` (`path_retWith`), and
+for every list of blocks its run adds (`Mem.Adds`, so 2 and 6) the memory with them dead has an
+empty trace and blocks 2 and 6 dead (`Mem.Dead true`); the empty trace has no race and keeps the
+promise, and the observation `pathObs` is `(some false, some false)`. So the kernel is sound with
+both `alloca` blocks dead at the end. -/
+theorem pathA_sound : Kernel.Sound pathP pathK Launch.one [] {} pathAdm pathObs
+    (· = (some false, some false)) := by
+  refine pathA.sound_of (fun _ _ _ _ _ h => by cases h) ?_
+    (fun _ _ h => by simp only [pathObs, h]) ?_
+  · rintro _ _ ⟨rfl, rfl⟩
+    exact path_start_ok
+  · rintro _ _ g c ⟨rfl, rfl⟩ h
+    obtain ⟨rfl, hc⟩ := path_start_eq h
+    refine ⟨pathInv, rfl, fun k hk m' f hm hf => ?_, fun m' hm => ?_⟩
+    · obtain rfl : k = 0 := Nat.lt_one_iff.1 hk
+      obtain rfl : m' = pathMem := hm
+      obtain rfl : pathF = f := (List.cons.inj hf).1
+      obtain ⟨hW, hret, _, hme, rfl⟩ := path_retWith
+      refine .inl ⟨pathPs, pathA_paths ▸ List.mem_singleton_self _, ?_⟩
+      rw [hc]
+      refine ⟨hW, hret, _, hme, fun bs hA => ⟨?_, fun b hb => ?_⟩⟩
+      · rw [Mem.foldl_setLive_trace]
+        exact List.isEmpty_iff.1 path_retMem.2.1
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
+        rcases hb with rfl | rfl <;> rw [hA.foldl_setLive] <;> decide +kernel
+    · obtain ⟨ht, h2⟩ : pathInv 1 m' := hm
+      simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq] at h2
+      rw [ht]
+      exact ⟨fun _ _ => rfl, rfl, _, rfl, by rw [h2.1, h2.2]⟩
+
+/--
+error: mojo_kernel: block %6 (block 0 of gemv.fn_0) is outside the checker's fragment with alloca
+  at statement 17: %24 = call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 %22, i32 0, i32 31)
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kernel gemvA := gemv.prog gemv.fn_0
+  scalars mm := a3, nn := a4, kk := a5
+  pointers y := a0, a := a1, x := a2
+  alloca
+
+/--
+error: mojo_kernel: block %6 (block 0 of gemv.fn_0) is outside the checker's fragment with alloca
+  and fmul contract at statement 17: %24 = call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 %22,
+  i32 0, i32 31)
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kernel gemvAC := gemv.prog gemv.fn_0
+  scalars mm := a3, nn := a4, kk := a5
+  pointers y := a0, a := a1, x := a2
+  contract alloca
+
+/-- error: mojo_kernel: block %6 (block 0 of gemv.fn_0) is outside the checker's fragment -/
+#guard_msgs in
+mojo_kernel gemvA_twin := gemv.prog gemv.fn_0
+  scalars mm := a3, nn := a4, kk := a5
+  pointers y := a0, a := a1, x := a2
+
+/--
+error: mojo_kernel: alloca is not combined with loop; the loop clause's obligations and
+  pathL.sound_loop are with the flag off (pathK)
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kernel pathL := pathP pathK alloca
+  loop 1 := (fun _ => True) (fun _ _ _ => True) (fun _ => 0) (fun _ _ => True)
+
+/--
+error: mojo_kernel: alloca is not combined with map2; Kernel.sound_map2 is the theorem with the
+  flag off (pathK)
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kernel pathM2 := pathP pathK map2 (Ty.int 32) (fun _ => 0) (fun _ _ _ _ _ => none) alloca
+
+/--
+error: mojo_kernel: mat is not combined with alloca; Kernel.sound_mat is the theorem with the flag
+  off (pathK)
+-/
+#guard_msgs (whitespace := lax) in
+mojo_kernel pathM := pathP pathK alloca mat [] []
 
 end MojoProofTest.SymAlloca

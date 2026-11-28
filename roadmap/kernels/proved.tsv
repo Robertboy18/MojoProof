@@ -1,0 +1,11 @@
+# Modular's kernel functions with a kernel theorem at the last commit of each day (scripts/kernel_universe.py
+# history): roadmap/llvm-ir/programs.tsv, kinds.tsv and tests/corpus/MANIFEST.tsv of that commit, read by
+# proved_functions against the current universe.tsv (`correct` theorems only, not the spec-free `safe`
+# ones), as path:name separated by `;`. The days before programs.tsv was first written are not listed.
+date	functions
+2026-11-23	max/examples/gpu-functions/vector_addition.mojo:vector_addition;max/kernels/src/linalg/matmul/gpu/__init__.mojo:matmul_kernel_naive
+2026-11-24	max/examples/gpu-functions/vector_addition.mojo:vector_addition;max/kernels/src/linalg/matmul/gpu/__init__.mojo:matmul_kernel_naive
+2026-11-25	max/examples/gpu-functions/vector_addition.mojo:vector_addition;max/kernels/src/linalg/matmul/gpu/__init__.mojo:matmul_kernel_naive
+2026-11-26	max/examples/gpu-functions/vector_addition.mojo:vector_addition;max/kernels/src/linalg/matmul/gpu/__init__.mojo:matmul_kernel_naive
+2026-11-27	max/examples/gpu-functions/vector_addition.mojo:vector_addition;max/kernels/src/linalg/matmul/gpu/__init__.mojo:matmul_kernel_naive
+2026-11-28	max/examples/gpu-functions/vector_addition.mojo:vector_addition;max/kernels/src/linalg/gemv.mojo:gemv_kernel;max/kernels/src/linalg/gemv.mojo:gevm_kernel;max/kernels/src/linalg/matmul/gpu/__init__.mojo:matmul_kernel_naive

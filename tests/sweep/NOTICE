@@ -1,0 +1,50 @@
+MojoProof sweep corpus: notice for the files in tests/sweep/
+
+The files named *.nvptx.ll here are LLVM IR that the Mojo compiler (1.3.0.dev2026112705) wrote
+for the GPU kernels of the Mojo test sources listed below (`mojo build --emit llvm
+--target-accelerator <arch>`), kept by scripts/safe_sweep.py (docs/proofs/safe.md): of each
+(kernel library function, test file) pair, the smallest per-kernel file. Each file's row in
+MANIFEST.tsv (this directory's own manifest, which scripts/corpus.py reads with
+`--root tests/sweep`) records its Mojo version, its flags, its source and the source's sha256,
+and the library file that defines the kernel's function. The IR is compiled from those sources
+and from the library code they import.
+
+The sources come from the Modular repository, https://github.com/modular/modular, at commit
+483e1348c8adab60d67d2857272cefc706d7e217 (483e1348). Their headers read:
+
+    Copyright (c) 2026, Modular Inc. All rights reserved.
+
+    Licensed under the Apache License v2.0 with LLVM Exceptions:
+    https://llvm.org/LICENSE.txt
+
+The license text is in LICENSE-APACHE-LLVM, next to this file. The library code that these
+kernels import comes from the same commit: the Mojo standard library and the MAX kernel library
+(max/kernels/src), under the same license.
+
+Sources at 483e1348 and the number of files kept from each (all in 483e1348/):
+
+    max/kernels/test/gpu/basics/test_wmma.mojo                                 1
+    max/kernels/test/gpu/examples/test_double_buffer_gemm.mojo                 1
+    max/kernels/test/gpu/layout/test_ldmatrix.mojo                             1
+    max/kernels/test/gpu/layout/test_stmatrix.mojo                             1
+    max/kernels/test/gpu/layout/test_vendor_blas_matmul.mojo                   1
+    max/kernels/test/gpu/linalg/test_gemv.mojo                                 7
+    max/kernels/test/gpu/linalg/test_gemv2.mojo                                22
+    max/kernels/test/gpu/linalg/test_gemv_bf16.mojo                            2
+    max/kernels/test/gpu/linalg/test_gemv_multirow.mojo                        4
+    max/kernels/test/gpu/linalg/test_gemv_pdl_race.mojo                        1
+    max/kernels/test/gpu/linalg/test_matmul_custom.mojo                        15
+    max/kernels/test/gpu/linalg/test_mma_ws_partial_sm100.mojo                 1
+    max/kernels/test/gpu/linalg/test_multistage_gemm_epilogue_owners.mojo      1
+    max/kernels/test/gpu/linalg/test_multistage_gemm_kernel.mojo               4
+    max/kernels/test/gpu/linalg/test_router_gate_mixed_gemv_sm100.mojo         7
+    max/kernels/test/gpu/linalg/test_stream_k.mojo                             1
+    max/kernels/test/gpu/linalg/test_vendor_blas.mojo                          1
+    max/kernels/test/gpu/memory/test_ldmatrix_fp8.mojo                         1
+    max/kernels/test/gpu/nn/test_conv_gpu.mojo                                 13
+    max/kernels/test/gpu/nn/test_mha_fallback_pdl_wait.mojo                    3
+    max/kernels/test/gpu/nn/test_mha_splitk_reduce.mojo                        1
+    max/kernels/test/gpu/quantization/test_multistage_gemm_q.mojo              2
+
+MANIFEST.tsv and this file belong to MojoProof. They are under the Apache License 2.0 in the
+repository's top-level LICENSE.

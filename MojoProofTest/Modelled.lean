@@ -38,6 +38,12 @@ def kernel (body : String) (decls : String := "") : String :=
 /-- The kernel calling the intrinsic declared by `decl` with the call line `call`. -/
 def calls (call decl : String) : String := kernel ("  " ++ call ++ "\n") (decl ++ "\n")
 
+/-- `calls` in a kernel whose `"target-cpu"` is `sm_90`, which the grid dependency control
+instructions require (`Func.griddepBad`). -/
+def callsAt90 (call decl : String) : String :=
+  "define ptx_kernel void @k(ptr addrspace(1) %0) #9 {\n  " ++ call ++ "\n  ret void\n}\n" ++
+    decl ++ "\nattributes #9 = { \"target-cpu\"=\"sm_90\" }\n"
+
 /-- One binary operation `op` on two `i32` constants. -/
 def bin (op : String) : String := kernel s!"  %a = {op} i32 7, 2\n"
 
@@ -133,9 +139,10 @@ def cases : List (String × String) :=
       "declare <2 x i32> @llvm.vector.extract.v2i32.v4i32(<4 x i32>, i64 immarg)"),
    ("Intrinsic.stepvector", calls "%a = call <2 x i64> @llvm.stepvector.v2i64()"
       "declare <2 x i64> @llvm.stepvector.v2i64()"),
-   ("Intrinsic.griddepWait", calls "call void @llvm.nvvm.griddepcontrol.wait()"
+   ("Intrinsic.griddepWait", callsAt90 "call void @llvm.nvvm.griddepcontrol.wait()"
       "declare void @llvm.nvvm.griddepcontrol.wait()"),
-   ("Intrinsic.griddepLaunch", calls "call void @llvm.nvvm.griddepcontrol.launch.dependents()"
+   ("Intrinsic.griddepLaunch", callsAt90
+      "call void @llvm.nvvm.griddepcontrol.launch.dependents()"
       "declare void @llvm.nvvm.griddepcontrol.launch.dependents()"),
    ("Intrinsic.cpAsyncCommit", calls "call void @llvm.nvvm.cp.async.commit.group()"
       "declare void @llvm.nvvm.cp.async.commit.group()"),

@@ -7,7 +7,8 @@ its underflow allowance (in binary32, `u = 2 ^ -24` and `η = 2 ^ -150`). `Mixed
 FloatLib's `|x - x₀| ≤ r · |x₀| + a` with `r, a ≥ 0`.
 
 The statements are about words and the operations a kernel performs on them, as functions of the
-inputs. That a grid run of a kernel performs those operations is not proved here. The shape is
+inputs. That a grid run of a kernel performs those operations is not proved here, except for one
+thread of the block kernel's last loop (below, and [layernorm.md](layernorm.md)). The shape is
 the one of docs/proofs/float-reductions.md: for every input meeting the premises, if the computed
 word is finite, it is within the stated bound of the exact real value, TorchLean's where TorchLean
 has one.
@@ -168,5 +169,10 @@ program.
   IEEE's (FloatLib's finite-only and FNUZ formats): statement 10 takes IEEE formats with at most
   binary32's widths. The casts of the weight, the offset and the output are bounded as roundings,
   also where they are exact (a widening).
-- That a grid run of a kernel computes these words.
+- That a grid run of a kernel computes these words. One thread's run of the last loop of layer
+  norm's block kernel (tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll,
+  :718-722) stores, at each of its floats, a value that, when finite, is `lnOut fused` of its row
+  entries and the registers `%460`, `%464`, with `fused` fixed by the context's oracle
+  (MojoProofTest/LnRun.lean's `lnVal_finite`, and `lnVal_error` for this page's bound). The words
+  of those two registers are not run, so `lnorm` is not reached.
 - Any bound when the output is infinite or a NaN.

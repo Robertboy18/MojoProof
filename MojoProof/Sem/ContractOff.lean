@@ -139,11 +139,46 @@ theorem _root_.MojoProof.LLVM.Func.contractOff_uses (fn : Func) :
     Function.comp_def, Stmt.contractOff, Inst.contractOff_operands]
   rfl
 
+/-- The flags removed keep the registers an `alloca` of a function defines. -/
+theorem _root_.MojoProof.LLVM.Func.contractOff_allocaReg (fn : Func) (r : Nat) :
+    fn.contractOff.allocaReg r = fn.allocaReg r := by
+  simp only [Func.allocaReg, Func.contractOff, LLVM.Block.contractOff, List.any_map,
+    List.all_map, Function.comp_def, Stmt.contractOff, List.toList_toArray]
+  congr 2 <;> (congr 1; funext b; congr 1; funext st; congr 1; cases st.inst <;> rfl)
+
+/-- The flags removed keep a function's lifetime markers' check. -/
+theorem _root_.MojoProof.LLVM.Func.contractOff_lifetimeOk (fn : Func) :
+    fn.contractOff.lifetimeOk = fn.lifetimeOk := by
+  unfold Func.lifetimeOk
+  simp only [Func.contractOff_allocaReg]
+  simp only [Func.contractOff, LLVM.Block.contractOff, List.all_map, Function.comp_def,
+    Stmt.contractOff]
+  congr 1; funext b; congr 1; funext st
+  cases st.inst <;> rfl
+
+/-- The flags removed keep a function's calls of the grid dependency control intrinsics. -/
+theorem _root_.MojoProof.LLVM.Func.contractOff_callsGriddep (fn : Func) :
+    fn.contractOff.callsGriddep = fn.callsGriddep := by
+  unfold Func.callsGriddep
+  simp only [Func.contractOff, LLVM.Block.contractOff, List.any_map, Function.comp_def,
+    Stmt.contractOff]
+  congr 1; funext b; congr 1; funext st
+  cases st.inst <;> rfl
+
+/-- The flags removed keep the functions of a launch that call the grid dependency control
+intrinsics below `sm_90`. -/
+theorem _root_.MojoProof.LLVM.Func.contractOff_griddepBad (md : LLVM.Module) (fn : Func) :
+    fn.contractOff.griddepBad md.contractOff = fn.griddepBad md := by
+  unfold Func.griddepBad LLVM.Module.cpu
+  simp only [LLVM.Module.contractOff, List.toList_toArray, ← List.map_cons, List.filterMap_map,
+    Function.comp_def, Func.contractOff_callsGriddep]
+  rfl
+
 /-- The flags removed keep a function's check. -/
 theorem _root_.MojoProof.LLVM.Func.contractOff_check (md : LLVM.Module) (fn : Func)
     (i : Option Intrinsic) : fn.contractOff.check md.contractOff i = fn.check md i := by
   unfold Func.check
-  rw [Func.contractOff_isEmpty]
+  rw [Func.contractOff_isEmpty, Func.contractOff_lifetimeOk, Func.contractOff_griddepBad]
   rfl
 
 /-- The flags removed keep a statement's metadata check. -/
@@ -1204,6 +1239,7 @@ theorem Grid.start_contractOff {P Q : Program} (hQ : Q.module = P.module.contrac
   unfold Grid.start
   dsimp only
   rw [hQ, hl, Func.contractOff_check]
+  refine Except.Rel.bind_eq _ fun _ _ => ?_
   refine Except.Rel.bind_eq _ fun _ _ => ?_
   refine Except.Rel.bind_eq _ fun _ _ => ?_
   refine Except.Rel.bind (R := Eq) (.refl (fun _ => rfl) _) fun x y hxy => ?_

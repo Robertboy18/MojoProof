@@ -18,7 +18,7 @@ LangRef's section on `addrspacecast` (the quote is the first sentence of its ove
 
 ## Corpus
 
-32 of the 116 corpus files use it (282 uses); `corpus` lists the first 5 in path order.
+32 of the 127 corpus files use it (282 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

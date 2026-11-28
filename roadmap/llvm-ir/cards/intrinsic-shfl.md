@@ -5,7 +5,7 @@ kind: construct
 ref: PTX ISA 9.5 #data-movement-and-conversion-instructions-shfl-sync
 quote: "Register data shuffle within threads of a warp."
 lean: MojoProof.LLVM.Intrinsic.ofDecl, MojoProof.LLVM.Intrinsic, MojoProof.Sem.intrinsic, MojoProof.Sem.shflSource
-corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs1024_c4d21970.nvptx.ll, tests/corpus/layernorm/ln_rowwise_block_t0_r1_ax0_w1_bs128_847b1b53.nvptx.ll
+corpus: tests/corpus/gemv/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gemv_dev2026112705/gemv_f32_gemv_kernel_float32_float32_float32_False_b79a852b.nvptx.ll, tests/corpus/gemv_dev2026112705/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll, tests/corpus/gevm_t512/gevm_f32_t512_gevm_kernel_float32_float32_float32_512_7a789db0.nvptx.ll
 tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
@@ -18,7 +18,7 @@ PTX ISA's section on the instruction NVPTX lowers it to (the quote is the sectio
 
 ## Corpus
 
-62 of the 116 corpus files use it (978 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.shfl.sync.bfly.i32`, `llvm.nvvm.shfl.sync.idx.i32`.
+66 of the 127 corpus files use it (1050 uses); `corpus` lists the first 5 in path order. The members called: `llvm.nvvm.shfl.sync.bfly.i32`, `llvm.nvvm.shfl.sync.idx.i32`.
 
 ## Out of scope
 

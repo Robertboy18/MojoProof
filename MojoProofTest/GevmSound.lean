@@ -2,7 +2,7 @@ import MojoProofTest.GevmWarp1
 import MojoProofTest.GevmTrace
 import MojoProofTest.GevmSpec
 import MojoProofTest.GemvThread
-import MojoProofTest.Theorem0
+import MojoProof.Sym.SigKernel
 
 /-!
 # gevm_kernel is sound against the vector-matrix spec, through Theorem 0
@@ -20,11 +20,11 @@ that such a trace makes the done grid not bad, then the kernel's soundness by Th
   115); the promise of `!invariant.load` kept (`kept_of_split`): the invariant loads read the
   vector and the matrix, which no access writes;
 * `starts`: gevm_kernel's launch starts on a memory closed for its arguments
-  (`Sym.Grid.start_ok`: its one global is an internal shared array, `undef`);
+  (`Grid.start_of_check`, its check by `kernel_rfl`), with a twin whose check fails;
 * `kernel_sound`: gevm_kernel is sound at `sig` (`GPUProof.Kernel.Sound`) against
   `GPUProof.Spec.vecMat` (`GevmSpec.ColsRule`) for the admission "every block of threads' shared
   array fits below `2 ^ 32`": `grid`, `grid_bad`, `GevmSpec.cols_holds` and Theorem 0 at `sig`
-  (`MojoProofTest.Theorem0.sound_sig`); `gevm_torchLean`: the same against TorchLean's `.vecMat`
+  (`kernel_sound_sig`); `gevm_torchLean`: the same against TorchLean's `.vecMat`
   (`GevmSpec.TorchCols`, by `GevmSpec.torchCols_of_rule`);
 * `mem_closed`: the memory `GemvThread.mem B A` (gemv_kernel's caller memory at `M = K = 32`) is
   closed for gevm_kernel's arguments;
@@ -46,13 +46,12 @@ grid, giving grid `g₀` and contexts `c`, every `N = 32 · L.grid .x`, memory `
 buffer `p0` and read-only buffers `bA` and `bB` (`Mem.Buffer`), shared arrays `sb g` of the blocks
 of threads `g` of the grid (`g₀.mem.ctaOf`) and done grid `z` reachable from `g₀` every access of
 whose trace is one of `GevmWarp1.Acc` at its phase (`GevmWarp1.grid`'s last conjunct): `z` is not
-bad at `sig`. By `Grid.Done.bad_iff`: no race by `racy_cells` (cell map `tpose 32`, injective on
-`[0, 1024)` by `tpose_tpose`, cell width 4, `ofSh := z.mem.ctaOf`, the output's tiling
-`GevmTrace.warpTiles p0 N`; the threads of each shared array by `Grid.start_reach_cta`), and the
-promise kept by `kept_of_split` (the invariant accesses read `bA` or `bB`, the writes are to a
-shared array or `p0`). The blocks' owners at `z` are their owners at `g₀`
-(`Grid.start_reach_above`): `p0`, `bA` and `bB` are no block of threads' (owner `.all`), `sb g`
-is `g`'s. -/
+bad at `sig`. An instance of `Grid.not_bad_cells` (MojoProof/Sym/SigKernel.lean): cell map
+`tpose 32`, injective on `[0, 1024)` by `tpose_tpose`, cell width 4, the output's tiling
+`GevmTrace.warpTiles p0 N`, and the promise kept because the invariant accesses read `bA` or `bB`
+and the writes are to a shared array or `p0`. The blocks' owners at `z` are their owners at `g₀`:
+`p0`, `bA` and `bB` are no block of threads' (`Grid.start_reach_buffer`), `sb g` is `g`'s
+(`Grid.start_reach_ctaOf`), and `bA`, `bB` are not `p0` (`Mem.Buffer.ne`). -/
 theorem grid_bad {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
     {oracle : Nat → Nat → Nat} {g₀ : Grid} {c : Nat → Ctx}
     (h : Grid.start gevm.prog gevm.fn_0 L args m ch oracle = .ok (g₀, c)) (hL : L.Valid)
@@ -66,46 +65,22 @@ theorem grid_bad {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
   have hv1 : volume L.block = 1024 := (Launch.tpose_env hL hx 0).1
   have hvg : volume L.grid = L.grid .x := by simp only [volume, hgy, hgz, Nat.mul_one]
   have hwho : ∀ n, (c n).who = ⟨n, n / volume L.block⟩ := fun n => (Grid.start_ctx h n).2.1
-  have hall : ∀ {q s : Nat} {w : Bool}, m.Buffer q s 4 w → z.mem.ctaOf q = none := by
-    intro q s w hq
-    obtain ⟨x, hx, -, -, ho, -⟩ := hq
-    obtain ⟨x', hx', ho', -⟩ := Grid.start_reach_above h hz (Grid.start_blocks h hx)
-      fun w' e => by rw [ho] at e; cases e
-    simp only [Mem.ctaOf, hx', Option.bind_some, ho', ho]
-  have hcta : ∀ g < L.grid .x, z.mem.ctaOf (sb g) = some g := by
-    intro g hg
-    have e := hsb g hg
-    unfold Mem.ctaOf at e ⊢
-    cases hq : g₀.mem.blocks (sb g) with
-    | none => rw [hq] at e; cases e
-    | some x =>
-      rw [hq] at e
-      obtain ⟨x', hx', ho', -⟩ := Grid.start_reach_above h hz hq fun w hw => by
-        simp [hw] at e
-      rw [hx', Option.bind_some, ho']
-      exact e
-  have hne : ∀ {q s : Nat}, m.Buffer q s 4 false → q ≠ p0 := by
-    intro q s hq e
-    obtain ⟨x, hx, -, -, -, h1, -⟩ := hq
-    obtain ⟨y, hy, -, -, -, h2, -⟩ := hb0
-    rw [e, hy] at hx
-    cases hx
-    rw [h1] at h2
-    cases h2
+  have hall : ∀ {q s : Nat} {w : Bool}, m.Buffer q s 4 w → z.mem.ctaOf q = none :=
+    Grid.start_reach_buffer h hz
+  have hcta : ∀ g < L.grid .x, z.mem.ctaOf (sb g) = some g := fun g hg =>
+    Grid.start_reach_ctaOf h hz (hsb g hg)
+  have hne : ∀ {q s : Nat}, m.Buffer q s 4 false → q ≠ p0 := fun hq => Mem.Buffer.ne hq hb0
   have hsne : ∀ {q s : Nat} {w : Bool}, m.Buffer q s 4 w → ∀ g < L.grid .x, sb g ≠ q :=
     fun hq g hg e => by
       have := hall hq
       rw [← e, hcta g hg] at this
       cases this
-  have hf := Grid.start_reach_fits h hz
-  have hr := racy_cells hf.trace hf.2 hL.volume_pos (w := 4) (cell := tpose 32)
+  refine Grid.not_bad_cells h hz hd hL.volume_pos (w := 4) (cell := tpose 32)
+    (G := warpTiles p0 N)
     (fun i hi j hj e => by
       rw [hv1] at hi hj
       rw [← tpose_tpose (n := 32) hi, e, tpose_tpose (n := 32) hj])
-    (ofSh := z.mem.ctaOf) (G := warpTiles p0 N)
     (fun x hxt β e => by
-      obtain ⟨hk, hb⟩ := Grid.start_reach_cta h hz _ (mem_phases hxt)
-      refine ⟨hb β e, by rw [← hk, hb β e], ?_⟩
       rcases hP x hxt with ⟨-, hq | hq⟩ | ⟨n, -, h0, ha⟩ | ⟨h0, hw, -⟩ | ⟨n, -, -, ha⟩
       · rw [hq, hall hbA] at e
         cases e
@@ -136,67 +111,55 @@ theorem grid_bad {L : Launch} {args : List Val} {m : Mem} {ch : Nat → Nat}
         rw [warpTiles, ite_eq_left_of_eq_true _ _ (eq_true rfl), Option.some.injEq] at ht
         subst ht
         simp only [warpTile, id, hwho]
-        split_ifs <;> omega)
-  intro hb
-  have hsh := (Grid.start_reach_shaped h hz 0).1
-  have hI : ∀ a e, Event.access a ∈ z.mem.trace → Event.access e ∈ z.mem.trace →
-      a.invariant = true → e.write = true → a.ptr.block ≠ e.ptr.block := by
-    intro a e ha he hi hw hab
-    obtain ⟨pa, hpa⟩ := phases_mem ha
-    obtain ⟨pe, hpe⟩ := phases_mem he
-    have hA : a.ptr.block = bA ∨ a.ptr.block = bB := by
-      rcases hP _ hpa with ⟨-, hq⟩ | ⟨n, -, -, rfl⟩ | ⟨-, -, hi', -⟩ | ⟨n, -, -, rfl⟩
-      · exact hq
-      · simp at hi
-      · rw [hi] at hi'
-        cases hi'
-      · simp at hi
-    rcases hP _ hpe with ⟨hw', -⟩ | ⟨n, hn, -, rfl⟩ | ⟨-, hw', -, -⟩ | ⟨n, -, -, rfl⟩
-    · rw [hw] at hw'
-      cases hw'
-    · rcases hA with hq | hq <;> rw [hab] at hq
-      · exact hsne hbA _ hn hq
-      · exact hsne hbB _ hn hq
-    · rw [hw] at hw'
-      cases hw'
-    · rcases hA with hq | hq <;> rw [hab] at hq
-      · exact hne hbA hq.symm
-      · exact hne hbB hq.symm
-  rw [Grid.Done.bad_iff (Grid.start_reach_size h hz).le hd, hr,
-    kept_of_split (W := fun b => ∃ e, Event.access e ∈ z.mem.trace ∧
-      e.write = true ∧ e.ptr.block = b) (fun a ha hi ⟨e, he, hw, hb⟩ => hI a e ha he hi hw hb.symm)
-      fun e he hw => by
-        obtain ⟨e', he', hw', hp⟩ := hsh.writes he hw
-        exact ⟨e', he', hw', by rw [hp]⟩] at hb
-  simp at hb
+        split_ifs <;> omega) ?_
+  intro a e ha he hi hw hab
+  obtain ⟨pa, hpa⟩ := phases_mem ha
+  obtain ⟨pe, hpe⟩ := phases_mem he
+  have hA : a.ptr.block = bA ∨ a.ptr.block = bB := by
+    rcases hP _ hpa with ⟨-, hq⟩ | ⟨n, -, -, rfl⟩ | ⟨-, -, hi', -⟩ | ⟨n, -, -, rfl⟩
+    · exact hq
+    · simp at hi
+    · rw [hi] at hi'
+      cases hi'
+    · simp at hi
+  rcases hP _ hpe with ⟨hw', -⟩ | ⟨n, hn, -, rfl⟩ | ⟨-, hw', -, -⟩ | ⟨n, -, -, rfl⟩
+  · rw [hw] at hw'
+    cases hw'
+  · rcases hA with hq | hq <;> rw [hab] at hq
+    · exact hsne hbA _ hn hq
+    · exact hsne hbB _ hn hq
+  · rw [hw] at hw'
+    cases hw'
+  · rcases hA with hq | hq <;> rw [hab] at hq
+    · exact hne hbA hq.symm
+    · exact hne hbB hq.symm
 
-unseal Array.anyM.loop in
-/-- **gevm_kernel's launch starts** (test of gevm_kernel, the corpus file, for every launch,
-argument values `p0`, `bA`, `bB` (pointers at offset 0), a word `%3`, `N` and `K`, memory closed
-for them, address choice and oracle): `Grid.start` gives a grid and contexts
-(`Sym.Grid.start_ok`: gevm's one global is an internal shared array in address space 3 with an
-`undef` initializer, it has no `byval` parameter, and its `noundef` parameters accept the
-arguments, by evaluation). -/
+/-- **gevm_kernel's launch starts** (test of gevm_kernel, the corpus file, for every launch of at
+most 1024 threads a block, the kernel's `"nvvm.maxntid"="1024"`, argument values `p0`, `bA`,
+`bB` (pointers at offset 0), a word `%3`, `N` and `K`, memory closed for them, address choice and
+oracle): `Grid.start` gives a grid and contexts. An instance of `Grid.start_of_check`
+(MojoProof/Sym/SigKernel.lean), its `startCheck` by `kernel_rfl` and its launch check by
+`Func.checkLaunch_maxntid`. -/
 theorem starts (L : Launch) {m : Mem} {p0 bA bB N K : Nat} {x3 : BitVec 32}
+    (hL : volume L.block ≤ 1024)
     (hC : m.Closed [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bB, 0⟩, .bits 32 x3,
       .bits 32 (BitVec.ofNat 32 N), .bits 32 (BitVec.ofNat 32 K)]) (ch : Nat → Nat)
     (oracle : Nat → Nat → Nat) :
     ∃ g c, Grid.start gevm.prog gevm.fn_0 L [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bB, 0⟩, .bits 32 x3,
-      .bits 32 (BitVec.ofNat 32 N), .bits 32 (BitVec.ofNat 32 K)] m ch oracle = .ok (g, c) := by
-  refine Sym.Grid.start_ok ch oracle rfl hC ?_ (fun p v hpv t ht => ?_)
-    (fun p v hpv hnb m' => ?_) (of_decide_eq_true (by kernel_rfl))
-  · intro g hg
-    obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hg
-    obtain rfl : i = 0 := by
-      have : gevm.prog.module.globals.toList.length = 1 := rfl
-      omega
-    exact ⟨rfl, .inr rfl⟩
-  all_goals
-    simp only [gevm.fn_0, List.zip_cons_cons, List.zip_nil_right, List.mem_cons, Prod.mk.injEq,
-      List.not_mem_nil] at hpv
-    repeat' rcases hpv with ⟨hp, hv⟩ | hpv
-  all_goals subst_vars
-  all_goals first | exact ⟨_, rfl⟩ | simp at ht
+      .bits 32 (BitVec.ofNat 32 N), .bits 32 (BitVec.ofNat 32 K)] m ch oracle = .ok (g, c) :=
+  Grid.start_of_check ch oracle hC
+    (Func.checkLaunch_maxntid (v := "1024") (x := 1024) (y := 1) (z := 1) rfl (by kernel_rfl)
+      (by kernel_rfl) (by kernel_rfl) (by kernel_rfl) (by simpa using hL)) (by kernel_rfl)
+
+/-- Twin of `starts`' launch check: a block of 1025 threads is beyond gevm_kernel's
+`"nvvm.maxntid"="1024"`, so the check fails. -/
+example : (gevm.fn_0.checkLaunch gevm.prog.module (fun | .x => 1025 | _ => 1) 6).isOk =
+    false := by kernel_rfl
+
+/-- Twin of `starts`' check: with a poison output pointer the check fails (`Param.takes`: an
+argument must be defined). -/
+example : startCheck gevm.prog gevm.fn_0 [.poison, .ptr ⟨1, 0⟩, .ptr ⟨2, 0⟩, .bits 32 0,
+    .bits 32 0, .bits 32 0] = false := by kernel_rfl
 
 /-- **gevm_kernel is sound against the vector-matrix spec**: gevm_kernel (one program, the corpus
 file gemv/gemv_f32_gevm_kernel_float32_float32_float32_1024_1308aaae.nvptx.ll), for every valid
@@ -211,10 +174,10 @@ shared array below `2 ^ 32`" (`ch (Nat.pair (β + 2) 2) · 4 mod 2 ^ 32 + 4096 �
 array's 4096 bytes at its address in address space 3, whose pointers have 32 bits), the output
 columns (`GevmSpec.colsObs`) and the rule of
 `GPUProof.Spec.vecMat (GPUProof.vecMatLaneGrade 32 5 fun m => ⌈m / 32⌉)` (`GevmSpec.ColsRule`).
-At each admitted choice the launch starts (`starts`), `GevmWarp1.grid` gives a run to a done
-grid with its columns and its trace's accesses, `grid_bad` that the grid is not bad, and Theorem
-0 at `sig` (`MojoProofTest.Theorem0.sound_sig`, by `GPUProof.Sound.of_one_run`) the soundness;
-the columns' relation by `GevmSpec.cols_holds`. -/
+An instance of `kernel_sound_sig` (MojoProof/Sym/SigKernel.lean, Theorem 0 at `sig` by
+`GPUProof.Sound.of_one_run`): at each admitted choice the launch starts (`starts`),
+`GevmWarp1.grid` gives a run to a done grid with its columns and its trace's accesses, `grid_bad`
+that the grid is not bad, and `GevmSpec.cols_holds` the columns' relation. -/
 theorem kernel_sound {L : Launch} {m : Mem} {N K p0 bA bB : Nat} {x3 : BitVec 32}
     (hC : m.Closed [.ptr ⟨p0, 0⟩, .ptr ⟨bA, 0⟩, .ptr ⟨bB, 0⟩, .bits 32 x3,
       .bits 32 (BitVec.ofNat 32 N), .bits 32 (BitVec.ofNat 32 K)])
@@ -237,17 +200,14 @@ theorem kernel_sound {L : Launch} {m : Mem} {N K p0 bA bB : Nat} {x3 : BitVec 32
       .ptr ⟨bB, 0⟩, .bits 32 x3, .bits 32 (BitVec.ofNat 32 N), .bits 32 (BitVec.ofNat 32 K)] m
       (fun ω => ∀ β < L.grid .x, ω.1 (Nat.pair (β + 2) 2) * 4 % 2 ^ 32 + 4096 ≤ 2 ^ 32)
       (fun b => colsObs L N p0 { blocks := b }) (ColsRule K bits I) := by
-  rintro ⟨ch, oracle⟩ hch
-  obtain ⟨g, c, hs⟩ := starts L hC ch oracle
+  refine kernel_sound_sig hC.bytesIn
+    (fun m₁ m₂ hb => congrArg some (funext fun _ => Mem.load_of_block (congrFun hb _) _ _ _ _))
+    (fun ω _ => starts L hL.threads hC ω.1 ω.2) fun ω g c hch hs => ?_
   obtain ⟨z, ⟨_, hp⟩, hd, hcols, sb, hsb, hP⟩ := grid hs hL hx hgy hgz rfl hN hK hK32 hKN hNg hb0
     hf0 hbA hbB hfA hfB hA hB hch
-  refine ⟨(g, L, c), ?_, MojoProofTest.Theorem0.sound_sig hs hC.bytesIn
-    (fun m₁ m₂ hb => congrArg some (funext fun _ => Mem.load_of_block (congrFun hb _) _ _ _ _))
-    hp hd (grid_bad hs hL hx hgy hgz hNg hb0 hbA hbB (GPUProof.Path.exists_iff.1 ⟨_, hp⟩) hd hsb
-      hP) rfl (cols_holds bits hIA hIB hcols)⟩
-  show (Grid.start gevm.prog gevm.fn_0 L _ m ch oracle).map _ = _
-  rw [hs]
-  rfl
+  have hz := GPUProof.Path.exists_iff.1 ⟨_, hp⟩
+  exact ⟨z, hz, hd, grid_bad hs hL hx hgy hgz hNg hb0 hbA hbB hz hd hsb hP, _, rfl,
+    cols_holds bits hIA hIB hcols⟩
 
 /-- **gevm_kernel is sound against TorchLean's vector-matrix contraction**: gevm_kernel (one
 program, the corpus file), for every launch, sizes, argument values, caller's memory, vector,

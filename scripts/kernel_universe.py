@@ -19,7 +19,8 @@ Usage:
   python3 scripts/kernel_universe.py universe <modular-clone> <commit>
       writes roadmap/kernels/universe.tsv; reads the clone with `git show` and `git grep` only.
   python3 scripts/kernel_universe.py history
-      writes roadmap/kernels/levels.tsv (every change of a kernel card's level in roadmap/status.yaml's history) and
+      writes roadmap/kernels/proved.tsv (Modular's kernel functions with a kernel theorem at the last commit of each
+      day, `proved_functions`, from the day roadmap/llvm-ir/programs.tsv was first written) and
       roadmap/kernels/theorems.tsv (the `theorem` and `lemma` declarations in the source of the library and of
       MojoProofTest at the last commit of each day, `count_theorems`), from this repository's history. It needs the
       full history, so it runs on a clone, not in CI; the site adds the current tree's numbers when it is built, so
@@ -158,25 +159,86 @@ def theorems_at(here: str, rev: str, cache: dict[str, int]) -> tuple[int, int]:
     return lib, sum(cache[h] for h, f in blobs if f.split('/')[0] in TESTS)
 
 
+MANIFEST_COLS = ['path', 'sha256', 'lines', 'kernel', 'arch', 'ptx', 'mojo', 'flags', 'source', 'source_sha256', 'lib']
+
+
+def universe_rows(text: str) -> list[dict]:
+    """The rows of universe.tsv's text: name, area, path, line, launch sites."""
+    rows = []
+    for line in text.split('\n'):
+        if line and not line.startswith('#') and not line.startswith('name\t'):
+            n, a, p, ln, s = line.split('\t')
+            rows.append({'name': n, 'area': a, 'path': p, 'line': int(ln), 'sites': int(s)})
+    return rows
+
+
+def theorem_kinds(kinds: str) -> dict[str | tuple[str, str], str]:
+    """Each theorem's kind from the text of roadmap/llvm-ir/kinds.tsv (scripts/L3Programs.lean): `correct` for a kernel
+    theorem whose relation is not the trivial one, `safe` for the spec-free statement (no fault, race free, one
+    observation for every schedule, with no claim about the output's values). A row `theorem, program, kind` gives the
+    kind of that theorem's soundness term about that program, keyed `(theorem, program)`; a row `theorem, kind` (the
+    table before it had a program column) the theorem's, keyed by its name."""
+    out: dict[str | tuple[str, str], str] = {}
+    for line in kinds.split('\n'):
+        cols = line.split('\t')
+        if cols[0] == 'theorem' or line.startswith('#'):
+            continue
+        if len(cols) == 3:
+            out[(cols[0], cols[1])] = cols[2]
+        elif len(cols) == 2:
+            out[cols[0]] = cols[1]
+    return out
+
+
+def proved_functions(programs: str, manifest: str, rows: list[dict], kinds: str | None = None,
+                     kind: str = 'correct') -> dict[tuple[str, str], list[tuple[str, str, str]]]:
+    """Modular's kernel functions with a kernel theorem of kind `kind`, from the texts of roadmap/llvm-ir/programs.tsv
+    (each theorem, the corpus file its program is bound to by its term, and the digest; scripts/L3Programs.lean), of
+    roadmap/llvm-ir/kinds.tsv (`theorem_kinds`; None reads this tree's, so the coverage page counts only `correct`
+    theorems as proved) and of tests/corpus/MANIFEST.tsv. A theorem kinds.tsv does not list is `correct` (the days
+    before kinds.tsv, when programs.tsv listed only spec theorems). A file's manifest row names the Mojo file that
+    defines its kernel (`lib`, or `source` when `lib` is `-`) and the kernel's name, which is the function's name
+    followed by the specialization the compiler appends; the function is the one of `rows` (universe rows) defined in
+    that file whose name is the kernel's name or the longest one that starts it followed by `_`. A file compiled from a
+    source written for MojoProof (`repo:`), a row whose digest is not the file's manifest row's, and a program bound to
+    no file count for no function. Returns {(path, name): [(theorem, file, sha256), ...]}."""
+    if kinds is None:
+        f = ROOT / 'roadmap' / 'llvm-ir' / 'kinds.tsv'
+        kinds = f.read_text() if f.is_file() else ''
+    kind_of = theorem_kinds(kinds)
+    man = {}
+    for line in manifest.split('\n'):
+        cols = line.split('\t')
+        if len(cols) == len(MANIFEST_COLS) and cols[0] != 'path':
+            man['tests/corpus/' + cols[0]] = dict(zip(MANIFEST_COLS, cols))
+    names_in = collections.defaultdict(list)
+    for r in rows:
+        names_in[r['path']].append(r['name'])
+    out: dict[tuple[str, str], list[tuple[str, str, str]]] = collections.defaultdict(list)
+    for line in programs.split('\n'):
+        cols = line.split('\t')
+        if len(cols) != 5 or cols[0] == 'theorem' or cols[3] == '-':
+            continue
+        thm, _, prog, f, digest = cols
+        m = man.get(f)
+        if kind_of.get((thm, prog), kind_of.get(thm, 'correct')) != kind:
+            continue
+        if not m or m['sha256'] != digest:
+            continue
+        for src in (m['lib'].split(',') if m['lib'] != '-' else [m['source']]):
+            if src.startswith('repo:'):
+                continue
+            src = re.sub(r'^modular/modular@[0-9a-f]+:', '', src)
+            hit = [n for n in names_in.get(src, []) if m['kernel'] == n or m['kernel'].startswith(n + '_')]
+            if hit:
+                out[(src, max(hit, key=len))].append((thm, f, digest))
+                break
+    return dict(out)
+
+
 def history() -> int:
     here = str(ROOT)
     ref = 'main'   # the development line; a side branch's own first-parent history would skip main's days
-    log = git(here, 'log', '--reverse', '--format=%H %cI', ref, '--', 'roadmap/status.yaml').split()
-    prev: dict[str, str] = {}
-    out = ['# Changes of the kernel cards\' levels, from the history of roadmap/status.yaml '
-           '(scripts/kernel_universe.py history).', 'time\tcard\tlevel']
-    for h, t in zip(log[::2], log[1::2]):
-        area, cid, cur = None, None, {}
-        for line in git(here, 'show', f'{h}:roadmap/status.yaml').split('\n'):
-            if m := re.match(r'  - id: (\S+)', line):
-                area = m.group(1)
-            elif m := re.match(r'      - id: (\S+)', line):
-                cid = m.group(1)
-            elif (m := re.match(r'        level: (\S+)', line)) and area == 'kernels':
-                cur[cid] = m.group(1)
-        out += [f'{t[:16]}Z\t{k}\t{v}' for k, v in sorted(cur.items()) if prev.get(k) != v]
-        prev = cur
-    (ROOT / 'roadmap' / 'kernels' / 'levels.tsv').write_text('\n'.join(out) + '\n')
     days: dict[str, str] = {}
     for line in git(here, 'log', '--first-parent', '--reverse', '--format=%H %cs', ref).split('\n'):
         if line:
@@ -192,7 +254,25 @@ def history() -> int:
         lib, tests = theorems_at(here, h, cache)
         rows.append(f'{d}\t{lib}\t{tests}')
     (ROOT / 'roadmap' / 'kernels' / 'theorems.tsv').write_text('\n'.join(rows) + '\n')
-    print(f'{len(out) - 2} level changes, {len(rows) - 5} days')
+    uni = universe_rows(OUT.read_text())
+    proved = ['# Modular\'s kernel functions with a kernel theorem at the last commit of each day (scripts/kernel_universe.py',
+              '# history): roadmap/llvm-ir/programs.tsv, kinds.tsv and tests/corpus/MANIFEST.tsv of that commit, read by',
+              '# proved_functions against the current universe.tsv (`correct` theorems only, not the spec-free `safe`',
+              '# ones), as path:name separated by `;`. The days before programs.tsv was first written are not listed.',
+              'date\tfunctions']
+    for d, h in sorted(days.items()):
+        try:
+            programs = git(here, 'show', f'{h}:roadmap/llvm-ir/programs.tsv')
+            manifest = git(here, 'show', f'{h}:tests/corpus/MANIFEST.tsv')
+        except subprocess.CalledProcessError:
+            continue
+        try:
+            kinds = git(here, 'show', f'{h}:roadmap/llvm-ir/kinds.tsv')
+        except subprocess.CalledProcessError:
+            kinds = ''
+        proved.append(f'{d}\t' + ';'.join(sorted(f'{p}:{n}' for p, n in proved_functions(programs, manifest, uni, kinds))))
+    (ROOT / 'roadmap' / 'kernels' / 'proved.tsv').write_text('\n'.join(proved) + '\n')
+    print(f'{len(rows) - 5} days of theorem counts, {len(proved) - 5} days of proved functions')
     return 0
 
 
@@ -223,9 +303,36 @@ THEOREM_CASES = [
 ]
 
 
+# A universe, a manifest, a programs table and a kinds table, and what `proved_functions` reads in them: the naive
+# kernel's file is bound to `matmul_kernel_naive` (not the shorter `matmul_kernel`, which also starts its name); the
+# file compiled from a repo: source, the theorem with no file, and the row whose digest is not its file's count for no
+# function; the `safe` theorem counts only for `kind='safe'`, and `V.sound`, which kinds.tsv does not list, is `correct`.
+PROVED_ROWS = [{'name': 'matmul_kernel', 'path': 'a/mm.mojo'}, {'name': 'matmul_kernel_naive', 'path': 'a/mm.mojo'},
+               {'name': 'vector_addition', 'path': 'ex/vadd.mojo'}]
+PROVED_MANIFEST = '\n'.join([
+    '\t'.join(MANIFEST_COLS),
+    'mm/naive_f32.ll\t11\t9\tmatmul_kernel_naive_float32_True_16_abc\tsm_80\tptx81\tv\t-\tmodular/modular@bbc1:a/t.mojo\tx\ta/mm.mojo',
+    'vadd/v.ll\t22\t9\tvector_addition_6A6A_def\tsm_80\tptx81\tv\t-\tmodular/modular@bbc1:ex/vadd.mojo\tx\t-',
+    'own/w.ll\t33\t9\tvector_addition_6A6A_ghi\tsm_80\tptx81\tv\t-\trepo:own/w.mojo\tx\t-'])
+PROVED_PROGRAMS = '\n'.join([
+    'theorem\tmodule\tprogram\tfile\tsha256',
+    'N.correct\tN\tN.prog\ttests/corpus/mm/naive_f32.ll\t11',
+    'V.sound\tV\tV.prog\ttests/corpus/vadd/v.ll\t22',
+    'V.stale\tV\tV.prog\ttests/corpus/vadd/v.ll\t99',
+    'W.sound\tW\tW.prog\ttests/corpus/own/w.ll\t33',
+    'X.sound\tX\tX.term\t-\t-',
+    'V.safe\tV\tV.prog\ttests/corpus/vadd/v.ll\t22'])
+PROVED_KINDS = 'theorem\tkind\nN.correct\tcorrect\nV.safe\tsafe\n'
+# The same in the table's three-column form: one row per theorem and program.
+PROVED_KINDS3 = 'theorem\tprogram\tkind\nN.correct\tN.prog\tcorrect\nV.safe\tV.prog\tsafe\n'
+PROVED_WANT = {('a/mm.mojo', 'matmul_kernel_naive'): [('N.correct', 'tests/corpus/mm/naive_f32.ll', '11')],
+               ('ex/vadd.mojo', 'vector_addition'): [('V.sound', 'tests/corpus/vadd/v.ll', '22')]}
+SAFE_WANT = {('ex/vadd.mojo', 'vector_addition'): [('V.safe', 'tests/corpus/vadd/v.ll', '22')]}
+
+
 def self_test() -> int:
-    """Check `launches` on `LAUNCH_CASES`, `resolve_in` on an alias, and `count_theorems` on `THEOREM_CASES`; print
-    each failure and return 1 if there is one."""
+    """Check `launches` on `LAUNCH_CASES`, `resolve_in` on an alias, `count_theorems` on `THEOREM_CASES` and
+    `proved_functions` on `PROVED_*` at both kinds; print each failure and return 1 if there is one."""
     bad = []
     for text, want, other in LAUNCH_CASES:
         if (got := launches(text)) != (want, other):
@@ -236,7 +343,12 @@ def self_test() -> int:
     for text, want in THEOREM_CASES:
         if (got := count_theorems(text)) != want:
             bad.append(f'count_theorems({text!r}) is {got}, not {want}')
-    print('\n'.join(bad) or f'self-test: {len(LAUNCH_CASES) + 1 + len(THEOREM_CASES)} cases pass')
+    for kinds in (PROVED_KINDS, PROVED_KINDS3):
+        for kind, want in (('correct', PROVED_WANT), ('safe', SAFE_WANT)):
+            if (got := proved_functions(PROVED_PROGRAMS, PROVED_MANIFEST, PROVED_ROWS, kinds, kind)) != want:
+                bad.append(f'proved_functions on PROVED_* at {kind} ({kinds.split(chr(10))[0]}) is {got!r}, '
+                           f'not {want!r}')
+    print('\n'.join(bad) or f'self-test: {len(LAUNCH_CASES) + 3 + len(THEOREM_CASES)} cases pass')
     return 1 if bad else 0
 
 

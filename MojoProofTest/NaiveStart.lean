@@ -31,14 +31,14 @@ bytes a row, read-only), the address choice 0 and every oracle `ω`.
   one more thread: threads 0 and 2 (row 0, in bounds) by `NaiveIn.runIn` and
   `Runs.of_chainsWith`, threads 1 and 3 (row 1, out of bounds) by `NaiveOut.runOut` and
   `Runs.of_retWith`; `first12` is the start and thread 0 from the start's memory itself.
-* `obs12`: `Kernel.Sound.exists_obs` at `NaiveKernel.sound12`, at every address choice and
-  oracle: a complete run (`Kernel.Obs`) whose observation meets the relation. `cells12`:
-  `NaiveKernel.read12` at that observation, its premise discharged, so the cells of row 0 of `C`
-  are those of a run that exists.
+* `obs12`: `L12` is valid, and `Kernel.Sound.exists_obs` at `NaiveKernel.sound12`, at every address
+  choice and oracle: a complete run (`Kernel.Obs`) whose observation meets the relation. `cells12`:
+  `NaiveKernel.read12` at that observation, its premise discharged, so the cells of row 0 of `C` are
+  those of a run that exists.
 * `soundOff12`, `obsOff12`: `NaiveOff.correct` at this launch and memory with `K = 768`, its
   `Mat.Pre` by `NaiveKernel.pre12`: the corpus kernel compiled with contraction off is sound for
   `Elem.Out` of `naive`'s bytes at the rows `neverFuse (ω k)`, and has such an observation at
-  every address choice and oracle family (`Kernel.Sound.exists_obs`).
+  every address choice and oracle family (`Kernel.Sound.exists_obs`), at a valid launch.
 
 The theorems about a start take its equation `hs` and evaluate the start itself, not the grid:
 `of_start` moves a fact about the start's value to `g` and `c`, so the kernel reduces
@@ -228,17 +228,18 @@ theorem first12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
   rw [trace12 A B ω hs] at ha
   cases ha
 
-/-- **`sound12` has an observation**, for every `A`, `B`, oracle `ω` and address choice `ch`: some
-complete run of `naive` on `L12` at `mem12 A B` under `ch` and `ω` (`Kernel.Obs`) observes blocks
-`Bk`, and `Bk` meets `Elem.Out` of the naive bytes (`Kernel.Sound.exists_obs` at `sound12`).
-For this program, launch and memory only. -/
+/-- **`sound12` has an observation**, for every `A`, `B`, oracle `ω` and address choice `ch`:
+`L12` is a valid launch (`launch2_valid`), and some complete run of `naive` on `L12` at
+`mem12 A B` under `ch` and `ω` (`Kernel.Obs`) observes blocks `Bk`, and `Bk` meets `Elem.Out` of
+the naive bytes (`Kernel.Sound.exists_obs` at `sound12`). For this program, launch and memory
+only. -/
 theorem obs12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
     (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) (ch : Nat → Nat) :
-    ∃ Bk, Kernel.Obs naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 768) (mem12 A B)
+    L12.Valid ∧ ∃ Bk, Kernel.Obs naive.prog naive.fn_0 L12 (Mat.args z 1 2 3 1 2 768) (mem12 A B)
       (fun m => some m.blocks) ch ω Bk ∧
       Elem.Out (mem12 A B) 1 (cell L12) (bytes ω L12 768 A B) (volume L12.grid * volume L12.block)
         Bk :=
-  (sound12 A B ω).exists_obs rfl
+  ⟨launch2_valid (by decide), (sound12 A B ω).exists_obs rfl⟩
 
 /-- **`read12` at an observation that exists**, for every `A`, `B`, oracle `ω` and address choice
 `ch`: some complete run of `naive` on `L12` at `mem12 A B` observes blocks `Bk` (`obs12`) whose
@@ -254,7 +255,7 @@ theorem cells12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
         naive.prog.layout.encode (.fp .float) (.ofFloat .float
           (dotLoop true (o (ω k)) (Model.zero _ false) (pairs A B 0 ⟨c, hc⟩ 768))) =
           some (y.read (c * 4) 4) :=
-  let ⟨Bk, hB, _⟩ := obs12 A B ω ch
+  let ⟨Bk, hB, _⟩ := (obs12 A B ω ch).2
   ⟨Bk, hB, read12 A B ω hB⟩
 
 /-- **`NaiveOff.correct` at a concrete memory with two threads in bounds**: for every `A`
@@ -272,17 +273,17 @@ theorem soundOff12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
   NaiveOff.correct NaiveOut.validZ ⟨rfl, rfl⟩ (pre12 A B le_rfl)
 
 /-- **`soundOff12` has an observation**, for every `A`, `B`, oracle family `ω` and address choice
-`ch`: some complete run of the corpus kernel compiled with contraction off on `L12` at
-`mem12 A B` under `ch` and `ω` (`Kernel.Obs`) observes blocks `Bk`, and `Bk` meets `Elem.Out` of
-`naive`'s bytes at the rows `neverFuse (ω k)` (`Kernel.Sound.exists_obs` at `soundOff12`). For
-this program, launch and memory only. -/
+`ch`: `L12` is a valid launch (`launch2_valid`), and some complete run of the corpus kernel
+compiled with contraction off on `L12` at `mem12 A B` under `ch` and `ω` (`Kernel.Obs`) observes
+blocks `Bk`, and `Bk` meets `Elem.Out` of `naive`'s bytes at the rows `neverFuse (ω k)`
+(`Kernel.Sound.exists_obs` at `soundOff12`). For this program, launch and memory only. -/
 theorem obsOff12 (A : Tensor (Model FloatTy.float.fmt) [1, 768])
     (B : Tensor (Model FloatTy.float.fmt) [2, 768]) (ω : Nat → Nat → Nat) (ch : Nat → Nat) :
-    ∃ Bk, Kernel.Obs g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.prog
+    L12.Valid ∧ ∃ Bk, Kernel.Obs g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.prog
       g_matmul_kernel_naive_float32_float32_float32_True_16_16826c8c.fn_0 L12
       (Mat.args z 1 2 3 1 2 768) (mem12 A B) (fun m => some m.blocks) ch ω Bk ∧
       Elem.Out (mem12 A B) 1 (cell L12) (bytes (fun k => neverFuse (ω k)) L12 768 A B)
         (volume L12.grid * volume L12.block) Bk :=
-  (soundOff12 A B ω).exists_obs rfl
+  ⟨launch2_valid (by decide), (soundOff12 A B ω).exists_obs rfl⟩
 
 end MojoProofTest.NaiveStart

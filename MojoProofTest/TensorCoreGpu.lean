@@ -25,15 +25,15 @@ does not, the kind-0 words would differ. For the launch of kind 5, the alignment
 prints `D - 1` and the exact sum less 1 in units of `2^-23` at each distance of the probe's
 small products.
 
-It refuses a dump with a malformed case or a number of launches other than `<launches>`
-(exit code 2). Exit code 0 when every D word is `fuseAcc`'s, every kind-0 word is `bfAcc`'s
-and the GPU wrote every D word (none is the initial word); 1 otherwise.
+It refuses a dump with a malformed case, with no launch, or with a number of launches other than
+`<launches>` (`launches`, exit code 2). Exit code 0 when every D word is `fuseAcc`'s, every
+kind-0 word is `bfAcc`'s and the GPU wrote every D word (none is the initial word); 1 otherwise.
 
 `lake env lean --run tests/gpu/ldmatrix/Compare.lean <dump> <launches>` runs `ldmMain` on the
 dump of tests/gpu/ldmatrix/test_ldmatrix.mojo: for each launch, the 512 16-bit words of shared
 memory, the row addresses the 32 lanes gave, and the registers of `ldmatrix.x4` and of
 `ldmatrix.x4.trans` from those addresses. It compares each 16-bit element with `ldmatrix 4`,
-exit code 0 when all agree and the GPU wrote every register.
+exit code 0 when all agree and the GPU wrote every register; it refuses a dump as `main` does.
 
 Conformance tests of one instruction each on these inputs and one GPU, not proofs.
 -/
@@ -249,19 +249,28 @@ def compare (cs : List Case) : IO UInt32 := do
     differ from bfAcc's, {far} finite words outside dotBound, {left} words unwritten"
   return if off = 0 ∧ bad = 0 ∧ left = 0 then 0 else 1
 
-/-- The entry point: `<dump> <launches>`; refuses a malformed dump or another number of
-launches (exit code 2), else `compare`. -/
+/-- The launches that `parse` reads from the dump's lines `ls`, checked before any comparison:
+an error when there is none (an empty dump, even with `expected` 0: a comparison of no launch
+checks nothing) and when their number is not `expected`, the number of launches the run made.
+The check of the three comparisons (`main`, `ldmMain`, `AsyncGpu.main`), as `dumpCases` is
+`MojoProofTest/Gpu.lean`'s. -/
+def launches {α : Type} (parse : List String → Except String (List α)) (ls : List String)
+    (expected : Nat) : Except String (List α) := do
+  let cs ← parse ls
+  if cs.isEmpty then throw "no launch in the dump"
+  unless cs.length = expected do throw s!"{cs.length} launches, expected {expected}"
+  return cs
+
+/-- The entry point: `<dump> <launches>`; refuses a malformed dump, one with no launch or another
+number of launches (`launches`, exit code 2), else `compare`. -/
 def main (args : List String) : IO UInt32 := do
   let [path, count] := args
     | IO.eprintln "usage: lean --run tests/gpu/mma/Compare.lean <dump> <launches>"; return 2
   let some expected := count.toNat?
     | IO.eprintln s!"not a number of launches: {count}"; return 2
-  match parse (← IO.FS.lines path).toList with
+  match launches parse (← IO.FS.lines path).toList expected with
   | .error e => IO.eprintln s!"{path}: {e}"; return 2
-  | .ok cs =>
-    if cs.length ≠ expected then
-      IO.eprintln s!"{path}: {cs.length} launches, expected {expected}"; return 2
-    compare cs
+  | .ok cs => compare cs
 
 /-- A made-up case of kind 0: every A and B element 1 (`0x3f80`) and C 0, so each D word is 16
 (`0x41800000`) on the GPU; and the same with D word 0 of lane 0 changed to 15. -/
@@ -284,6 +293,13 @@ private def ones (d0 : Nat) : Case :=
   (parse ["seed 1", "case 0", "a" ++ z 128, "b" ++ z 64, "c" ++ z 128, "init 7",
     "d" ++ z 128]).toOption.map List.length == some 1
 #guard (parse ["case 0", "a 0", "b", "c", "init 7", "d"]).toOption.isNone
+-- `launches` takes a dump of one case at 1 launch, and refuses it at 2, and an empty dump (or one
+-- of `seed` lines only) even at 0 launches.
+#guard let z (n : Nat) := String.join (List.replicate n " 0")
+  let one := ["seed 1", "case 0", "a" ++ z 128, "b" ++ z 64, "c" ++ z 128, "init 7", "d" ++ z 128]
+  (launches parse one 1).toOption.map List.length == some 1 &&
+    (launches parse one 2).toOption.isNone && (launches parse [] 0).toOption.isNone &&
+    (launches parse ["seed 1"] 0).toOption.isNone
 
 /-! ## `ldmatrix.x4` -/
 
@@ -358,19 +374,16 @@ def ldmCompare (cs : List LdmCase) : IO UInt32 := do
   IO.println s!"{cs.length} launches: {bad} elements differ, {left} words unwritten"
   return if bad = 0 ∧ left = 0 then 0 else 1
 
-/-- The entry point of the `ldmatrix` comparison: `<dump> <launches>`; refuses a malformed dump
-or another number of launches (exit code 2), else `ldmCompare`. -/
+/-- The entry point of the `ldmatrix` comparison: `<dump> <launches>`; refuses a malformed dump,
+one with no launch or another number of launches (`launches`, exit code 2), else `ldmCompare`. -/
 def ldmMain (args : List String) : IO UInt32 := do
   let [path, count] := args
     | IO.eprintln "usage: lean --run tests/gpu/ldmatrix/Compare.lean <dump> <launches>"; return 2
   let some expected := count.toNat?
     | IO.eprintln s!"not a number of launches: {count}"; return 2
-  match parseLdm (← IO.FS.lines path).toList with
+  match launches parseLdm (← IO.FS.lines path).toList expected with
   | .error e => IO.eprintln s!"{path}: {e}"; return 2
-  | .ok cs =>
-    if cs.length ≠ expected then
-      IO.eprintln s!"{path}: {cs.length} launches, expected {expected}"; return 2
-    ldmCompare cs
+  | .ok cs => ldmCompare cs
 
 /-- A made-up case: shared word `i` is `i`, row `R` at byte `16 R` (the rows in order), and the
 registers the ISA's layout gives: lane `l`'s register `r` holds elements `2 (l % 4)` and

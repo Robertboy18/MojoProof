@@ -105,6 +105,19 @@ level's theorems have follows their names. The script reads these from the theor
 statements in their source (for a name `mojo_kernel` adds, from its statement template), not
 from the card.
 
+An `L3:` or `L4:` name counts when it is a theorem that states that level about a run of a
+program bound to one of the card's corpus files (roadmap/llvm-ir/evidence.tsv: one row per
+program the statement mentions, its `levels` column the levels stated of that program's runs
+only, which scripts/L3Programs.lean writes by its level rule `runLevels`; the row must be bound
+to one of the card's files with that file's digest). Read by head constants and argument
+shapes, without unfolding: a run is a `Kernel.Obs` premise or conclusion; its outputs are its
+observed value and the variables an equation `x = e`, `some x = e` or `encode (ofFloat x) = e`
+ties to that run alone; an `L3` statement equates an output with a TorchLean operation's value,
+and an `L4` one equates an output's real value with a real rounded (`Model.roundAt`) or bounds
+`|s - t|` with one run's outputs on one side only. A statement that concludes soundness, or
+mentions the program only in a premise, has neither level for it. The rule does not read which
+tensors the TorchLean value is of, nor how large a bound is.
+
 Construct cards:
 
 | Level | Meaning | Evidence |

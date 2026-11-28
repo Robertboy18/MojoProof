@@ -18,7 +18,7 @@ LangRef's section on `or` (the quote is the first sentence of its overview). The
 
 ## Corpus
 
-47 of the 116 corpus files use it (161 uses); `corpus` lists the first 5 in path order.
+49 of the 127 corpus files use it (169 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

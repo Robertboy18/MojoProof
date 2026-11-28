@@ -5,7 +5,7 @@ kind: construct
 ref: LLVM LangRef 24.0.0git #fpext-to-instruction
 quote: "The ‘fpext’ extends a floating-point value to a larger floating-point value."
 lean: MojoProof.LLVM.Parser.inst, MojoProof.LLVM.Inst, MojoProof.Sem.exec, MojoProof.Sem.floatCast, MojoProof.Sym.exec_cast
-corpus: tests/corpus/mgemm/g_matmul_kernel_naive_bfloat16_bfloat16_bfloat16_True_16_ba3789d9.nvptx.ll, tests/corpus/mgemm/g_matmul_kernel_naive_float32_bfloat16_bfloat16_True_16_940bf0f4.nvptx.ll, tests/corpus/mgemm/g_matmul_kernel_naive_float8_e4m3fn_bfloat16_bfloat16_True_16_c159_00c8af24fa246f7a.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_False_623520a3.nvptx.ll, tests/corpus/mgemm/g_matmul_split_k_reduce_r2_w16_b256_gs_False_fee81d5b.nvptx.ll
+corpus: tests/corpus/ln16/test_layer_norm_rowwise_block_t0_r1_ax0_w1_bs128_c5012e49.nvptx.ll, tests/corpus/lnbf16/test_layer_norm_rowwise_block_t0_r1_ax0_w1_bs128_ae9cae70.nvptx.ll, tests/corpus/mgemm/g_matmul_kernel_naive_bfloat16_bfloat16_bfloat16_True_16_ba3789d9.nvptx.ll, tests/corpus/mgemm/g_matmul_kernel_naive_float32_bfloat16_bfloat16_True_16_940bf0f4.nvptx.ll, tests/corpus/mgemm/g_matmul_kernel_naive_float8_e4m3fn_bfloat16_bfloat16_True_16_c159_00c8af24fa246f7a.nvptx.ll
 tests: MojoProofTest.Rule, MojoProofTest.Corpus, MojoProofTest.Modelled
 upstream:
 level: L1
@@ -18,7 +18,7 @@ LangRef's section on `fpext` (the quote is the first sentence of its overview). 
 
 ## Corpus
 
-9 of the 116 corpus files use it (158 uses); `corpus` lists the first 5 in path order.
+11 of the 127 corpus files use it (176 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

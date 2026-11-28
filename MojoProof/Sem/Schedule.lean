@@ -540,10 +540,9 @@ theorem exec_retrace (c : Ctx) (s : Scope) (tr : List Event) (k : Nat) (f : Fram
       simp only [exec, LLVM.Stmt.pending, bind, Except.bind, pure, Except.pure]
       repeat' split at h
       all_goals cases h
-      all_goals simp only [evalV_retrace, evalTV_retrace, evalTVs_retrace, Mem.load_retrace,
-        gep_retrace, castV_retrace, icmpV_retrace, Mem.fresh_retrace, Mem.log_retrace,
-        Mem.alloc_retrace, Mem.store_retrace, Scope.retrace_mem, Scope.retrace_ch, Eff.retrace,
-        Except.map, Bool.false_eq_true, ↓reduceIte, *]
+      all_goals simp only [evalV_retrace, evalTV_retrace, evalTVs_retrace, Mem.load_retrace, gep_retrace, castV_retrace, icmpV_retrace, Mem.fresh_retrace,
+        Mem.log_retrace, Mem.alloc_retrace, Mem.store_retrace, Scope.retrace_mem, Scope.retrace_ch,
+        Eff.retrace, Except.map, Bool.false_eq_true, ↓reduceIte, *]
       all_goals rfl
 
 /-- Entering a block reads no trace. -/

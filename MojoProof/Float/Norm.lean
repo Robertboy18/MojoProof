@@ -169,10 +169,11 @@ def lnorm {n : ℕ} (t : ReductionTree (Fin n)) (x g b : Fin n → Model .binary
     (ε : Model .binary32) (k : ℕ) (fused : Bool) (j : Fin n) : Model .binary32 :=
   lnOut fused (x j) (welford t x).2.1 (Sem.rsqrt (Model.add (wvar t x) ε) k) (g j) (b j)
 
--- Mathlib v4.36.0 exposes `Real`'s operations to files outside the module system, so closing the
--- premise on `u`, `η` and `rsqrtErr` of binary32 unfolds their arithmetic, which needs a deeper
--- recursion limit.
-set_option maxRecDepth 4096 in
+-- FloatLib's `unitRoundoffAt` and `underflowErrorAt` are powers `bpow 2 e`, and Mathlib v4.36.0
+-- exposes `Real`'s operations to files outside the module system: a premise about these reals
+-- in weak head normal form would unfold the powers past the default recursion limit. `bpow` is
+-- irreducible here, so it is not unfolded.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **Layer norm against TorchLean's.** In binary32, for every `n ≤ 2 ^ 24`, tree `t` whose leaves
 are `0, …, n - 1` up to order, inputs `x` within `B` in magnitude, weights `g`, biases `b`, word
 `ε > 0`, oracle number `k` of `rsqrt.approx`, fused or not, and index `j`: if the Welford words
@@ -263,10 +264,8 @@ def rmsnorm {n : ℕ} (t : ReductionTree (Fin n)) (x g : Fin n → Model .binary
     (N ε : Model .binary32) (k : ℕ) (j : Fin n) : Model .binary32 :=
   rmsOut (x j) (Sem.rsqrt (Model.add (msq t x N) ε) k) (g j)
 
--- Mathlib v4.36.0 exposes `Real`'s operations to files outside the module system, so closing the
--- premise on `u`, `η` and `rsqrtErr` of binary32 unfolds their arithmetic, which needs a deeper
--- recursion limit.
-set_option maxRecDepth 4096 in
+-- `bpow` is irreducible here, as above.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **RMS norm.** In binary32, for every `n`, tree `t` whose leaves are `0, …, n - 1` up to order,
 inputs `x`, weights `g`, finite word `N` of real value `n`, word `ε > 0`, oracle number `k` of
 `rsqrt.approx` and index `j`: if the operand `s = m + ε` of `rsqrt.approx` (`m = msq t x N`) is

@@ -222,6 +222,8 @@ theorem Grid.start_size {prog : Program} {fn : Func} {L : Launch} {args : List V
   · cases h
   split at h
   · cases h
+  split at h
+  · cases h
   rename_i v2 h2
   cases h
   have := foldlM_idx_inv (P := fun i (r : Mem × Array Status) => r.2.size = i) _
@@ -251,6 +253,8 @@ theorem Grid.start_trace {prog : Program} {fn : Func} {L : Launch} {args : List 
     (h : Grid.start prog fn L args m ch oracle = .ok (g, c)) : g.mem.trace = [] := by
   unfold Grid.start at h
   simp only [bind, Except.bind] at h
+  split at h
+  · cases h
   split at h
   · cases h
   split at h

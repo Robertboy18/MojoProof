@@ -18,7 +18,7 @@ LangRef's section on `ptrtoint` (the quote is the first sentence of its overview
 
 ## Corpus
 
-42 of the 116 corpus files use it (1515 uses); `corpus` lists the first 5 in path order.
+42 of the 127 corpus files use it (1515 uses); `corpus` lists the first 5 in path order.
 
 ## Out of scope
 

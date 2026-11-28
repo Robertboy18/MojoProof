@@ -89,10 +89,11 @@ macro "lndev_num" : tactic => `(tactic| (
     show FloatFormat.binary32.fracWidth = 23 by decide,
     show FloatFormat.binary32.exponentBias = 127 by decide]))
 
--- Mathlib v4.36.0 exposes `Real`'s operations to files outside the module system, so elaborating
--- the premises about concrete reals unfolds their arithmetic, which needs a deeper recursion limit
--- (as in MojoProof/Sem/Float.lean).
-set_option maxRecDepth 4096 in
+-- FloatLib's `unitRoundoffAt` and `underflowErrorAt` are powers `bpow 2 e`, and Mathlib v4.36.0
+-- exposes `Real`'s operations to files outside the module system: a premise about these reals
+-- in weak head normal form would unfold the powers past the default recursion limit. `bpow` is
+-- irreducible here, so it is not unfolded.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **`lnorm_error` at `1, ..., 2 ^ k` along `halveFin k`**, for every `k ≤ 24`, weights `g`,
 biases `b`, word `ε` of rational value `e > 0`, oracle number `o` of `rsqrt.approx`, fused or not,
 and index `j`: if the inputs' words, the Welford and variance words, the operand `v + ε` of
@@ -155,7 +156,8 @@ theorem lnorm8 := fun fused => lnorm_iota 3 (by norm_num) (fun _ => one) (fun _ 
   (f32 0x412C0000) (e := 43 / 4) (by decide +kernel) 0x3e800000 fused (0 : Fin 8)
   (by cases fused <;> decide +kernel) (by norm_num) (by lndev_num)
 
-set_option maxRecDepth 4096 in
+-- `bpow` is irreducible here, as above.
+attribute [local irreducible] FloatLib.Floats.Formats.Flocq.bpow in
 /-- **`rmsnorm_error` at `1, ..., 2 ^ k` along `halveFin k`**, for every `k ≤ 24`, weights `g`,
 word `ε` of rational value `e > 0`, oracle number `o` of `rsqrt.approx` and index `j`, with the
 divisor word `nat32 (2 ^ k)`: if the inputs' words, the divisor word, the operand `m + ε` of

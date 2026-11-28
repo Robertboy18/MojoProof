@@ -1222,6 +1222,9 @@ theorem launchArgs_skel {pay : Nat → Prop} {m₁ m₂ : Mem} (h : m₁.SkelEq 
     Except.Rel (fun r₁ r₂ : Mem × List Val => r₁.1.SkelEq pay r₂.1 ∧ r₁.2 = r₂.2)
       (launchArgs l m₁ n fn args ch) (launchArgs l m₂ n fn args ch) := by
   unfold launchArgs
+  split
+  swap
+  · exact .error _
   refine Except.Rel.foldlM (fun pvi _ x y hxy => ?_) ⟨h, rfl⟩
   obtain ⟨⟨p, v⟩, i⟩ := pvi
   obtain ⟨a₁, acc⟩ := x
@@ -1275,6 +1278,7 @@ theorem Grid.start_skel {lab : Labels} {pay : Nat → Prop} {m₁ m₂ : Mem} (h
       (Grid.start prog fn L args m₁ ch o₁) (Grid.start prog fn L args m₂ ch o₂) := by
   unfold Grid.start
   dsimp only
+  refine Except.Rel.bind_eq _ fun _ _ => ?_
   refine Except.Rel.bind_eq _ fun _ _ => ?_
   rw [Mem.checkClosed_skel h]
   refine Except.Rel.bind_eq _ fun _ _ => ?_

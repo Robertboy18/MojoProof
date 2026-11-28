@@ -18,7 +18,7 @@ The importer refuses a call of inline assembly whose template and constraints ar
 
 ## Corpus
 
-4 of the 116 corpus files use it (4 uses).
+4 of the 127 corpus files use it (4 uses).
 
 ## Out of scope
 

@@ -14,10 +14,11 @@ MojoProof/Sem/Schedule.lean: its result names only numbers its operands name, or
 
 The memory (section Memory), for every layout: if `S` has null's number 0, a load from a memory
 with `Mem.BytesIn S` gives a value that names only numbers of `S` (`Mem.load_namesIn`, by
-`decode_namesIn`). A store of a value that names only numbers of `S` keeps `Mem.BytesIn S`
-(`Mem.store_bytesIn`, by `encode_namesIn`), and so do an allocation whose initial bytes name only
-numbers of `S` and changes of liveness (`Mem.alloc_bytesIn`, `Mem.foldl_setLive_bytesIn`). The
-number of an allocation's block is known after it (`Mem.alloc_known`).
+`decode_namesIn`). A store of a value that names
+only numbers of `S` keeps `Mem.BytesIn S` (`Mem.store_bytesIn`, by `encode_namesIn`), and so do an
+allocation whose initial bytes name only numbers of `S` and changes of liveness
+(`Mem.alloc_bytesIn`, `Mem.foldl_setLive_bytesIn`). The number of an allocation's block is known
+after it (`Mem.alloc_known`).
 
 `Mem.Known` and `Mem.BytesIn` are defined in MojoProof/Sem/SigDef.lean, with `sig`, which
 reaches them.

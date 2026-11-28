@@ -120,20 +120,21 @@ python3 scripts/corpus.py check
 
 The arguments are the family (the directory under `tests/corpus/`), the source, where the source
 comes from (`repo:<path>` for a source kept in this repository, or its path in the
-`modular/modular` repository), the exact flags given to `mojo build`, and the `.nvptx.ll` files.
+`modular/modular` repository, as `modular/modular@<commit>:<path>` at another commit than the
+one `corpus.py` records), the exact flags given to `mojo build`, and the `.nvptx.ll` files.
 `add` copies each file to `tests/corpus/<family>/` and writes its row of
 `tests/corpus/MANIFEST.tsv`: its sha256, line count, kernel, arch, PTX version, Mojo version,
 flags and source. Leave out `--mojo` when you compiled with the version `corpus.py` records.
 When the kernel is defined in a library file that the source imports, name that file with
 `--lib <path>`; the vsub source defines its kernel, so its row's `lib` is `-`. `add` refuses a
 source whose header lacks the Apache-LLVM license line.
-`check` printed `corpus: 116 files, 0 problems`.
+`check` printed `corpus: 127 files, 0 problems`.
 
 The repository already has this row, and `add` refuses a file already in the manifest: for your
 own kernel, use your own family name.
 
 A new row changes the corpus's counts, which a test checks: in `MojoProofTest/Corpus.lean`, the
-expected message of `#mojo_corpus` (`mojo_corpus: 116 rows, 109 imported, ...` after this
+expected message of `#mojo_corpus` (`mojo_corpus: 127 rows, 120 imported, ...` after this
 example) must count your row, or step 8's build fails there with "Docstring on `#guard_msgs`
 does not match".
 
@@ -245,6 +246,35 @@ at cell `4 i` for every thread `i`, every other block unchanged. The last line p
 
 Lean's three standard axioms. docs/kernel.md has every clause, every declaration the command
 adds, the statement of `correct` and every refusal message.
+
+### At another float format
+
+The Mojo source is generic in its element type, and each `DType` gives another file. At
+`float16`, compile the source with `float32` replaced (tests/corpus/vadd16/ is
+`vector_addition`'s), add it to the corpus, import it and run the command with the element type,
+the encoding and the bytes at that format; `Elem.map2` (MojoProof/Sym/Kernel.lean) is the bytes
+of a binary elementwise kernel at every format, so no new definition is needed:
+
+```lean
+mojo_kernel v16 := v16.prog v16.fn_0
+  reads a := a0, b := a1
+  writes out := a2
+  scalars n := a3
+  map2 (.fp .half) (Val.ofFloat .half)
+    (fun ω => Elem.map2 v16.prog.layout .half Model.add (fun k => ω k (Nat.pair 23 0) / 3))
+```
+
+`v16.correct` (MojoProofTest/Formats.lean) is then the theorem at that file, alignment 2 and
+cells `2 i`. For one theorem at every format instead, the three elementwise kernels have
+`vadd.family`, `vmul.family` and `vsub.family` (MojoProof/Kernels/Formats.lean), about the
+Float32 program retyped at the format (`Program.retype`, MojoProof/Sym/Formats.lean):
+vector_subtraction's is `vsub.family`, and `vsub.correct` is it at `.float`. They are written by
+hand after the command; the command has no clause for them. Each is `vadd.sound_retype` (the
+kernel theorem at every format of every kernel with `vector_addition`'s layout and parameters)
+with its threads by the tactic `mojo_map2_step`; the threads at `.half` and `.bfloat` are
+declarations of their own, since one declaration's heartbeats hold one run of mojo_ret at a
+16-bit format. docs/proofs/elementwise.md has the statements and what each corpus file is
+an instance of.
 
 ## 7. When the command fails or goals stay open
 

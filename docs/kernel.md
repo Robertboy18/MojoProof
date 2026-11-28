@@ -149,13 +149,14 @@ checker's fragment: the summaries are `summarizeC`'s, so a `fadd contract` that 
 `fmul contract` product fuses with it or not by the thread's oracle. The checks are
 `coversEntryWith true` and `coversChainsWith true`, the obligations are over `EdgeWith true`,
 `Valuation.roundWith true`, `RoundWith true` and `RetWith true` (their names and order are those
-above), `n.loop` is a `RetLsWith true`, `n.sound_of` is `Kernel.sound_of_chainsWith` at `true`
+above), `n.loop` is a `RetLsWith true`, `n.sound_of` is `Kernel.sound_of_chainsAt` at
+`alloca := false` and `contract := true` (its statement with `Mem.Dead false m Q` unfolded to `Q`)
 and `n.sound_loop` is `Kernel.sound_entryWith` at `true`. The per-thread premise of
 `n.sound_loop` also takes an admitted address choice and oracle and gives the thread's oracle
 (`V.ctx.oracle = oracle k`), since a fused operation's rounding depends on it. A loop-free
-kernel takes the flag with no loop clause: `n.sound_of` is then `Kernel.sound_of_chainsWith` at
-`true`, `n.covers` and no sequence of loops (its cover is `rfl`). With `map2` the flag gives
-`n.ret` as a `RetWith true` (the `mojo_ret` proof of a `Ret`, moved by
+kernel takes the flag with no loop clause: `n.sound_of` is then `Kernel.sound_of_chainsAt` at
+`false` and `true`, `n.covers` and no sequence of loops (its cover is `rfl`). With `map2` the flag
+gives `n.ret` as a `RetWith true` (the `mojo_ret` proof of a `Ret`, moved by
 `RetWith.exists_true_of_ret` of MojoProof/Sym/RetFlag.lean, which holds when no summary of the
 paths records an `fmul contract` product, decided on them) and `n.correct` by
 `Kernel.sound_map2With (contract := true)` (MojoProofTest/KernelContract.lean's
@@ -169,6 +170,21 @@ twins are the clause without the flag, the flag without a loop clause (refused a
 has no clause), and the message of a tactic that leaves two obligations; an open-goal test checks
 `kfK.sound_loop`'s per-thread premise. The module's `kgK` is the flag on the loop-free kernel `kg`,
 with no loop clause; its twin is `kg` without the flag.
+
+The flag `alloca` comes after `contract`, if any, and puts `alloca` in the block checker's
+fragment: the summaries are `summarizeAt true contract`'s, the check is `coversEntryAt true
+contract` (`n.covers`) and `n.sound_of` is `Kernel.sound_of_chainsAt (alloca := true)` with no
+sequence of loops. Its per-thread premise is a `RetWith contract` along a path to the thread's
+predicate `P (k + 1)` on the memory its path leaves with the blocks it adds, its `alloca` blocks,
+set dead (`Mem.Dead true m' (P (k + 1))`), since `ret` sets them dead. The flag is not combined
+with a `loop` clause, `map2` or `mat`, each an error, since their theorems are with the flag off.
+A block outside the checker's fragment under the flag is an error naming its first refused
+statement (`refusalAt`), as LLVM text. Without the flag, the command and its declarations are as
+before. MojoProofTest/SymAlloca.lean's `pathA` is the flag on the two-block alloca path of
+`pathText`; `pathA_sound` meets its `sound_of`'s premises at a launch of one thread from the
+empty memory, its two `alloca` blocks dead at the end. Its twins are the kernel without the flag
+(refused at its first block), gemv_kernel with the flag (refused at `%6`'s statement 17, its
+first `shfl.sync.idx`), and the flag with `loop`, `map2` and `mat`.
 
 ### The matmul clause `mat`
 
@@ -713,21 +729,30 @@ before it. Tests in MojoProofTest/SymCall.lean:
 `Sym.Grid.start_ok` gives `Grid.start`'s `.ok` for every program, kernel, launch, arguments,
 memory, address choice and oracle. Its premises are ones a caller checks:
 - `Func.check` passes;
+- the launch passes `Func.checkLaunch`: as many arguments as parameters, and the block within the
+  kernel's `nvvm.maxntid` or of its `nvvm.reqntid` shape, if it has one, as a string attribute
+  or as `!nvvm.annotations` entries (`maxntidx` to `reqntidz`; `kernel` admitted, other keys
+  unsupported);
 - the memory is `Mem.Closed` for the arguments;
 - every global is in address space 3, and either external and not `constant`, or `undef`;
 - every `byval(T)` argument encodes as a `T`;
 - every other parameter's attributes accept its argument on every memory;
-- the kernel has a body.
+- the kernel has a body;
+- every `byval` copy has a placement (`Func.byvalPlaced`): its type has no padding
+  (`Layout.dense`), and some aligned address `x` in address space 0 is `placed`, that is
+  nonzero, with `x + size < 2 ^ w` (no wrap, the address one past the end included) and
+  `size < 2 ^ (w - 1)` for `w`-bit pointers (the index width); `launchArgs` refuses every other
+  copy, and moves an address choice outside these rules to the lowest placed one (`place`).
 
 Its invariant is `Mem.FreeAbove` (`Mem.Closed.above`): on such a memory, every allocation of the
-start (`Mem.allocNext`) succeeds, whatever the address choice. Neither the launch nor the number
-of arguments is a premise: the start pairs arguments with parameters by `List.zip`.
+start (`Mem.allocNext`) succeeds, whatever the address choice. Neither the address choice nor
+the oracle is a premise.
 
 Tests in MojoProofTest/SymLaunch.lean:
 - `vadd_starts`: `vector_addition` starts on every launch and every closed memory, with each
   premise by `rfl`, `decide` or `simp`.
 - `byval_twin`: the start faults when the first buffer is replaced by the size.
-- `short_starts`: the start succeeds with three arguments for four parameters.
+- `short_refused`: the start refuses three arguments for four parameters.
 
 ### The kernel theorem (MojoProof/Sym/Kernel.lean)
 
@@ -778,16 +803,26 @@ choice and oracle, under the premises given.
   the argument as `withAttrs` gives it on every memory, and whose memory is one of `I k`
   (`Grid.start_thread`, `Grid.start_ctx`, `Grid.start_scalar`, `Grid.start_blocks`,
   `Grid.start_trace`). `mojo_kernel`'s `n.sound_loop` is it on `n.args`.
-- **The `contract` forms.** `Kernel.sound_of_chainsWith`, `Kernel.sound_entryWith` and
-  `Kernel.sound_cellsWith` are `Kernel.sound_of_chains`, `Kernel.sound_entry` and
-  `Kernel.sound_cells` for every flag `contract`: `coversEntryWith contract` and
-  `coversChainsWith contract` for the checks, and `RetWith contract` and `RetLsWith contract` for
-  each thread's run, so the blocks may have `fmul contract` and `fadd contract`
+- **The `contract` forms.** `Kernel.sound_of_chainsAt` at `alloca := false`,
+  `Kernel.sound_entryWith` and `Kernel.sound_cellsWith` are `Kernel.sound_of_chains`,
+  `Kernel.sound_entry` and `Kernel.sound_cells` for every flag `contract`:
+  `coversEntryWith contract` and `coversChainsWith contract` for the checks, and
+  `RetWith contract` and `RetLsWith contract` for each thread's run, so the blocks may have
+  `fmul contract` and `fadd contract`
   (`Runs.of_retWith`, `Runs.of_chainsWith`, MojoProof/Sym/Loop.lean). The three without the flag
   are their `false` cases, one line each (`RetLs` is `RetLsWith false` by definition).
   `Kernel.sound_entryWith` also indexes the invariant by the start's memory and gives each named
   `byval(t)` parameter's register a pointer to a block of the start's memory, owned by the
   thread, from which `t` loads as the argument (`Grid.start_buffer`), and the valuation's oracle.
+- **The `alloca` form.** `Kernel.sound_of_chainsAt` is the `contract` form for both values of
+  the flag `alloca`: `coversEntryAt alloca contract` and `coversChainsAt alloca
+  contract` for the checks, and each thread's `RetWith contract` or `RetLsWith contract` to
+  `Mem.Dead alloca m' (P (k + 1))`, the next predicate on the memory the thread leaves with its
+  `alloca` blocks set dead (`Runs.of_retAt`, `Runs.of_chainsAt`, MojoProof/Sym/Loop.lean).
+  `Mem.Dead false m' Q` is `Q` and `coversEntryWith contract` is `coversEntryAt false contract`
+  by definition, so at `alloca := false` it is the `contract` form with each thread's predicate
+  itself (the `example` after it), and `Kernel.sound_of_chains` is its case at both flags off, one
+  line.
 - **The elementwise invariant.** `Elem m₀ out w cell bs k m`: block `out` is `m₀`'s with the
   bytes of the first `k` threads put at their cells, other blocks are unchanged, and every access
   is owned.

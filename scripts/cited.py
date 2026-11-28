@@ -75,7 +75,7 @@ working tree no longer declares. Every suffix of such a name, of one or more com
 (`warpBound`, `Sem.warpBound`, `MojoProof.Sem.warpBound`), that is no suffix of a declaration of
 ours, of a package or of the toolchain's library and no field name must not begin a backticked
 span (the whole span, or its head before a space) in a docstring or comment of our Lean files or in a tracked Markdown file,
-fenced code included. docs/BUGS.md, docs/found-bugs.md and docs/UPSTREAM.md are skipped: they
+fenced code included. docs/found-bugs.md and docs/UPSTREAM.md are skipped: they
 record deleted names on purpose. This covers the names a change deletes in whatever case they
 are written (the default check reads only snake_case names in module docstrings, and only
 qualified names in cards), so it is run on the commits since the last check.
@@ -97,6 +97,8 @@ OTHER = {
     'n.sound_loop',     # and the kernel theorem through the loop (MojoProof/Sym/KernelCmd.lean)
     'n.sound_mat',      # what `mojo_kernel n` adds with the mat clause (MojoProof/Sym/KernelCmd.lean)
     'n.sound_inv',      # and with `mat … inv` (MojoProof/Sym/KernelCmd.lean)
+    'n.safe_at',        # what `mojo_safe n … at …` adds (MojoProof/Kernels/SafeCmd.lean)
+    'bitonic_global_step',  # corpus kernels
     'matmul_kernel_naive_float32_float32_float32_True_16_16826c8c',  # corpus kernels
     'tiled_matmul',     # corpus kernels
     'vector_addition',
@@ -117,6 +119,8 @@ SCOPE = re.compile(r'^\s*(?:noncomputable\s+)?(namespace|section|mutual|end|open
 FIELD = re.compile(r'^  ([a-z][A-Za-z0-9_\']*) :')
 CTOR = re.compile(r'^\s*\|\s*([A-Za-z_][A-Za-z0-9_\'!?]*)')
 KERNEL = re.compile(r'^mojo_kernel\s+([^\s:]+)\s+:=')
+SAFE = re.compile(r'^mojo_safe\s+([^\s:]+)\s+:=')
+SAFEAT = re.compile(r'(?:^|\s)at\s')
 LOOP = re.compile(r'^\s+loop\s+(\d+)\s*:=')
 MAT = re.compile(r'(?:^|\s)mat\s')
 INV = re.compile(r'\sinv\s*$')
@@ -163,6 +167,7 @@ def scan(text: str) -> tuple[set[str], set[str], set[str], set[str]]:
     prev = ''   # the last non-blank line
     kernel = None   # the full name of the unrefused `mojo_kernel` command whose clauses follow
     heads: list[str] = []   # the headers of its `loop` clauses
+    safe = None     # the full name of the unrefused `mojo_safe` command whose `at` may follow
     impspec = None  # the namespace and `Src` of the `import_spec` command whose operations follow
     lines = text.split('\n')
     for i, line in enumerate(lines):
@@ -170,6 +175,15 @@ def scan(text: str) -> tuple[set[str], set[str], set[str], set[str]]:
         if kernel and line[:1].strip():
             decls |= loop_names(kernel, heads)
             kernel, heads = None, []
+        if safe and line[:1].strip():
+            safe = None
+        if safe and SAFEAT.match(line.lstrip()):
+            decls.update((f'{safe}.safe_at', f'{safe}.obs'))
+        if (m := SAFE.match(line)) and not GUARD.match(prev.strip()):
+            safe = f'{cur}.{m.group(1)}' if cur else m.group(1)
+            decls.update((safe, f'{safe}.safe'))
+            if SAFEAT.search(line.split(':=', 1)[1]):
+                decls.update((f'{safe}.safe_at', f'{safe}.obs'))
         if impspec and line[:1].strip():
             impspec = None
         if impspec and (m := IMPOP.match(line)):
@@ -327,6 +341,14 @@ CHECKS = [
     ('mojo_family F := prog\n', {'F.prog', 'F.fn', 'F.prog_corpus'}, set()),
     ('#guard_msgs (whitespace := lax) in\nmojo_family G := prog\n', set(), {'G.prog', 'G.fn'}),
     ('mojo_kernel k := vadd\n', {'k', 'k.covers', 'k.sound_of', 'k.starts', 'k.sound'}, set()),
+    # `mojo_safe n := P fn` declares `n.safe`, and with `at …` (on its line or the next) also
+    # `n.safe_at` and `n.obs`; its `mojo_kernel` declarations may be an earlier command's
+    # (MojoProof/Kernels/SafeCmd.lean), so none is declared
+    ('mojo_safe s := p f\n', {'s', 's.safe'}, {'s.safe_at', 's.obs', 's.covers'}),
+    ('mojo_safe t := p f\n  at L a m c w h\n', {'t.safe', 't.safe_at', 't.obs'}, set()),
+    ('mojo_safe t1 := p f at L a m c w h\n', {'t1.safe', 't1.safe_at', 't1.obs'}, set()),
+    ('mojo_safe s2 := p f\ntheorem x : True := at\n', {'s2.safe'}, {'s2.safe_at'}),
+    ('#guard_msgs in\nmojo_safe u := p f\n  at L a m c w h\n', set(), {'u', 'u.safe', 'u.safe_at'}),
     ('#guard_msgs (drop info) in\nmojo_kernel r := vadd\n', {'r'}, {'r.covers', 'r.sound_of'}),
     ('#guard_msgs in\nmojo_kernel q := vadd\n', {'q'}, {'q.covers', 'q.sound_of'}),
     # a kernel's theorems by its clauses (the names in the audit's dump at MojoProofTest/
@@ -661,7 +683,7 @@ def deleted(rev: str, decls: set[str], fields: set[str]) -> int:
         for s in suffixes(n):
             if s not in now:
                 gone.setdefault(s, n)
-    skip = {'docs/BUGS.md', 'docs/found-bugs.md', 'docs/UPSTREAM.md'}
+    skip = {'docs/found-bugs.md', 'docs/UPSTREAM.md'}
     texts = [f for f in git('ls-files', '--', '*.md').split() if f not in skip]
     texts += [str(p) for d in ('GPUProof', 'MojoProof', 'MojoProofTest')
               for p in sorted(pathlib.Path(d).rglob('*.lean'))]

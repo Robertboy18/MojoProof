@@ -9,9 +9,9 @@ import MojoProof.Sym.RetFlag
 # A kernel's paths as Lean terms: `mojo_kernel`
 
 `mojo_kernel n := P fn reads x := a0, … writes y := a2, … scalars z := a3, … pointers q := a4, …
-map2 t e bytes contract loop h := …` names the parameters of kernel `fn` of program `P` (`a<i>` is
-parameter `i`; each clause group is optional; `fn` is a term, elaborated, and steps 5 and 6 use
-the constant it denotes), and, when the command is elaborated:
+map2 t e bytes contract alloca loop h := …` names the parameters of kernel `fn` of program `P`
+(`a<i>` is parameter `i`; each clause group is optional; `fn` is a term, elaborated, and steps 5
+and 6 use the constant it denotes), and, when the command is elaborated:
 
 1. checks the clauses against `fn.params` (`clauseError`): every parameter is named by exactly
    one clause, a `reads` or `writes` parameter is `byval` of a buffer struct (a struct whose first
@@ -22,15 +22,24 @@ the constant it denotes), and, when the command is elaborated:
    `fmul contract` in the checker's fragment: steps 2 to 6 then use the variants with the flag
    (`summarizeC`, `coversEntryWith true`, `coversChainsWith true`, `EdgeWith true`,
    `Valuation.roundWith true`, `RoundWith true`, `RetWith true`, `RetLsWith true` by
-   `ChainWith.loop`, `Kernel.sound_of_chainsWith` and `Kernel.sound_entryWith` at
-   `contract := true`), and without it a block with `fmul contract` is outside the fragment;
-2. evaluates `summarize P fn l (phiCount fn l)` for every block `l` of `fn` (as `sym_summary`: from
-   after the block's `phi`s, the position an edge enters it at, `Exit.pc`; 0 for a block without
-   `phi`s) and adds `n.b<i> : Summary`, the summary of block `i`, after the checks of steps 3 and 6
-   (so a refused command adds nothing); a block outside the checker's fragment is an error naming
-   it. `n.b<i>` and `n.paths` are registered for equation lemmas
-   (`enableRealizationsForConst`), so `simp only [n.b<i>]` unfolds them in the module that runs the
-   command too;
+   `ChainWith.loop`, `Kernel.sound_of_chainsAt` at `alloca := false` and `Kernel.sound_entryWith`
+   at `contract := true`), and without it a block with `fmul contract` is outside the fragment.
+   The flag `alloca` (after `contract`) puts `alloca` in the checker's fragment: steps 2 to 4
+   then use `summarizeAt true`, `coversEntryAt true contract` and `Kernel.sound_of_chainsAt` at
+   `alloca := true`, whose per-thread premise is each thread's predicate after `ret` sets the
+   blocks the thread adds (its `alloca` blocks) dead (`Mem.Dead true`), a block outside the
+   fragment is an error naming the first statement the checker refuses in it (`refusalAt`, as
+   LLVM text), and a `loop`, `map2` or `mat` clause is an error (their theorems are with the
+   flag off). Without the flag every step, declaration and message is as before the flag existed
+   (`summarizeAt false` is `summarize`; at `alloca := false` `n.sound_of`'s statement has each
+   thread's predicate itself, `Mem.Dead false m Q` unfolded to `Q`);
+2. evaluates `summarize P fn l (phiCount fn l)` (`summarizeAt alloca` with the flags) for every
+   block `l` of `fn` (as `sym_summary`: from after the block's `phi`s, the position an edge
+   enters it at, `Exit.pc`; 0 for a block without `phi`s) and adds `n.b<i> : Summary`, the
+   summary of block `i`, after the checks of steps 3 and 6 (so a refused command adds nothing);
+   a block outside the checker's fragment is an error naming it. `n.b<i>` and `n.paths` are
+   registered for equation lemmas (`enableRealizationsForConst`), so `simp only [n.b<i>]`
+   unfolds them in the module that runs the command too;
 3. enumerates the paths from the entry block over the summaries' exits (`kernelSegs`, depth
    first; `br d` to `d`, `cond c d e` and `phi c d e` to `d` then `e`, `ret` ends a path); a branch
    into a block with `phi`s is followed, and the path checker with `phi`s (`coversPathWith false`,
@@ -64,16 +73,21 @@ the constant it denotes), and, when the command is elaborated:
    `n.loop` is `ChainWith.loop` for each loop in turn, from the first clause's precondition;
 4. adds `n.sound_of`, `Kernel.sound_of_paths` at `n.covers` (with the loop clause
    `Kernel.sound_of_chains` at `n.covers` and `n.coversChains`; with the flag and no loop clause
-   `Kernel.sound_of_chainsWith` at `n.covers` and no sequence of loops, whose cover is `rfl`): the
+   `Kernel.sound_of_chainsAt (alloca := false) (contract := true)` at `n.covers` and no sequence
+   of loops, whose cover is `rfl`, its statement with `Mem.Dead false m Q` unfolded to `Q`;
+   with `alloca`, `Kernel.sound_of_chainsAt (alloca := true)` there, `n.covers` then being
+   `coversEntryAt true contract`): the
    kernel theorem for `fn`, for
    every launch, arguments, memory, admission, observation and predicate, from the premises that
    remain (the caller's pointer bytes, the start, the observation and the per-thread invariant);
-5. when `fn` elaborates to a constant (a name, or a term such as `(f)` that denotes one) and `P`
-   has no globals: adds `n.args`, the arguments from the clauses in
-   parameter order (a buffer's is its `byval` struct with a pointer to offset 0 of a block number
-   and the zero value of every other field, `Layout.zero` evaluated by the command and written as
-   a term by `valTerm`; a pointer's is the pointer `.ptr ⟨b, 0⟩` to offset 0 of a block number
-   `b`; a scalar's is a bit vector), the theorem `n.starts`, that the start on
+5. when `fn` elaborates to a constant (a name, or a term such as `(f)` that denotes one), `P`
+   has no globals and `fn` has no launch limit (`Func.ntidLimit` is `none` for `"nvvm.maxntid"`
+   and `"nvvm.reqntid"`, so that `Func.checkLaunch` does not read the block): adds `n.args`,
+   the arguments from the clauses in parameter order (a buffer's is its `byval` struct with a
+   pointer to offset 0 of a block number and the zero value of every other field, `Layout.zero`
+   evaluated by the command and written as a term by `valTerm`; a pointer's is the pointer
+   `.ptr ⟨b, 0⟩` to offset 0 of a block number `b`; a scalar's is a bit vector), the theorem
+   `n.starts`, that the start on
    `n.args` succeeds for every launch, block numbers, scalars, memory closed for the arguments
    (`Mem.Closed`), address choice and oracle (`Sym.Grid.start_ok`, each premise by `rfl`,
    `decide +kernel` or `simp` on `fn`'s parameters), and `n.sound`, `n.sound_of` on `n.args` with
@@ -90,7 +104,8 @@ the constant it denotes), and, when the command is elaborated:
    the end check on `I` after all threads; with `contract` the per-thread premise also has an
    admitted address choice and oracle `oracle` and the thread's oracle `oracle k`, on which a
    fused operation's rounding depends. Another `fn` or a program with globals skips this step and
-   the next;
+   the next. With `alloca` the step is the same (`n.sound` is `n.sound_of`, over `Mem.Dead true`,
+   with the start by `n.starts`; there is no loop clause);
 6. with the clause `map2 t e bytes` (a binary elementwise kernel: element type `t`, encoder `e`,
    and `bytes ω x y n k`, the bytes thread `k` stores at oracle `ω` for tensors `x`, `y` and count
    `n`), when `fn` elaborates to a constant, `P` has no globals, the clauses are `reads` of `a0`,
@@ -335,7 +350,12 @@ Prop` the invariant by round at that valuation, `trips : Valuation → Nat` the 
 `decide +kernel`), also the sequence of loops `n.chains`, its theorem `n.coversChains`, the
 obligations `n.entry`, `n.init`, `n.step`, `n.exit` (each proved by `tac`), the thread's run
 `n.loop`, `n.sound_of` is `Kernel.sound_of_chains`, and with `n.args` also the kernel theorem
-`n.sound_loop` on them (`Kernel.sound_entry`).
+`n.sound_loop` on them (`Kernel.sound_entry`). With `alloca` (after `contract`, if any), blocks
+with `alloca`s are in the checker's fragment (`summarizeAt true`), `n.covers` is over
+`coversEntryAt true` and `n.sound_of` is `Kernel.sound_of_chainsAt (alloca := true)`, whose
+per-thread premise is over the memory each thread leaves with its `alloca` blocks dead
+(`Mem.Dead true`); a block outside the fragment is then an error naming its first refused
+statement, and the flag is an error with `loop`, `map2` or `mat`.
 With a `loop` clause for each of several loops in sequence, in the order a thread runs them, the
 obligations end with the header (`n.entry<i>`), a loop's path in is the previous loop's path out,
 and the exit of each loop but the last is the next clause's precondition at the invariant at the
@@ -344,7 +364,8 @@ first clause's precondition and postcondition. With `contract` (before the loop 
 `fmul contract` is in the checker's fragment and every one of these is over the variant with the
 flag (`summarizeC`, `coversEntryWith true`, `coversChainsWith true`, `EdgeWith true`,
 `Valuation.roundWith true`, `RoundWith true`, `RetWith true`, `RetLsWith true`,
-`Kernel.sound_of_chainsWith` and `Kernel.sound_entryWith`), and `n.sound_loop`'s per-thread
+`Kernel.sound_of_chainsAt` at `alloca := false` and `Kernel.sound_entryWith`), and
+`n.sound_loop`'s per-thread
 premise also has an admitted address choice and oracle and the thread's oracle. Errors on
 clauses that do not name each parameter once with its kind,
 on a block outside the checker's fragment, on a loop without a `loop` clause
@@ -367,7 +388,7 @@ thread's `Mat.Thread`. -/
 syntax (name := mojoKernel) "mojo_kernel " ident " := " term:max term:max
   (&" reads " sepBy1(ident " := " ident, ", "))? (&" writes " sepBy1(ident " := " ident, ", "))?
   (&" scalars " sepBy1(ident " := " ident, ", "))? (&" pointers " sepBy1(ident " := " ident, ", "))?
-  (&" map2 " term:max term:max term:max)? (&" contract")?
+  (&" map2 " term:max term:max term:max)? (&" contract")? (&" alloca")?
   (&" loop " num " := " term:max term:max term:max term:max (" by " Lean.Parser.Tactic.tacticSeq)?)*
   (&" mat " term:max term:max (&" inv")?)? : command
 
@@ -780,8 +801,11 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
     throwError "mojo_kernel: {e} ({fnText})"
   let contract := !stx[10].isNone
   let rname (l : Nat) : String := s!"%{fn.names.getD l s!"{l}"}"
-  unless stx[9].isNone && stx[11].getArgs.isEmpty do
+  unless stx[9].isNone && stx[12].getArgs.isEmpty do
     throwError "mojo_kernel: mat is not combined with map2 or loop ({fnText})"
+  unless stx[11].isNone do
+    throwError "mojo_kernel: mat is not combined with alloca; Kernel.sound_mat is the theorem \
+      with the flag off ({fnText})"
   let some fnC := fnC? | throwError "mojo_kernel: mat needs the kernel as a constant; {fnText} \
     does not elaborate to one"
   unless P.module.globals.isEmpty do
@@ -815,13 +839,13 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
       {n}.out ({fnText})"
   unless xsN.eraseDups.length == xsN.length do
     throwError "mojo_kernel: mat: two clauses have one name ({fnText})"
-  let inv := !stx[12][3].isNone
+  let inv := !stx[13][3].isNone
   if inv then
     if let some x := xsN.find? fun x => matInvBinders.contains (.mkSimple x) then
       throwError "mojo_kernel: mat: the clause name {x} is a binder name of {n}.runInv, \
         {n}.kept or {n}.sound_inv ({fnText})"
-  let pathsStx : Lean.Term := ⟨stx[12][1]⟩
-  let chainsStx : Lean.Term := ⟨stx[12][2]⟩
+  let pathsStx : Lean.Term := ⟨stx[13][1]⟩
+  let chainsStx : Lean.Term := ⟨stx[13][2]⟩
   -- no empty list, evaluated, and with `inv` one chain of one loop with no nested loop, by
   -- `whnf`, before the path checker: the checker's cover of no path is vacuous, and the theorem
   -- would then cover only launches with no thread on that side
@@ -922,9 +946,9 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
       theorem $startsId (L : Launch) $binders* {mem : Mem} (hC : mem.Closed (Mat.args $zt $xs*))
           (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
           ∃ g c, Sem.Grid.start $Pstx $fnstx L (Mat.args $zt $xs*) mem ch oracle = .ok (g, c) := by
-        refine Sym.Grid.start_ok ch oracle rfl hC
+        refine Sym.Grid.start_ok ch oracle rfl rfl hC
           (fun g hg => by rw [show ($Pstx).module.globals.toList = [] from rfl] at hg; cases hg)
-          (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel)
+          (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel) rfl
         all_goals
           simp only [Mat.args, $fnUnf,*, List.zip_cons_cons, List.zip_nil_left,
             List.mem_cons, Prod.mk.injEq, List.not_mem_nil] at hpv
@@ -1367,11 +1391,12 @@ unsafe def elabMat (stx : Syntax) : CommandElabM Unit := do
     throw e
 
 /-- Step 5 of `elabMojoKernel`: for a kernel `fnC` (a constant) of a program without globals,
-the arguments `n.args` from the clauses (a buffer's `byval` struct with a pointer to a block
-number and the zero value of every other field, a pointer parameter's pointer, a scalar's bit
-vector), `n.starts` (the start on them succeeds, `Sym.Grid.start_ok`) and `n.sound` (`sound_of`
-on `n.args` from `Mem.Closed`). It returns the clauses by parameter index, the arguments' terms,
-their binders and names, and the name of `n.args`, for steps 5' and 6. -/
+with no launch limit, the arguments `n.args` from the clauses (a buffer's `byval` struct with a
+pointer to a block number and the zero value of every other field, a pointer parameter's
+pointer, a scalar's bit vector), `n.starts` (the start on them succeeds, `Sym.Grid.start_ok`)
+and `n.sound` (`sound_of` on `n.args` from `Mem.Closed`). It returns the clauses by parameter
+index, the arguments' terms, their binders and names, and the name of `n.args`, for steps 5'
+and 6. -/
 def elabArgs (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String) (P : Program) (fn : Func)
     (fnC : Name) (bufs scalars ptrs : List (String × Nat)) (soundN pathsN : Name)
     (loops : Bool) :
@@ -1425,9 +1450,9 @@ def elabArgs (n ns : Name) (Pstx fnstx : Lean.Term) (fnText : String) (P : Progr
     theorem $startsId (L : Launch) $binders* {m : Mem} (hC : m.Closed ($argsId $xs*))
         (ch : Nat → Nat) (oracle : Nat → Nat → Nat) :
         ∃ g c, Sem.Grid.start $Pstx $fnstx L ($argsId $xs*) m ch oracle = .ok (g, c) := by
-      refine Sym.Grid.start_ok ch oracle rfl hC
+      refine Sym.Grid.start_ok ch oracle rfl rfl hC
         (fun g hg => by rw [show ($Pstx).module.globals.toList = [] from rfl] at hg; cases hg)
-        (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel)
+        (fun p v hpv t ht => ?_) (fun p v hpv hnb m' => ?_) (by decide +kernel) rfl
       all_goals
         simp only [$argsId:ident, $fnUnf,*, List.zip_cons_cons, List.zip_nil_left,
           List.mem_cons, Prod.mk.injEq, List.not_mem_nil] at hpv
@@ -1612,17 +1637,35 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
   if let some e := clauseError fn.params bufs scalars ptrs then
     throwError "mojo_kernel: {e} ({fnText})"
   let contract := !stx[10].isNone
-  let loopStxs := stx[11].getArgs.toList
+  let alloca := !stx[11].isNone
+  let loopStxs := stx[12].getArgs.toList
+  -- with `alloca`, the kernel theorem is `Kernel.sound_of_chainsAt` on paths: no loop clause
+  -- (whose obligations and `n.sound_loop` are with the flag off) and no `map2`
+  if alloca && !loopStxs.isEmpty then
+    throwError "mojo_kernel: alloca is not combined with loop; the loop clause's obligations \
+      and {n}.sound_loop are with the flag off ({fnText})"
+  if alloca && !stx[9].isNone then
+    throwError "mojo_kernel: alloca is not combined with map2; Kernel.sound_map2 is the \
+      theorem with the flag off ({fnText})"
   -- 2. the summaries (added after every check, so that a refused command adds nothing), with
-  -- `fmul contract` in the fragment under the flag
+  -- `fmul contract` and `alloca` in the fragment under their flags (`summarizeAt false` is
+  -- `summarize`, and `summarizeC` with `contract`)
   let name (l : Nat) : String := s!"%{fn.names.getD l s!"{l}"}"
   let mut sums : Array Summary := #[]
   for b in fn.blocks do
     let l := b.label
-    match if contract then summarizeC P fn l (phiCount fn l) else summarize P fn l (phiCount fn l)
-      with
-    | none => throwError "mojo_kernel: block {name l} (block {sums.size} of {fnText}) is \
-        outside the checker's fragment{if contract then " with fmul contract" else ""}"
+    match summarizeAt alloca P fn l (phiCount fn l) (fun σ tm => σ.exitAt fn l tm) contract with
+    | none =>
+      if alloca then
+        -- the statement the checker stops at, so that the message says what is refused
+        let stop := match refusalAt true contract P fn b (phiCount fn l) with
+          | some i => s!" {refusedText fn b i}"
+          | none => ""
+        throwError "mojo_kernel: block {name l} (block {sums.size} of {fnText}) is outside the \
+          checker's fragment with alloca{if contract then " and fmul contract" else ""}{stop}"
+      else
+        throwError "mojo_kernel: block {name l} (block {sums.size} of {fnText}) is \
+          outside the checker's fragment{if contract then " with fmul contract" else ""}"
     | some S => sums := sums.push S
   -- 3. the paths, and with the `loop` clause the loop's paths
   let idx (l : Nat) : Nat := (fn.blocks.findIdx? (·.label == l)).getD fn.blocks.size
@@ -1740,8 +1783,10 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
     let l := (fn.blocks.getD i default).label
     bns := bns.push (← liftCoreM <| kernelDef (base ++ .mkSimple s!"b{i}")
       (mkConst ``Summary) (toExpr sums[i]!) s!"The summary of block `{name l}` (block {i}) of \
-        `{fnText}`, from after its `phi`s ({if contract then "`summarizeC`, with `fmul contract` \
-        in the fragment," else "`summarize`"} at `phiCount`, computed by `mojo_kernel`).")
+        `{fnText}`, from after its `phi`s ({if alloca then s!"`summarizeAt true`, with \
+        `alloca`{if contract then " and `fmul contract`" else ""} in the fragment," else
+        if contract then "`summarizeC`, with `fmul contract` in the fragment," else
+        "`summarize`"} at `phiCount`, computed by `mojo_kernel`).")
   let pathText (p : List Nat) : String := " → ".intercalate (p.map fun i => name (lbl i))
   let pathsText (ps : List (List Nat)) : String :=
     if ps.isEmpty then "none" else ", ".intercalate (ps.map (s!"`{pathText ·}`"))
@@ -1761,13 +1806,17 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
         {notIn}, computed by \
         `mojo_kernel`: {pathsText ps}."
   let coversId := mkIdent (n ++ `covers)
-  let coversT ← if contract then `(coversEntryWith true $Pstx $fnstx $(mkCIdent pathsN))
+  let coversT ← if alloca then
+      `(coversEntryAt true $(quote contract) $Pstx $fnstx $(mkCIdent pathsN))
+    else if contract then `(coversEntryWith true $Pstx $fnstx $(mkCIdent pathsN))
     else `(coversEntry $Pstx $fnstx $(mkCIdent pathsN))
   elabCommand (← `(command| theorem $coversId : $coversT = true := by decide +kernel))
   addDocStringCore (base ++ `covers) s!"The paths `{short pathsN}` start at the entry block of \
     `{fnText}` and are accepted by the path checker with `phi`s from position 0 \
-    ({if contract then "`coversEntryWith true`, with `fmul contract`" else "`coversEntry`"}, \
-    evaluated by the kernel)."
+    ({if alloca then s!"`coversEntryAt true {contract}`, with `alloca`\
+    {if contract then " and `fmul contract`" else ""}" else if contract then
+    "`coversEntryWith true`, with `fmul contract`" else "`coversEntry`"}, evaluated by the \
+    kernel)."
   -- 3'. the loop: its chain, the obligations by the discharger, the thread's run through it
   let chainsN? ← match en? with
     | none => pure none
@@ -1787,12 +1836,14 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
   liftTermElabM do
     let thm ← match chainsN? with
       | none =>
-        if contract then `(@Kernel.sound_of_chainsWith true $Pstx $fnstx L args m adm β obs R
-          $(mkCIdent pathsN) [] $(mkCIdent (base ++ `covers)) rfl)
+        if alloca then `(@Kernel.sound_of_chainsAt true $(quote contract) $Pstx $fnstx L args m
+          adm β obs R $(mkCIdent pathsN) [] $(mkCIdent (base ++ `covers)) rfl)
+        else if contract then `(@Kernel.sound_of_chainsAt false true $Pstx $fnstx L args m adm β
+          obs R $(mkCIdent pathsN) [] $(mkCIdent (base ++ `covers)) rfl)
         else `(@Kernel.sound_of_paths $Pstx $fnstx L args m adm β obs R $(mkCIdent pathsN)
           $(mkCIdent (base ++ `covers)))
       | some chainsN =>
-        if contract then `(@Kernel.sound_of_chainsWith true $Pstx $fnstx L args m adm β obs R
+        if contract then `(@Kernel.sound_of_chainsAt false true $Pstx $fnstx L args m adm β obs R
           $(mkCIdent pathsN) $(mkCIdent chainsN) $(mkCIdent (base ++ `covers))
           $(mkCIdent (base ++ `coversChains)))
         else `(@Kernel.sound_of_chains $Pstx $fnstx L args m adm β obs R
@@ -1803,9 +1854,20 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
         {R : β → Prop} => $thm)) none
     Term.synthesizeSyntheticMVarsNoPostponing
     let e ← instantiateMVars e
-    addDecl <| .thmDecl { name := soundN, levelParams := [], type := ← inferType e, value := e }
+    -- the statement with each `Mem.Dead false m Q` (a partial application) unfolded to `Q`, its
+    -- definition at `false` up to eta, so that at `alloca := false` it is the one of the theorem
+    -- with the predicate itself; the kernel checks `e` against it by definitional unfolding
+    let ty ← Meta.transform (← instantiateMVars (← inferType e)) (pre := fun t => do
+      if t.isAppOf ``Mem.Dead && t.getAppNumArgs ≥ 3 && (t.getArg! 0).isConstOf ``Bool.false then
+        return .visit (mkAppN (t.getArg! 2) (t.getAppArgs.extract 3 t.getAppNumArgs))
+      return .continue)
+    addDecl <| .thmDecl { name := soundN, levelParams := [], type := ty, value := e }
   let alongText := match chainsN? with
-    | none => if contract then s!"along some path of `{short pathsN}` that is a `RetWith true`, \
+    | none => if alloca then s!"along some path of `{short pathsN}` that is a `RetWith \
+        {contract}` to a memory of `Mem.Dead true` at the thread's memory (the invariant with \
+        the blocks the thread adds, its `alloca` blocks, dead)\
+        {if contract then ", with `fmul contract`" else ""}"
+      else if contract then s!"along some path of `{short pathsN}` that is a `RetWith true`, \
         with `fmul contract`" else s!"along some path of `{short pathsN}` that is a `Ret`"
     | some chainsN =>
       if contract then s!"along some path of `{short pathsN}` that is a `RetWith true` or \
@@ -1815,10 +1877,12 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
         sequence of loops of `{short chainsN}` to `ret` (`RetLs`)"
   addDocStringCore soundN s!"The kernel theorem for `{fnText}` (`Kernel.Sound`) from its paths, \
     generated by `mojo_kernel {n}`: \
-    {if chainsN?.isSome then s!"`Kernel.sound_of_chains{if contract then "With" else ""}` \
-      {if contract then "(contract := true) " else ""}at `{n}.covers` and \
-      `{n}.coversChains`" else if contract then s!"`Kernel.sound_of_chainsWith \
-      (contract := true)` at `{n}.covers` and no sequence of loops" else
+    {if chainsN?.isSome then s!"`Kernel.sound_of_chains{if contract then "At" else ""}` \
+      {if contract then "(alloca := false) (contract := true) " else ""}at `{n}.covers` and \
+      `{n}.coversChains`" else if alloca then s!"`Kernel.sound_of_chainsAt (alloca := true) \
+      (contract := {contract})` at `{n}.covers` and no sequence of loops" else if contract then
+      s!"`Kernel.sound_of_chainsAt (alloca := false) (contract := true)` at `{n}.covers` and no \
+      sequence of loops" else
       s!"`Kernel.sound_of_paths` at `{n}.covers`"}. For every launch, \
     arguments, memory, admission, observation and predicate, `{fnText}` is sound if the caller's \
     pointer bytes are known (`Mem.BytesIn`), the start succeeds on every admitted address choice \
@@ -1831,6 +1895,12 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
   -- 5. the arguments from the clauses, the start on them, and the kernel theorem from `Mem.Closed`
   let some fnC := fnC? | return
   unless P.module.globals.isEmpty do return
+  -- a launch limit makes `Func.checkLaunch` read the block, which `n.starts` takes for every launch
+  let unlimited := match fn.annots P.module with
+    | .ok ps => (fn.ntidLimit P.module "nvvm.maxntid" (annotDims ps "maxntid") matches .ok none) &&
+        (fn.ntidLimit P.module "nvvm.reqntid" (annotDims ps "reqntid") matches .ok none)
+    | .error _ => false
+  unless unlimited do return
   let (byIdx, elems, binders, xs, argsN) ← elabArgs n ns Pstx fnstx fnText P fn fnC bufs scalars
     ptrs soundN pathsN chainsN?.isSome
   -- 5'. with the loop clauses: the kernel theorem on `n.args` from `Mem.Closed`, each thread by
@@ -1846,6 +1916,6 @@ unsafe def elabMojoKernel : CommandElab := fun stx => do
 /-- Elaborates `mojo_kernel`: with the `mat` clause by `elabMat`, otherwise by `elabMojoKernel`;
 `unsafe` because both evaluate the program. -/
 @[command_elab mojoKernel] unsafe def elabMojoKernelCmd : CommandElab := fun stx =>
-  if stx[12].isNone then elabMojoKernel stx else elabMat stx
+  if stx[13].isNone then elabMojoKernel stx else elabMat stx
 
 end MojoProof.Sym
